@@ -65,7 +65,8 @@ public class ChunkGenerator
     }
 
 
-    // Requer: using Unity.Collections;
+
+    // Substituir o método existente por este
     public NativeArray<int> GenerateFlattenedPadded_Native(Vector2Int chunkCoord, out int pw, out int ph, out int pd, Allocator allocator = Allocator.TempJob)
     {
         int w = chunkWidth, h = chunkHeight, d = chunkDepth;
@@ -75,11 +76,15 @@ public class ChunkGenerator
         ph = h;
         pd = d + 2 * pad;
 
-        // make local copies to avoid capturing out-parameters in a local function
         int lpw = pw, lph = ph, lpd = pd;
 
         int total = lpw * lph * lpd;
+
+        // NativeArray retornado (alocado com o allocator solicitado)
         var paddedFlat = new NativeArray<int>(total, allocator);
+
+        // **BUILD IN A MANAGED ARRAY FIRST** (muito mais rápido para escrever elemento-a-elemento)
+        var flatManaged = new int[total];
 
         // helper local (usa as cópias)
         int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
@@ -98,7 +103,7 @@ public class ChunkGenerator
             }
         }
 
-        // 2) Preencher paddedFlat diretamente (sem criar BlockType[,,])
+        // 2) Preencher flatManaged diretamente (sem criar BlockType[,,] e sem NativeArray.Set_Item por elemento)
         for (int lx = 0; lx < lpw; lx++)
         {
             for (int lz = 0; lz < lpd; lz++)
@@ -111,16 +116,96 @@ public class ChunkGenerator
                 {
                     var bt = DetermineBlockType(y, groundLevel, worldX, worldZ, heightMap, lx, lz, lpw, lpd);
                     int idx = FlattenIndex(lx, y, lz);
-                    paddedFlat[idx] = (int)bt;
+                    flatManaged[idx] = (int)bt;
                 }
             }
         }
 
-        // 3) Colocar árvores diretamente no paddedFlat
-        PlaceTreesInFlattened(paddedFlat, heightMap, chunkCoord, lpw, lph, lpd, pad);
+        // 3) Colocar árvores diretamente no flatManaged (versão que opera em int[])
+        PlaceTreesInFlattened(flatManaged, heightMap, chunkCoord, lpw, lph, lpd, pad);
+
+        // Finalmente copia o bloco inteiro para o NativeArray (memcpy interno, muito rápido)
+        paddedFlat.CopyFrom(flatManaged);
 
         return paddedFlat;
     }
+
+    // Substituir/Adicionar overload que aceita int[] em vez de NativeArray<int>
+    private void PlaceTreesInFlattened(int[] paddedFlat, int[,] heightMap, Vector2Int chunkCoord, int pw, int ph, int pd, int pad)
+    {
+        int lpw = pw, lph = ph, lpd = pd;
+        int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
+
+        int startWorldX = chunkCoord.x * chunkWidth - pad;
+        int startWorldZ = chunkCoord.y * chunkDepth - pad;
+
+        for (int lx = 0; lx < lpw; lx++)
+        {
+            for (int lz = 0; lz < lpd; lz++)
+            {
+                int worldX = startWorldX + lx;
+                int worldZ = startWorldZ + lz;
+                int groundLevel = heightMap[lx, lz];
+
+                if (groundLevel <= seaLevel) continue;
+
+                if (groundLevel < 0 || groundLevel >= lph) continue;
+                int topIdx = FlattenIndex(lx, groundLevel, lz);
+                int topInt = paddedFlat[topIdx];
+                if (!(topInt == (int)BlockType.Grass || topInt == (int)BlockType.Dirt)) continue;
+
+                int hseed = worldX * 73856093 ^ worldZ * 19349663 ^ (seed + treeSeed);
+                var rng = new System.Random(hseed);
+                if (rng.NextDouble() >= treeSpawnChance) continue;
+
+                int leftH = (lx - 1 >= 0) ? heightMap[lx - 1, lz] : GetHeightAt(worldX - 1, worldZ);
+                int rightH = (lx + 1 < lpw) ? heightMap[lx + 1, lz] : GetHeightAt(worldX + 1, worldZ);
+                int frontH = (lz + 1 < lpd) ? heightMap[lx, lz + 1] : GetHeightAt(worldX, worldZ + 1);
+                int backH = (lz - 1 >= 0) ? heightMap[lx, lz - 1] : GetHeightAt(worldX, worldZ - 1);
+                if (Mathf.Abs(leftH - groundLevel) > 1 || Mathf.Abs(rightH - groundLevel) > 1 ||
+                    Mathf.Abs(frontH - groundLevel) > 1 || Mathf.Abs(backH - groundLevel) > 1)
+                    continue;
+
+                int trunkH = useFixedTreeHeight ? fixedTreeHeight : rng.Next(treeMinHeight, treeMaxHeight + 1);
+                int topY = groundLevel + trunkH;
+
+                for (int y = groundLevel + 1; y <= topY; y++)
+                {
+                    if (y < 0 || y >= lph) continue;
+                    int idx = FlattenIndex(lx, y, lz);
+                    int cur = paddedFlat[idx];
+                    if (cur == (int)BlockType.Air || cur == (int)BlockType.Water)
+                        paddedFlat[idx] = (int)BlockTypeFrom(woodBlock);
+                }
+
+                int leafR = treeLeafRadius;
+                for (int layer = 0; layer < 4; layer++)
+                {
+                    int by = topY + layer;
+                    if (by < 0 || by >= lph) continue;
+                    int radius = (layer == 1) ? leafR : Mathf.Max(1, leafR - 1);
+
+                    for (int ox = -radius; ox <= radius; ox++)
+                    {
+                        for (int oz = -radius; oz <= radius; oz++)
+                        {
+                            int bx = lx + ox;
+                            int bz = lz + oz;
+                            if (bx < 0 || bx >= lpw || bz < 0 || bz >= lpd) continue;
+
+                            if (Mathf.Abs(ox) == radius && Mathf.Abs(oz) == radius && layer != 0) continue;
+
+                            int idx = FlattenIndex(bx, by, bz);
+                            int cur = paddedFlat[idx];
+                            if (cur == (int)BlockType.Air || cur == (int)BlockType.Water)
+                                paddedFlat[idx] = (int)BlockTypeFrom(leavesBlock);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
 
     private void PlaceTreesInFlattened(NativeArray<int> paddedFlat, int[,] heightMap, Vector2Int chunkCoord, int pw, int ph, int pd, int pad)
@@ -175,7 +260,7 @@ public class ChunkGenerator
                         paddedFlat[idx] = (int)BlockTypeFrom(woodBlock);
                 }
 
-                
+
                 int leafR = treeLeafRadius;
 
                 int minLayers = 3;
@@ -478,7 +563,7 @@ public class ChunkGenerator
                 int layerCount = Mathf.Clamp(leafR + 2, minLayers, maxLayers); // quantas camadas de folhas
                 int mid = layerCount / 2;
 
-              
+
                 // Colocar folhas estilo Minecraft Oak (3 camadas fixas acima do topo do tronco)
                 for (int layer = 0; layer < 4; layer++)
                 {
@@ -520,7 +605,7 @@ public class ChunkGenerator
 
         var cur = padded[px, py, pz];
         // Só sobrescrever se for ar ou água (assim não remove terreno)
-        if (cur == BlockType.Air )
+        if (cur == BlockType.Air)
         {
             padded[px, py, pz] = bt;
         }

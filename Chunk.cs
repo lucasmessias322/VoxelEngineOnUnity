@@ -1,4 +1,5 @@
 
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -49,245 +50,80 @@ public class Chunk : MonoBehaviour
         return blocks[x, y, z];
     }
 
-    // // REBUILD: agora gera o mesh localmente a partir de this.blocks
-    // public void RebuildMesh()
-    // {
-    //     if (blocks == null)
-    //     {
-    //         // nada a fazer — chama ApplyMeshData com nulls para limpar o mesh
-    //         ApplyMeshData(null, null, null, null, null, null, null, null,
-    //             new Material[] { }, width, height, depth, blockSize);
-    //         return;
-    //     }
-
-    //     // Listas locais para sólidos e água
-    //     var vertsSolid = new List<Vector3>();
-    //     var trisSolid = new List<int>();
-    //     var uvsSolidFaces = new List<BlockFaceInfo>(); // guardamos blockType + normal por face para UVs
-
-    //     var vertsLeaves = new List<Vector3>();
-    //     var trisLeaves = new List<int>();
-    //     var uvsLeavesFaces = new List<BlockFaceInfo>();
-
-
-    //     var vertsWater = new List<Vector3>();
-    //     var trisWater = new List<int>();
-    //     var uvsWaterFaces = new List<BlockFaceInfo>();
-
-    //     float s = blockSize;
-
-    //     // percorre todos os blocos e adiciona faces expostas (quad por face)
-    //     for (int x = 0; x < width; x++)
-    //     {
-    //         for (int y = 0; y < height; y++)
-    //         {
-    //             for (int z = 0; z < depth; z++)
-    //             {
-    //                 BlockType bt = blocks[x, y, z];
-    //                 if (bt == BlockType.Air) continue;
-
-    //                 Vector3 basePos = new Vector3(x * s, y * s, z * s);
-    //                 bool isWater = (bt == BlockType.Water);
-
-    //                 // var vList = isWater ? vertsWater : vertsSolid;
-    //                 // var tList = isWater ? trisWater : trisSolid;
-    //                 // var faceInfos = isWater ? uvsWaterFaces : uvsSolidFaces;
-
-    //                 bool isLeaf = (bt == BlockType.Leaves); // supondo que seu enum tenha Leaves
-
-    //                 var vList = isWater ? vertsWater : isLeaf ? vertsLeaves : vertsSolid;
-    //                 var tList = isWater ? trisWater : isLeaf ? trisLeaves : trisSolid;
-    //                 var faceInfos = isWater ? uvsWaterFaces : isLeaf ? uvsLeavesFaces : uvsSolidFaces;
-
-
-    //                 // front (+z)
-    //                 if (IsNeighborAirOrEmpty(x, y, z + 1, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(0, 0, s),
-    //                         basePos + new Vector3(s, 0, s),
-    //                         basePos + new Vector3(s, s, s),
-    //                         basePos + new Vector3(0, s, s));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 0 });
-    //                 }
-
-    //                 // back (-z)
-    //                 if (IsNeighborAirOrEmpty(x, y, z - 1, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(s, 0, 0),
-    //                         basePos + new Vector3(0, 0, 0),
-    //                         basePos + new Vector3(0, s, 0),
-    //                         basePos + new Vector3(s, s, 0));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 1 });
-    //                 }
-
-    //                 // top (+y)
-    //                 if (IsNeighborAirOrEmpty(x, y + 1, z, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(0, s, 0),
-    //                         basePos + new Vector3(0, s, s),
-    //                         basePos + new Vector3(s, s, s),
-    //                         basePos + new Vector3(s, s, 0));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 2 });
-    //                 }
-
-    //                 // bottom (-y)
-    //                 if (IsNeighborAirOrEmpty(x, y - 1, z, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(0, 0, 0),
-    //                         basePos + new Vector3(s, 0, 0),
-    //                         basePos + new Vector3(s, 0, s),
-    //                         basePos + new Vector3(0, 0, s));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 3 });
-    //                 }
-
-    //                 // right (+x)
-    //                 if (IsNeighborAirOrEmpty(x + 1, y, z, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(s, 0, s),
-    //                         basePos + new Vector3(s, 0, 0),
-    //                         basePos + new Vector3(s, s, 0),
-    //                         basePos + new Vector3(s, s, s));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 4 });
-    //                 }
-
-    //                 // left (-x)
-    //                 if (IsNeighborAirOrEmpty(x - 1, y, z, isWater))
-    //                 {
-    //                     AddQuadNoAlloc(vList, tList,
-    //                         basePos + new Vector3(0, 0, 0),
-    //                         basePos + new Vector3(0, 0, s),
-    //                         basePos + new Vector3(0, s, s),
-    //                         basePos + new Vector3(0, s, 0));
-    //                     faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 5 });
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     // Gerar UVs
-    //     var world = VoxelWorld.Instance;
-    //     Material[] mats = null;
-    //     if (world != null)
-    //     {
-    //         if (world.waterMaterial != null)
-    //             mats = new Material[] { world.chunkMaterial, world.waterMaterial };
-    //         else
-    //             mats = new Material[] { world.chunkMaterial };
-    //     }
-    //     else
-    //     {
-    //         mats = new Material[] { };
-    //     }
-
-    //     var solidUVs = new List<Vector2>(vertsSolid.Count);
-    //     for (int i = 0; i < uvsSolidFaces.Count; i++)
-    //     {
-    //         var info = uvsSolidFaces[i];
-    //         var normal = NormalFromIndex(info.normal);
-    //         AddUVsTo(solidUVs, info.blockType, normal);
-    //     }
-
-    //     var leavesUVs = new List<Vector2>(vertsLeaves.Count);
-    //     for (int i = 0; i < uvsLeavesFaces.Count; i++)
-    //     {
-    //         var info = uvsLeavesFaces[i];
-    //         var normal = NormalFromIndex(info.normal);
-    //         AddUVsTo(leavesUVs, info.blockType, normal);
-    //     }
-
-
-
-
-    //     var waterUVs = new List<Vector2>(vertsWater.Count);
-    //     for (int i = 0; i < uvsWaterFaces.Count; i++)
-    //     {
-    //         var info = uvsWaterFaces[i];
-    //         var normal = NormalFromIndex(info.normal);
-    //         AddUVsTo(waterUVs, info.blockType, normal);
-    //     }
-
-    //     // --- Construir listas de normais por-vértice (4 cópias da normal por face) ---
-    //     List<Vector3> solidNormals = null;
-    //     if (uvsSolidFaces != null && uvsSolidFaces.Count > 0)
-    //     {
-    //         solidNormals = new List<Vector3>(uvsSolidFaces.Count * 4);
-    //         for (int f = 0; f < uvsSolidFaces.Count; f++)
-    //         {
-    //             var n = NormalFromIndex(uvsSolidFaces[f].normal);
-    //             solidNormals.Add(n);
-    //             solidNormals.Add(n);
-    //             solidNormals.Add(n);
-    //             solidNormals.Add(n);
-    //         }
-    //     }
-
-    //     List<Vector3> leavesNormals = null;
-    //     if (uvsLeavesFaces.Count > 0)
-    //     {
-    //         leavesNormals = new List<Vector3>(uvsLeavesFaces.Count * 4);
-    //         for (int f = 0; f < uvsLeavesFaces.Count; f++)
-    //         {
-    //             var n = NormalFromIndex(uvsLeavesFaces[f].normal);
-    //             leavesNormals.Add(n);
-    //             leavesNormals.Add(n);
-    //             leavesNormals.Add(n);
-    //             leavesNormals.Add(n);
-    //         }
-    //     }
-
-    //     List<Vector3> waterNormals = null;
-    //     if (uvsWaterFaces != null && uvsWaterFaces.Count > 0)
-    //     {
-    //         waterNormals = new List<Vector3>(uvsWaterFaces.Count * 4);
-    //         for (int f = 0; f < uvsWaterFaces.Count; f++)
-    //         {
-    //             var n = NormalFromIndex(uvsWaterFaces[f].normal);
-    //             waterNormals.Add(n);
-    //             waterNormals.Add(n);
-    //             waterNormals.Add(n);
-    //             waterNormals.Add(n);
-    //         }
-    //     }
-
-    //     // Aplicar mesh usando a nova assinatura (inclui normais)
-    //     ApplyMeshData(
-    //         vertsSolid, trisSolid, solidUVs, solidNormals,
-    //         vertsWater, trisWater, waterUVs, waterNormals,
-    //         mats,
-    //         width, height, depth, blockSize);
-    // }
-
     public void RebuildMesh()
     {
         if (blocks == null)
         {
-            ApplyMeshData(null, null, null, null,
-                          null, null, null, null,
-                          null, null, null, null,
-                          new Material[] { }, width, height, depth, blockSize);
+            // limpa mesh
+            ApplyMeshDataByMaterial(
+                new List<List<Vector3>>(),
+                new List<List<int>>(),
+                new List<List<Vector2>>(),
+                new List<List<Vector3>>(),
+                new Material[] { }, width, height, depth, blockSize);
             return;
         }
 
-        // Listas locais para sólidos, folhas e água
-        var vertsSolid = new List<Vector3>();
-        var trisSolid = new List<int>();
-        var uvsSolidFaces = new List<BlockFaceInfo>();
+        var world = VoxelWorld.Instance;
+        var soForLookup = blockDataSO != null ? blockDataSO : (world != null ? world.blockDataSO : null);
 
-        var vertsLeaves = new List<Vector3>();
-        var trisLeaves = new List<int>();
-        var uvsLeavesFaces = new List<BlockFaceInfo>();
+        // listas por material (cresceremos dinamicamente conforme encontramos materialIndex)
+        var vertsByMat = new List<List<Vector3>>();
+        var trisByMat = new List<List<int>>();
+        var uvsByMat = new List<List<Vector2>>();
+        var normsByMat = new List<List<Vector3>>();
 
-        var vertsWater = new List<Vector3>();
-        var trisWater = new List<int>();
-        var uvsWaterFaces = new List<BlockFaceInfo>();
+        void EnsureSlot(int idx)
+        {
+            while (vertsByMat.Count <= idx)
+            {
+                vertsByMat.Add(new List<Vector3>());
+                trisByMat.Add(new List<int>());
+                uvsByMat.Add(new List<Vector2>());
+                normsByMat.Add(new List<Vector3>());
+            }
+        }
+
+        // Helper para resolver materialIndex de um BlockType (usa blockDataSO local ou do world)
+        int GetMaterialIndexForBlockType(BlockType bt)
+        {
+            if (soForLookup != null && soForLookup.blockTextureDict.TryGetValue(bt, out var mapping))
+            {
+                // mapping.materialIndex deve existir no seu BlockTextureMapping (fallback 0)
+                try
+                {
+                    return Mathf.Max(0, mapping.materialIndex);
+                }
+                catch
+                {
+                    return 0;
+                }
+            }
+            return 0;
+        }
 
         float s = blockSize;
 
+        // função para processar uma face: adiciona quad ao slot do material, UVs e normais
+        void ProcessFace(int matIndex, BlockType bt, Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3, Vector3 normalVec)
+        {
+            EnsureSlot(matIndex);
+            var vlist = vertsByMat[matIndex];
+            var tlist = trisByMat[matIndex];
+            var uvlist = uvsByMat[matIndex];
+            var nlist = normsByMat[matIndex];
+
+            // AddQuadNoAlloc já cuida do offset dos índices relativamente ao vlist
+            AddQuadNoAlloc(vlist, tlist, v0, v1, v2, v3);
+
+            // UVs (4 por face)
+            AddUVsTo(uvlist, bt, normalVec);
+
+            // Normais (4 cópias)
+            nlist.Add(normalVec); nlist.Add(normalVec); nlist.Add(normalVec); nlist.Add(normalVec);
+        }
+
+        // Percorrer blocos e gerar faces agrupadas por materialIndex
         for (int x = 0; x < width; x++)
         {
             for (int y = 0; y < height; y++)
@@ -299,112 +135,107 @@ public class Chunk : MonoBehaviour
 
                     Vector3 basePos = new Vector3(x * s, y * s, z * s);
                     bool isWater = (bt == BlockType.Water);
-                    bool isLeaf = (bt == BlockType.Leaves);
 
-                    var vList = isWater ? vertsWater : isLeaf ? vertsLeaves : vertsSolid;
-                    var tList = isWater ? trisWater : isLeaf ? trisLeaves : trisSolid;
-                    var faceInfos = isWater ? uvsWaterFaces : isLeaf ? uvsLeavesFaces : uvsSolidFaces;
+                    int matIndex = GetMaterialIndexForBlockType(bt);
 
-                    // front (+z)
+                    // front (+z) normal = forward
                     if (IsNeighborAirOrEmpty(x, y, z + 1, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(0, 0, s),
                             basePos + new Vector3(s, 0, s),
                             basePos + new Vector3(s, s, s),
-                            basePos + new Vector3(0, s, s));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 0 });
+                            basePos + new Vector3(0, s, s),
+                            NormalFromIndex(0));
                     }
-                    // back (-z)
+
+                    // back (-z) normal = back
                     if (IsNeighborAirOrEmpty(x, y, z - 1, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(s, 0, 0),
                             basePos + new Vector3(0, 0, 0),
                             basePos + new Vector3(0, s, 0),
-                            basePos + new Vector3(s, s, 0));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 1 });
+                            basePos + new Vector3(s, s, 0),
+                            NormalFromIndex(1));
                     }
-                    // top (+y)
+
+                    // top (+y) normal = up
                     if (IsNeighborAirOrEmpty(x, y + 1, z, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(0, s, 0),
                             basePos + new Vector3(0, s, s),
                             basePos + new Vector3(s, s, s),
-                            basePos + new Vector3(s, s, 0));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 2 });
+                            basePos + new Vector3(s, s, 0),
+                            NormalFromIndex(2));
                     }
-                    // bottom (-y)
+
+                    // bottom (-y) normal = down
                     if (IsNeighborAirOrEmpty(x, y - 1, z, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(0, 0, 0),
                             basePos + new Vector3(s, 0, 0),
                             basePos + new Vector3(s, 0, s),
-                            basePos + new Vector3(0, 0, s));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 3 });
+                            basePos + new Vector3(0, 0, s),
+                            NormalFromIndex(3));
                     }
-                    // right (+x)
+
+                    // right (+x) normal = right
                     if (IsNeighborAirOrEmpty(x + 1, y, z, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(s, 0, s),
                             basePos + new Vector3(s, 0, 0),
                             basePos + new Vector3(s, s, 0),
-                            basePos + new Vector3(s, s, s));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 4 });
+                            basePos + new Vector3(s, s, s),
+                            NormalFromIndex(4));
                     }
-                    // left (-x)
+
+                    // left (-x) normal = left
                     if (IsNeighborAirOrEmpty(x - 1, y, z, isWater))
                     {
-                        AddQuadNoAlloc(vList, tList,
+                        ProcessFace(matIndex, bt,
                             basePos + new Vector3(0, 0, 0),
                             basePos + new Vector3(0, 0, s),
                             basePos + new Vector3(0, s, s),
-                            basePos + new Vector3(0, s, 0));
-                        faceInfos.Add(new BlockFaceInfo { blockType = bt, normal = 5 });
+                            basePos + new Vector3(0, s, 0),
+                            NormalFromIndex(5));
                     }
                 }
             }
         }
 
-        var world = VoxelWorld.Instance;
-        Material[] mats = null;
-        if (world != null)
+        // montar array de materiais final: preferir world.materials (mais geral), senão usar chunk/leaf/water antigos
+        Material[] finalMaterials = null;
+        if (world != null && world.materials != null && world.materials.Length > 0)
         {
-            var matList = new List<Material>();
-            if (world.chunkMaterial != null) matList.Add(world.chunkMaterial);
-            if (world.leafMaterial != null) matList.Add(world.leafMaterial);
-            if (world.waterMaterial != null) matList.Add(world.waterMaterial);
-            mats = matList.ToArray();
+            finalMaterials = world.materials;
         }
         else
         {
-            mats = new Material[] { };
+            var mats = new List<Material>();
+            if (world != null)
+            {
+                if (world.chunkMaterial != null) mats.Add(world.chunkMaterial);
+                if (world.leafMaterial != null) mats.Add(world.leafMaterial);
+                if (world.waterMaterial != null) mats.Add(world.waterMaterial);
+            }
+            finalMaterials = mats.ToArray();
         }
 
-        // UVs
-        var solidUVs = new List<Vector2>(vertsSolid.Count);
-        foreach (var info in uvsSolidFaces) AddUVsTo(solidUVs, info.blockType, NormalFromIndex(info.normal));
+        // garantir listas não-nulas (ApplyMeshDataByMaterial aceita listas vazias)
+        if (vertsByMat.Count == 0)
+        {
+            vertsByMat.Add(new List<Vector3>());
+            trisByMat.Add(new List<int>());
+            uvsByMat.Add(new List<Vector2>());
+            normsByMat.Add(new List<Vector3>());
+        }
 
-        var leavesUVs = new List<Vector2>(vertsLeaves.Count);
-        foreach (var info in uvsLeavesFaces) AddUVsTo(leavesUVs, info.blockType, NormalFromIndex(info.normal));
-
-        var waterUVs = new List<Vector2>(vertsWater.Count);
-        foreach (var info in uvsWaterFaces) AddUVsTo(waterUVs, info.blockType, NormalFromIndex(info.normal));
-
-        // Normais
-        List<Vector3> solidNormals = GenNormals(uvsSolidFaces);
-        List<Vector3> leavesNormals = GenNormals(uvsLeavesFaces);
-        List<Vector3> waterNormals = GenNormals(uvsWaterFaces);
-
-        ApplyMeshData(
-            vertsSolid, trisSolid, solidUVs, solidNormals,
-            vertsLeaves, trisLeaves, leavesUVs, leavesNormals,
-            vertsWater, trisWater, waterUVs, waterNormals,
-            mats,
-            width, height, depth, blockSize);
+        // chamar a versão genérica que monta o mesh com N submeshes
+        ApplyMeshDataByMaterial(vertsByMat, trisByMat, uvsByMat, normsByMat, finalMaterials, width, height, depth, blockSize);
     }
 
     // helper para gerar normais
@@ -442,19 +273,7 @@ public class Chunk : MonoBehaviour
         };
     }
 
-    // // verifica vizinho dentro do chunk; fora do chunk = Air
-    // private bool IsNeighborAirOrEmpty(int nx, int ny, int nz)
-    // {
-    //     if (ny < 0 || ny >= height) return true;
-    //     if (nx < 0 || nx >= width) return true;
-    //     if (nz < 0 || nz >= depth) return true;
 
-    //     var nb = blocks[nx, ny, nz];
-    //     return IsBlockEmptyByBlockData(nb);
-    // }
-    // verifica vizinho dentro do chunk; fora do chunk = consulta VoxelWorld (se existir) else Air
-
-    // sem alocação de arrays temporários por face
     private void AddQuadNoAlloc(List<Vector3> vList, List<int> tList, Vector3 v0, Vector3 v1, Vector3 v2, Vector3 v3)
     {
         int vi = vList.Count;
@@ -520,29 +339,6 @@ public class Chunk : MonoBehaviour
     }
 
 
-
-    // // verifica vizinho dentro do chunk; fora do chunk = consulta VoxelWorld (se existir) else Air
-    // private bool IsNeighborAirOrEmpty(int nx, int ny, int nz)
-    // {
-    //     if (ny < 0 || ny >= height) return true;
-
-    //     // vizinho dentro do mesmo chunk
-    //     if (nx >= 0 && nx < width && nz >= 0 && nz < depth)
-    //     {
-    //         var nb = blocks[nx, ny, nz];
-    //         return IsBlockEmptyByBlockData(nb);
-    //     }
-
-    //     // fora do chunk: consultamos o mundo para ver se existe bloco ativo naquele local
-    //     var world = VoxelWorld.Instance;
-    //     if (world == null) return true;
-
-    //     // coordenada do bloco vizinho em world space
-    //     Vector3 neighborWorldPos = transform.position + new Vector3(nx * blockSize, ny * blockSize, nz * blockSize);
-    //     var nbType = world.GetBlockAtWorld(neighborWorldPos);
-    //     return IsBlockEmptyByBlockData(nbType);
-    // }
-
     private bool IsNeighborAirOrEmpty(int nx, int ny, int nz, bool faceIsWater)
     {
         // Fora no Y => exposto
@@ -576,30 +372,6 @@ public class Chunk : MonoBehaviour
 
         return IsBlockEmptyByBlockData(nbType);
     }
-
-    // // Retorna true se o BlockType deve ser tratado como "vazio" para fins de face-culling.
-    // // Retorna true se o BlockType deve ser tratado como "vazio" para fins de face-culling.
-    // private bool IsBlockEmptyByBlockData(BlockType bt)
-    // {
-    //     if (bt == BlockType.Air) return true;
-
-    //     // Usa o BlockDataSO do próprio chunk se existir; senão tenta usar o do mundo.
-    //     var so = blockDataSO;
-    //     if (so == null)
-    //     {
-    //         var world = VoxelWorld.Instance;
-    //         if (world != null) so = world.blockDataSO;
-    //     }
-
-    //     if (so != null && so.blockTextureDict.TryGetValue(bt, out var mapping))
-    //     {
-    //         return mapping.isEmpty;
-    //     }
-
-    //     // fallback seguro: por padrão não considerar água como "vazia".
-    //     // (mantém comportamento consistente com o MeshGenJob quando blockDataSO == null)
-    //     return false;
-    // }
 
     private bool IsBlockEmptyByBlockData(BlockType bt)
     {
@@ -747,409 +519,145 @@ public class Chunk : MonoBehaviour
     }
 
 
-    // public void ApplyMeshData(
-    //     List<Vector3> solidVertices, List<int> solidTriangles, List<Vector2> solidUVs, List<Vector3> solidNormals,
-    //     List<Vector3> waterVertices, List<int> waterTriangles, List<Vector2> waterUVs, List<Vector3> waterNormals,
-    //     Material[] materials, int w, int h, int d, float bSize)
-    // {
-    //     width = w; height = h; depth = d; blockSize = bSize;
-
-    //     int solidCount = (solidVertices != null) ? solidVertices.Count : 0;
-    //     int waterCount = (waterVertices != null) ? waterVertices.Count : 0;
-
-    //     // combinar vértices/uvs/normals em listas contíguas para o mesh
-    //     int totalVerts = solidCount + waterCount;
-    //     var allVerts = new List<Vector3>(totalVerts);
-    //     var allUVs = new List<Vector2>(totalVerts);
-    //     var allNormals = new List<Vector3>(totalVerts);
-
-    //     if (solidVertices != null) allVerts.AddRange(solidVertices);
-    //     if (waterVertices != null) allVerts.AddRange(waterVertices);
-
-    //     if (solidUVs != null) allUVs.AddRange(solidUVs);
-    //     if (waterUVs != null) allUVs.AddRange(waterUVs);
-
-    //     if (solidNormals != null) allNormals.AddRange(solidNormals);
-    //     if (waterNormals != null) allNormals.AddRange(waterNormals);
-
-    //     // Reutilizar mesh existente quando possível para evitar GC / uploads desnecessários
-    //     Mesh mesh = meshFilter.sharedMesh;
-    //     if (mesh == null)
-    //     {
-    //         mesh = new Mesh();
-    //         mesh.name = $"{gameObject.name}_mesh";
-    //         // Permitir > 65535 vértices se necessário
-    //         mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-    //         meshFilter.sharedMesh = mesh;
-    //     }
-
-    //     // Limpar mantendo capacidade interna (false) para reduzir reallocs
-    //     mesh.Clear(false);
-
-    //     // Escolher index format conforme número de vértices
-    //     mesh.indexFormat = (totalVerts > 65535) ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16;
-
-    //     // Vértices
-    //     if (allVerts.Count > 0)
-    //         mesh.SetVertices(allVerts);
-    //     else
-    //         mesh.SetVertices(new List<Vector3>());
-
-    //     // Normais: se o chamador já passou normais, apenas setar
-    //     if (allNormals != null && allNormals.Count == allVerts.Count)
-    //     {
-    //         mesh.SetNormals(allNormals);
-    //     }
-    //     else
-    //     {
-    //         // fallback: computar normais manualmente a partir dos triangles (evita RecalculateNormals interno)
-    //         // cria array de accumulação
-    //         var accumNormals = new Vector3[allVerts.Count];
-    //         for (int i = 0; i < accumNormals.Length; i++) accumNormals[i] = Vector3.zero;
-
-    //         // montar lista de triangles combinados (ajustando offset para water)
-    //         var trisCombined = new List<int>();
-    //         if (solidTriangles != null) trisCombined.AddRange(solidTriangles);
-    //         if (waterTriangles != null && waterTriangles.Count > 0)
-    //         {
-    //             for (int i = 0; i < waterTriangles.Count; i++)
-    //                 trisCombined.Add(waterTriangles[i] + solidCount);
-    //         }
-
-    //         // para cada tri, calcular normal e somar nos vértices
-    //         for (int ti = 0; ti + 2 < trisCombined.Count; ti += 3)
-    //         {
-    //             int i0 = trisCombined[ti + 0];
-    //             int i1 = trisCombined[ti + 1];
-    //             int i2 = trisCombined[ti + 2];
-    //             if (i0 < 0 || i1 < 0 || i2 < 0 ||
-    //                 i0 >= allVerts.Count || i1 >= allVerts.Count || i2 >= allVerts.Count)
-    //                 continue;
-
-    //             Vector3 v0 = allVerts[i0];
-    //             Vector3 v1 = allVerts[i1];
-    //             Vector3 v2 = allVerts[i2];
-    //             Vector3 triNormal = Vector3.Cross(v1 - v0, v2 - v0);
-    //             // soma (sem normalizar ainda)
-    //             accumNormals[i0] += triNormal;
-    //             accumNormals[i1] += triNormal;
-    //             accumNormals[i2] += triNormal;
-    //         }
-
-    //         // normalizar e setar
-    //         var finalNormals = new List<Vector3>(allVerts.Count);
-    //         for (int i = 0; i < accumNormals.Length; i++)
-    //         {
-    //             Vector3 n = accumNormals[i];
-    //             if (n.sqrMagnitude > 1e-8f) n.Normalize();
-    //             else n = Vector3.up; // fallback seguro
-    //             finalNormals.Add(n);
-    //         }
-    //         mesh.SetNormals(finalNormals);
-    //     }
-
-    //     // submeshes: 2 se houver água, senão 1
-    //     int subMeshCount = (waterCount > 0) ? 2 : 1;
-    //     mesh.subMeshCount = subMeshCount;
-
-    //     // sólidos (submesh 0)
-    //     if (solidTriangles != null && solidTriangles.Count > 0)
-    //         mesh.SetTriangles(solidTriangles, 0);
-    //     else
-    //         mesh.SetTriangles(new int[0], 0);
-
-    //     // água (submesh 1) — ajustar índices pelo offset dos vértices sólidos
-    //     if (waterCount > 0 && waterTriangles != null && waterTriangles.Count > 0)
-    //     {
-    //         var waterTrisOffset = new List<int>(waterTriangles.Count);
-    //         for (int i = 0; i < waterTriangles.Count; i++)
-    //             waterTrisOffset.Add(waterTriangles[i] + solidCount);
-    //         mesh.SetTriangles(waterTrisOffset, 1);
-    //     }
-
-    //     // UVs
-    //     if (allUVs != null && allUVs.Count == allVerts.Count)
-    //         mesh.SetUVs(0, allUVs);
-    //     else
-    //     {
-    //         var fallback = new List<Vector2>(allVerts.Count);
-    //         for (int i = 0; i < allVerts.Count; i++) fallback.Add(Vector2.zero);
-    //         mesh.SetUVs(0, fallback);
-    //     }
-
-    //     // Recalcular bounds (barato comparado a recalcular normals)
-    //     mesh.RecalculateBounds();
-
-    //     // Aplicar o mesh ao filter (já atribuímos sharedMesh; garantir instância atualizada)
-    //     meshFilter.sharedMesh = mesh;
-
-    //     // configurar materiais corretamente
-    //     if (materials != null && materials.Length > 0)
-    //     {
-    //         if (waterCount > 0 && materials.Length >= 2)
-    //             meshRenderer.materials = new Material[] { materials[0], materials[1] };
-    //         else
-    //             meshRenderer.materials = new Material[] { materials[0] };
-    //     }
-
-    //     // Upload para GPU (manter readable = false torna não-readable e economiza memória; aqui mantemos false)
-    //     mesh.UploadMeshData(false);
-    // }
-
-
-    // public void ApplyMeshData(
-    //     List<Vector3> solidVertices, List<int> solidTriangles, List<Vector2> solidUVs, List<Vector3> solidNormals,
-    //     List<Vector3> leafVertices, List<int> leafTriangles, List<Vector2> leafUVs, List<Vector3> leafNormals,
-    //     List<Vector3> waterVertices, List<int> waterTriangles, List<Vector2> waterUVs, List<Vector3> waterNormals,
-    //     Material[] materials, int w, int h, int d, float bSize)
-    // {
-    //     width = w; height = h; depth = d; blockSize = bSize;
-
-    //     int solidCount = solidVertices?.Count ?? 0;
-    //     int leafCount = leafVertices?.Count ?? 0;
-    //     int waterCount = waterVertices?.Count ?? 0;
-
-    //     int totalVerts = solidCount + leafCount + waterCount;
-    //     var allVerts = new List<Vector3>(totalVerts);
-    //     var allUVs = new List<Vector2>(totalVerts);
-    //     var allNormals = new List<Vector3>(totalVerts);
-
-    //     if (solidVertices != null) allVerts.AddRange(solidVertices);
-    //     if (leafVertices != null) allVerts.AddRange(leafVertices);
-    //     if (waterVertices != null) allVerts.AddRange(waterVertices);
-
-    //     if (solidUVs != null) allUVs.AddRange(solidUVs);
-    //     if (leafUVs != null) allUVs.AddRange(leafUVs);
-    //     if (waterUVs != null) allUVs.AddRange(waterUVs);
-
-    //     if (solidNormals != null) allNormals.AddRange(solidNormals);
-    //     if (leafNormals != null) allNormals.AddRange(leafNormals);
-    //     if (waterNormals != null) allNormals.AddRange(waterNormals);
-
-    //     Mesh mesh = meshFilter.sharedMesh;
-    //     if (mesh == null)
-    //     {
-    //         mesh = new Mesh();
-    //         mesh.name = $"{gameObject.name}_mesh";
-    //         mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
-    //         meshFilter.sharedMesh = mesh;
-    //     }
-    //     mesh.Clear(false);
-    //     mesh.indexFormat = (totalVerts > 65535) ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16;
-    //     mesh.SetVertices(allVerts);
-
-    //     if (allNormals.Count == allVerts.Count) mesh.SetNormals(allNormals);
-    //     else mesh.RecalculateNormals();
-
-    //     // Submeshes
-    //     int subMeshCount = 1;
-    //     if (leafCount > 0) subMeshCount++;
-    //     if (waterCount > 0) subMeshCount++;
-    //     mesh.subMeshCount = subMeshCount;
-
-    //     // sólidos = submesh 0
-    //     mesh.SetTriangles(solidTriangles ?? new List<int>(), 0);
-
-    //     // folhas = submesh 1
-    //     if (leafCount > 0 && leafTriangles != null)
-    //     {
-    //         var leafTrisOffset = new List<int>(leafTriangles.Count);
-    //         for (int i = 0; i < leafTriangles.Count; i++)
-    //             leafTrisOffset.Add(leafTriangles[i] + solidCount);
-    //         mesh.SetTriangles(leafTrisOffset, 1);
-    //     }
-
-    //     // água = último submesh
-    //     if (waterCount > 0 && waterTriangles != null)
-    //     {
-    //         var waterTrisOffset = new List<int>(waterTriangles.Count);
-    //         for (int i = 0; i < waterTriangles.Count; i++)
-    //             waterTrisOffset.Add(waterTriangles[i] + solidCount + leafCount);
-    //         mesh.SetTriangles(waterTrisOffset, subMeshCount - 1);
-    //     }
-
-    //     mesh.SetUVs(0, allUVs.Count == allVerts.Count ? allUVs : new List<Vector2>(new Vector2[allVerts.Count]));
-    //     mesh.RecalculateBounds();
-    //     meshFilter.sharedMesh = mesh;
-
-    //     if (materials != null && materials.Length == mesh.subMeshCount)
-    //     {
-    //         meshRenderer.materials = materials;
-    //     }
-    //     else
-    //     {
-    //         // fallback seguro: aplica só o material base
-    //         meshRenderer.materials = new Material[] { materials != null && materials.Length > 0 ? materials[0] : null };
-    //     }
-
-    //     mesh.UploadMeshData(false);
-    // }
-
-
-    public void ApplyMeshData(
-        List<Vector3> solidVertices, List<int> solidTriangles, List<Vector2> solidUVs, List<Vector3> solidNormals,
-        List<Vector3> leafVertices, List<int> leafTriangles, List<Vector2> leafUVs, List<Vector3> leafNormals,
-        List<Vector3> waterVertices, List<int> waterTriangles, List<Vector2> waterUVs, List<Vector3> waterNormals,
-        Material[] materials, int w, int h, int d, float bSize)
+    /// <summary>
+    /// Implementação genérica que monta o mesh a partir de listas por-material.
+    /// verticesByMaterial[i], trianglesByMaterial[i], uvsByMaterial[i], normalsByMaterial[i]
+    /// representam os dados do material de índice i (pode haver listas vazias).
+    /// </summary>
+    public void ApplyMeshDataByMaterial(
+        List<List<Vector3>> verticesByMaterial,
+        List<List<int>> trianglesByMaterial,
+        List<List<Vector2>> uvsByMaterial,
+        List<List<Vector3>> normalsByMaterial,
+        Material[] materials,
+        int w, int h, int d, float bSize)
     {
         // atualizar metadados do chunk
         width = w; height = h; depth = d; blockSize = bSize;
 
-        int solidCount = solidVertices?.Count ?? 0;
-        int leafCount = leafVertices?.Count ?? 0;
-        int waterCount = waterVertices?.Count ?? 0;
+        // decidir quantos "slots" (materiais) vamos considerar
+        int materialCount = (materials != null) ? materials.Length : 0;
+        if (materialCount == 0)
+        {
+            materialCount = Math.Max(
+                verticesByMaterial != null ? verticesByMaterial.Count : 0,
+                Math.Max(
+                    trianglesByMaterial != null ? trianglesByMaterial.Count : 0,
+                    Math.Max(uvsByMaterial != null ? uvsByMaterial.Count : 0,
+                             normalsByMaterial != null ? normalsByMaterial.Count : 0)
+                )
+            );
+        }
+        materialCount = Math.Max(1, materialCount);
 
-        int totalVerts = solidCount + leafCount + waterCount;
+        // preparar combinados
+        var allVerts = new List<Vector3>();
+        var allUVs = new List<Vector2>();
+        var allNormals = new List<Vector3>();
 
-        // Combinar vértices / uvs / normais em listas contíguas
-        var allVerts = new List<Vector3>(totalVerts);
-        var allUVs = new List<Vector2>(totalVerts);
-        var allNormals = new List<Vector3>(totalVerts);
+        var submeshTriangles = new List<int>[materialCount];
+        for (int i = 0; i < materialCount; i++) submeshTriangles[i] = new List<int>();
 
-        if (solidVertices != null) allVerts.AddRange(solidVertices);
-        if (leafVertices != null) allVerts.AddRange(leafVertices);
-        if (waterVertices != null) allVerts.AddRange(waterVertices);
+        // concatenar dados por material e ajustar índices dos triangles
+        for (int mat = 0; mat < materialCount; mat++)
+        {
+            var vlist = (verticesByMaterial != null && mat < verticesByMaterial.Count) ? verticesByMaterial[mat] : null;
+            var tris = (trianglesByMaterial != null && mat < trianglesByMaterial.Count) ? trianglesByMaterial[mat] : null;
+            var uvs = (uvsByMaterial != null && mat < uvsByMaterial.Count) ? uvsByMaterial[mat] : null;
+            var norms = (normalsByMaterial != null && mat < normalsByMaterial.Count) ? normalsByMaterial[mat] : null;
 
-        if (solidUVs != null) allUVs.AddRange(solidUVs);
-        if (leafUVs != null) allUVs.AddRange(leafUVs);
-        if (waterUVs != null) allUVs.AddRange(waterUVs);
+            int offset = allVerts.Count;
 
-        if (solidNormals != null) allNormals.AddRange(solidNormals);
-        if (leafNormals != null) allNormals.AddRange(leafNormals);
-        if (waterNormals != null) allNormals.AddRange(waterNormals);
+            if (vlist != null && vlist.Count > 0)
+            {
+                allVerts.AddRange(vlist);
 
-        // Reutilizar mesh existente quando possível
+                if (uvs != null && uvs.Count == vlist.Count) allUVs.AddRange(uvs);
+                else
+                {
+                    for (int i = 0; i < vlist.Count; i++) allUVs.Add(Vector2.zero);
+                }
+
+                if (norms != null && norms.Count == vlist.Count) allNormals.AddRange(norms);
+                else
+                {
+                    for (int i = 0; i < vlist.Count; i++) allNormals.Add(Vector3.zero);
+                }
+            }
+
+            if (tris != null && tris.Count > 0)
+            {
+                for (int ti = 0; ti < tris.Count; ti++)
+                    submeshTriangles[mat].Add(tris[ti] + offset);
+            }
+        }
+
+        // criar/reutilizar mesh
         Mesh mesh = meshFilter.sharedMesh;
         if (mesh == null)
         {
             mesh = new Mesh();
             mesh.name = $"{gameObject.name}_mesh";
-            // permitir > 65535 vértices quando necessário
             mesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
             meshFilter.sharedMesh = mesh;
         }
 
-        // Limpar mantendo capacidade interna (false) para reduzir reallocs
         mesh.Clear(false);
+        mesh.indexFormat = (allVerts.Count > 65535) ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16;
 
-        // Escolher index format conforme número de vértices
-        mesh.indexFormat = (totalVerts > 65535) ? UnityEngine.Rendering.IndexFormat.UInt32 : UnityEngine.Rendering.IndexFormat.UInt16;
+        if (allVerts.Count > 0) mesh.SetVertices(allVerts);
+        else mesh.SetVertices(new List<Vector3>());
 
-        // Vértices
-        if (allVerts.Count > 0)
-            mesh.SetVertices(allVerts);
-        else
-            mesh.SetVertices(new List<Vector3>());
-
-        // Normais: se o chamador já passou normais completas, usá-las; senão calcular a partir dos triângulos
-        if (allNormals != null && allNormals.Count == allVerts.Count)
+        // normais: usar se válidas, senão calcular
+        bool hasValidNormals = allNormals != null && allNormals.Count == allVerts.Count && allNormals.Exists(n => n.sqrMagnitude > 1e-8f);
+        if (hasValidNormals)
         {
             mesh.SetNormals(allNormals);
         }
         else
         {
-            // calcular normais manualmente a partir dos triângulos (evita RecalculateNormals interno)
-            var accumNormals = new Vector3[allVerts.Count];
-            for (int i = 0; i < accumNormals.Length; i++) accumNormals[i] = Vector3.zero;
+            var accum = new Vector3[allVerts.Count];
+            for (int i = 0; i < accum.Length; i++) accum[i] = Vector3.zero;
 
-            // montar lista de triangles combinados (ajustando offsets para leaf e water)
-            var trisCombined = new List<int>();
-            if (solidTriangles != null) trisCombined.AddRange(solidTriangles);
+            var combinedTris = new List<int>();
+            for (int i = 0; i < materialCount; i++) combinedTris.AddRange(submeshTriangles[i]);
 
-            if (leafTriangles != null && leafTriangles.Count > 0)
+            for (int ti = 0; ti + 2 < combinedTris.Count; ti += 3)
             {
-                int leafOffset = solidCount;
-                for (int i = 0; i < leafTriangles.Count; i++)
-                    trisCombined.Add(leafTriangles[i] + leafOffset);
-            }
-
-            if (waterTriangles != null && waterTriangles.Count > 0)
-            {
-                int waterOffset = solidCount + leafCount;
-                for (int i = 0; i < waterTriangles.Count; i++)
-                    trisCombined.Add(waterTriangles[i] + waterOffset);
-            }
-
-            // calcular normal por tri e acumular
-            for (int ti = 0; ti + 2 < trisCombined.Count; ti += 3)
-            {
-                int i0 = trisCombined[ti + 0];
-                int i1 = trisCombined[ti + 1];
-                int i2 = trisCombined[ti + 2];
-                if (i0 < 0 || i1 < 0 || i2 < 0 ||
-                    i0 >= allVerts.Count || i1 >= allVerts.Count || i2 >= allVerts.Count)
-                    continue;
-
+                int i0 = combinedTris[ti + 0];
+                int i1 = combinedTris[ti + 1];
+                int i2 = combinedTris[ti + 2];
+                if (i0 < 0 || i1 < 0 || i2 < 0 || i0 >= allVerts.Count || i1 >= allVerts.Count || i2 >= allVerts.Count) continue;
                 Vector3 v0 = allVerts[i0];
                 Vector3 v1 = allVerts[i1];
                 Vector3 v2 = allVerts[i2];
-                Vector3 triNormal = Vector3.Cross(v1 - v0, v2 - v0);
-                accumNormals[i0] += triNormal;
-                accumNormals[i1] += triNormal;
-                accumNormals[i2] += triNormal;
+                Vector3 triN = Vector3.Cross(v1 - v0, v2 - v0);
+                accum[i0] += triN; accum[i1] += triN; accum[i2] += triN;
             }
 
-            // normalizar e setar
             var finalNormals = new List<Vector3>(allVerts.Count);
-            for (int i = 0; i < accumNormals.Length; i++)
+            for (int i = 0; i < accum.Length; i++)
             {
-                Vector3 n = accumNormals[i];
-                if (n.sqrMagnitude > 1e-8f) n.Normalize();
-                else n = Vector3.up; // fallback seguro
+                Vector3 n = accum[i];
+                if (n.sqrMagnitude > 1e-8f) n.Normalize(); else n = Vector3.up;
                 finalNormals.Add(n);
             }
             mesh.SetNormals(finalNormals);
         }
 
-        // preparar submeshes: ordem = sólido(0), folhas(1 se existir), água(last se existir)
-        int subMeshCount = 1;
-        if (leafCount > 0) subMeshCount++;
-        if (waterCount > 0) subMeshCount++;
-        mesh.subMeshCount = subMeshCount;
+        // configurar submeshes
+        int usedSubMeshCount = materialCount;
+        mesh.subMeshCount = usedSubMeshCount;
 
-        // sólidos = submesh 0
-        if (solidTriangles != null && solidTriangles.Count > 0)
-            mesh.SetTriangles(solidTriangles, 0);
-        else
-            mesh.SetTriangles(new int[0], 0);
-
-        // folhas = submesh 1 (se existirem)
-        if (leafCount > 0)
+        for (int i = 0; i < usedSubMeshCount; i++)
         {
-            if (leafTriangles != null && leafTriangles.Count > 0)
-            {
-                var leafTrisOffset = new List<int>(leafTriangles.Count);
-                for (int i = 0; i < leafTriangles.Count; i++)
-                    leafTrisOffset.Add(leafTriangles[i] + solidCount);
-                mesh.SetTriangles(leafTrisOffset, 1);
-            }
-            else
-            {
-                mesh.SetTriangles(new int[0], 1);
-            }
+            var tri = submeshTriangles[i];
+            if (tri != null && tri.Count > 0) mesh.SetTriangles(tri, i);
+            else mesh.SetTriangles(new int[0], i);
         }
 
-        // água = último submesh (se existir)
-        if (waterCount > 0)
-        {
-            int waterSubIndex = (leafCount > 0) ? 2 : 1;
-            if (waterTriangles != null && waterTriangles.Count > 0)
-            {
-                var waterTrisOffset = new List<int>(waterTriangles.Count);
-                int waterOffset = solidCount + leafCount;
-                for (int i = 0; i < waterTriangles.Count; i++)
-                    waterTrisOffset.Add(waterTriangles[i] + waterOffset);
-                mesh.SetTriangles(waterTrisOffset, waterSubIndex);
-            }
-            else
-            {
-                mesh.SetTriangles(new int[0], waterSubIndex);
-            }
-        }
-
-        // UVs: garantir que o tamanho bata com allVerts
-        if (allUVs != null && allUVs.Count == allVerts.Count)
-            mesh.SetUVs(0, allUVs);
+        // UVs
+        if (allUVs != null && allUVs.Count == allVerts.Count) mesh.SetUVs(0, allUVs);
         else
         {
             var fallback = new List<Vector2>(allVerts.Count);
@@ -1157,66 +665,36 @@ public class Chunk : MonoBehaviour
             mesh.SetUVs(0, fallback);
         }
 
-        // Recalcular bounds
         mesh.RecalculateBounds();
-
-        // Garantir que sharedMesh seja o mesh atual
         meshFilter.sharedMesh = mesh;
 
-        // --- materials: garantir correspondência com subMeshCount ---
-        Material[] finalMats = null;
-
-        // Se o chamador passou um array e ele coincide com o número de submeshes, usar direto
-        if (materials != null && materials.Length == mesh.subMeshCount)
+        // materiais: alinhar com subMeshCount (usar VoxelWorld.materials como fallback se existir)
+        Material[] finalMats;
+        if (materials != null && materials.Length >= mesh.subMeshCount)
         {
-            finalMats = materials;
+            finalMats = new Material[mesh.subMeshCount];
+            for (int i = 0; i < mesh.subMeshCount; i++) finalMats[i] = materials[i];
         }
         else
         {
-            // Montar dinamicamente a partir do VoxelWorld (se disponível) ou do array parcial passado
             var world = VoxelWorld.Instance;
-            var matList = new List<Material>();
-
-            // base (sólidos)
-            Material baseMat = (materials != null && materials.Length > 0) ? materials[0] : (world != null ? world.chunkMaterial : null);
-            if (baseMat != null) matList.Add(baseMat);
-            else matList.Add(new Material(Shader.Find("Standard"))); // fallback seguro
-
-            bool hasLeaf = (leafCount > 0);
-            bool hasWater = (waterCount > 0);
-
-            if (hasLeaf)
+            var list = new List<Material>();
+            for (int i = 0; i < mesh.subMeshCount; i++)
             {
-                Material leafMat = null;
-                if (materials != null && materials.Length > 1) leafMat = materials[1];
-                else if (world != null) leafMat = world.leafMaterial;
-
-                if (leafMat != null) matList.Add(leafMat);
-                else matList.Add(matList[0]); // fallback para evitar null
+                Material m = null;
+                if (materials != null && i < materials.Length) m = materials[i];
+                else if (world != null && world.materials != null && i < world.materials.Length) m = world.materials[i];
+                if (m == null) m = (world != null && world.chunkMaterial != null) ? world.chunkMaterial : new Material(Shader.Find("Standard"));
+                list.Add(m);
             }
-
-            if (hasWater)
-            {
-                Material waterMat = null;
-                if (materials != null)
-                {
-                    int expectedIndex = 1 + (hasLeaf ? 1 : 0);
-                    if (materials.Length > expectedIndex) waterMat = materials[expectedIndex];
-                }
-                if (waterMat == null && world != null) waterMat = world.waterMaterial;
-                if (waterMat != null) matList.Add(waterMat);
-                else matList.Add(matList[0]);
-            }
-
-            finalMats = matList.ToArray();
+            finalMats = list.ToArray();
         }
 
-        // Aplicar materiais
         meshRenderer.materials = finalMats;
 
-        // Upload para GPU (manter readable = false)
         mesh.UploadMeshData(false);
     }
+
 
 
 

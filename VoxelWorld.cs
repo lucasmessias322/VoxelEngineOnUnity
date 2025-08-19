@@ -61,6 +61,10 @@ public class VoxelWorld : MonoBehaviour
     public Material leafMaterial;  // índice 1 (novo)
     public Material waterMaterial; // índice 2
 
+    // Add this array to allow custom material assignment
+    [Tooltip("Optional: Override materials array for chunk rendering.")]
+    public Material[] materials;
+
     public Transform player;
     public GameObject chunkPrefab;
 
@@ -100,12 +104,19 @@ public class VoxelWorld : MonoBehaviour
     // Buffers reutilizáveis (para reduzir GC no main thread)
     // Usados apenas no main thread (ProcessMeshResults)
     // -------------------------
-    private List<Vector2> reusableSolidUVs = new List<Vector2>(4096);
-    private List<Vector2> reusableWaterUVs = new List<Vector2>(1024);
-    private List<Vector3> reusableAllVerts = new List<Vector3>(8192);
-    private List<Vector2> reusableAllUVs = new List<Vector2>(8192);
-    private List<Vector3> reusableTempVerts = new List<Vector3>(8192); // usado se precisar temporariamente
+    // private List<Vector2> reusableSolidUVs = new List<Vector2>(4096);
+    // private List<Vector2> reusableWaterUVs = new List<Vector2>(1024);
+    // private List<Vector3> reusableAllVerts = new List<Vector3>(8192);
+    // private List<Vector2> reusableAllUVs = new List<Vector2>(8192);
+    // private List<Vector3> reusableTempVerts = new List<Vector3>(8192); // usado se precisar temporariamente
     // -------------------------
+
+    // --- caching for enum lookups (to avoid Enum.GetValues/boxing in hot-paths)
+    private int cachedMaxBlockType = -1;
+    private int[] cachedMaterialIndexByType; // index = (int)BlockType -> materialIndex
+    private byte[] cachedIsEmptyByType;      // index = (int)BlockType -> 0/1
+    private BlockDataSO cachedBlockDataSORef = null;
+
 
     private SemaphoreSlim generationSemaphore;
 
@@ -176,99 +187,44 @@ public class VoxelWorld : MonoBehaviour
         UpdateChunkColliders();
     }
 
-    // private void ProcessMeshResults()
-    // {
-    //     while (meshResults.TryDequeue(out var res))
-    //     {
-    //         // garante chunk (cria/pega do pool)
-    //         if (!activeChunks.TryGetValue(res.coord, out var chunk))
-    //         {
-    //             chunk = GetChunkFromPool(res.coord);
-    //             activeChunks[res.coord] = chunk;
-    //         }
+    private void EnsureBlockTypeCaches()
+    {
+        // recompute only if blockDataSO changed or not initialized
+        if (cachedBlockDataSORef == blockDataSO && cachedMaxBlockType >= 0) return;
 
-    //         // Seta o inner blocks (w,h,d) no chunk
-    //         chunk.SetBlocks(res.blocks);
+        cachedBlockDataSORef = blockDataSO;
 
-    //         // --- UVs: reutilizar buffers em vez de alocar ---
-    //         reusableSolidUVs.Clear();
-    //         EnsureCapacity(reusableSolidUVs, res.solidVertices != null ? res.solidVertices.Count : 0);
-    //         // Cada face adiciona 4 UVs; res.solidFaceBlockTypes.Count é número de faces
-    //         for (int qi = 0; qi < res.solidFaceBlockTypes.Count; qi++)
-    //         {
-    //             var bt = (BlockType)res.solidFaceBlockTypes[qi];
-    //             var normal = NormalFromIndex(res.solidFaceNormals[qi]);
-    //             AddUVsForFace(reusableSolidUVs, bt, normal);
-    //         }
+        // descobrir max enum (uma vez). Usa Enum.GetValues UMA VEZ aqui — aceitável.
+        int max = 0;
+        foreach (BlockType bt in Enum.GetValues(typeof(BlockType)))
+            max = Math.Max(max, (int)bt);
 
-    //         reusableWaterUVs.Clear();
-    //         EnsureCapacity(reusableWaterUVs, res.waterVertices != null ? res.waterVertices.Count : 0);
-    //         for (int qi = 0; qi < res.waterFaceBlockTypes.Count; qi++)
-    //         {
-    //             var bt = (BlockType)res.waterFaceBlockTypes[qi];
-    //             var normal = NormalFromIndex(res.waterFaceNormals[qi]);
-    //             AddUVsForFace(reusableWaterUVs, bt, normal);
-    //         }
+        cachedMaxBlockType = max;
 
-    //         // --- Construir listas de normais por-vértice (4 cópias da normal por face) ---
-    //         List<Vector3> solidNormals = null;
-    //         if (res.solidFaceNormals != null && res.solidFaceNormals.Count > 0)
-    //         {
-    //             int faceCount = res.solidFaceNormals.Count;
-    //             solidNormals = new List<Vector3>(faceCount * 4);
-    //             for (int f = 0; f < faceCount; f++)
-    //             {
-    //                 var n = NormalFromIndex(res.solidFaceNormals[f]);
-    //                 // cada face tem 4 vértices (quad)
-    //                 solidNormals.Add(n);
-    //                 solidNormals.Add(n);
-    //                 solidNormals.Add(n);
-    //                 solidNormals.Add(n);
-    //             }
-    //         }
+        // criar arrays
+        cachedMaterialIndexByType = new int[max + 1];
+        cachedIsEmptyByType = new byte[max + 1];
 
-    //         List<Vector3> waterNormals = null;
-    //         if (res.waterFaceNormals != null && res.waterFaceNormals.Count > 0)
-    //         {
-    //             int faceCount = res.waterFaceNormals.Count;
-    //             waterNormals = new List<Vector3>(faceCount * 4);
-    //             for (int f = 0; f < faceCount; f++)
-    //             {
-    //                 var n = NormalFromIndex(res.waterFaceNormals[f]);
-    //                 waterNormals.Add(n);
-    //                 waterNormals.Add(n);
-    //                 waterNormals.Add(n);
-    //                 waterNormals.Add(n);
-    //             }
-    //         }
+        // defaults
+        for (int i = 0; i <= max; i++)
+        {
+            cachedMaterialIndexByType[i] = 0;
+            cachedIsEmptyByType[i] = 0;
+        }
 
-    //         // --- Preparar vértices/UVs reutilizando buffers (para reduzir GC) ---
-    //         reusableAllVerts.Clear();
-    //         int expectedVerts = (res.solidVertices?.Count ?? 0) + (res.waterVertices?.Count ?? 0);
-    //         EnsureCapacity(reusableAllVerts, expectedVerts);
-    //         if (res.solidVertices != null) reusableAllVerts.AddRange(res.solidVertices);
-    //         if (res.waterVertices != null) reusableAllVerts.AddRange(res.waterVertices);
-
-    //         reusableAllUVs.Clear();
-    //         EnsureCapacity(reusableAllUVs, expectedVerts);
-    //         if (reusableSolidUVs != null) reusableAllUVs.AddRange(reusableSolidUVs);
-    //         if (reusableWaterUVs != null) reusableAllUVs.AddRange(reusableWaterUVs);
-
-    //         // Chamamos ApplyMeshData passando também as listas de normais por-vértice
-    //         chunk.ApplyMeshData(
-    //             res.solidVertices, res.solidTriangles, reusableSolidUVs, solidNormals,
-    //             res.waterVertices, res.waterTriangles, reusableWaterUVs, waterNormals,
-    //             new Material[] { chunkMaterial, waterMaterial },
-    //             res.width, res.height, res.depth, res.blockSize
-    //         );
-
-    //         // Após aplicar, podemos limpar as listas do result (opcional para liberar referência mais cedo)
-    //         // Não usamos pool para resultados em background; deixamos GC cuidar — já alocamos com boa capacidade.
-    //     }
-    // }
-
-
-    // Helper que chama AddUVsTo 1 vez por face (AddUVsTo adiciona 4 UVs)
+        if (blockDataSO != null)
+        {
+            foreach (var kv in blockDataSO.blockTextureDict)
+            {
+                int idx = (int)kv.Key;
+                if (idx >= 0 && idx <= max)
+                {
+                    cachedMaterialIndexByType[idx] = Mathf.Max(0, kv.Value.materialIndex);
+                    cachedIsEmptyByType[idx] = (byte)(kv.Value.isEmpty ? 1 : 0);
+                }
+            }
+        }
+    }
 
 
     private void ProcessMeshResults()
@@ -285,95 +241,104 @@ public class VoxelWorld : MonoBehaviour
             // Seta o inner blocks no chunk
             chunk.SetBlocks(res.blocks);
 
-            // --- UVs ---
-            // sólidos
-            reusableSolidUVs.Clear();
-            EnsureCapacity(reusableSolidUVs, res.solidVertices != null ? res.solidVertices.Count : 0);
-            for (int qi = 0; qi < res.solidFaceBlockTypes.Count; qi++)
-            {
-                var bt = (BlockType)res.solidFaceBlockTypes[qi];
-                var normal = NormalFromIndex(res.solidFaceNormals[qi]);
-                AddUVsForFace(reusableSolidUVs, bt, normal);
-            }
+            // --- Agrupar faces (as faces foram empacotadas em res.solid* pelo StartGenerateChunkAsync) ---
+            var faceVerts = res.solidVertices ?? new List<Vector3>();
+            var faceTris = res.solidTriangles ?? new List<int>();
+            var faceBlockTypes = res.solidFaceBlockTypes ?? new List<int>();
+            var faceNormals = res.solidFaceNormals ?? new List<int>();
 
-            // folhas
-            var reusableLeafUVs = new List<Vector2>(res.leafVertices != null ? res.leafVertices.Count : 0);
-            for (int qi = 0; qi < (res.leafFaceBlockTypes?.Count ?? 0); qi++)
-            {
-                var bt = (BlockType)res.leafFaceBlockTypes[qi];
-                var normal = NormalFromIndex(res.leafFaceNormals[qi]);
-                AddUVsForFace(reusableLeafUVs, bt, normal);
-            }
+            int faceCount = faceBlockTypes.Count; // cada entrada é uma face (4 vértices, 6 índices)
 
-            // água
-            reusableWaterUVs.Clear();
-            EnsureCapacity(reusableWaterUVs, res.waterVertices != null ? res.waterVertices.Count : 0);
-            for (int qi = 0; qi < res.waterFaceBlockTypes.Count; qi++)
-            {
-                var bt = (BlockType)res.waterFaceBlockTypes[qi];
-                var normal = NormalFromIndex(res.waterFaceNormals[qi]);
-                AddUVsForFace(reusableWaterUVs, bt, normal);
-            }
+            // Dicionários temporários por materialIndex
+            var vertsByMat = new List<List<Vector3>>();
+            var trisByMat = new List<List<int>>();
+            var uvsByMat = new List<List<Vector2>>();
+            var normsByMat = new List<List<Vector3>>();
 
-            // --- Normais ---
-            List<Vector3> solidNormals = null;
-            if (res.solidFaceNormals != null && res.solidFaceNormals.Count > 0)
+            // Helper para garantir tamanho das listas por material index
+            void EnsureMaterialSlot(int idx)
             {
-                int faceCount = res.solidFaceNormals.Count;
-                solidNormals = new List<Vector3>(faceCount * 4);
-                for (int f = 0; f < faceCount; f++)
+                while (vertsByMat.Count <= idx)
                 {
-                    var n = NormalFromIndex(res.solidFaceNormals[f]);
-                    solidNormals.Add(n); solidNormals.Add(n); solidNormals.Add(n); solidNormals.Add(n);
+                    vertsByMat.Add(new List<Vector3>());
+                    trisByMat.Add(new List<int>());
+                    uvsByMat.Add(new List<Vector2>());
+                    normsByMat.Add(new List<Vector3>());
                 }
             }
 
-            List<Vector3> leafNormals = null;
-            if (res.leafFaceNormals != null && res.leafFaceNormals.Count > 0)
+            int GetMaterialIndexForBlockType(int blockTypeInt)
             {
-                int faceCount = res.leafFaceNormals.Count;
-                leafNormals = new List<Vector3>(faceCount * 4);
-                for (int f = 0; f < faceCount; f++)
-                {
-                    var n = NormalFromIndex(res.leafFaceNormals[f]);
-                    leafNormals.Add(n); leafNormals.Add(n); leafNormals.Add(n); leafNormals.Add(n);
-                }
+                if (blockTypeInt < 0) return 0;
+                // garante cache preparado
+                if (cachedMaterialIndexByType == null) EnsureBlockTypeCaches();
+                if (blockTypeInt >= cachedMaterialIndexByType.Length) return 0;
+                return cachedMaterialIndexByType[blockTypeInt];
             }
 
-            List<Vector3> waterNormals = null;
-            if (res.waterFaceNormals != null && res.waterFaceNormals.Count > 0)
+
+
+            // Percorrer faces: cada face ocupa 4 vértices seguidos em faceVerts; face i tem verts index = i*4 .. i*4+3
+            for (int fi = 0; fi < faceCount; fi++)
             {
-                int faceCount = res.waterFaceNormals.Count;
-                waterNormals = new List<Vector3>(faceCount * 4);
-                for (int f = 0; f < faceCount; f++)
-                {
-                    var n = NormalFromIndex(res.waterFaceNormals[f]);
-                    waterNormals.Add(n); waterNormals.Add(n); waterNormals.Add(n); waterNormals.Add(n);
-                }
+                int matIndex = GetMaterialIndexForBlockType(faceBlockTypes[fi]);
+                EnsureMaterialSlot(matIndex);
+
+                var vlist = vertsByMat[matIndex];
+                var tris = trisByMat[matIndex];
+                var uvs = uvsByMat[matIndex];
+                var norms = normsByMat[matIndex];
+
+                int baseVertIndex = fi * 4;
+                // adicionar 4 vértices
+                vlist.Add(faceVerts[baseVertIndex + 0]);
+                vlist.Add(faceVerts[baseVertIndex + 1]);
+                vlist.Add(faceVerts[baseVertIndex + 2]);
+                vlist.Add(faceVerts[baseVertIndex + 3]);
+
+                // adicionar tri (indices relativos ao vlist)
+                int vi = vlist.Count - 4;
+                tris.Add(vi + 0); tris.Add(vi + 1); tris.Add(vi + 2);
+                tris.Add(vi + 0); tris.Add(vi + 2); tris.Add(vi + 3);
+
+                // UVs: usar AddUVsTo para esta face (esta função está em VoxelWorld e é segura na main thread)
+                var bt = (BlockType)faceBlockTypes[fi];
+                var normal = NormalFromIndex(faceNormals[fi]);
+                AddUVsTo(uvs, bt, normal);
+
+                // Normais per-vertex (4 cópias)
+                norms.Add(normal); norms.Add(normal); norms.Add(normal); norms.Add(normal);
             }
 
-            // --- Escolher materiais na mesma ordem dos submeshes ---
-            var mats = new List<Material>();
-            mats.Add(chunkMaterial); // sólidos sempre primeiro
+            // Montar array de materiais final (preferir VoxelWorld.materials[] se atribuído; senão montar fallback)
+            Material[] finalMaterials = null;
+            if (this.materials != null && this.materials.Length > 0)
+            {
+                finalMaterials = this.materials;
+            }
+            else
+            {
+                // fallback para compatibilidade com campos existentes
+                var matsList = new List<Material>();
+                if (chunkMaterial != null) matsList.Add(chunkMaterial);
+                if (leafMaterial != null) matsList.Add(leafMaterial);
+                if (waterMaterial != null) matsList.Add(waterMaterial);
+                finalMaterials = matsList.ToArray();
+            }
 
-            bool hasLeaves = res.leafVertices != null && res.leafVertices.Count > 0;
-            bool hasWater = res.waterVertices != null && res.waterVertices.Count > 0;
-
-            if (hasLeaves) mats.Add(leafMaterial); // folhas se existirem
-            if (hasWater) mats.Add(waterMaterial); // água se existir
-
-            chunk.ApplyMeshData(
-                res.solidVertices, res.solidTriangles, reusableSolidUVs, solidNormals,
-                res.leafVertices, res.leafTriangles, reusableLeafUVs, leafNormals,
-                res.waterVertices, res.waterTriangles, reusableWaterUVs, waterNormals,
-                mats.ToArray(),
+            // Garantir que finalMaterials tenha pelo menos o número de slots usados (ou será truncado no Chunk)
+            // Chamar ApplyMeshDataByMaterial no chunk (ordem de materiais = índice)
+            chunk.ApplyMeshDataByMaterial(
+                vertsByMat,
+                trisByMat,
+                uvsByMat,
+                normsByMat,
+                finalMaterials,
                 res.width, res.height, res.depth, res.blockSize
             );
-
-
-
         }
     }
+
 
     private void AddUVsForFace(List<Vector2> uvList, BlockType bt, Vector3 normal)
     {
@@ -564,174 +529,6 @@ public class VoxelWorld : MonoBehaviour
         return new Vector2Int(cx, cz);
     }
 
-    // private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
-    // {
-    //     await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
-
-    //     try
-    //     {
-    //         if (token.IsCancellationRequested) return;
-
-    //         // gera padded flattened diretamente do generator (NativeArray)
-    //         int pw, ph, pd;
-    //         var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob);
-
-    //         // extrai o inner (w,h,d) para SetBlocks (mantendo o array BlockType[,,] que o resto do pipeline usa)
-    //         int w = chunkWidth, h = chunkHeight, d = chunkDepth;
-    //         int pad = (pw - w) / 2;
-    //         if (pad < 0) pad = 0;
-
-    //         var inner = new BlockType[w, h, d];
-    //         // copiando usando a mesma fórmula de flatten
-    //         int lpw = pw, lph = ph, lpd = pd;
-    //         for (int x = 0; x < w; x++)
-    //         {
-    //             int srcX = x + pad;
-    //             for (int y = 0; y < h; y++)
-    //             {
-    //                 for (int z = 0; z < d; z++)
-    //                 {
-    //                     int srcZ = z + pad;
-    //                     int idx = (srcX * lph + y) * lpd + srcZ;
-    //                     inner[x, y, z] = (BlockType)paddedFlat[idx];
-    //                 }
-    //             }
-    //         }
-
-    //         // Construir isEmptyByType native array (0/1) com base em blockDataSO
-    //         int maxEnum = 0;
-    //         foreach (BlockType bt in Enum.GetValues(typeof(BlockType)))
-    //         {
-    //             maxEnum = Math.Max(maxEnum, (int)bt);
-    //         }
-    //         var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
-    //         for (int i = 0; i < isEmptyByType.Length; i++) isEmptyByType[i] = 0;
-    //         if (blockDataSO != null)
-    //         {
-    //             foreach (var kv in blockDataSO.blockTextureDict)
-    //             {
-    //                 var bt = kv.Key;
-    //                 var mapping = kv.Value;
-    //                 if ((int)bt >= 0 && (int)bt < isEmptyByType.Length)
-    //                     isEmptyByType[(int)bt] = (byte)(mapping.isEmpty ? 1 : 0);
-    //             }
-    //         }
-
-    //         // Preparar job (usa paddedFlat diretamente)
-    //         float s = blockSize;
-    //         int airInt = (int)BlockType.Air;
-    //         int waterInt = (int)BlockType.Water;
-
-    //         var solidFaces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-    //         var waterFaces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-
-    //         var job = new MeshGenJob
-    //         {
-    //             padded = paddedFlat,
-    //             pw = lpw,
-    //             ph = lph,
-    //             pd = lpd,
-    //             pad = pad,
-    //             w = w,
-    //             h = h,
-    //             d = d,
-    //             s = s,
-    //             airInt = airInt,
-    //             waterInt = waterInt,
-    //             isEmptyByType = isEmptyByType,
-    //             solidFaces = solidFaces,
-    //             waterFaces = waterFaces
-    //         };
-
-    //         // Executa (IJob) — manter comportamento original (Schedule/Complete)
-    //         var handle = job.Schedule();
-    //         handle.Complete();
-
-    //         // Coleta resultados para main thread
-    //         var solidFaceArr = solidFaces.AsArray();
-    //         var waterFaceArr = waterFaces.AsArray();
-
-    //         var solidVerts = new List<Vector3>(solidFaceArr.Length * 4);
-    //         var solidTris = new List<int>(solidFaceArr.Length * 6);
-    //         var solidFaceBlockTypes = new List<int>(solidFaceArr.Length);
-    //         var solidFaceNormals = new List<int>(solidFaceArr.Length);
-
-    //         for (int i = 0; i < solidFaceArr.Length; i++)
-    //         {
-    //             var f = solidFaceArr[i];
-    //             int vi = solidVerts.Count;
-    //             solidVerts.Add(ToV3(f.v0));
-    //             solidVerts.Add(ToV3(f.v1));
-    //             solidVerts.Add(ToV3(f.v2));
-    //             solidVerts.Add(ToV3(f.v3));
-    //             solidTris.Add(vi + 0); solidTris.Add(vi + 1); solidTris.Add(vi + 2);
-    //             solidTris.Add(vi + 0); solidTris.Add(vi + 2); solidTris.Add(vi + 3);
-
-    //             solidFaceBlockTypes.Add(f.blockType);
-    //             solidFaceNormals.Add(f.normal);
-    //         }
-
-    //         var waterVerts = new List<Vector3>(waterFaceArr.Length * 4);
-    //         var waterTris = new List<int>(waterFaceArr.Length * 6);
-    //         var waterFaceBlockTypes = new List<int>(waterFaceArr.Length);
-    //         var waterFaceNormals = new List<int>(waterFaceArr.Length);
-
-    //         for (int i = 0; i < waterFaceArr.Length; i++)
-    //         {
-    //             var f = waterFaceArr[i];
-    //             int vi = waterVerts.Count;
-    //             waterVerts.Add(ToV3(f.v0));
-    //             waterVerts.Add(ToV3(f.v1));
-    //             waterVerts.Add(ToV3(f.v2));
-    //             waterVerts.Add(ToV3(f.v3));
-    //             waterTris.Add(vi + 0); waterTris.Add(vi + 1); waterTris.Add(vi + 2);
-    //             waterTris.Add(vi + 0); waterTris.Add(vi + 2); waterTris.Add(vi + 3);
-
-    //             waterFaceBlockTypes.Add(f.blockType);
-    //             waterFaceNormals.Add(f.normal);
-    //         }
-
-    //         // Dispose dos containers nativos
-    //         solidFaces.Dispose();
-    //         waterFaces.Dispose();
-    //         paddedFlat.Dispose(); // <--- agora descarta o NativeArray alocado no generator
-    //         isEmptyByType.Dispose();
-
-    //         // Enfileira resultado para main thread aplicar mesh (UVs e Mesh)
-    //         var result = new MeshJobResult()
-    //         {
-    //             coord = chunkCoord,
-    //             blocks = inner,
-    //             solidVertices = solidVerts,
-    //             solidTriangles = solidTris,
-    //             solidFaceBlockTypes = solidFaceBlockTypes,
-    //             solidFaceNormals = solidFaceNormals,
-    //             waterVertices = waterVerts,
-    //             waterTriangles = waterTris,
-    //             waterFaceBlockTypes = waterFaceBlockTypes,
-    //             waterFaceNormals = waterFaceNormals,
-    //             width = w,
-    //             height = h,
-    //             depth = d,
-    //             blockSize = s
-    //         };
-
-    //         meshResults.Enqueue(result);
-    //     }
-    //     catch (OperationCanceledException) { }
-    //     catch (Exception ex)
-    //     {
-    //         Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
-    //     }
-    //     finally
-    //     {
-    //         generationSemaphore.Release();
-    //         generatingChunks.TryRemove(chunkCoord, out _);
-    //     }
-    // }
-
-    // --- Helpers e funções antigas adaptadas ---
-
 
     private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
     {
@@ -768,33 +565,35 @@ public class VoxelWorld : MonoBehaviour
             }
 
             // Construir isEmptyByType native array (0/1) com base em blockDataSO
-            int maxEnum = 0;
-            foreach (BlockType bt in Enum.GetValues(typeof(BlockType)))
-            {
-                maxEnum = Math.Max(maxEnum, (int)bt);
-            }
+            // int maxEnum = 0;
+            // foreach (BlockType bt in Enum.GetValues(typeof(BlockType)))
+            // {
+            //     maxEnum = Math.Max(maxEnum, (int)bt);
+            // }
+            // var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
+            // for (int i = 0; i < isEmptyByType.Length; i++) isEmptyByType[i] = 0;
+            // if (blockDataSO != null)
+            // {
+            //     foreach (var kv in blockDataSO.blockTextureDict)
+            //     {
+            //         var bt = kv.Key;
+            //         var mapping = kv.Value;
+            //         if ((int)bt >= 0 && (int)bt < isEmptyByType.Length)
+            //             isEmptyByType[(int)bt] = (byte)(mapping.isEmpty ? 1 : 0);
+            //     }
+            // }
+            // garante que caches estejam prontos
+            EnsureBlockTypeCaches();
+            int maxEnum = cachedMaxBlockType;
             var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
-            for (int i = 0; i < isEmptyByType.Length; i++) isEmptyByType[i] = 0;
-            if (blockDataSO != null)
-            {
-                foreach (var kv in blockDataSO.blockTextureDict)
-                {
-                    var bt = kv.Key;
-                    var mapping = kv.Value;
-                    if ((int)bt >= 0 && (int)bt < isEmptyByType.Length)
-                        isEmptyByType[(int)bt] = (byte)(mapping.isEmpty ? 1 : 0);
-                }
-            }
+            for (int i = 0; i <= maxEnum; i++) isEmptyByType[i] = cachedIsEmptyByType[i];
+
 
             // Preparar job (usa paddedFlat diretamente)
             float s = blockSize;
             int airInt = (int)BlockType.Air;
-            int waterInt = (int)BlockType.Water;
-            int leafInt = (int)BlockType.Leaves; // <--- novo: inteiro para folhas
 
-            var solidFaces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-            var leafFaces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);   // <--- novo
-            var waterFaces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
+            var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
 
             var job = new MeshGenJob
             {
@@ -808,12 +607,8 @@ public class VoxelWorld : MonoBehaviour
                 d = d,
                 s = s,
                 airInt = airInt,
-                waterInt = waterInt,
-                leafInt = leafInt, // <-- passar o leafInt pro job
                 isEmptyByType = isEmptyByType,
-                solidFaces = solidFaces,
-                leafFaces = leafFaces,     // <--- ligar a lista
-                waterFaces = waterFaces
+                faces = faces
             };
 
             // Executa (IJob) — manter comportamento original (Schedule/Complete)
@@ -821,97 +616,49 @@ public class VoxelWorld : MonoBehaviour
             handle.Complete();
 
             // Coleta resultados para main thread
-            var solidFaceArr = solidFaces.AsArray();
-            var leafFaceArr = leafFaces.AsArray();   // <--- novo
-            var waterFaceArr = waterFaces.AsArray();
+            var faceArr = faces.AsArray();
 
-            var solidVerts = new List<Vector3>(solidFaceArr.Length * 4);
-            var solidTris = new List<int>(solidFaceArr.Length * 6);
-            var solidFaceBlockTypes = new List<int>(solidFaceArr.Length);
-            var solidFaceNormals = new List<int>(solidFaceArr.Length);
+            // transformar faces (cada face => 4 vértices + 6 índices) em listas simples para enfileirar
+            var allVerts = new List<Vector3>(faceArr.Length * 4);
+            var allTris = new List<int>(faceArr.Length * 6);
+            var allFaceBlockTypes = new List<int>(faceArr.Length);
+            var allFaceNormals = new List<int>(faceArr.Length);
 
-            for (int i = 0; i < solidFaceArr.Length; i++)
+            for (int i = 0; i < faceArr.Length; i++)
             {
-                var f = solidFaceArr[i];
-                int vi = solidVerts.Count;
-                solidVerts.Add(ToV3(f.v0));
-                solidVerts.Add(ToV3(f.v1));
-                solidVerts.Add(ToV3(f.v2));
-                solidVerts.Add(ToV3(f.v3));
-                solidTris.Add(vi + 0); solidTris.Add(vi + 1); solidTris.Add(vi + 2);
-                solidTris.Add(vi + 0); solidTris.Add(vi + 2); solidTris.Add(vi + 3);
+                var f = faceArr[i];
+                int vi = allVerts.Count;
+                allVerts.Add(ToV3(f.v0));
+                allVerts.Add(ToV3(f.v1));
+                allVerts.Add(ToV3(f.v2));
+                allVerts.Add(ToV3(f.v3));
+                allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
+                allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
 
-                solidFaceBlockTypes.Add(f.blockType);
-                solidFaceNormals.Add(f.normal);
-            }
-
-            var leafVerts = new List<Vector3>(leafFaceArr.Length * 4);    // <--- novo
-            var leafTris = new List<int>(leafFaceArr.Length * 6);         // <--- novo
-            var leafFaceBlockTypes = new List<int>(leafFaceArr.Length);   // <--- novo
-            var leafFaceNormals = new List<int>(leafFaceArr.Length);      // <--- novo
-
-            for (int i = 0; i < leafFaceArr.Length; i++)
-            {
-                var f = leafFaceArr[i];
-                int vi = leafVerts.Count;
-                leafVerts.Add(ToV3(f.v0));
-                leafVerts.Add(ToV3(f.v1));
-                leafVerts.Add(ToV3(f.v2));
-                leafVerts.Add(ToV3(f.v3));
-                leafTris.Add(vi + 0); leafTris.Add(vi + 1); leafTris.Add(vi + 2);
-                leafTris.Add(vi + 0); leafTris.Add(vi + 2); leafTris.Add(vi + 3);
-
-                leafFaceBlockTypes.Add(f.blockType);
-                leafFaceNormals.Add(f.normal);
-            }
-
-            var waterVerts = new List<Vector3>(waterFaceArr.Length * 4);
-            var waterTris = new List<int>(waterFaceArr.Length * 6);
-            var waterFaceBlockTypes = new List<int>(waterFaceArr.Length);
-            var waterFaceNormals = new List<int>(waterFaceArr.Length);
-
-            for (int i = 0; i < waterFaceArr.Length; i++)
-            {
-                var f = waterFaceArr[i];
-                int vi = waterVerts.Count;
-                waterVerts.Add(ToV3(f.v0));
-                waterVerts.Add(ToV3(f.v1));
-                waterVerts.Add(ToV3(f.v2));
-                waterVerts.Add(ToV3(f.v3));
-                waterTris.Add(vi + 0); waterTris.Add(vi + 1); waterTris.Add(vi + 2);
-                waterTris.Add(vi + 0); waterTris.Add(vi + 2); waterTris.Add(vi + 3);
-
-                waterFaceBlockTypes.Add(f.blockType);
-                waterFaceNormals.Add(f.normal);
+                allFaceBlockTypes.Add(f.blockType);
+                allFaceNormals.Add(f.normal);
             }
 
             // Dispose dos containers nativos
-            solidFaces.Dispose();
-            leafFaces.Dispose();   // <--- novo
-            waterFaces.Dispose();
-            paddedFlat.Dispose(); // <--- agora descarta o NativeArray alocado no generator
+            faces.Dispose();
+            paddedFlat.Dispose();
             isEmptyByType.Dispose();
 
-            // Enfileira resultado para main thread aplicar mesh (UVs e Mesh)
+            // Enfileira resultado para main thread aplicar mesh (agrupamento por material será feito na main thread)
             var result = new MeshJobResult()
             {
                 coord = chunkCoord,
                 blocks = inner,
-                solidVertices = solidVerts,
-                solidTriangles = solidTris,
-                solidFaceBlockTypes = solidFaceBlockTypes,
-                solidFaceNormals = solidFaceNormals,
-
-                // FOLHAS
-                leafVertices = leafVerts,
-                leafTriangles = leafTris,
-                leafFaceBlockTypes = leafFaceBlockTypes,
-                leafFaceNormals = leafFaceNormals,
-
-                waterVertices = waterVerts,
-                waterTriangles = waterTris,
-                waterFaceBlockTypes = waterFaceBlockTypes,
-                waterFaceNormals = waterFaceNormals,
+                // usamos os campos "solid*" para transportar as faces combinadas (legacy names)
+                solidVertices = allVerts,
+                solidTriangles = allTris,
+                solidFaceBlockTypes = allFaceBlockTypes,
+                solidFaceNormals = allFaceNormals,
+                // manter vazio os campos de water/leaf específicos (não usados aqui)
+                waterVertices = null,
+                waterTriangles = null,
+                waterFaceBlockTypes = new List<int>(),
+                waterFaceNormals = new List<int>(),
                 width = w,
                 height = h,
                 depth = d,
@@ -931,7 +678,6 @@ public class VoxelWorld : MonoBehaviour
             generatingChunks.TryRemove(chunkCoord, out _);
         }
     }
-
 
 
     private static Vector3 ToV3(float3 f) => new Vector3(f.x, f.y, f.z);
@@ -1093,159 +839,6 @@ public class VoxelWorld : MonoBehaviour
         public int normal;    // 0..5 (forward, back, up, down, right, left)
     }
 
-    // [BurstCompile]
-    // public struct MeshGenJob : IJob
-    // {
-    //     [ReadOnly] public NativeArray<int> padded; // flatten (x * ph + y) * pd + z
-    //     public int pw, ph, pd;
-    //     public int pad, w, h, d;
-    //     public float s;
-    //     public int airInt;
-    //     public int waterInt;
-    //     [ReadOnly] public NativeArray<byte> isEmptyByType;
-
-    //     // resultados
-    //     public NativeList<FaceData> solidFaces;
-    //     public NativeList<FaceData> waterFaces;
-
-    //     public void Execute()
-    //     {
-    //         // loops sobre inner no padded: x = pad .. pad + w - 1 ; z = pad .. pad + d - 1 ; y = 0..h-1
-    //         for (int x = pad; x < pad + w; x++)
-    //         {
-    //             for (int y = 0; y < h; y++)
-    //             {
-    //                 for (int z = pad; z < pad + d; z++)
-    //                 {
-    //                     int idx = FlattenIndex(x, y, z);
-    //                     int bt = padded[idx];
-    //                     if (bt == airInt) continue;
-
-    //                     float3 basePos = new float3((x - pad) * s, y * s, (z - pad) * s);
-    //                     bool isWater = (bt == waterInt);
-
-    //                     // front (+z), normal index 0
-    //                     if (IsFaceExposed(x, y, z + 1, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(0, 0, s),
-    //                             v1 = basePos + new float3(s, 0, s),
-    //                             v2 = basePos + new float3(s, s, s),
-    //                             v3 = basePos + new float3(0, s, s),
-    //                             blockType = bt,
-    //                             normal = 0
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-
-    //                     // back (-z), normal index 1
-    //                     if (IsFaceExposed(x, y, z - 1, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(s, 0, 0),
-    //                             v1 = basePos + new float3(0, 0, 0),
-    //                             v2 = basePos + new float3(0, s, 0),
-    //                             v3 = basePos + new float3(s, s, 0),
-    //                             blockType = bt,
-    //                             normal = 1
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-
-    //                     // top (+y), normal index 2
-    //                     if (IsFaceExposed(x, y + 1, z, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(0, s, 0),
-    //                             v1 = basePos + new float3(0, s, s),
-    //                             v2 = basePos + new float3(s, s, s),
-    //                             v3 = basePos + new float3(s, s, 0),
-    //                             blockType = bt,
-    //                             normal = 2
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-
-    //                     // bottom (-y), normal index 3
-    //                     if (IsFaceExposed(x, y - 1, z, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(0, 0, 0),
-    //                             v1 = basePos + new float3(s, 0, 0),
-    //                             v2 = basePos + new float3(s, 0, s),
-    //                             v3 = basePos + new float3(0, 0, s),
-    //                             blockType = bt,
-    //                             normal = 3
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-
-    //                     // right (+x), normal index 4
-    //                     if (IsFaceExposed(x + 1, y, z, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(s, 0, s),
-    //                             v1 = basePos + new float3(s, 0, 0),
-    //                             v2 = basePos + new float3(s, s, 0),
-    //                             v3 = basePos + new float3(s, s, s),
-    //                             blockType = bt,
-    //                             normal = 4
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-
-    //                     // left (-x), normal index 5
-    //                     if (IsFaceExposed(x - 1, y, z, isWater))
-    //                     {
-    //                         var f = new FaceData
-    //                         {
-    //                             v0 = basePos + new float3(0, 0, 0),
-    //                             v1 = basePos + new float3(0, 0, s),
-    //                             v2 = basePos + new float3(0, s, s),
-    //                             v3 = basePos + new float3(0, s, 0),
-    //                             blockType = bt,
-    //                             normal = 5
-    //                         };
-    //                         (isWater ? waterFaces : solidFaces).Add(f);
-    //                     }
-    //                 }
-    //             }
-    //         }
-    //     }
-
-    //     private int FlattenIndex(int x, int y, int z)
-    //     {
-    //         return (x * ph + y) * pd + z;
-    //     }
-
-    //     private bool IsFaceExposed(int nx, int ny, int nz, bool faceIsWater)
-    //     {
-    //         // Se fora no Y => exposto
-    //         if (ny < 0 || ny >= ph) return true;
-    //         if (nx < 0 || nx >= pw || nz < 0 || nz >= pd) return true;
-
-    //         int nIdx = FlattenIndex(nx, ny, nz);
-    //         int nb = padded[nIdx];
-
-    //         if (faceIsWater)
-    //         {
-    //             // Para água consideramos ar ou fora como exposto
-    //             return nb == airInt;
-    //         }
-    //         else
-    //         {
-    //             // Para sólidos: exposto se vizinho for "air" ou "isEmpty"
-    //             if (nb == airInt) return true;
-    //             if (nb >= 0 && nb < isEmptyByType.Length && isEmptyByType[nb] == 1) return true;
-    //             return false;
-    //         }
-    //     }
-    // }
 
 
     [BurstCompile]
@@ -1256,14 +849,10 @@ public class VoxelWorld : MonoBehaviour
         public int pad, w, h, d;
         public float s;
         public int airInt;
-        public int waterInt;
-        public int leafInt; // <--- novo: inteiro representando BlockType.Leaves
         [ReadOnly] public NativeArray<byte> isEmptyByType;
 
-        // resultados
-        public NativeList<FaceData> solidFaces;
-        public NativeList<FaceData> leafFaces;  // <--- novo
-        public NativeList<FaceData> waterFaces;
+        // resultados: todas as faces (qualquer blockType)
+        public NativeList<FaceData> faces;
 
         public void Execute()
         {
@@ -1279,11 +868,9 @@ public class VoxelWorld : MonoBehaviour
                         if (bt == airInt) continue;
 
                         float3 basePos = new float3((x - pad) * s, y * s, (z - pad) * s);
-                        bool isWater = (bt == waterInt);
-                        bool isLeaf = (bt == leafInt);
 
                         // front (+z), normal index 0
-                        if (IsFaceExposed(x, y, z + 1, isWater))
+                        if (IsFaceExposed(x, y, z + 1))
                         {
                             var f = new FaceData
                             {
@@ -1294,11 +881,11 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 0
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
 
                         // back (-z), normal index 1
-                        if (IsFaceExposed(x, y, z - 1, isWater))
+                        if (IsFaceExposed(x, y, z - 1))
                         {
                             var f = new FaceData
                             {
@@ -1309,11 +896,11 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 1
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
 
                         // top (+y), normal index 2
-                        if (IsFaceExposed(x, y + 1, z, isWater))
+                        if (IsFaceExposed(x, y + 1, z))
                         {
                             var f = new FaceData
                             {
@@ -1324,11 +911,11 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 2
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
 
                         // bottom (-y), normal index 3
-                        if (IsFaceExposed(x, y - 1, z, isWater))
+                        if (IsFaceExposed(x, y - 1, z))
                         {
                             var f = new FaceData
                             {
@@ -1339,11 +926,11 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 3
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
 
                         // right (+x), normal index 4
-                        if (IsFaceExposed(x + 1, y, z, isWater))
+                        if (IsFaceExposed(x + 1, y, z))
                         {
                             var f = new FaceData
                             {
@@ -1354,11 +941,11 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 4
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
 
                         // left (-x), normal index 5
-                        if (IsFaceExposed(x - 1, y, z, isWater))
+                        if (IsFaceExposed(x - 1, y, z))
                         {
                             var f = new FaceData
                             {
@@ -1369,7 +956,7 @@ public class VoxelWorld : MonoBehaviour
                                 blockType = bt,
                                 normal = 5
                             };
-                            (isWater ? waterFaces : (isLeaf ? leafFaces : solidFaces)).Add(f);
+                            faces.Add(f);
                         }
                     }
                 }
@@ -1381,7 +968,7 @@ public class VoxelWorld : MonoBehaviour
             return (x * ph + y) * pd + z;
         }
 
-        private bool IsFaceExposed(int nx, int ny, int nz, bool faceIsWater)
+        private bool IsFaceExposed(int nx, int ny, int nz)
         {
             // Se fora no Y => exposto
             if (ny < 0 || ny >= ph) return true;
@@ -1390,21 +977,12 @@ public class VoxelWorld : MonoBehaviour
             int nIdx = FlattenIndex(nx, ny, nz);
             int nb = padded[nIdx];
 
-            if (faceIsWater)
-            {
-                // Para água consideramos ar ou fora como exposto
-                return nb == airInt;
-            }
-            else
-            {
-                // Para sólidos/folhas: exposto se vizinho for "air" ou "isEmpty"
-                if (nb == airInt) return true;
-                if (nb >= 0 && nb < isEmptyByType.Length && isEmptyByType[nb] == 1) return true;
-                return false;
-            }
+            // Para todos os tipos (não diferenciando água aqui), consideramos exposto se ar ou isEmpty.
+            if (nb == airInt) return true;
+            if (nb >= 0 && nb < isEmptyByType.Length && isEmptyByType[nb] == 1) return true;
+            return false;
         }
     }
-
 
 
     // -------------------------

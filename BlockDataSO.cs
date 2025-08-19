@@ -39,4 +39,6 @@ public class BlockTextureMapping
     [Header("Behavior (use to control face culling / water handling)")]
     public bool isEmpty = false;
     public bool isSolid = true;  // padrão: sólidos
+
+     public int materialIndex = 0;
 }
