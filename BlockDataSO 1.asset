@@ -29,12 +29,12 @@ MonoBehaviour:
     isSolid: 1
     materialIndex: 0
   - blockType: 2
-    top: {x: 26, y: 1}
+    top: {x: 25, y: 3}
     bottom: {x: 21, y: 10}
     side: {x: 25, y: 0}
     isEmpty: 0
     isSolid: 1
-    materialIndex: 0
+    materialIndex: 1
   - blockType: 1
     top: {x: 21, y: 10}
     bottom: {x: 21, y: 10}
@@ -85,9 +85,9 @@ MonoBehaviour:
     isSolid: 1
     materialIndex: 0
   - blockType: 9
-    top: {x: 12, y: 0}
-    bottom: {x: 12, y: 0}
-    side: {x: 12, y: 0}
+    top: {x: 21, y: 17}
+    bottom: {x: 21, y: 17}
+    side: {x: 21, y: 17}
     isEmpty: 1
     isSolid: 1
     materialIndex: 1

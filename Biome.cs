@@ -1,3 +1,5 @@
+using UnityEngine;
+
 [System.Serializable]
 public class Biome
 {
@@ -17,4 +19,9 @@ public class Biome
     public BlockType topBlock = BlockType.Grass;
     public BlockType subSurfaceBlock = BlockType.Dirt;
     public BlockType fillerBlock = BlockType.Stone; // camadas profundas / cliff
+
+    
+    [Header("Visual")]
+    [Tooltip("Cor usada para as folhas/folhagem deste bioma")]
+    public Color foliageColor = Color.green;
 }

@@ -16,7 +16,7 @@ MonoBehaviour:
   bedrockLayers: 1
   dirtLayers: 3
   seed: 0
-  continentalScale: 0.008
+  continentalScale: 0.005
   continentalStrength: 40
   continentalOctaves: 4
   continentalPersistence: 0.5

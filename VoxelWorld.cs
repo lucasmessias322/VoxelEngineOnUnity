@@ -129,6 +129,7 @@ public class VoxelWorld : MonoBehaviour
     [Tooltip("Distância inicial de view (chunks) no startup. Depois expande até viewDistanceInChunks.")]
     public int initialViewDistance = 1;
     public float expandViewSeconds = 4f; // tempo total para expandir até viewDistanceInChunks
+    private BiomeBlender biomeBlender;
 
     // --- Construtores / Start / Destroy ---
     void Awake()
@@ -150,7 +151,7 @@ public class VoxelWorld : MonoBehaviour
             var p = FindObjectOfType<Camera>();
             if (p != null) player = p.transform;
         }
-
+        biomeBlender = new BiomeBlender(biomes, biomeNoiseScale, biomeSeed);
 
         chunkGenerator = new ChunkGenerator(
             biomes, biomeNoiseScale, biomeSeed, chunkWidth, chunkHeight, chunkDepth,
@@ -186,7 +187,19 @@ public class VoxelWorld : MonoBehaviour
         UpdateChunksStreaming();
         UpdateChunkColliders();
     }
+    public Color GetFoliageColorAt(int worldX, int worldZ)
+    {
+        if (biomes == null || biomes.Length == 0)
+            return Color.green;
 
+        biomeBlender ??= new BiomeBlender(biomes, biomeNoiseScale, biomeSeed);
+
+        biomeBlender.GetBiomeBlendAt(worldX, worldZ, out int i0, out int i1, out float t);
+
+        Color c0 = biomes[Mathf.Clamp(i0, 0, biomes.Length - 1)].foliageColor;
+        Color c1 = biomes[Mathf.Clamp(i1, 0, biomes.Length - 1)].foliageColor;
+        return Color.Lerp(c0, c1, t);
+    }
     private void EnsureBlockTypeCaches()
     {
         // recompute only if blockDataSO changed or not initialized
@@ -329,13 +342,46 @@ public class VoxelWorld : MonoBehaviour
             // Garantir que finalMaterials tenha pelo menos o número de slots usados (ou será truncado no Chunk)
             // Chamar ApplyMeshDataByMaterial no chunk (ordem de materiais = índice)
             chunk.ApplyMeshDataByMaterial(
-                vertsByMat,
-                trisByMat,
-                uvsByMat,
-                normsByMat,
-                finalMaterials,
-                res.width, res.height, res.depth, res.blockSize
-            );
+     vertsByMat,
+     trisByMat,
+     uvsByMat,
+     normsByMat,
+     finalMaterials,
+     res.width, res.height, res.depth, res.blockSize
+ );
+            // --- set foliage color on this chunk ---
+            try
+            {
+                // calcular posição central do chunk (em blocos world coords)
+                int chunkWorldX = res.coord.x * chunkWidth + (chunkWidth / 2);
+                int chunkWorldZ = res.coord.y * chunkDepth + (chunkDepth / 2);
+
+                Color foliageColor = GetFoliageColorAt(chunkWorldX, chunkWorldZ);
+
+                // achar índice do material de folhas dentro do array finalMaterials
+                int leafMatIndex = -1;
+                if (finalMaterials != null && leafMaterial != null)
+                {
+                    for (int i = 0; i < finalMaterials.Length; i++)
+                        if (finalMaterials[i] == leafMaterial) { leafMatIndex = i; break; }
+                }
+
+                if (leafMatIndex >= 0)
+                {
+                    var renderer = chunk.GetComponent<MeshRenderer>();
+                    var mpb = new MaterialPropertyBlock();
+                    renderer.GetPropertyBlock(mpb);
+                    // nome da propriedade usada pelo shader (veja shader abaixo). Use o mesmo nome no shader.
+                    mpb.SetColor("_FoliageColor", foliageColor);
+                    // aplica a property block somente ao material index do leaf (disponível em Unity)
+                    renderer.SetPropertyBlock(mpb, leafMatIndex);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"Erro ao aplicar foliage color: {ex}");
+            }
+
         }
     }
 
