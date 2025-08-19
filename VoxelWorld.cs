@@ -339,12 +339,6 @@ public class VoxelWorld : MonoBehaviour
         }
     }
 
-
-    private void AddUVsForFace(List<Vector2> uvList, BlockType bt, Vector3 normal)
-    {
-        AddUVsTo(uvList, bt, normal);
-    }
-
     // Converte índice de normal gerado no job para Vector3
     private Vector3 NormalFromIndex(int idx)
     {
@@ -564,24 +558,6 @@ public class VoxelWorld : MonoBehaviour
                 }
             }
 
-            // Construir isEmptyByType native array (0/1) com base em blockDataSO
-            // int maxEnum = 0;
-            // foreach (BlockType bt in Enum.GetValues(typeof(BlockType)))
-            // {
-            //     maxEnum = Math.Max(maxEnum, (int)bt);
-            // }
-            // var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
-            // for (int i = 0; i < isEmptyByType.Length; i++) isEmptyByType[i] = 0;
-            // if (blockDataSO != null)
-            // {
-            //     foreach (var kv in blockDataSO.blockTextureDict)
-            //     {
-            //         var bt = kv.Key;
-            //         var mapping = kv.Value;
-            //         if ((int)bt >= 0 && (int)bt < isEmptyByType.Length)
-            //             isEmptyByType[(int)bt] = (byte)(mapping.isEmpty ? 1 : 0);
-            //     }
-            // }
             // garante que caches estejam prontos
             EnsureBlockTypeCaches();
             int maxEnum = cachedMaxBlockType;
@@ -607,9 +583,11 @@ public class VoxelWorld : MonoBehaviour
                 d = d,
                 s = s,
                 airInt = airInt,
+                waterInt = (int)BlockType.Water, // <-- ADICIONAR
                 isEmptyByType = isEmptyByType,
                 faces = faces
             };
+
 
             // Executa (IJob) — manter comportamento original (Schedule/Complete)
             var handle = job.Schedule();
@@ -849,6 +827,7 @@ public class VoxelWorld : MonoBehaviour
         public int pad, w, h, d;
         public float s;
         public int airInt;
+        public int waterInt; // <- ADICIONADO
         [ReadOnly] public NativeArray<byte> isEmptyByType;
 
         // resultados: todas as faces (qualquer blockType)
@@ -856,7 +835,7 @@ public class VoxelWorld : MonoBehaviour
 
         public void Execute()
         {
-            // loops sobre inner no padded: x = pad .. pad + w - 1 ; z = pad .. pad + d - 1 ; y = 0..h-1
+            // loops sobre inner no padded: x = pad . pad + w - 1 ; z = pad . pad + d - 1 ; y = 0.h-1
             for (int x = pad; x < pad + w; x++)
             {
                 for (int y = 0; y < h; y++)
@@ -870,7 +849,7 @@ public class VoxelWorld : MonoBehaviour
                         float3 basePos = new float3((x - pad) * s, y * s, (z - pad) * s);
 
                         // front (+z), normal index 0
-                        if (IsFaceExposed(x, y, z + 1))
+                        if (IsFaceExposed(bt, x, y, z + 1))
                         {
                             var f = new FaceData
                             {
@@ -885,7 +864,7 @@ public class VoxelWorld : MonoBehaviour
                         }
 
                         // back (-z), normal index 1
-                        if (IsFaceExposed(x, y, z - 1))
+                        if (IsFaceExposed(bt, x, y, z - 1))
                         {
                             var f = new FaceData
                             {
@@ -900,7 +879,7 @@ public class VoxelWorld : MonoBehaviour
                         }
 
                         // top (+y), normal index 2
-                        if (IsFaceExposed(x, y + 1, z))
+                        if (IsFaceExposed(bt, x, y + 1, z))
                         {
                             var f = new FaceData
                             {
@@ -915,7 +894,7 @@ public class VoxelWorld : MonoBehaviour
                         }
 
                         // bottom (-y), normal index 3
-                        if (IsFaceExposed(x, y - 1, z))
+                        if (IsFaceExposed(bt, x, y - 1, z))
                         {
                             var f = new FaceData
                             {
@@ -930,7 +909,7 @@ public class VoxelWorld : MonoBehaviour
                         }
 
                         // right (+x), normal index 4
-                        if (IsFaceExposed(x + 1, y, z))
+                        if (IsFaceExposed(bt, x + 1, y, z))
                         {
                             var f = new FaceData
                             {
@@ -945,7 +924,7 @@ public class VoxelWorld : MonoBehaviour
                         }
 
                         // left (-x), normal index 5
-                        if (IsFaceExposed(x - 1, y, z))
+                        if (IsFaceExposed(bt, x - 1, y, z))
                         {
                             var f = new FaceData
                             {
@@ -968,7 +947,8 @@ public class VoxelWorld : MonoBehaviour
             return (x * ph + y) * pd + z;
         }
 
-        private bool IsFaceExposed(int nx, int ny, int nz)
+        // assinatura alterada para receber o blockType da face de origem
+        private bool IsFaceExposed(int originBt, int nx, int ny, int nz)
         {
             // Se fora no Y => exposto
             if (ny < 0 || ny >= ph) return true;
@@ -977,7 +957,10 @@ public class VoxelWorld : MonoBehaviour
             int nIdx = FlattenIndex(nx, ny, nz);
             int nb = padded[nIdx];
 
-            // Para todos os tipos (não diferenciando água aqui), consideramos exposto se ar ou isEmpty.
+            // Se a face pertence à água: exposto somente se vizinho for ar
+            if (originBt == waterInt) return (nb == airInt);
+
+            // Para todos os outros tipos: exposto se ar ou isEmptyByType
             if (nb == airInt) return true;
             if (nb >= 0 && nb < isEmptyByType.Length && isEmptyByType[nb] == 1) return true;
             return false;
