@@ -100,18 +100,7 @@ public class VoxelWorld : MonoBehaviour
     [Tooltip("Como as linhas do atlas estão numeradas: BottomToTop = linha 0 é a mais baixa (origem UV do Unity), TopToBottom = linha 0 é a mais alta (estilo Minecraft).")]
     public AtlasOrientation atlasOrientation = AtlasOrientation.TopToBottom;
 
-    // -------------------------
-    // Buffers reutilizáveis (para reduzir GC no main thread)
-    // Usados apenas no main thread (ProcessMeshResults)
-    // -------------------------
-    // private List<Vector2> reusableSolidUVs = new List<Vector2>(4096);
-    // private List<Vector2> reusableWaterUVs = new List<Vector2>(1024);
-    // private List<Vector3> reusableAllVerts = new List<Vector3>(8192);
-    // private List<Vector2> reusableAllUVs = new List<Vector2>(8192);
-    // private List<Vector3> reusableTempVerts = new List<Vector3>(8192); // usado se precisar temporariamente
-    // -------------------------
 
-    // --- caching for enum lookups (to avoid Enum.GetValues/boxing in hot-paths)
     private int cachedMaxBlockType = -1;
     private int[] cachedMaterialIndexByType; // index = (int)BlockType -> materialIndex
     private byte[] cachedIsEmptyByType;      // index = (int)BlockType -> 0/1
@@ -148,7 +137,7 @@ public class VoxelWorld : MonoBehaviour
         cts = new CancellationTokenSource();
         if (player == null)
         {
-            var p = FindObjectOfType<Camera>();
+            var p = Camera.main; ;
             if (p != null) player = p.transform;
         }
         biomeBlender = new BiomeBlender(biomes, biomeNoiseScale, biomeSeed);
@@ -240,6 +229,9 @@ public class VoxelWorld : MonoBehaviour
     }
 
 
+  
+
+    // Substitua a função inteira ProcessMeshResults por esta (VoxelWorld.cs)
     private void ProcessMeshResults()
     {
         while (meshResults.TryDequeue(out var res))
@@ -289,9 +281,7 @@ public class VoxelWorld : MonoBehaviour
                 return cachedMaterialIndexByType[blockTypeInt];
             }
 
-
-
-            // Percorrer faces: cada face ocupa 4 vértices seguidos em faceVerts; face i tem verts index = i*4 .. i*4+3
+            // Percorrer faces: cada face ocupa 4 vértices seguidos em faceVerts; face i tem verts index = i*4 . i*4+3
             for (int fi = 0; fi < faceCount; fi++)
             {
                 int matIndex = GetMaterialIndexForBlockType(faceBlockTypes[fi]);
@@ -342,48 +332,71 @@ public class VoxelWorld : MonoBehaviour
             // Garantir que finalMaterials tenha pelo menos o número de slots usados (ou será truncado no Chunk)
             // Chamar ApplyMeshDataByMaterial no chunk (ordem de materiais = índice)
             chunk.ApplyMeshDataByMaterial(
-     vertsByMat,
-     trisByMat,
-     uvsByMat,
-     normsByMat,
-     finalMaterials,
-     res.width, res.height, res.depth, res.blockSize
- );
-            // --- set foliage color on this chunk ---
+                vertsByMat,
+                trisByMat,
+                uvsByMat,
+                normsByMat,
+                finalMaterials,
+                res.width, res.height, res.depth, res.blockSize
+            );
+
+            // --- Aplicar MaterialPropertyBlocks para foliage e biome color ---
             try
             {
                 // calcular posição central do chunk (em blocos world coords)
                 int chunkWorldX = res.coord.x * chunkWidth + (chunkWidth / 2);
                 int chunkWorldZ = res.coord.y * chunkDepth + (chunkDepth / 2);
 
-                Color foliageColor = GetFoliageColorAt(chunkWorldX, chunkWorldZ);
+                Color biomeColor = GetFoliageColorAt(chunkWorldX, chunkWorldZ); // reuse foliage palette
 
-                // achar índice do material de folhas dentro do array finalMaterials
+                // descobrir índices dos materiais dentro do finalMaterials
                 int leafMatIndex = -1;
-                if (finalMaterials != null && leafMaterial != null)
+                int chunkMatIndex = -1;
+                int GrassMatIndex = -1;
+
+                if (finalMaterials != null)
                 {
                     for (int i = 0; i < finalMaterials.Length; i++)
-                        if (finalMaterials[i] == leafMaterial) { leafMatIndex = i; break; }
+                    {
+                        if (finalMaterials[i] == leafMaterial) leafMatIndex = i;
+                        if (finalMaterials[i] == chunkMaterial) chunkMatIndex = i;
+                        if (i == 3f) GrassMatIndex = i;
+                    }
                 }
 
-                if (leafMatIndex >= 0)
+                var renderer = chunk.GetComponent<MeshRenderer>();
+                if (renderer != null)
                 {
-                    var renderer = chunk.GetComponent<MeshRenderer>();
-                    var mpb = new MaterialPropertyBlock();
-                    renderer.GetPropertyBlock(mpb);
-                    // nome da propriedade usada pelo shader (veja shader abaixo). Use o mesmo nome no shader.
-                    mpb.SetColor("_FoliageColor", foliageColor);
-                    // aplica a property block somente ao material index do leaf (disponível em Unity)
-                    renderer.SetPropertyBlock(mpb, leafMatIndex);
+                    // Folhas: aplicar _FoliageColor no slot de leafMaterial (se existir)
+                    if (leafMatIndex >= 0)
+                    {
+                        var mpbLeaf = new MaterialPropertyBlock();
+                        // ler bloco atual (opcional, para preservar outras propriedades)
+                        renderer.GetPropertyBlock(mpbLeaf, leafMatIndex);
+                        mpbLeaf.SetColor("_FoliageColor", biomeColor);
+                        renderer.SetPropertyBlock(mpbLeaf, leafMatIndex);
+                    }
+
+                    // Terra/Bloco: aplicar _BiomeColor no slot de chunkMaterial (se existir)
+                    if (GrassMatIndex >= 0)
+                    {
+                        var mpbChunk = new MaterialPropertyBlock();
+                        renderer.GetPropertyBlock(mpbChunk, GrassMatIndex);
+                        mpbChunk.SetColor("_BiomeColor", biomeColor);
+                        renderer.SetPropertyBlock(mpbChunk, GrassMatIndex);
+                    }
                 }
             }
             catch (Exception ex)
             {
-                Debug.LogWarning($"Erro ao aplicar foliage color: {ex}");
+                Debug.LogWarning($"Erro ao aplicar foliage/biome color: {ex}");
             }
-
         }
     }
+
+
+
+
 
     // Converte índice de normal gerado no job para Vector3
     private Vector3 NormalFromIndex(int idx)
