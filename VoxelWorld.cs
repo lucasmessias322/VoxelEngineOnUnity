@@ -583,139 +583,270 @@ public class VoxelWorld : MonoBehaviour
     }
 
 
-    private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
+    // private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
+    // {
+    //     await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
+
+    //     try
+    //     {
+    //         if (token.IsCancellationRequested) return;
+
+    //         // gera padded flattened diretamente do generator (NativeArray)
+    //         int pw, ph, pd;
+    //         var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob, SpawnTrees);
+
+    //         // extrai o inner (w,h,d) para SetBlocks (mantendo o array BlockType[,,] que o resto do pipeline usa)
+    //         int w = chunkWidth, h = chunkHeight, d = chunkDepth;
+    //         int pad = (pw - w) / 2;
+    //         if (pad < 0) pad = 0;
+
+    //         var inner = new BlockType[w, h, d];
+    //         // copiando usando a mesma fórmula de flatten
+    //         int lpw = pw, lph = ph, lpd = pd;
+    //         for (int x = 0; x < w; x++)
+    //         {
+    //             int srcX = x + pad;
+    //             for (int y = 0; y < h; y++)
+    //             {
+    //                 for (int z = 0; z < d; z++)
+    //                 {
+    //                     int srcZ = z + pad;
+    //                     int idx = (srcX * lph + y) * lpd + srcZ;
+    //                     inner[x, y, z] = (BlockType)paddedFlat[idx];
+    //                 }
+    //             }
+    //         }
+
+    //         // garante que caches estejam prontos
+    //         EnsureBlockTypeCaches();
+    //         int maxEnum = cachedMaxBlockType;
+    //         var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
+    //         for (int i = 0; i <= maxEnum; i++) isEmptyByType[i] = cachedIsEmptyByType[i];
+
+
+    //         // Preparar job (usa paddedFlat diretamente)
+    //         float s = blockSize;
+    //         int airInt = (int)BlockType.Air;
+
+    //         var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
+
+    //         var job = new MeshGenJob
+    //         {
+    //             padded = paddedFlat,
+    //             pw = lpw,
+    //             ph = lph,
+    //             pd = lpd,
+    //             pad = pad,
+    //             w = w,
+    //             h = h,
+    //             d = d,
+    //             s = s,
+    //             airInt = airInt,
+    //             waterInt = (int)BlockType.Water, // <-- ADICIONAR
+    //             isEmptyByType = isEmptyByType,
+    //             faces = faces
+    //         };
+
+
+    //         // Executa (IJob) — manter comportamento original (Schedule/Complete)
+    //         var handle = job.Schedule();
+    //         handle.Complete();
+
+    //         // Coleta resultados para main thread
+    //         var faceArr = faces.AsArray();
+
+    //         // transformar faces (cada face => 4 vértices + 6 índices) em listas simples para enfileirar
+    //         var allVerts = new List<Vector3>(faceArr.Length * 4);
+    //         var allTris = new List<int>(faceArr.Length * 6);
+    //         var allFaceBlockTypes = new List<int>(faceArr.Length);
+    //         var allFaceNormals = new List<int>(faceArr.Length);
+
+    //         for (int i = 0; i < faceArr.Length; i++)
+    //         {
+    //             var f = faceArr[i];
+    //             int vi = allVerts.Count;
+    //             allVerts.Add(ToV3(f.v0));
+    //             allVerts.Add(ToV3(f.v1));
+    //             allVerts.Add(ToV3(f.v2));
+    //             allVerts.Add(ToV3(f.v3));
+    //             allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
+    //             allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
+
+    //             allFaceBlockTypes.Add(f.blockType);
+    //             allFaceNormals.Add(f.normal);
+    //         }
+
+    //         // Dispose dos containers nativos
+    //         faces.Dispose();
+    //         paddedFlat.Dispose();
+    //         isEmptyByType.Dispose();
+
+    //         // Enfileira resultado para main thread aplicar mesh (agrupamento por material será feito na main thread)
+    //         var result = new MeshJobResult()
+    //         {
+    //             coord = chunkCoord,
+    //             blocks = inner,
+    //             // usamos os campos "solid*" para transportar as faces combinadas (legacy names)
+    //             solidVertices = allVerts,
+    //             solidTriangles = allTris,
+    //             solidFaceBlockTypes = allFaceBlockTypes,
+    //             solidFaceNormals = allFaceNormals,
+    //             // manter vazio os campos de water/leaf específicos (não usados aqui)
+    //             waterVertices = null,
+    //             waterTriangles = null,
+    //             waterFaceBlockTypes = new List<int>(),
+    //             waterFaceNormals = new List<int>(),
+    //             width = w,
+    //             height = h,
+    //             depth = d,
+    //             blockSize = s
+    //         };
+
+    //         meshResults.Enqueue(result);
+    //     }
+    //     catch (OperationCanceledException) { }
+    //     catch (Exception ex)
+    //     {
+    //         Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
+    //     }
+    //     finally
+    //     {
+    //         generationSemaphore.Release();
+    //         generatingChunks.TryRemove(chunkCoord, out _);
+    //     }
+    // }
+
+
+// Substitua o StartGenerateChunkAsync em VoxelWorld.cs por este
+private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
+{
+    await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
+
+    try
     {
-        await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
+        if (token.IsCancellationRequested) return;
 
-        try
+        // recebe tanto o NativeArray (para o Job) quanto o int[] gerenciado (para leitura rápida)
+        int pw, ph, pd;
+        var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, out int[] paddedManaged, Allocator.TempJob, SpawnTrees);
+
+        // --- usa o paddedManaged (int[]) para preencher inner (muito mais rápido que ler paddedFlat item-a-item) ---
+        int lpw = pw, lph = ph, lpd = pd;
+        int w = chunkWidth, h = chunkHeight, d = chunkDepth;
+        int pad = (lpw - w) / 2;
+        if (pad < 0) pad = 0;
+
+        var inner = new BlockType[w, h, d];
+
+        int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
+
+        for (int x = 0; x < w; x++)
         {
-            if (token.IsCancellationRequested) return;
-
-            // gera padded flattened diretamente do generator (NativeArray)
-            int pw, ph, pd;
-            var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob, SpawnTrees);
-
-            // extrai o inner (w,h,d) para SetBlocks (mantendo o array BlockType[,,] que o resto do pipeline usa)
-            int w = chunkWidth, h = chunkHeight, d = chunkDepth;
-            int pad = (pw - w) / 2;
-            if (pad < 0) pad = 0;
-
-            var inner = new BlockType[w, h, d];
-            // copiando usando a mesma fórmula de flatten
-            int lpw = pw, lph = ph, lpd = pd;
-            for (int x = 0; x < w; x++)
+            int srcX = x + pad;
+            for (int y = 0; y < h; y++)
             {
-                int srcX = x + pad;
-                for (int y = 0; y < h; y++)
+                for (int z = 0; z < d; z++)
                 {
-                    for (int z = 0; z < d; z++)
-                    {
-                        int srcZ = z + pad;
-                        int idx = (srcX * lph + y) * lpd + srcZ;
-                        inner[x, y, z] = (BlockType)paddedFlat[idx];
-                    }
+                    int srcZ = z + pad;
+                    int idx = FlattenIndex(srcX, y, srcZ);
+                    inner[x, y, z] = (BlockType)paddedManaged[idx]; // leitura rápida de int[]
                 }
             }
-
-            // garante que caches estejam prontos
-            EnsureBlockTypeCaches();
-            int maxEnum = cachedMaxBlockType;
-            var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
-            for (int i = 0; i <= maxEnum; i++) isEmptyByType[i] = cachedIsEmptyByType[i];
-
-
-            // Preparar job (usa paddedFlat diretamente)
-            float s = blockSize;
-            int airInt = (int)BlockType.Air;
-
-            var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-
-            var job = new MeshGenJob
-            {
-                padded = paddedFlat,
-                pw = lpw,
-                ph = lph,
-                pd = lpd,
-                pad = pad,
-                w = w,
-                h = h,
-                d = d,
-                s = s,
-                airInt = airInt,
-                waterInt = (int)BlockType.Water, // <-- ADICIONAR
-                isEmptyByType = isEmptyByType,
-                faces = faces
-            };
-
-
-            // Executa (IJob) — manter comportamento original (Schedule/Complete)
-            var handle = job.Schedule();
-            handle.Complete();
-
-            // Coleta resultados para main thread
-            var faceArr = faces.AsArray();
-
-            // transformar faces (cada face => 4 vértices + 6 índices) em listas simples para enfileirar
-            var allVerts = new List<Vector3>(faceArr.Length * 4);
-            var allTris = new List<int>(faceArr.Length * 6);
-            var allFaceBlockTypes = new List<int>(faceArr.Length);
-            var allFaceNormals = new List<int>(faceArr.Length);
-
-            for (int i = 0; i < faceArr.Length; i++)
-            {
-                var f = faceArr[i];
-                int vi = allVerts.Count;
-                allVerts.Add(ToV3(f.v0));
-                allVerts.Add(ToV3(f.v1));
-                allVerts.Add(ToV3(f.v2));
-                allVerts.Add(ToV3(f.v3));
-                allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
-                allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
-
-                allFaceBlockTypes.Add(f.blockType);
-                allFaceNormals.Add(f.normal);
-            }
-
-            // Dispose dos containers nativos
-            faces.Dispose();
-            paddedFlat.Dispose();
-            isEmptyByType.Dispose();
-
-            // Enfileira resultado para main thread aplicar mesh (agrupamento por material será feito na main thread)
-            var result = new MeshJobResult()
-            {
-                coord = chunkCoord,
-                blocks = inner,
-                // usamos os campos "solid*" para transportar as faces combinadas (legacy names)
-                solidVertices = allVerts,
-                solidTriangles = allTris,
-                solidFaceBlockTypes = allFaceBlockTypes,
-                solidFaceNormals = allFaceNormals,
-                // manter vazio os campos de water/leaf específicos (não usados aqui)
-                waterVertices = null,
-                waterTriangles = null,
-                waterFaceBlockTypes = new List<int>(),
-                waterFaceNormals = new List<int>(),
-                width = w,
-                height = h,
-                depth = d,
-                blockSize = s
-            };
-
-            meshResults.Enqueue(result);
         }
-        catch (OperationCanceledException) { }
-        catch (Exception ex)
+
+        // liberamos referência ao managed (ela fica elegível ao GC após método sair)
+        // paddedManaged = null; // opcional
+
+        // preparar caches / dados para o job
+        EnsureBlockTypeCaches();
+        int maxEnum = cachedMaxBlockType;
+        var isEmptyByType = new NativeArray<byte>(cachedIsEmptyByType, Allocator.TempJob);
+
+        float s = blockSize;
+        int airInt = (int)BlockType.Air;
+
+        var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
+
+        var job = new MeshGenJob
         {
-            Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
-        }
-        finally
+            padded = paddedFlat,
+            pw = lpw,
+            ph = lph,
+            pd = lpd,
+            pad = pad,
+            w = w,
+            h = h,
+            d = d,
+            s = s,
+            airInt = airInt,
+            waterInt = (int)BlockType.Water,
+            isEmptyByType = isEmptyByType,
+            faces = faces
+        };
+
+        // schedule + complete (mesma lógica anterior)
+        var handle = job.Schedule();
+        handle.Complete();
+
+        var faceArr = faces.AsArray();
+
+        var allVerts = new List<Vector3>(faceArr.Length * 4);
+        var allTris = new List<int>(faceArr.Length * 6);
+        var allFaceBlockTypes = new List<int>(faceArr.Length);
+        var allFaceNormals = new List<int>(faceArr.Length);
+
+        for (int i = 0; i < faceArr.Length; i++)
         {
-            generationSemaphore.Release();
-            generatingChunks.TryRemove(chunkCoord, out _);
+            var f = faceArr[i];
+            int vi = allVerts.Count;
+            allVerts.Add(ToV3(f.v0));
+            allVerts.Add(ToV3(f.v1));
+            allVerts.Add(ToV3(f.v2));
+            allVerts.Add(ToV3(f.v3));
+            allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
+            allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
+
+            allFaceBlockTypes.Add(f.blockType);
+            allFaceNormals.Add(f.normal);
         }
+
+        // Dispose dos containers nativos
+        faces.Dispose();
+        paddedFlat.Dispose();
+        isEmptyByType.Dispose();
+
+        // Enfileira resultado para main thread aplicar mesh
+        var result = new MeshJobResult()
+        {
+            coord = chunkCoord,
+            blocks = inner,
+            solidVertices = allVerts,
+            solidTriangles = allTris,
+            solidFaceBlockTypes = allFaceBlockTypes,
+            solidFaceNormals = allFaceNormals,
+            waterVertices = null,
+            waterTriangles = null,
+            waterFaceBlockTypes = new List<int>(),
+            waterFaceNormals = new List<int>(),
+            width = w,
+            height = h,
+            depth = d,
+            blockSize = s
+        };
+
+        meshResults.Enqueue(result);
     }
-
+    catch (OperationCanceledException) { }
+    catch (Exception ex)
+    {
+        Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
+    }
+    finally
+    {
+        generationSemaphore.Release();
+        generatingChunks.TryRemove(chunkCoord, out _);
+    }
+}
 
     private static Vector3 ToV3(float3 f) => new Vector3(f.x, f.y, f.z);
 

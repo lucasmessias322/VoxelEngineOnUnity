@@ -448,73 +448,144 @@ public class ChunkGenerator
         this.defaultFillerBlock = defaultFillerBlock;
     }
 
-    // Substituir o método existente por este
-    public NativeArray<int> GenerateFlattenedPadded_Native(Vector2Int chunkCoord, out int pw, out int ph, out int pd, Allocator allocator = Allocator.TempJob, bool SpawnTrees = true)
+    // // Substituir o método existente por este
+    // public NativeArray<int> GenerateFlattenedPadded_Native(Vector2Int chunkCoord, out int pw, out int ph, out int pd, Allocator allocator = Allocator.TempJob, bool SpawnTrees = true)
+    // {
+    //     int w = chunkWidth, h = chunkHeight, d = chunkDepth;
+    //     int pad = treePadding;
+
+    //     pw = w + 2 * pad;
+    //     ph = h;
+    //     pd = d + 2 * pad;
+
+    //     int lpw = pw, lph = ph, lpd = pd;
+
+    //     int total = lpw * lph * lpd;
+
+    //     // NativeArray retornado (alocado com o allocator solicitado)
+    //     var paddedFlat = new NativeArray<int>(total, allocator);
+
+    //     // **BUILD IN A MANAGED ARRAY FIRST** (muito mais rápido para escrever elemento-a-elemento)
+    //     var flatManaged = new int[total];
+
+    //     // helper local (usa as cópias)
+    //     int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
+
+    //     // 1) Precompute heightMap (lpw x lpd)
+    //     int startWorldX = chunkCoord.x * chunkWidth - pad;
+    //     int startWorldZ = chunkCoord.y * chunkDepth - pad;
+    //     var heightMap = new int[lpw, lpd];
+    //     for (int lx = 0; lx < lpw; lx++)
+    //     {
+    //         for (int lz = 0; lz < lpd; lz++)
+    //         {
+    //             int worldX = startWorldX + lx;
+    //             int worldZ = startWorldZ + lz;
+    //             heightMap[lx, lz] = GetHeightAt(worldX, worldZ);
+    //         }
+    //     }
+
+    //     // 2) Preencher flatManaged diretamente (sem criar BlockType[,] e sem NativeArray.Set_Item por elemento)
+    //     for (int lx = 0; lx < lpw; lx++)
+    //     {
+    //         for (int lz = 0; lz < lpd; lz++)
+    //         {
+    //             int worldX = chunkCoord.x * chunkWidth + lx - pad;
+    //             int worldZ = chunkCoord.y * chunkDepth + lz - pad;
+    //             int groundLevel = heightMap[lx, lz];
+
+    //             for (int y = 0; y < lph; y++)
+    //             {
+    //                 var bt = DetermineBlockType(y, groundLevel, worldX, worldZ, heightMap, lx, lz, lpw, lpd);
+    //                 int idx = FlattenIndex(lx, y, lz);
+    //                 flatManaged[idx] = (int)bt;
+    //             }
+    //         }
+    //     }
+
+    //     if (SpawnTrees)
+    //     {
+    //         // 3) Colocar árvores diretamente no flatManaged (versão que opera em int[])
+    //         PlaceTreesInFlattened(flatManaged, heightMap, chunkCoord, lpw, lph, lpd, pad);
+
+    //     }
+
+    //     // Finalmente copia o bloco inteiro para o NativeArray (memcpy interno, muito rápido)
+    //     paddedFlat.CopyFrom(flatManaged);
+
+    //     return paddedFlat;
+    // }
+
+// Substitua/adicione este método em ChunkGenerator.cs
+public NativeArray<int> GenerateFlattenedPadded_Native(
+    Vector2Int chunkCoord,
+    out int pw, out int ph, out int pd,
+    out int[] paddedManaged,
+    Allocator allocator = Allocator.TempJob,
+    bool SpawnTrees = true)
+{
+    int w = chunkWidth, h = chunkHeight, d = chunkDepth;
+    int pad = treePadding;
+
+    pw = w + 2 * pad;
+    ph = h;
+    pd = d + 2 * pad;
+
+    int lpw = pw, lph = ph, lpd = pd;
+    int total = lpw * lph * lpd;
+
+    // 1) construir o array gerenciado (escrever elemento-a-elemento é mais rápido em int[] do que em NativeArray)
+    paddedManaged = new int[total];
+
+    // helper flatten
+    int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
+
+    // 2) Precompute heightMap (lpw x lpd)
+    int startWorldX = chunkCoord.x * chunkWidth - pad;
+    int startWorldZ = chunkCoord.y * chunkDepth - pad;
+    var heightMap = new int[lpw, lpd];
+    for (int lx = 0; lx < lpw; lx++)
     {
-        int w = chunkWidth, h = chunkHeight, d = chunkDepth;
-        int pad = treePadding;
-
-        pw = w + 2 * pad;
-        ph = h;
-        pd = d + 2 * pad;
-
-        int lpw = pw, lph = ph, lpd = pd;
-
-        int total = lpw * lph * lpd;
-
-        // NativeArray retornado (alocado com o allocator solicitado)
-        var paddedFlat = new NativeArray<int>(total, allocator);
-
-        // **BUILD IN A MANAGED ARRAY FIRST** (muito mais rápido para escrever elemento-a-elemento)
-        var flatManaged = new int[total];
-
-        // helper local (usa as cópias)
-        int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
-
-        // 1) Precompute heightMap (lpw x lpd)
-        int startWorldX = chunkCoord.x * chunkWidth - pad;
-        int startWorldZ = chunkCoord.y * chunkDepth - pad;
-        var heightMap = new int[lpw, lpd];
-        for (int lx = 0; lx < lpw; lx++)
+        for (int lz = 0; lz < lpd; lz++)
         {
-            for (int lz = 0; lz < lpd; lz++)
-            {
-                int worldX = startWorldX + lx;
-                int worldZ = startWorldZ + lz;
-                heightMap[lx, lz] = GetHeightAt(worldX, worldZ);
-            }
+            int worldX = startWorldX + lx;
+            int worldZ = startWorldZ + lz;
+            heightMap[lx, lz] = GetHeightAt(worldX, worldZ);
         }
-
-        // 2) Preencher flatManaged diretamente (sem criar BlockType[,] e sem NativeArray.Set_Item por elemento)
-        for (int lx = 0; lx < lpw; lx++)
-        {
-            for (int lz = 0; lz < lpd; lz++)
-            {
-                int worldX = chunkCoord.x * chunkWidth + lx - pad;
-                int worldZ = chunkCoord.y * chunkDepth + lz - pad;
-                int groundLevel = heightMap[lx, lz];
-
-                for (int y = 0; y < lph; y++)
-                {
-                    var bt = DetermineBlockType(y, groundLevel, worldX, worldZ, heightMap, lx, lz, lpw, lpd);
-                    int idx = FlattenIndex(lx, y, lz);
-                    flatManaged[idx] = (int)bt;
-                }
-            }
-        }
-
-        if (SpawnTrees)
-        {
-            // 3) Colocar árvores diretamente no flatManaged (versão que opera em int[])
-            PlaceTreesInFlattened(flatManaged, heightMap, chunkCoord, lpw, lph, lpd, pad);
-            
-        }
-
-        // Finalmente copia o bloco inteiro para o NativeArray (memcpy interno, muito rápido)
-        paddedFlat.CopyFrom(flatManaged);
-
-        return paddedFlat;
     }
+
+    // 3) Preencher paddedManaged diretamente (int)
+    for (int lx = 0; lx < lpw; lx++)
+    {
+        for (int lz = 0; lz < lpd; lz++)
+        {
+            int worldX = chunkCoord.x * chunkWidth + lx - pad;
+            int worldZ = chunkCoord.y * chunkDepth + lz - pad;
+            int groundLevel = heightMap[lx, lz];
+
+            for (int y = 0; y < lph; y++)
+            {
+                var bt = DetermineBlockType(y, groundLevel, worldX, worldZ, heightMap, lx, lz, lpw, lpd);
+                int idx = FlattenIndex(lx, y, lz);
+                paddedManaged[idx] = (int)bt;
+            }
+        }
+    }
+
+    // 4) Se for gerar árvores, modifique o paddedManaged diretamente
+    if (SpawnTrees)
+    {
+        PlaceTreesInFlattened(paddedManaged, heightMap, chunkCoord, lpw, lph, lpd, pad);
+    }
+
+    // 5) Criar NativeArray (alocado pelo allocator pedido) e copiar uma única vez do managed para native
+    var paddedFlat = new NativeArray<int>(total, allocator);
+    paddedFlat.CopyFrom(paddedManaged);
+
+    return paddedFlat;
+}
+
+
 
     // Substituir/Adicionar overload que aceita int[] em vez de NativeArray<int>
     private void PlaceTreesInFlattened(int[] paddedFlat, int[,] heightMap, Vector2Int chunkCoord, int pw, int ph, int pd, int pad)
