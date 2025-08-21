@@ -2,6 +2,8 @@ using UnityEngine;
 
 public class MyNoise
 {
+
+    
     // Fractal Perlin (octaves) - versão geral
     public static float FractalNoise2D(float x, float z, int octaves, float persistence, float lacunarity, float scale, int seed)
     {
@@ -35,6 +37,9 @@ public class MyNoise
 
         return new Vector2(wx, wz);
     }
+
+
+    
 
     // Ridged fractal noise — cria picos/montanhas (valores entre 0 e 1)
     public static float RidgedFractalNoise2D(float x, float z, int octaves, float persistence, float lacunarity, float scale, int seed)

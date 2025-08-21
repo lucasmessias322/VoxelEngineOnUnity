@@ -29,16 +29,25 @@ public class OreConfig
 public class VoxelWorld : MonoBehaviour
 {
     public static VoxelWorld Instance { get; private set; }
-    [Header("Biomes")]
-    public Biome[] biomes;                 // configurar no inspector
-    public float biomeNoiseScale = 0.005f; // escala do mapa de biomas (baixo => grandes biomas)
-    public int biomeSeed = 12345;          // seed para o mapa de biomas
 
     [Header("Chunk params")]
     public int chunkWidth = 16;
     public int chunkHeight = 128;
     public int chunkDepth = 16;
     public float blockSize = 1f;
+    [Header("Terrain Presets")]
+    public float presetNoiseScale = 0.01f;
+    public int presetSeed = 9999;
+
+    [Header("Biomes")]
+    public Biome[] biomes;                 // configurar no inspector
+    public float biomeNoiseScale = 0.005f; // escala do mapa de biomas (baixo => grandes biomas)
+    public int biomeSeed = 12345;          // seed para o mapa de biomas
+
+    public BlockType defaultTopBlock = BlockType.Grass;
+    public BlockType defaultSubSurfaceBlock = BlockType.Dirt;
+    public BlockType defaultFillerBlock = BlockType.Stone;
+
 
     [Header("Noise / world")]
     public int bedrockLayers = 1;
@@ -79,14 +88,6 @@ public class VoxelWorld : MonoBehaviour
     public BlockType woodBlock = BlockType.Placeholder;
     public BlockType leavesBlock = BlockType.Placeholder;
 
-    [Header("Tree Height Control")]
-    public bool useFixedTreeHeight = false;
-    [Range(1, 64)]
-    public int fixedTreeHeight = 5;
-
-    [Header("Ore Settings")]
-    public OreConfig[] oreConfigs;
-
     // internal
     private readonly Dictionary<Vector2Int, Chunk> activeChunks = new();
     private readonly ConcurrentQueue<MeshJobResult> meshResults = new();
@@ -105,8 +106,6 @@ public class VoxelWorld : MonoBehaviour
     private int[] cachedMaterialIndexByType; // index = (int)BlockType -> materialIndex
     private byte[] cachedIsEmptyByType;      // index = (int)BlockType -> 0/1
     private BlockDataSO cachedBlockDataSORef = null;
-
-
     private SemaphoreSlim generationSemaphore;
 
     [Header("Generation Limits")]
@@ -119,7 +118,7 @@ public class VoxelWorld : MonoBehaviour
     public int initialViewDistance = 1;
     public float expandViewSeconds = 4f; // tempo total para expandir até viewDistanceInChunks
     private BiomeBlender biomeBlender;
-
+    public bool SpawnTrees;
     // --- Construtores / Start / Destroy ---
     void Awake()
     {
@@ -142,25 +141,26 @@ public class VoxelWorld : MonoBehaviour
         }
         biomeBlender = new BiomeBlender(biomes, biomeNoiseScale, biomeSeed);
 
-        chunkGenerator = new ChunkGenerator(
-            biomes, biomeNoiseScale, biomeSeed, chunkWidth, chunkHeight, chunkDepth,
-            bedrockLayers, dirtLayers, seed, noiseSettings, seaLevel,
-            treePadding, treeSeed, treeSpawnChance, treeMinHeight, treeMaxHeight, treeLeafRadius,
-            woodBlock, leavesBlock,
-            useFixedTreeHeight, fixedTreeHeight
-        );
 
+
+        chunkGenerator = new ChunkGenerator(
+     chunkWidth, chunkHeight, chunkDepth,
+    bedrockLayers, dirtLayers, seed, noiseSettings, seaLevel,
+    treePadding, treeSpawnChance, treeMinHeight, treeMaxHeight, treeLeafRadius,
+    woodBlock, leavesBlock,
+
+
+    defaultTopBlock, defaultSubSurfaceBlock, defaultFillerBlock
+);
         int concurrent = maxConcurrentGenerations;
         if (concurrent < 0) concurrent = SystemInfo.processorCount - 1;
         concurrent = Mathf.Max(1, concurrent);
         generationSemaphore = new SemaphoreSlim(concurrent);
 
-        // UpdateChunksImmediate();
+
         currentViewDistance = initialViewDistance;
         StartCoroutine(ExpandViewDistanceCoroutine());
         StartCoroutine(InitialChunkGenerationCoroutine()); // essa coroutine usa currentViewDistance em vez do antigo viewDistanceInChunks
-
-
     }
 
     void OnDestroy()
@@ -229,7 +229,7 @@ public class VoxelWorld : MonoBehaviour
     }
 
 
-  
+
 
     // Substitua a função inteira ProcessMeshResults por esta (VoxelWorld.cs)
     private void ProcessMeshResults()
@@ -593,7 +593,7 @@ public class VoxelWorld : MonoBehaviour
 
             // gera padded flattened diretamente do generator (NativeArray)
             int pw, ph, pd;
-            var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob);
+            var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob, SpawnTrees);
 
             // extrai o inner (w,h,d) para SetBlocks (mantendo o array BlockType[,,] que o resto do pipeline usa)
             int w = chunkWidth, h = chunkHeight, d = chunkDepth;
