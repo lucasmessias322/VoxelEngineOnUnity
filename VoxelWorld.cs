@@ -11,21 +11,6 @@ using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
 
-[System.Serializable]
-public class OreConfig
-{
-    public BlockType oreBlock;    // tipo do minério (ex.: BlockType.IronOre)
-    public int minHeight;         // altura mínima de geração
-    public int maxHeight;         // altura máxima de geração
-    [Range(0f, 1f)] public float rarity; // chance por bloco dentro da faixa
-    public int veinSize;          // tamanho médio da veia
-    public int seedOffset;        // offset para evitar overlap entre minérios
-}
-
-/// <summary>
-/// VoxelWorld — gera/streaming de chunks (versão com suporte a submeshes para água).
-/// Versão adaptada para Job System + Burst + NativeCollections para o meshing.
-/// </summary>
 public class VoxelWorld : MonoBehaviour
 {
     public static VoxelWorld Instance { get; private set; }
@@ -101,6 +86,9 @@ public class VoxelWorld : MonoBehaviour
     [Tooltip("Como as linhas do atlas estão numeradas: BottomToTop = linha 0 é a mais baixa (origem UV do Unity), TopToBottom = linha 0 é a mais alta (estilo Minecraft).")]
     public AtlasOrientation atlasOrientation = AtlasOrientation.TopToBottom;
 
+    // fields em VoxelWorld
+    private readonly ConcurrentQueue<Vector2Int> chunksToRebuild = new();
+    public int maxChunkRebuildsPerFrame = 4; // ajustável no inspector se você tornar público
 
     private int cachedMaxBlockType = -1;
     private int[] cachedMaterialIndexByType; // index = (int)BlockType -> materialIndex
@@ -172,10 +160,35 @@ public class VoxelWorld : MonoBehaviour
 
     void Update()
     {
-        ProcessMeshResults();
+
         UpdateChunksStreaming();
         UpdateChunkColliders();
+
+        ProcessChunkRebuildQueue(); // NOVO: processa N rebuilds por frame
     }
+
+    private void ProcessChunkRebuildQueue()
+    {
+        int processed = 0;
+        var processedSet = new HashSet<Vector2Int>(); // evita rebuild duplo do mesmo chunk nessa frame
+        while (processed < maxChunkRebuildsPerFrame && chunksToRebuild.TryDequeue(out var coord))
+        {
+            if (processedSet.Contains(coord)) continue;
+            processedSet.Add(coord);
+
+            if (activeChunks.TryGetValue(coord, out var chunk))
+            {
+                // Rebuild mesh; reconstrução de colisores deixamos para condição de physics
+                bool rebuildCollidersNow = /* checar se chunk está dentro de physicsRadiusInChunks */
+                    (Mathf.Max(Mathf.Abs(coord.x - GetPlayerChunk().x), Mathf.Abs(coord.y - GetPlayerChunk().y)) <= physicsRadiusInChunks);
+
+                chunk.ApplyPendingChanges(rebuildCollidersNow);
+            }
+
+            processed++;
+        }
+    }
+
     public Color GetFoliageColorAt(int worldX, int worldZ)
     {
         if (biomes == null || biomes.Length == 0)
@@ -189,7 +202,7 @@ public class VoxelWorld : MonoBehaviour
         Color c1 = biomes[Mathf.Clamp(i1, 0, biomes.Length - 1)].foliageColor;
         return Color.Lerp(c0, c1, t);
     }
-    private void EnsureBlockTypeCaches()
+    public void EnsureBlockTypeCaches()
     {
         // recompute only if blockDataSO changed or not initialized
         if (cachedBlockDataSORef == blockDataSO && cachedMaxBlockType >= 0) return;
@@ -228,191 +241,6 @@ public class VoxelWorld : MonoBehaviour
         }
     }
 
-
-
-
-    // Substitua a função inteira ProcessMeshResults por esta (VoxelWorld.cs)
-    private void ProcessMeshResults()
-    {
-        while (meshResults.TryDequeue(out var res))
-        {
-            // garante chunk (cria/pega do pool)
-            if (!activeChunks.TryGetValue(res.coord, out var chunk))
-            {
-                chunk = GetChunkFromPool(res.coord);
-                activeChunks[res.coord] = chunk;
-            }
-
-            // Seta o inner blocks no chunk
-            chunk.SetBlocks(res.blocks);
-
-            // --- Agrupar faces (as faces foram empacotadas em res.solid* pelo StartGenerateChunkAsync) ---
-            var faceVerts = res.solidVertices ?? new List<Vector3>();
-            var faceTris = res.solidTriangles ?? new List<int>();
-            var faceBlockTypes = res.solidFaceBlockTypes ?? new List<int>();
-            var faceNormals = res.solidFaceNormals ?? new List<int>();
-
-            int faceCount = faceBlockTypes.Count; // cada entrada é uma face (4 vértices, 6 índices)
-
-            // Dicionários temporários por materialIndex
-            var vertsByMat = new List<List<Vector3>>();
-            var trisByMat = new List<List<int>>();
-            var uvsByMat = new List<List<Vector2>>();
-            var normsByMat = new List<List<Vector3>>();
-
-            // Helper para garantir tamanho das listas por material index
-            void EnsureMaterialSlot(int idx)
-            {
-                while (vertsByMat.Count <= idx)
-                {
-                    vertsByMat.Add(new List<Vector3>());
-                    trisByMat.Add(new List<int>());
-                    uvsByMat.Add(new List<Vector2>());
-                    normsByMat.Add(new List<Vector3>());
-                }
-            }
-
-            int GetMaterialIndexForBlockType(int blockTypeInt)
-            {
-                if (blockTypeInt < 0) return 0;
-                // garante cache preparado
-                if (cachedMaterialIndexByType == null) EnsureBlockTypeCaches();
-                if (blockTypeInt >= cachedMaterialIndexByType.Length) return 0;
-                return cachedMaterialIndexByType[blockTypeInt];
-            }
-
-            // Percorrer faces: cada face ocupa 4 vértices seguidos em faceVerts; face i tem verts index = i*4 . i*4+3
-            for (int fi = 0; fi < faceCount; fi++)
-            {
-                int matIndex = GetMaterialIndexForBlockType(faceBlockTypes[fi]);
-                EnsureMaterialSlot(matIndex);
-
-                var vlist = vertsByMat[matIndex];
-                var tris = trisByMat[matIndex];
-                var uvs = uvsByMat[matIndex];
-                var norms = normsByMat[matIndex];
-
-                int baseVertIndex = fi * 4;
-                // adicionar 4 vértices
-                vlist.Add(faceVerts[baseVertIndex + 0]);
-                vlist.Add(faceVerts[baseVertIndex + 1]);
-                vlist.Add(faceVerts[baseVertIndex + 2]);
-                vlist.Add(faceVerts[baseVertIndex + 3]);
-
-                // adicionar tri (indices relativos ao vlist)
-                int vi = vlist.Count - 4;
-                tris.Add(vi + 0); tris.Add(vi + 1); tris.Add(vi + 2);
-                tris.Add(vi + 0); tris.Add(vi + 2); tris.Add(vi + 3);
-
-                // UVs: usar AddUVsTo para esta face (esta função está em VoxelWorld e é segura na main thread)
-                var bt = (BlockType)faceBlockTypes[fi];
-                var normal = NormalFromIndex(faceNormals[fi]);
-                AddUVsTo(uvs, bt, normal);
-
-                // Normais per-vertex (4 cópias)
-                norms.Add(normal); norms.Add(normal); norms.Add(normal); norms.Add(normal);
-            }
-
-            // Montar array de materiais final (preferir VoxelWorld.materials[] se atribuído; senão montar fallback)
-            Material[] finalMaterials = null;
-            if (this.materials != null && this.materials.Length > 0)
-            {
-                finalMaterials = this.materials;
-            }
-            else
-            {
-                // fallback para compatibilidade com campos existentes
-                var matsList = new List<Material>();
-                if (chunkMaterial != null) matsList.Add(chunkMaterial);
-                if (leafMaterial != null) matsList.Add(leafMaterial);
-                if (waterMaterial != null) matsList.Add(waterMaterial);
-                finalMaterials = matsList.ToArray();
-            }
-
-            // Garantir que finalMaterials tenha pelo menos o número de slots usados (ou será truncado no Chunk)
-            // Chamar ApplyMeshDataByMaterial no chunk (ordem de materiais = índice)
-            chunk.ApplyMeshDataByMaterial(
-                vertsByMat,
-                trisByMat,
-                uvsByMat,
-                normsByMat,
-                finalMaterials,
-                res.width, res.height, res.depth, res.blockSize
-            );
-
-            // --- Aplicar MaterialPropertyBlocks para foliage e biome color ---
-            try
-            {
-                // calcular posição central do chunk (em blocos world coords)
-                int chunkWorldX = res.coord.x * chunkWidth + (chunkWidth / 2);
-                int chunkWorldZ = res.coord.y * chunkDepth + (chunkDepth / 2);
-
-                Color biomeColor = GetFoliageColorAt(chunkWorldX, chunkWorldZ); // reuse foliage palette
-
-                // descobrir índices dos materiais dentro do finalMaterials
-                int leafMatIndex = -1;
-                int chunkMatIndex = -1;
-                int GrassMatIndex = -1;
-
-                if (finalMaterials != null)
-                {
-                    for (int i = 0; i < finalMaterials.Length; i++)
-                    {
-                        if (finalMaterials[i] == leafMaterial) leafMatIndex = i;
-                        if (finalMaterials[i] == chunkMaterial) chunkMatIndex = i;
-                        if (i == 3f) GrassMatIndex = i;
-                    }
-                }
-
-                var renderer = chunk.GetComponent<MeshRenderer>();
-                if (renderer != null)
-                {
-                    // Folhas: aplicar _FoliageColor no slot de leafMaterial (se existir)
-                    if (leafMatIndex >= 0)
-                    {
-                        var mpbLeaf = new MaterialPropertyBlock();
-                        // ler bloco atual (opcional, para preservar outras propriedades)
-                        renderer.GetPropertyBlock(mpbLeaf, leafMatIndex);
-                        mpbLeaf.SetColor("_FoliageColor", biomeColor);
-                        renderer.SetPropertyBlock(mpbLeaf, leafMatIndex);
-                    }
-
-                    // Terra/Bloco: aplicar _BiomeColor no slot de chunkMaterial (se existir)
-                    if (GrassMatIndex >= 0)
-                    {
-                        var mpbChunk = new MaterialPropertyBlock();
-                        renderer.GetPropertyBlock(mpbChunk, GrassMatIndex);
-                        mpbChunk.SetColor("_BiomeColor", biomeColor);
-                        renderer.SetPropertyBlock(mpbChunk, GrassMatIndex);
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.LogWarning($"Erro ao aplicar foliage/biome color: {ex}");
-            }
-        }
-    }
-
-
-
-
-
-    // Converte índice de normal gerado no job para Vector3
-    private Vector3 NormalFromIndex(int idx)
-    {
-        return idx switch
-        {
-            0 => Vector3.forward, // +z front
-            1 => Vector3.back,    // -z back
-            2 => Vector3.up,      // +y top
-            3 => Vector3.down,    // -y bottom
-            4 => Vector3.right,   // +x right
-            5 => Vector3.left,    // -x left
-            _ => Vector3.forward
-        };
-    }
-
     private void UpdateChunkColliders()
     {
         Vector2Int center = GetPlayerChunk();
@@ -448,6 +276,17 @@ public class VoxelWorld : MonoBehaviour
         go.transform.localPosition = new Vector3(coord.x * chunkWidth * blockSize, 0, coord.y * chunkDepth * blockSize);
         var chunk = go.GetComponent<Chunk>();
         chunk.blockDataSO = blockDataSO;
+        return chunk;
+    }
+
+    // retorna chunk ativo (cria e adiciona em activeChunks se necessário)
+    public Chunk GetOrCreateChunk(Vector2Int coord)
+    {
+        if (activeChunks.TryGetValue(coord, out var chunk))
+            return chunk;
+
+        chunk = GetChunkFromPool(coord); // usa o método privado já existente
+        activeChunks[coord] = chunk;
         return chunk;
     }
 
@@ -511,7 +350,6 @@ public class VoxelWorld : MonoBehaviour
         }
     }
 
-
     private IEnumerator ExpandViewDistanceCoroutine()
     {
         int target = viewDistanceInChunks;
@@ -527,8 +365,6 @@ public class VoxelWorld : MonoBehaviour
         }
         currentViewDistance = target;
     }
-
-    // adicione isto dentro da classe VoxelWorld
 
     private IEnumerator InitialChunkGenerationCoroutine()
     {
@@ -582,358 +418,148 @@ public class VoxelWorld : MonoBehaviour
         return new Vector2Int(cx, cz);
     }
 
-
-    // private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
-    // {
-    //     await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
-
-    //     try
-    //     {
-    //         if (token.IsCancellationRequested) return;
-
-    //         // gera padded flattened diretamente do generator (NativeArray)
-    //         int pw, ph, pd;
-    //         var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, Allocator.TempJob, SpawnTrees);
-
-    //         // extrai o inner (w,h,d) para SetBlocks (mantendo o array BlockType[,,] que o resto do pipeline usa)
-    //         int w = chunkWidth, h = chunkHeight, d = chunkDepth;
-    //         int pad = (pw - w) / 2;
-    //         if (pad < 0) pad = 0;
-
-    //         var inner = new BlockType[w, h, d];
-    //         // copiando usando a mesma fórmula de flatten
-    //         int lpw = pw, lph = ph, lpd = pd;
-    //         for (int x = 0; x < w; x++)
-    //         {
-    //             int srcX = x + pad;
-    //             for (int y = 0; y < h; y++)
-    //             {
-    //                 for (int z = 0; z < d; z++)
-    //                 {
-    //                     int srcZ = z + pad;
-    //                     int idx = (srcX * lph + y) * lpd + srcZ;
-    //                     inner[x, y, z] = (BlockType)paddedFlat[idx];
-    //                 }
-    //             }
-    //         }
-
-    //         // garante que caches estejam prontos
-    //         EnsureBlockTypeCaches();
-    //         int maxEnum = cachedMaxBlockType;
-    //         var isEmptyByType = new NativeArray<byte>(maxEnum + 1, Allocator.TempJob);
-    //         for (int i = 0; i <= maxEnum; i++) isEmptyByType[i] = cachedIsEmptyByType[i];
-
-
-    //         // Preparar job (usa paddedFlat diretamente)
-    //         float s = blockSize;
-    //         int airInt = (int)BlockType.Air;
-
-    //         var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-
-    //         var job = new MeshGenJob
-    //         {
-    //             padded = paddedFlat,
-    //             pw = lpw,
-    //             ph = lph,
-    //             pd = lpd,
-    //             pad = pad,
-    //             w = w,
-    //             h = h,
-    //             d = d,
-    //             s = s,
-    //             airInt = airInt,
-    //             waterInt = (int)BlockType.Water, // <-- ADICIONAR
-    //             isEmptyByType = isEmptyByType,
-    //             faces = faces
-    //         };
-
-
-    //         // Executa (IJob) — manter comportamento original (Schedule/Complete)
-    //         var handle = job.Schedule();
-    //         handle.Complete();
-
-    //         // Coleta resultados para main thread
-    //         var faceArr = faces.AsArray();
-
-    //         // transformar faces (cada face => 4 vértices + 6 índices) em listas simples para enfileirar
-    //         var allVerts = new List<Vector3>(faceArr.Length * 4);
-    //         var allTris = new List<int>(faceArr.Length * 6);
-    //         var allFaceBlockTypes = new List<int>(faceArr.Length);
-    //         var allFaceNormals = new List<int>(faceArr.Length);
-
-    //         for (int i = 0; i < faceArr.Length; i++)
-    //         {
-    //             var f = faceArr[i];
-    //             int vi = allVerts.Count;
-    //             allVerts.Add(ToV3(f.v0));
-    //             allVerts.Add(ToV3(f.v1));
-    //             allVerts.Add(ToV3(f.v2));
-    //             allVerts.Add(ToV3(f.v3));
-    //             allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
-    //             allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
-
-    //             allFaceBlockTypes.Add(f.blockType);
-    //             allFaceNormals.Add(f.normal);
-    //         }
-
-    //         // Dispose dos containers nativos
-    //         faces.Dispose();
-    //         paddedFlat.Dispose();
-    //         isEmptyByType.Dispose();
-
-    //         // Enfileira resultado para main thread aplicar mesh (agrupamento por material será feito na main thread)
-    //         var result = new MeshJobResult()
-    //         {
-    //             coord = chunkCoord,
-    //             blocks = inner,
-    //             // usamos os campos "solid*" para transportar as faces combinadas (legacy names)
-    //             solidVertices = allVerts,
-    //             solidTriangles = allTris,
-    //             solidFaceBlockTypes = allFaceBlockTypes,
-    //             solidFaceNormals = allFaceNormals,
-    //             // manter vazio os campos de water/leaf específicos (não usados aqui)
-    //             waterVertices = null,
-    //             waterTriangles = null,
-    //             waterFaceBlockTypes = new List<int>(),
-    //             waterFaceNormals = new List<int>(),
-    //             width = w,
-    //             height = h,
-    //             depth = d,
-    //             blockSize = s
-    //         };
-
-    //         meshResults.Enqueue(result);
-    //     }
-    //     catch (OperationCanceledException) { }
-    //     catch (Exception ex)
-    //     {
-    //         Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
-    //     }
-    //     finally
-    //     {
-    //         generationSemaphore.Release();
-    //         generatingChunks.TryRemove(chunkCoord, out _);
-    //     }
-    // }
-
-
-// Substitua o StartGenerateChunkAsync em VoxelWorld.cs por este
-private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
-{
-    await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
-
-    try
+    private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationToken token)
     {
-        if (token.IsCancellationRequested) return;
+        await generationSemaphore.WaitAsync(token).ConfigureAwait(false);
 
-        // recebe tanto o NativeArray (para o Job) quanto o int[] gerenciado (para leitura rápida)
-        int pw, ph, pd;
-        var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, out int[] paddedManaged, Allocator.TempJob, SpawnTrees);
-
-        // --- usa o paddedManaged (int[]) para preencher inner (muito mais rápido que ler paddedFlat item-a-item) ---
-        int lpw = pw, lph = ph, lpd = pd;
-        int w = chunkWidth, h = chunkHeight, d = chunkDepth;
-        int pad = (lpw - w) / 2;
-        if (pad < 0) pad = 0;
-
-        var inner = new BlockType[w, h, d];
-
-        int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
-
-        for (int x = 0; x < w; x++)
+        try
         {
-            int srcX = x + pad;
-            for (int y = 0; y < h; y++)
+            if (token.IsCancellationRequested) return;
+
+            // recebe tanto o NativeArray (para o Job) quanto o int[] gerenciado (para leitura rápida)
+            int pw, ph, pd;
+            var paddedFlat = chunkGenerator.GenerateFlattenedPadded_Native(chunkCoord, out pw, out ph, out pd, out int[] paddedManaged, Allocator.TempJob, SpawnTrees);
+
+            // --- usa o paddedManaged (int[]) para preencher inner (muito mais rápido que ler paddedFlat item-a-item) ---
+            int lpw = pw, lph = ph, lpd = pd;
+            int w = chunkWidth, h = chunkHeight, d = chunkDepth;
+            int pad = (lpw - w) / 2;
+            if (pad < 0) pad = 0;
+
+            var inner = new BlockType[w, h, d];
+
+            int FlattenIndex(int x, int y, int z) => (x * lph + y) * lpd + z;
+
+            for (int x = 0; x < w; x++)
             {
-                for (int z = 0; z < d; z++)
+                int srcX = x + pad;
+                for (int y = 0; y < h; y++)
                 {
-                    int srcZ = z + pad;
-                    int idx = FlattenIndex(srcX, y, srcZ);
-                    inner[x, y, z] = (BlockType)paddedManaged[idx]; // leitura rápida de int[]
+                    for (int z = 0; z < d; z++)
+                    {
+                        int srcZ = z + pad;
+                        int idx = FlattenIndex(srcX, y, srcZ);
+                        inner[x, y, z] = (BlockType)paddedManaged[idx]; // leitura rápida de int[]
+                    }
                 }
             }
+
+            // liberamos referência ao managed (ela fica elegível ao GC após método sair)
+            // paddedManaged = null; // opcional
+
+            // preparar caches / dados para o job
+            EnsureBlockTypeCaches();
+            int maxEnum = cachedMaxBlockType;
+            var isEmptyByType = new NativeArray<byte>(cachedIsEmptyByType, Allocator.TempJob);
+
+            float s = blockSize;
+            int airInt = (int)BlockType.Air;
+
+            var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
+
+            var job = new MeshGenJob
+            {
+                padded = paddedFlat,
+                pw = lpw,
+                ph = lph,
+                pd = lpd,
+                pad = pad,
+                w = w,
+                h = h,
+                d = d,
+                s = s,
+                airInt = airInt,
+                waterInt = (int)BlockType.Water,
+                isEmptyByType = isEmptyByType,
+                faces = faces
+            };
+
+            // schedule + complete (mesma lógica anterior)
+            var handle = job.Schedule();
+            handle.Complete();
+
+            var faceArr = faces.AsArray();
+
+            var allVerts = new List<Vector3>(faceArr.Length * 4);
+            var allTris = new List<int>(faceArr.Length * 6);
+            var allFaceBlockTypes = new List<int>(faceArr.Length);
+            var allFaceNormals = new List<int>(faceArr.Length);
+
+            for (int i = 0; i < faceArr.Length; i++)
+            {
+                var f = faceArr[i];
+                int vi = allVerts.Count;
+                allVerts.Add(ToV3(f.v0));
+                allVerts.Add(ToV3(f.v1));
+                allVerts.Add(ToV3(f.v2));
+                allVerts.Add(ToV3(f.v3));
+                allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
+                allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
+
+                allFaceBlockTypes.Add(f.blockType);
+                allFaceNormals.Add(f.normal);
+            }
+
+            // Dispose dos containers nativos
+            faces.Dispose();
+            paddedFlat.Dispose();
+            isEmptyByType.Dispose();
+
+            // Enfileira resultado para main thread aplicar mesh
+            var result = new MeshJobResult()
+            {
+                coord = chunkCoord,
+                blocks = inner,
+                solidVertices = allVerts,
+                solidTriangles = allTris,
+                solidFaceBlockTypes = allFaceBlockTypes,
+                solidFaceNormals = allFaceNormals,
+                waterVertices = null,
+                waterTriangles = null,
+                waterFaceBlockTypes = new List<int>(),
+                waterFaceNormals = new List<int>(),
+                width = w,
+                height = h,
+                depth = d,
+                blockSize = s
+            };
+
+            // meshResults.Enqueue(result);
+            // envia para o MeshBuilder (thread-safe)
+            if (MeshBuilder.Instance != null)
+                MeshBuilder.Instance.QueueResult(result);
+            else
+                meshResults.Enqueue(result); // fallback se ainda preferir
+
         }
-
-        // liberamos referência ao managed (ela fica elegível ao GC após método sair)
-        // paddedManaged = null; // opcional
-
-        // preparar caches / dados para o job
-        EnsureBlockTypeCaches();
-        int maxEnum = cachedMaxBlockType;
-        var isEmptyByType = new NativeArray<byte>(cachedIsEmptyByType, Allocator.TempJob);
-
-        float s = blockSize;
-        int airInt = (int)BlockType.Air;
-
-        var faces = new NativeList<VoxelWorld.FaceData>(Allocator.TempJob);
-
-        var job = new MeshGenJob
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
         {
-            padded = paddedFlat,
-            pw = lpw,
-            ph = lph,
-            pd = lpd,
-            pad = pad,
-            w = w,
-            h = h,
-            d = d,
-            s = s,
-            airInt = airInt,
-            waterInt = (int)BlockType.Water,
-            isEmptyByType = isEmptyByType,
-            faces = faces
-        };
-
-        // schedule + complete (mesma lógica anterior)
-        var handle = job.Schedule();
-        handle.Complete();
-
-        var faceArr = faces.AsArray();
-
-        var allVerts = new List<Vector3>(faceArr.Length * 4);
-        var allTris = new List<int>(faceArr.Length * 6);
-        var allFaceBlockTypes = new List<int>(faceArr.Length);
-        var allFaceNormals = new List<int>(faceArr.Length);
-
-        for (int i = 0; i < faceArr.Length; i++)
-        {
-            var f = faceArr[i];
-            int vi = allVerts.Count;
-            allVerts.Add(ToV3(f.v0));
-            allVerts.Add(ToV3(f.v1));
-            allVerts.Add(ToV3(f.v2));
-            allVerts.Add(ToV3(f.v3));
-            allTris.Add(vi + 0); allTris.Add(vi + 1); allTris.Add(vi + 2);
-            allTris.Add(vi + 0); allTris.Add(vi + 2); allTris.Add(vi + 3);
-
-            allFaceBlockTypes.Add(f.blockType);
-            allFaceNormals.Add(f.normal);
+            Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
         }
-
-        // Dispose dos containers nativos
-        faces.Dispose();
-        paddedFlat.Dispose();
-        isEmptyByType.Dispose();
-
-        // Enfileira resultado para main thread aplicar mesh
-        var result = new MeshJobResult()
+        finally
         {
-            coord = chunkCoord,
-            blocks = inner,
-            solidVertices = allVerts,
-            solidTriangles = allTris,
-            solidFaceBlockTypes = allFaceBlockTypes,
-            solidFaceNormals = allFaceNormals,
-            waterVertices = null,
-            waterTriangles = null,
-            waterFaceBlockTypes = new List<int>(),
-            waterFaceNormals = new List<int>(),
-            width = w,
-            height = h,
-            depth = d,
-            blockSize = s
-        };
-
-        meshResults.Enqueue(result);
+            generationSemaphore.Release();
+            generatingChunks.TryRemove(chunkCoord, out _);
+        }
     }
-    catch (OperationCanceledException) { }
-    catch (Exception ex)
+    public int[] GetCachedMaterialIndexByType()
     {
-        Debug.LogError($"Erro em geração de chunk {chunkCoord}: {ex}");
+        EnsureBlockTypeCaches(); // garante inicialização
+        return cachedMaterialIndexByType;
     }
-    finally
-    {
-        generationSemaphore.Release();
-        generatingChunks.TryRemove(chunkCoord, out _);
-    }
-}
 
     private static Vector3 ToV3(float3 f) => new Vector3(f.x, f.y, f.z);
-
-    // função original AddUVsTo (mantive praticamente igual)
-    private void AddUVsTo(List<Vector2> uvList, BlockType bt, Vector3 normal)
-    {
-        Vector2Int tile;
-
-        if (blockDataSO != null && blockDataSO.blockTextureDict.TryGetValue(bt, out var mapping))
-        {
-            tile = normal == Vector3.up ? mapping.top :
-                   normal == Vector3.down ? mapping.bottom :
-                   mapping.side;
-        }
-        else
-        {
-            // Evitar logs excessivos no hot-path: apenas um aviso
-            // (assuma que em produção os mapeamentos estão corretos)
-            if (blockDataSO == null)
-            {
-                tile = new Vector2Int(1, 0);
-            }
-            else if (blockDataSO.blockTextureDict.TryGetValue(BlockType.Placeholder, out var fallbackMapping))
-            {
-                tile = normal == Vector3.up ? fallbackMapping.top :
-                       normal == Vector3.down ? fallbackMapping.bottom :
-                       fallbackMapping.side;
-            }
-            else
-            {
-                tile = new Vector2Int(1, 0);
-            }
-        }
-
-        int tileY = tile.y;
-        if (blockDataSO != null && atlasOrientation == AtlasOrientation.TopToBottom)
-        {
-            tileY = (int)blockDataSO.atlasSize.y - 1 - tile.y;
-        }
-
-        float invX = 1f;
-        float invY = 1f;
-        if (blockDataSO != null)
-        {
-            invX = 1f / blockDataSO.atlasSize.x;
-            invY = 1f / blockDataSO.atlasSize.y;
-        }
-
-        Vector2 uv00 = new Vector2(tile.x * invX, tileY * invY);
-        Vector2 uv10 = new Vector2((tile.x + 1) * invX, tileY * invY);
-        Vector2 uv11 = new Vector2((tile.x + 1) * invX, (tileY + 1) * invY);
-        Vector2 uv01 = new Vector2(tile.x * invX, (tileY + 1) * invY);
-
-        uvList.Add(uv00);
-        uvList.Add(uv10);
-        uvList.Add(uv11);
-        uvList.Add(uv01);
-    }
-
-
-    // Estrutura do resultado (adaptada para incluir faces info)
-    private class MeshJobResult
-    {
-        public Vector2Int coord;
-        public BlockType[,,] blocks;
-
-        // Vertices / indices prontos
-        public List<Vector3> solidVertices;
-        public List<int> solidTriangles;
-        // Por-quad info para gerar UVs no main thread
-        public List<int> solidFaceBlockTypes;
-        public List<int> solidFaceNormals;
-
-        // FOLHAS (submesh separado)
-        public List<Vector3> leafVertices;
-        public List<int> leafTriangles;
-        public List<int> leafFaceBlockTypes;
-        public List<int> leafFaceNormals;
-
-        public List<Vector3> waterVertices;
-        public List<int> waterTriangles;
-        public List<int> waterFaceBlockTypes;
-        public List<int> waterFaceNormals;
-
-        public int width, height, depth;
-        public float blockSize;
-    }
 
     public void SetBlockAtWorld(Vector3 worldPos, BlockType blockType)
     {
@@ -950,8 +576,30 @@ private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationTo
 
         chunk.SetBlock(lx, ly, lz, blockType);
 
-        // 🔑 Atualizar vizinhos se necessário
-        RefreshNeighbors(coord, lx, ly, lz);
+        // Em vez de chamar RebuildMesh direto, enfileira para rebuild controlado
+        chunksToRebuild.Enqueue(coord);
+
+        // Atualiza vizinhos: só marca para rebuild, não chama RebuildMesh direto
+        RefreshNeighborsMarkOnly(coord, lx, ly, lz);
+    }
+    public void RefreshNeighborsMarkOnly(Vector2Int coord, int lx, int ly, int lz)
+    {
+        if (lx == 0)
+            EnqueueChunkForRebuild(coord + new Vector2Int(-1, 0));
+        else if (lx == chunkWidth - 1)
+            EnqueueChunkForRebuild(coord + new Vector2Int(1, 0));
+
+        if (lz == 0)
+            EnqueueChunkForRebuild(coord + new Vector2Int(0, -1));
+        else if (lz == chunkDepth - 1)
+            EnqueueChunkForRebuild(coord + new Vector2Int(0, 1));
+    }
+
+    private void EnqueueChunkForRebuild(Vector2Int coord)
+    {
+        // só se já existir ativo
+        if (activeChunks.ContainsKey(coord))
+            chunksToRebuild.Enqueue(coord);
     }
 
     public BlockType GetBlockAtWorld(Vector3 worldPos)
@@ -970,33 +618,6 @@ private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationTo
         return chunk.GetBlock(lx, ly, lz);
     }
 
-    public void RefreshNeighbors(Vector2Int coord, int lx, int ly, int lz)
-    {
-        // Checar limites do chunk
-        if (lx == 0)
-            RebuildChunkAt(coord + new Vector2Int(-1, 0));
-        else if (lx == chunkWidth - 1)
-            RebuildChunkAt(coord + new Vector2Int(1, 0));
-
-        if (lz == 0)
-            RebuildChunkAt(coord + new Vector2Int(0, -1));
-        else if (lz == chunkDepth - 1)
-            RebuildChunkAt(coord + new Vector2Int(0, 1));
-    }
-
-    private void RebuildChunkAt(Vector2Int coord)
-    {
-        if (activeChunks.TryGetValue(coord, out var neighbor))
-        {
-            neighbor.RebuildMesh();
-        }
-    }
-
-    // -----------------------------------------------------------
-    // Job / Structs para meshing (Burst)
-    // -----------------------------------------------------------
-
-    // FaceData — estrutura simples e blittable para comunicação via NativeList
     public struct FaceData
     {
         public float3 v0;
@@ -1006,7 +627,6 @@ private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationTo
         public int blockType; // (int)BlockType
         public int normal;    // 0..5 (forward, back, up, down, right, left)
     }
-
 
 
     [BurstCompile]
@@ -1157,12 +777,4 @@ private async Task StartGenerateChunkAsync(Vector2Int chunkCoord, CancellationTo
         }
     }
 
-
-    // -------------------------
-    // Utilitários
-    // -------------------------
-    private void EnsureCapacity<T>(List<T> list, int capacity)
-    {
-        if (list.Capacity < capacity) list.Capacity = capacity;
-    }
 }

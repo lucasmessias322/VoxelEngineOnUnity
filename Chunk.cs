@@ -24,10 +24,9 @@ public class Chunk : MonoBehaviour
         meshRenderer = GetComponent<MeshRenderer>();
     }
 
-    public void SetBlocks(BlockType[,,] newBlocks)
-    {
-        blocks = newBlocks;
-    }
+       private bool meshDirty = false;
+    private bool collidersDirty = false;
+    private readonly HashSet<Vector3Int> dirtyPositions = new HashSet<Vector3Int>();
 
     public void SetBlock(int x, int y, int z, BlockType blockType)
     {
@@ -35,11 +34,45 @@ public class Chunk : MonoBehaviour
             return;
 
         blocks[x, y, z] = blockType;
-        RebuildMesh();
+
+        // marcar para rebuild posterior (debounce/batch)
+        meshDirty = true;
+        dirtyPositions.Add(new Vector3Int(x, y, z));
+
+        // marcar colliders como sujos só se já estiverem ativados
         if (hasColliders)
+            collidersDirty = true;
+
+        // NÃO chamar RebuildMesh() nem ApplyAABBCollidersFromBlocks() aqui
+    }
+
+    // Chamado externamente (voxelWorld) para aplicar as mudanças agendadas
+    public void ApplyPendingChanges(bool rebuildCollidersNow = false)
+    {
+        if (meshDirty)
+        {
+            // Recomendo: se houver muitas mudanças, você pode tentar um método incremental aqui.
+            RebuildMesh();
+            meshDirty = false;
+            dirtyPositions.Clear();
+        }
+
+        if (rebuildCollidersNow && collidersDirty)
         {
             ApplyAABBCollidersFromBlocks();
+            collidersDirty = false;
         }
+    }
+
+    // (Opcional) expor um método para marcar dirty externamente
+    public void MarkDirtyForRebuild()
+    {
+        meshDirty = true;
+    }
+
+    public void SetBlocks(BlockType[,,] newBlocks)
+    {
+        blocks = newBlocks;
     }
 
     public BlockType GetBlock(int x, int y, int z)
@@ -236,19 +269,6 @@ public class Chunk : MonoBehaviour
 
         // chamar a versão genérica que monta o mesh com N submeshes
         ApplyMeshDataByMaterial(vertsByMat, trisByMat, uvsByMat, normsByMat, finalMaterials, width, height, depth, blockSize);
-    }
-
-    // helper para gerar normais
-    private List<Vector3> GenNormals(List<BlockFaceInfo> faces)
-    {
-        if (faces == null || faces.Count == 0) return null;
-        var normals = new List<Vector3>(faces.Count * 4);
-        for (int f = 0; f < faces.Count; f++)
-        {
-            var n = NormalFromIndex(faces[f].normal);
-            normals.Add(n); normals.Add(n); normals.Add(n); normals.Add(n);
-        }
-        return normals;
     }
 
 
@@ -519,11 +539,6 @@ public class Chunk : MonoBehaviour
     }
 
 
-    /// <summary>
-    /// Implementação genérica que monta o mesh a partir de listas por-material.
-    /// verticesByMaterial[i], trianglesByMaterial[i], uvsByMaterial[i], normalsByMaterial[i]
-    /// representam os dados do material de índice i (pode haver listas vazias).
-    /// </summary>
     public void ApplyMeshDataByMaterial(
         List<List<Vector3>> verticesByMaterial,
         List<List<int>> trianglesByMaterial,
