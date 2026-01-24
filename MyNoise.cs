@@ -1,72 +1,110 @@
+
 using UnityEngine;
+using Unity.Burst;
+using Unity.Mathematics;
 
-public class MyNoise
+/// <summary>
+/// Utilitários de noise (inspirado no seu snippet).
+/// Use OctavePerlin(nx, nz, layer) para substituir a implementação atual do MeshGenerator.
+/// </summary>
+public static class MyNoise
 {
-
-    
-    // Fractal Perlin (octaves) - versão geral
-    public static float FractalNoise2D(float x, float z, int octaves, float persistence, float lacunarity, float scale, int seed)
+    public static float RemapValue(float value, float initialMin, float initialMax, float outputMin, float outputMax)
     {
-        float total = 0;
-        float frequency = scale;
-        float amplitude = 1;
-        float maxValue = 0;
+        return outputMin + (value - initialMin) * (outputMax - outputMin) / (initialMax - initialMin);
+    }
 
-        for (int i = 0; i < octaves; i++)
+    public static float RemapValue01(float value, float outputMin, float outputMax)
+    {
+        return RemapValue(value, 0f, 1f, outputMin, outputMax);
+    }
+
+    public static int RemapValue01ToInt(float value, float outputMin, float outputMax)
+    {
+        return (int)RemapValue01(value, outputMin, outputMax);
+    }
+
+    /// <summary>
+    /// Pequena função de redistribuição (opcional).
+    /// noise em [0,1] -> aplica multiplicador e expoente.
+    /// </summary>
+    [BurstCompile]
+    public static float Redistribution(float noise, float redistributionModifier = 1f, float exponent = 1f)
+    {
+        return math.pow(noise * redistributionModifier, exponent);
+    }
+
+    /// <summary>
+    /// Octave Perlin genérico que aceita a struct NoiseLayer usada no seu projeto.
+    /// Espera que o caller já passe coords que podem conter offsets/warping.
+    /// Retorna valor aproximadamente em [0,1] (usa layer.maxAmp quando disponível).
+    /// </summary>
+    [BurstCompile]
+    public static float OctavePerlin(float nx, float nz, NoiseLayer layer)
+    {
+        float scale = math.max(1e-5f, layer.scale);
+        int octaves = math.max(1, layer.octaves);
+        float persistence = math.clamp(layer.persistence, 0f, 1f);
+        float lacunarity = math.max(1f, layer.lacunarity);
+
+        // Caso simples (1 octave)
+        if (octaves == 1)
         {
-            float nx = (x + seed) * frequency;
-            float nz = (z + seed) * frequency;
-            total += Mathf.PerlinNoise(nx, nz) * amplitude;
-
-            maxValue += amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
+            return noise.cnoise(new float2(nx / scale, nz / scale)) * 0.5f + 0.5f;
         }
 
-        return total / maxValue;
-    }
-
-    // Domain warping — retorna coords warpados
-    public static Vector2 DomainWarp(float x, float z, float warpStrength, float warpScale, int seed)
-    {
-        float qx = Mathf.PerlinNoise((x + seed) * warpScale, (z + seed) * warpScale);
-        float qz = Mathf.PerlinNoise((x - seed) * warpScale, (z - seed) * warpScale);
-
-        float wx = x + (qx - 0.5f) * 2f * warpStrength;
-        float wz = z + (qz - 0.5f) * 2f * warpStrength;
-
-        return new Vector2(wx, wz);
-    }
-
-
-    
-
-    // Ridged fractal noise — cria picos/montanhas (valores entre 0 e 1)
-    public static float RidgedFractalNoise2D(float x, float z, int octaves, float persistence, float lacunarity, float scale, int seed)
-    {
         float total = 0f;
-        float frequency = scale;
         float amplitude = 1f;
-        float maxValue = 0f;
+        float frequency = 1f;
+        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
 
         for (int i = 0; i < octaves; i++)
         {
-            float nx = (x + seed) * frequency;
-            float nz = (z + seed) * frequency;
-            float n = Mathf.PerlinNoise(nx, nz); // 0..1
-            // transforma em "ridge"
-            float ridge = 1f - Mathf.Abs(2f * n - 1f); // 0..1 com crista no centro
-            ridge = ridge * ridge; // acentua crista
-            total += ridge * amplitude;
-
-            maxValue += amplitude;
+            float sample = noise.cnoise(new float2((nx * frequency) / scale, (nz * frequency) / scale)) * 0.5f + 0.5f;
+            total += sample * amplitude;
             amplitude *= persistence;
             frequency *= lacunarity;
         }
 
-        return total / maxValue;
+        float value = total / maxAmp;
+
+        // garante intervalo [0,1]
+        return math.clamp(value, 0f, 1f);
     }
 
+    /// <summary>
+    /// Sobrecarga para WarpLayer (sem redistribuição).
+    /// </summary>
+    [BurstCompile]
+    public static float OctavePerlin(float nx, float nz, WarpLayer layer)
+    {
+        float scale = math.max(1e-5f, layer.scale);
+        int octaves = math.max(1, layer.octaves);
+        float persistence = math.clamp(layer.persistence, 0f, 1f);
+        float lacunarity = math.max(1f, layer.lacunarity);
 
+        // Caso simples (1 octave)
+        if (octaves == 1)
+        {
+            return noise.cnoise(new float2(nx / scale, nz / scale)) * 0.5f + 0.5f;
+        }
 
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f;
+        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
+
+        for (int i = 0; i < octaves; i++)
+        {
+            float sample = noise.cnoise(new float2((nx * frequency) / scale, (nz * frequency) / scale)) * 0.5f + 0.5f;
+            total += sample * amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+        }
+
+        float value = total / maxAmp;
+
+        // garante intervalo [0,1]
+        return math.clamp(value, 0f, 1f);
+    }
 }
