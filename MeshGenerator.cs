@@ -5,22 +5,7 @@ using UnityEngine;
 using Unity.Collections;
 using Unity.Mathematics;
 
-[Serializable]
-public struct NoiseLayer
-{
-    public bool enabled;
-    public float scale;
-    public float amplitude;
-    public int octaves;
-    public float persistence;
-    public float lacunarity;
-    public Vector2 offset;
-    public float maxAmp; // precomputado (World.Start já faz isso)
 
-    // novos (opcionais) — controla redistribuição do layer
-    public float redistributionModifier; // default 1
-    public float exponent; // default 1
-}
 
 public static class MeshGenerator
 {
@@ -52,13 +37,18 @@ public static class MeshGenerator
         NativeArray<BlockTextureMapping> blockMappings,
         int atlasTilesX, int atlasTilesY,
         bool generateSides = true, float seaLevel = 32,
-        NativeArray<WarpLayer> warpLayers = default)
+        NativeArray<WarpLayer> warpLayers = default,
+        NativeArray<NoiseLayer> caveLayers = default,  // Novo
+        float caveThreshold = 0.5f,
+        int caveStride = 1,  // NOVO
+    int maxCaveDepthMultiplier = 1)  // NOVO
+
     {
         // 1) Gerar cache de alturas
         int[,] heightCache = GenerateHeightCache(coord, noiseLayers, baseHeight, heightVariation, globalOffsetX, globalOffsetZ, warpLayers);
 
         // 2) Popular voxels (blockType e solid)
-        var (blockType, solid) = PopulateVoxels(heightCache, seaLevel, blockMappings);
+        var (blockType, solid) = PopulateVoxels(heightCache, seaLevel, blockMappings, coord, caveLayers, caveThreshold, globalOffsetX, globalOffsetZ,maxCaveDepthMultiplier,caveStride);  // Atualize chamada
 
         // 3) Gerar mesh (faces)
         var (vertices, opaqueTriangles, waterTriangles, uvs, normals) = GenerateMesh(heightCache, blockType, solid, blockMappings, atlasTilesX, atlasTilesY, generateSides, seaLevel);
@@ -163,54 +153,129 @@ public static class MeshGenerator
     private static (BlockType[,,] blockType, bool[,,] solid) PopulateVoxels(
         int[,] heightCache,
         float seaLevel,
-        NativeArray<BlockTextureMapping> blockMappings)
+        NativeArray<BlockTextureMapping> blockMappings,
+        Vector2Int coord,
+        NativeArray<NoiseLayer> caveLayers,
+        float caveThreshold,
+        float globalOffsetX, float globalOffsetZ, int maxCaveDepthMultiplier,int caveStride)
     {
-        BlockType[,,] blockType = new BlockType[Chunk.SizeX, Chunk.SizeY, Chunk.SizeZ];
-        bool[,,] solid = new bool[Chunk.SizeX, Chunk.SizeY, Chunk.SizeZ];
+        const int border = 1; // +1 em cada lado
+        BlockType[,,] blockType = new BlockType[Chunk.SizeX + 2 * border, Chunk.SizeY, Chunk.SizeZ + 2 * border];
+        bool[,,] solid = new bool[Chunk.SizeX + 2 * border, Chunk.SizeY, Chunk.SizeZ + 2 * border];
 
-        for (int lx = 0; lx < Chunk.SizeX; lx++)
+        int baseWorldX = coord.x * Chunk.SizeX;
+        int baseWorldZ = coord.y * Chunk.SizeZ;
+
+        for (int lx = -border; lx < Chunk.SizeX + border; lx++)
         {
-            for (int lz = 0; lz < Chunk.SizeZ; lz++)
+            for (int lz = -border; lz < Chunk.SizeZ + border; lz++)
             {
-                int h = heightCache[lx + 1, lz + 1];
+                int cacheX = lx + border; // Ajuste para indexar heightCache corretamente (0 a SizeX+1)
+                int cacheZ = lz + border;
+                int h = heightCache[cacheX, cacheZ]; // heightCache é [SizeX+2, SizeZ+2]
+                bool isBeachArea = (h <= seaLevel + 2);
 
-                bool isBeachArea = (h <= seaLevel + 2);  // Define "praia" para heights até 2 blocos acima do mar (ajuste conforme necessário)
-
+                // Preencher sólidos iniciais
                 for (int y = 0; y <= h; y++)
                 {
                     BlockType bt;
-
                     if (y == h)
                     {
-                        if (isBeachArea) bt = BlockType.Sand;
-                        else bt = BlockType.Grass;
+                        bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
                     }
                     else if (y > h - 4)
                     {
-                        bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;  // Areia em vez de dirt para praias/fundos oceânicos
+                        bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
                     }
                     else
                     {
                         bt = BlockType.Stone;
                     }
-
-                    blockType[lx, y, lz] = bt;
+                    blockType[lx + border, y, lz + border] = bt; // Index ajustado para array com border
                     var mapping = blockMappings[(int)bt];
-                    solid[lx, y, lz] = mapping.isSolid;
+                    solid[lx + border, y, lz + border] = mapping.isSolid;
                 }
 
-                // preencher água até o nível do mar
+                // Aplicar cavernas (agora nas bordas também)
+        if (caveLayers.Length > 0)
+        {
+            // int cacheX = lx + border;
+            // int cacheZ = lz + border;
+            // int h = heightCache[cacheX, cacheZ];
+            int maxCaveY = Mathf.Min(h, (int)seaLevel * maxCaveDepthMultiplier);
+
+            if (maxCaveY < 2) continue; // Sem cavernas se muito raso
+
+            int stride = Mathf.Max(1, caveStride);
+            int numCoarse = (maxCaveY / stride) + 2;
+            float[] coarseNoise = new float[numCoarse]; // ~70 floats/coluna, negligible
+
+            float worldX = baseWorldX + lx; // SEM +globalOffsetX (bug fix: offsets já têm)
+            float worldZ = baseWorldZ + lz;
+
+            // COMPUTE COARSE SAMPLES (apenas 1/stride das amostras!)
+            for (int ci = 0; ci < numCoarse; ci++)
+            {
+                float cy = (ci + 0.5f) * stride; // Centro da célula para melhor interp
+                if (cy > maxCaveY) cy = maxCaveY;
+
+                float totalCaveNoise = 0f;
+                float sumAmp = 0f;
+                for (int i = 0; i < caveLayers.Length; i++)
+                {
+                    var layer = caveLayers[i];
+                    if (!layer.enabled) continue;
+
+                    float nx = worldX + layer.offset.x;
+                    float ny = cy;
+                    float nz = worldZ + layer.offset.y;
+
+                    float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+                    if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                    {
+                        sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                    }
+                    totalCaveNoise += sample * layer.amplitude;
+                    sumAmp += layer.amplitude;
+                }
+                coarseNoise[ci] = (sumAmp > 0f) ? totalCaveNoise / sumAmp : 0f;
+            }
+
+            // CARVE COM INTERPOLAÇÃO LINEAR (suave!)
+            for (int y = 1; y <= h; y++)
+            {
+                if (y > maxCaveY) break;
+
+                int ci = y / stride;
+                int ci1 = ci + 1;
+                if (ci1 >= numCoarse) ci1 = numCoarse - 1;
+
+                float t = (y % stride) / (float)stride;
+                float interpNoise = Mathf.Lerp(coarseNoise[ci], coarseNoise[ci1], t);
+
+                if (interpNoise > caveThreshold)
+                {
+                    int ix = lx + border;
+                    int iz = lz + border;
+                    blockType[ix, y, iz] = BlockType.Air;
+                    solid[ix, y, iz] = false;
+                }
+            }
+        }
+                // Preencher água (acima de h até seaLevel)
                 for (int y = h + 1; y <= seaLevel; y++)
                 {
-                    blockType[lx, y, lz] = BlockType.Water;
+                    blockType[lx + border, y, lz + border] = BlockType.Water;
                     var mapping = blockMappings[(int)BlockType.Water];
-                    solid[lx, y, lz] = mapping.isSolid;
+                    solid[lx + border, y, lz + border] = mapping.isSolid;
                 }
             }
         }
 
         return (blockType, solid);
     }
+
+
 
     private static (List<Vector3> vertices, List<int> opaqueTriangles, List<int> waterTriangles, List<Vector2> uvs, List<Vector3> normals) GenerateMesh(
         int[,] heightCache,
@@ -221,6 +286,7 @@ public static class MeshGenerator
         bool generateSides,
         float seaLevel)
     {
+        const int border = 1;
         List<Vector3> vertices = new List<Vector3>(4096);
         List<Vector2> uvs = new List<Vector2>(4096);
         List<Vector3> normals = new List<Vector3>(4096);
@@ -231,12 +297,14 @@ public static class MeshGenerator
         {
             for (int z = 0; z < Chunk.SizeZ; z++)
             {
-                int h = heightCache[x + 1, z + 1];
-                int maxY = Mathf.Max(h, (int)seaLevel); // inclui água
+                int h = heightCache[x + 1, z + 1]; // heightCache ainda é +2
+                int maxY = Mathf.Max(h, (int)seaLevel);
 
                 for (int y = 0; y <= maxY; y++)
                 {
-                    if (!solid[x, y, z] && blockType[x, y, z] != BlockType.Water)
+                    int internalX = x + border; // Ajuste para array com border
+                    int internalZ = z + border;
+                    if (!solid[internalX, y, internalZ] && blockType[internalX, y, internalZ] != BlockType.Water)
                         continue;
 
                     for (int dir = 0; dir < 6; dir++)
@@ -244,106 +312,42 @@ public static class MeshGenerator
                         if (!generateSides && (dir == 4 || dir == 5)) continue;
 
                         Vector3Int check = FaceChecks[dir];
-                        int nx = x + check.x, ny = y + check.y, nz = z + check.z;
+                        int nx = internalX + check.x; // Use índices internos com border
+                        int ny = y + check.y;
+                        int nz = internalZ + check.z;
 
                         bool neighborSolid = true;
 
-                        if (nx >= 0 && nx < Chunk.SizeX && ny >= 0 && ny < Chunk.SizeY && nz >= 0 && nz < Chunk.SizeZ)
+                        // Agora, como arrays têm border, nx/nz/ny sempre estarão dentro (não precisa de check fora)
+                        if (nx >= 0 && nx < Chunk.SizeX + 2 * border && ny >= 0 && ny < Chunk.SizeY && nz >= 0 && nz < Chunk.SizeZ + 2 * border)
                         {
-                            // vizinho dentro do chunk
                             BlockType nbType = blockType[nx, ny, nz];
                             var nbMap = blockMappings[(int)nbType];
-
-                            var curMap = blockMappings[(int)blockType[x, y, z]];
+                            var curMap = blockMappings[(int)blockType[internalX, y, internalZ]];
 
                             if (curMap.isEmpty && nbMap.isEmpty)
                             {
-                                // água contra água/ar → não renderiza
                                 neighborSolid = true;
                             }
                             else if (curMap.isEmpty && !nbMap.isEmpty)
                             {
-                                // água contra sólido → não renderiza a face da água,
-                                // mas mantém a face do sólido
                                 neighborSolid = nbMap.isSolid;
                             }
                             else if (!curMap.isEmpty && nbMap.isEmpty)
                             {
-                                // sólido contra água → força a face a ser renderizada
                                 neighborSolid = false;
                             }
                             else
                             {
-                                // sólido contra sólido → não renderiza
                                 neighborSolid = nbMap.isSolid;
                             }
                         }
-                        else
-                        {
-                            // vizinho fora do chunk
-                            bool neighborIsEmpty = true;
-                            bool neighborIsSolid = false;
-
-                            if (ny >= 0 && ny < Chunk.SizeY)
-                            {
-                                int neighborH = heightCache[nx + 1, nz + 1];
-
-                                if (ny <= neighborH)
-                                {
-                                    // assume sólido (como dirt/stone/etc.)
-                                    neighborIsEmpty = false;
-                                    neighborIsSolid = true;
-                                }
-                                else if (ny <= seaLevel)
-                                {
-                                    // assume água
-                                    neighborIsEmpty = true;
-                                    neighborIsSolid = false;
-                                }
-                                else
-                                {
-                                    // assume ar
-                                    neighborIsEmpty = true;
-                                    neighborIsSolid = false;
-                                }
-                            }
-                            else
-                            {
-                                // ny fora (acima ou abaixo do mundo): assume ar
-                                neighborIsEmpty = true;
-                                neighborIsSolid = false;
-                            }
-
-                            // Agora aplica a mesma lógica de combinação usada para vizinhos internos
-                            var curMap = blockMappings[(int)blockType[x, y, z]];
-                            bool curIsEmpty = curMap.isEmpty;
-
-                            if (curIsEmpty && neighborIsEmpty)
-                            {
-                                // água contra água/ar: não renderiza
-                                neighborSolid = true;
-                            }
-                            else if (curIsEmpty && !neighborIsEmpty)
-                            {
-                                // água contra sólido: não renderiza a face da água
-                                neighborSolid = neighborIsSolid;
-                            }
-                            else if (!curIsEmpty && neighborIsEmpty)
-                            {
-                                // sólido contra água/ar: força renderização
-                                neighborSolid = false;
-                            }
-                            else
-                            {
-                                // sólido contra sólido: não renderiza se vizinho sólido
-                                neighborSolid = neighborIsSolid;
-                            }
-                        }
+                        // Não precisa mais do else para "fora do chunk" — bordas cobrem
 
                         if (!neighborSolid)
                         {
-                            BlockType currentType = blockType[x, y, z];
-                            int vIndex = AddFace(vertices, uvs, normals, x, y, z, dir, currentType, blockMappings, atlasTilesX, atlasTilesY);
+                            BlockType currentType = blockType[internalX, y, internalZ];
+                            int vIndex = AddFace(vertices, uvs, normals, x, y, z, dir, currentType, blockMappings, atlasTilesX, atlasTilesY); // Use x,y,z originais (sem border) para posições
 
                             List<int> targetTris = (currentType == BlockType.Water) ? waterTriangles : opaqueTriangles;
                             targetTris.Add(vIndex + 0); targetTris.Add(vIndex + 1); targetTris.Add(vIndex + 2);
@@ -356,7 +360,6 @@ public static class MeshGenerator
 
         return (vertices, opaqueTriangles, waterTriangles, uvs, normals);
     }
-
     static int GetHeightFromNoise(float noise, int baseHeight, int heightVariation)
     {
         return Mathf.Clamp(baseHeight + Mathf.FloorToInt((noise - 0.5f) * 2f * heightVariation),
