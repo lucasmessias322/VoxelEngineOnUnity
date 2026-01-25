@@ -85,18 +85,22 @@ public class World : MonoBehaviour
         if (noiseLayers != null)
         {
             for (int i = 0; i < noiseLayers.Length; i++)
-            {// depois de noiseLayers[i] = layer; adicione:
-                if (noiseLayers[i].redistributionModifier == 0f) noiseLayers[i].redistributionModifier = 1f;
-                if (noiseLayers[i].exponent == 0f) noiseLayers[i].exponent = 1f;
+            {
 
-                // garantir valores seguros
-                if (noiseLayers[i].scale <= 0f) noiseLayers[i].scale = 0.05f;
-                if (noiseLayers[i].octaves <= 0) noiseLayers[i].octaves = 1;
-                if (noiseLayers[i].lacunarity <= 0f) noiseLayers[i].lacunarity = 2f;
-                if (noiseLayers[i].persistence <= 0f || noiseLayers[i].persistence > 1f) noiseLayers[i].persistence = 0.5f;
+                NoiseLayer layer = noiseLayers[i];
+                if (!layer.enabled) continue;
+                // Defaults Bedrock-like para superfície
+                if (layer.scale <= 0f) layer.scale = 45f + i * 10f; // 45,55,65... progressivo
+                if (layer.amplitude <= 0f) layer.amplitude = math.pow(0.55f, i); // Decai: 1,0.55,0.3,...
+                if (layer.octaves <= 0) layer.octaves = 3 + i;
+                if (layer.lacunarity <= 0f) layer.lacunarity = 2.2f;
+                if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.55f;
+                if (layer.redistributionModifier == 0f) layer.redistributionModifier = 1.1f + i * 0.05f; // Leve lift para planícies
+                if (layer.exponent == 0f) layer.exponent = 1.1f;
+                if (layer.ridgeFactor <= 0f) layer.ridgeFactor = 1f + i * 0.2f; // Ridge crescente para details
 
                 // se offset não definido, atribui um offset derivado do seed + index para variação entre layers
-                NoiseLayer layer = noiseLayers[i]; // Copy to modify (since struct)
+
                 if (layer.offset == Vector2.zero)
                 {
                     layer.offset = new Vector2(offsetX + i * 13.37f, offsetZ + i * 7.53f);
@@ -125,10 +129,13 @@ public class World : MonoBehaviour
         {
             for (int i = 0; i < warpLayers.Length; i++)
             {
-                WarpLayer layer = warpLayers[i]; // Copy to modify
+                WarpLayer layer = warpLayers[i];
+                if (!layer.enabled) continue;
+                if (layer.scale <= 0f) layer.scale = 300f + i * 200f; // Baixa freq distorção
+                if (layer.amplitude <= 0f) layer.amplitude = 28f; // Dist ~50 blocks
 
                 // Garantir valores seguros
-                if (layer.scale <= 0f) layer.scale = 0.005f; // Baixa para warping
+
                 if (layer.octaves <= 0) layer.octaves = 1;
                 if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
                 if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
@@ -162,16 +169,18 @@ public class World : MonoBehaviour
         {
             for (int i = 0; i < caveLayers.Length; i++)
             {
-                // Mesmos saneamentos e precomputes que em noiseLayers
-                if (caveLayers[i].redistributionModifier == 0f) caveLayers[i].redistributionModifier = 1f;
-                if (caveLayers[i].exponent == 0f) caveLayers[i].exponent = 1f;
-
-                if (caveLayers[i].scale <= 0f) caveLayers[i].scale = 0.03f; // Boa para cavernas
-                if (caveLayers[i].octaves <= 0) caveLayers[i].octaves = 4;
-                if (caveLayers[i].lacunarity <= 0f) caveLayers[i].lacunarity = 2f;
-                if (caveLayers[i].persistence <= 0f || caveLayers[i].persistence > 1f) caveLayers[i].persistence = 0.5f;
-
                 NoiseLayer layer = caveLayers[i];
+                if (!layer.enabled) continue;
+                // Mesmos saneamentos e precomputes que em noiseLayers
+                if (layer.redistributionModifier == 0f) layer.redistributionModifier = 1f;
+                if (layer.exponent == 0f) layer.exponent = 1f;
+
+                if (layer.scale <= 0f) layer.scale = 0.03f; // Boa para cavernas
+                if (layer.octaves <= 0) layer.octaves = 4;
+                if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
+                if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
+
+
                 if (layer.offset == Vector2.zero)
                 {
                     layer.offset = new Vector2(offsetX + i * 19.87f, offsetZ + i * 8.76f); // Offsets únicos
@@ -297,6 +306,11 @@ public class World : MonoBehaviour
             }
         }
         foreach (var r in toRemove) activeChunks.Remove(r);
+    }
+    public struct CaveGridCache
+    {
+        public int sizeX, sizeY, sizeZ;
+        public float[] data; // flatten 3D → 1D
     }
 
 

@@ -48,7 +48,7 @@ public static class MeshGenerator
         int[,] heightCache = GenerateHeightCache(coord, noiseLayers, baseHeight, heightVariation, globalOffsetX, globalOffsetZ, warpLayers);
 
         // 2) Popular voxels (blockType e solid)
-        var (blockType, solid) = PopulateVoxels(heightCache, seaLevel, blockMappings, coord, caveLayers, caveThreshold, globalOffsetX, globalOffsetZ,maxCaveDepthMultiplier,caveStride);  // Atualize chamada
+        var (blockType, solid) = PopulateVoxels(heightCache, seaLevel, blockMappings, coord, caveLayers, caveThreshold, globalOffsetX, globalOffsetZ, maxCaveDepthMultiplier, caveStride);  // Atualize chamada
 
         // 3) Gerar mesh (faces)
         var (vertices, opaqueTriangles, waterTriangles, uvs, normals) = GenerateMesh(heightCache, blockType, solid, blockMappings, atlasTilesX, atlasTilesY, generateSides, seaLevel);
@@ -150,6 +150,136 @@ public static class MeshGenerator
         return heightCache;
     }
 
+    // private static (BlockType[,,] blockType, bool[,,] solid) PopulateVoxels(
+    //     int[,] heightCache,
+    //     float seaLevel,
+    //     NativeArray<BlockTextureMapping> blockMappings,
+    //     Vector2Int coord,
+    //     NativeArray<NoiseLayer> caveLayers,
+    //     float caveThreshold,
+    //     float globalOffsetX, float globalOffsetZ, int maxCaveDepthMultiplier, int caveStride)
+    // {
+    //     const int border = 1; // +1 em cada lado
+    //     BlockType[,,] blockType = new BlockType[Chunk.SizeX + 2 * border, Chunk.SizeY, Chunk.SizeZ + 2 * border];
+    //     bool[,,] solid = new bool[Chunk.SizeX + 2 * border, Chunk.SizeY, Chunk.SizeZ + 2 * border];
+
+    //     int baseWorldX = coord.x * Chunk.SizeX;
+    //     int baseWorldZ = coord.y * Chunk.SizeZ;
+
+    //     for (int lx = -border; lx < Chunk.SizeX + border; lx++)
+    //     {
+    //         for (int lz = -border; lz < Chunk.SizeZ + border; lz++)
+    //         {
+    //             int cacheX = lx + border; // Ajuste para indexar heightCache corretamente (0 a SizeX+1)
+    //             int cacheZ = lz + border;
+    //             int h = heightCache[cacheX, cacheZ]; // heightCache é [SizeX+2, SizeZ+2]
+    //             bool isBeachArea = (h <= seaLevel + 2);
+
+    //             // Preencher sólidos iniciais
+    //             for (int y = 0; y <= h; y++)
+    //             {
+    //                 BlockType bt;
+    //                 if (y == h)
+    //                 {
+    //                     bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+    //                 }
+    //                 else if (y > h - 4)
+    //                 {
+    //                     bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+    //                 }
+    //                 else
+    //                 {
+    //                     bt = BlockType.Stone;
+    //                 }
+    //                 blockType[lx + border, y, lz + border] = bt; // Index ajustado para array com border
+    //                 var mapping = blockMappings[(int)bt];
+    //                 solid[lx + border, y, lz + border] = mapping.isSolid;
+    //             }
+
+    //             // Aplicar cavernas (agora nas bordas também)
+    //             if (caveLayers.Length > 0)
+    //             {
+    //                 // int cacheX = lx + border;
+    //                 // int cacheZ = lz + border;
+    //                 // int h = heightCache[cacheX, cacheZ];
+    //                 int maxCaveY = Mathf.Min(h, (int)seaLevel * maxCaveDepthMultiplier);
+
+    //                 if (maxCaveY < 2) continue; // Sem cavernas se muito raso
+
+    //                 int stride = Mathf.Max(1, caveStride);
+    //                 int numCoarse = (maxCaveY / stride) + 2;
+    //                 float[] coarseNoise = new float[numCoarse]; // ~70 floats/coluna, negligible
+
+    //                 float worldX = baseWorldX + lx; // SEM +globalOffsetX (bug fix: offsets já têm)
+    //                 float worldZ = baseWorldZ + lz;
+
+    //                 // COMPUTE COARSE SAMPLES (apenas 1/stride das amostras!)
+    //                 for (int ci = 0; ci < numCoarse; ci++)
+    //                 {
+    //                     float cy = (ci + 0.5f) * stride; // Centro da célula para melhor interp
+    //                     if (cy > maxCaveY) cy = maxCaveY;
+
+    //                     float totalCaveNoise = 0f;
+    //                     float sumAmp = 0f;
+    //                     for (int i = 0; i < caveLayers.Length; i++)
+    //                     {
+    //                         var layer = caveLayers[i];
+    //                         if (!layer.enabled) continue;
+
+    //                         float nx = worldX + layer.offset.x;
+    //                         float ny = cy;
+    //                         float nz = worldZ + layer.offset.y;
+
+    //                         float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+    //                         if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+    //                         {
+    //                             sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+    //                         }
+    //                         totalCaveNoise += sample * layer.amplitude;
+    //                         sumAmp += layer.amplitude;
+    //                     }
+    //                     coarseNoise[ci] = (sumAmp > 0f) ? totalCaveNoise / sumAmp : 0f;
+    //                 }
+
+    //                 // CARVE COM INTERPOLAÇÃO LINEAR (suave!)
+    //                 for (int y = 1; y <= h; y++)
+    //                 {
+    //                     if (y > maxCaveY) break;
+
+    //                     int ci = y / stride;
+    //                     int ci1 = ci + 1;
+    //                     if (ci1 >= numCoarse) ci1 = numCoarse - 1;
+
+    //                     float t = (y % stride) / (float)stride;
+    //                     float interpNoise = Mathf.Lerp(coarseNoise[ci], coarseNoise[ci1], t);
+
+    //                     if (interpNoise > caveThreshold)
+    //                     {
+    //                         int ix = lx + border;
+    //                         int iz = lz + border;
+    //                         if (blockType[ix, y, iz] == BlockType.Stone)
+    //                         {
+    //                             blockType[ix, y, iz] = BlockType.Air;
+    //                             solid[ix, y, iz] = false;
+    //                         }
+
+    //                         //solid[ix, y, iz] = false;
+    //                     }
+    //                 }
+    //             }
+    //             // Preencher água (acima de h até seaLevel)
+    //             for (int y = h + 1; y <= seaLevel; y++)
+    //             {
+    //                 blockType[lx + border, y, lz + border] = BlockType.Water;
+    //                 var mapping = blockMappings[(int)BlockType.Water];
+    //                 solid[lx + border, y, lz + border] = mapping.isSolid;
+    //             }
+    //         }
+    //     }
+
+    //     return (blockType, solid);
+    // }
+
     private static (BlockType[,,] blockType, bool[,,] solid) PopulateVoxels(
         int[,] heightCache,
         float seaLevel,
@@ -157,7 +287,7 @@ public static class MeshGenerator
         Vector2Int coord,
         NativeArray<NoiseLayer> caveLayers,
         float caveThreshold,
-        float globalOffsetX, float globalOffsetZ, int maxCaveDepthMultiplier,int caveStride)
+        float globalOffsetX, float globalOffsetZ, int maxCaveDepthMultiplier, int caveStride)
     {
         const int border = 1; // +1 em cada lado
         BlockType[,,] blockType = new BlockType[Chunk.SizeX + 2 * border, Chunk.SizeY, Chunk.SizeZ + 2 * border];
@@ -166,6 +296,16 @@ public static class MeshGenerator
         int baseWorldX = coord.x * Chunk.SizeX;
         int baseWorldZ = coord.y * Chunk.SizeZ;
 
+        // Função auxiliar para FloorDiv (lida com negativos corretamente)
+        int FloorDiv(int a, int b)
+        {
+            int q = a / b;
+            int r = a % b;
+            if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
+            return q;
+        }
+
+        // -------- PREENCHER SÓLIDOS INICIAIS --------
         for (int lx = -border; lx < Chunk.SizeX + border; lx++)
         {
             for (int lz = -border; lz < Chunk.SizeZ + border; lz++)
@@ -191,92 +331,183 @@ public static class MeshGenerator
                     {
                         bt = BlockType.Stone;
                     }
-                    blockType[lx + border, y, lz + border] = bt; // Index ajustado para array com border
-                    var mapping = blockMappings[(int)bt];
-                    solid[lx + border, y, lz + border] = mapping.isSolid;
+
+                    blockType[cacheX, y, cacheZ] = bt;
+                    solid[cacheX, y, cacheZ] = blockMappings[(int)bt].isSolid;
                 }
 
-                // Aplicar cavernas (agora nas bordas também)
-        if (caveLayers.Length > 0)
-        {
-            // int cacheX = lx + border;
-            // int cacheZ = lz + border;
-            // int h = heightCache[cacheX, cacheZ];
-            int maxCaveY = Mathf.Min(h, (int)seaLevel * maxCaveDepthMultiplier);
-
-            if (maxCaveY < 2) continue; // Sem cavernas se muito raso
-
-            int stride = Mathf.Max(1, caveStride);
-            int numCoarse = (maxCaveY / stride) + 2;
-            float[] coarseNoise = new float[numCoarse]; // ~70 floats/coluna, negligible
-
-            float worldX = baseWorldX + lx; // SEM +globalOffsetX (bug fix: offsets já têm)
-            float worldZ = baseWorldZ + lz;
-
-            // COMPUTE COARSE SAMPLES (apenas 1/stride das amostras!)
-            for (int ci = 0; ci < numCoarse; ci++)
-            {
-                float cy = (ci + 0.5f) * stride; // Centro da célula para melhor interp
-                if (cy > maxCaveY) cy = maxCaveY;
-
-                float totalCaveNoise = 0f;
-                float sumAmp = 0f;
-                for (int i = 0; i < caveLayers.Length; i++)
+                // Preencher ar acima do terreno (até Chunk.SizeY)
+                for (int y = h + 1; y < Chunk.SizeY; y++)
                 {
-                    var layer = caveLayers[i];
-                    if (!layer.enabled) continue;
-
-                    float nx = worldX + layer.offset.x;
-                    float ny = cy;
-                    float nz = worldZ + layer.offset.y;
-
-                    float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
-                    if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                    {
-                        sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-                    }
-                    totalCaveNoise += sample * layer.amplitude;
-                    sumAmp += layer.amplitude;
-                }
-                coarseNoise[ci] = (sumAmp > 0f) ? totalCaveNoise / sumAmp : 0f;
-            }
-
-            // CARVE COM INTERPOLAÇÃO LINEAR (suave!)
-            for (int y = 1; y <= h; y++)
-            {
-                if (y > maxCaveY) break;
-
-                int ci = y / stride;
-                int ci1 = ci + 1;
-                if (ci1 >= numCoarse) ci1 = numCoarse - 1;
-
-                float t = (y % stride) / (float)stride;
-                float interpNoise = Mathf.Lerp(coarseNoise[ci], coarseNoise[ci1], t);
-
-                if (interpNoise > caveThreshold)
-                {
-                    int ix = lx + border;
-                    int iz = lz + border;
-                    blockType[ix, y, iz] = BlockType.Air;
-                    solid[ix, y, iz] = false;
+                    blockType[cacheX, y, cacheZ] = BlockType.Air;
+                    solid[cacheX, y, cacheZ] = false;
                 }
             }
         }
-                // Preencher água (acima de h até seaLevel)
+
+
+        // -------- CAVERNS (com cache coarse grid para performance) --------
+        if (caveLayers.Length > 0 && caveStride >= 1)
+        {
+            int stride = math.max(1, caveStride);
+            // maxCaveY global removido; use per-column abaixo
+
+            // Calcular bounds para coarse grid (inclui borders)
+            int minWorldX = baseWorldX - border;
+            int maxWorldX = baseWorldX + Chunk.SizeX + border - 1;
+            int minWorldZ = baseWorldZ - border;
+            int maxWorldZ = baseWorldZ + Chunk.SizeZ + border - 1;
+            int minWorldY = 0;
+            int maxWorldY = Chunk.SizeY - 1;  // Permitir até topo para cobrir altos h
+
+            int minCoarseX = FloorDiv(minWorldX, stride) * stride;
+            int maxCoarseX = FloorDiv(maxWorldX, stride) * stride + stride;
+            int coarseCountX = (maxCoarseX - minCoarseX) / stride + 1;
+
+            int minCoarseY = FloorDiv(minWorldY, stride) * stride;
+            int maxCoarseY = FloorDiv(maxWorldY, stride) * stride + stride;
+            int coarseCountY = (maxCoarseY - minCoarseY) / stride + 1;
+
+            int minCoarseZ = FloorDiv(minWorldZ, stride) * stride;
+            int maxCoarseZ = FloorDiv(maxWorldZ, stride) * stride + stride;
+            int coarseCountZ = (maxCoarseZ - minCoarseZ) / stride + 1;
+
+            // Alocar coarse grid (float para noise values)
+            NativeArray<float> coarseCaveNoise = new NativeArray<float>(coarseCountX * coarseCountY * coarseCountZ, Allocator.Temp);
+
+            // Preencher coarse grid (sem mudança)
+            for (int cx = 0; cx < coarseCountX; cx++)
+            {
+                int worldX = minCoarseX + cx * stride;
+                for (int cy = 0; cy < coarseCountY; cy++)
+                {
+                    int worldY = minCoarseY + cy * stride;
+                    for (int cz = 0; cz < coarseCountZ; cz++)
+                    {
+                        int worldZ = minCoarseZ + cz * stride;
+
+                        float totalCave = 0f;
+                        float sumCaveAmp = 0f;
+
+                        for (int i = 0; i < caveLayers.Length; i++)
+                        {
+                            var layer = caveLayers[i];
+                            if (!layer.enabled) continue;
+
+                            float nx = worldX + layer.offset.x + globalOffsetX;
+                            float ny = worldY; // Sem offset vertical por padrão
+                            float nz = worldZ + layer.offset.y + globalOffsetZ;
+
+                            float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+
+                            if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                            {
+                                sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                            }
+
+                            totalCave += sample * layer.amplitude;
+                            sumCaveAmp += math.max(1e-5f, layer.amplitude);
+                        }
+
+                        if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
+                        int index = cx + cy * coarseCountX + cz * coarseCountX * coarseCountY;
+                        coarseCaveNoise[index] = totalCave;
+                    }
+                }
+            }
+
+            // Agora, para cada voxel potencial de caverna, interpolar e aplicar
+            for (int lx = -border; lx < Chunk.SizeX + border; lx++)
+            {
+                int worldX = baseWorldX + lx;
+                for (int lz = -border; lz < Chunk.SizeZ + border; lz++)
+                {
+                    int worldZ = baseWorldZ + lz;
+                    int cacheX = lx + border;
+                    int cacheZ = lz + border;
+                    int h = heightCache[cacheX, cacheZ];
+                    int maxCaveY = h;  // Permitir até superfície local (remova limitação por seaLevel se quiser cavernas altas sempre)
+
+                    for (int y = 1; y <= h; y++)  // MUDANÇA: <= h para carving na superfície
+                    {
+                        if (y > maxCaveY) continue;
+
+                        // Calcular low e frac para trilinear interp (sem mudança)
+                        int lowX = FloorDiv(worldX, stride) * stride;
+                        float fracX = (worldX - lowX) / (float)stride;
+
+                        int lowY = FloorDiv(y, stride) * stride;
+                        float fracY = (y - lowY) / (float)stride;
+
+                        int lowZ = FloorDiv(worldZ, stride) * stride;
+                        float fracZ = (worldZ - lowZ) / (float)stride;
+
+                        int cx0 = (lowX - minCoarseX) / stride;
+                        int cy0 = (lowY - minCoarseY) / stride;
+                        int cz0 = (lowZ - minCoarseZ) / stride;
+
+                        int cx1 = cx0 + 1;
+                        int cy1 = cy0 + 1;
+                        int cz1 = cz0 + 1;
+
+                        float c000 = coarseCaveNoise[cx0 + cy0 * coarseCountX + cz0 * coarseCountX * coarseCountY];
+                        float c001 = coarseCaveNoise[cx0 + cy0 * coarseCountX + cz1 * coarseCountX * coarseCountY];
+                        float c010 = coarseCaveNoise[cx0 + cy1 * coarseCountX + cz0 * coarseCountX * coarseCountY];
+                        float c011 = coarseCaveNoise[cx0 + cy1 * coarseCountX + cz1 * coarseCountX * coarseCountY];
+                        float c100 = coarseCaveNoise[cx1 + cy0 * coarseCountX + cz0 * coarseCountX * coarseCountY];
+                        float c101 = coarseCaveNoise[cx1 + cy0 * coarseCountX + cz1 * coarseCountX * coarseCountY];
+                        float c110 = coarseCaveNoise[cx1 + cy1 * coarseCountX + cz0 * coarseCountX * coarseCountY];
+                        float c111 = coarseCaveNoise[cx1 + cy1 * coarseCountX + cz1 * coarseCountX * coarseCountY];
+
+                        float c00 = math.lerp(c000, c100, fracX);
+                        float c01 = math.lerp(c001, c101, fracX);
+                        float c10 = math.lerp(c010, c110, fracX);
+                        float c11 = math.lerp(c011, c111, fracX);
+
+                        float c0 = math.lerp(c00, c10, fracY);
+                        float c1 = math.lerp(c01, c11, fracY);
+
+                        float interpolatedCave = math.lerp(c0, c1, fracZ);
+
+                        // MUDANÇA: Bias relativo à altura local (h)
+                        float maxPossibleY = math.max(1f, h);
+                        float relativeHeight = (float)y / maxPossibleY;
+                        float surfaceBias = 0.001f * relativeHeight;
+
+                        if (y < 5) surfaceBias -= 0.08f;
+
+                        float adjustedThreshold = caveThreshold - surfaceBias;
+                        if (interpolatedCave > adjustedThreshold)
+                        {
+                            blockType[cacheX, y, cacheZ] = BlockType.Air;
+                            solid[cacheX, y, cacheZ] = false;
+                        }
+                    }
+                }
+            }
+
+            coarseCaveNoise.Dispose();
+        }
+
+        // -------- ÁGUA --------
+        for (int lx = -border; lx < Chunk.SizeX + border; lx++)
+        {
+            for (int lz = -border; lz < Chunk.SizeZ + border; lz++)
+            {
+                int cacheX = lx + border;
+                int cacheZ = lz + border;
+                int h = heightCache[cacheX, cacheZ];
+
                 for (int y = h + 1; y <= seaLevel; y++)
                 {
-                    blockType[lx + border, y, lz + border] = BlockType.Water;
-                    var mapping = blockMappings[(int)BlockType.Water];
-                    solid[lx + border, y, lz + border] = mapping.isSolid;
+                    blockType[cacheX, y, cacheZ] = BlockType.Water;
+                    solid[cacheX, y, cacheZ] = blockMappings[(int)BlockType.Water].isSolid;
                 }
             }
         }
 
         return (blockType, solid);
     }
-
-
-
     private static (List<Vector3> vertices, List<int> opaqueTriangles, List<int> waterTriangles, List<Vector2> uvs, List<Vector3> normals) GenerateMesh(
         int[,] heightCache,
         BlockType[,,] blockType,
