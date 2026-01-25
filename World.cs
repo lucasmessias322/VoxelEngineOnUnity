@@ -1,7 +1,5 @@
-
 using System.Collections.Generic;
 using UnityEngine;
-using System.Threading;
 using System;
 using Unity.Jobs;
 using Unity.Burst;
@@ -53,8 +51,6 @@ public class World : MonoBehaviour
     private Dictionary<Vector2Int, Chunk> activeChunks = new Dictionary<Vector2Int, Chunk>();
     private Queue<Chunk> chunkPool = new Queue<Chunk>();
 
-    private ConcurrentQueue<MeshBuildResult> meshResults = new ConcurrentQueue<MeshBuildResult>();
-
     private float offsetX, offsetZ;
     [Header("Block Data")]
     public BlockDataSO blockData;
@@ -69,6 +65,20 @@ public class World : MonoBehaviour
     public int maxMeshAppliesPerFrame = 2;
 
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
+
+    private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
+
+    private struct PendingMesh
+    {
+        public JobHandle handle;
+        public NativeList<Vector3> vertices;
+        public NativeList<int> opaqueTriangles;
+        public NativeList<int> waterTriangles;
+        public NativeList<Vector2> uvs;
+        public NativeList<Vector3> normals;
+        public Vector2Int coord;
+        public int expectedGen;
+    }
 
     private void Start()
     {
@@ -220,16 +230,25 @@ public class World : MonoBehaviour
         UpdateChunks();
 
         int applied = 0;
-        MeshBuildResult res;
-        while (meshResults.TryDequeue(out res) && applied < maxMeshAppliesPerFrame)
+        for (int i = pendingMeshes.Count - 1; i >= 0 && applied < maxMeshAppliesPerFrame; i--)
         {
-            if (res == null) continue;
-
-            if (activeChunks.TryGetValue(res.coord, out Chunk activeChunk) && activeChunk.generation == res.expectedGen)
+            var pm = pendingMeshes[i];
+            if (pm.handle.IsCompleted)
             {
-                activeChunk.ApplyMeshData(res.vertices, res.opaqueTriangles, res.waterTriangles, res.uvs, res.normals);
-                activeChunk.gameObject.SetActive(true);
-                applied++;
+                pm.handle.Complete();
+                if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
+                {
+                    activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
+                    activeChunk.gameObject.SetActive(true);
+                    applied++;
+                }
+                // Dispose NativeLists
+                pm.vertices.Dispose();
+                pm.opaqueTriangles.Dispose();
+                pm.waterTriangles.Dispose();
+                pm.uvs.Dispose();
+                pm.normals.Dispose();
+                pendingMeshes.RemoveAt(i);
             }
         }
     }
@@ -307,12 +326,6 @@ public class World : MonoBehaviour
         }
         foreach (var r in toRemove) activeChunks.Remove(r);
     }
-    public struct CaveGridCache
-    {
-        public int sizeX, sizeY, sizeZ;
-        public float[] data; // flatten 3D → 1D
-    }
-
 
     private void RequestChunk(Vector2Int coord)
     {
@@ -331,94 +344,42 @@ public class World : MonoBehaviour
 
         activeChunks.Add(coord, chunk);
 
-        NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayers, Allocator.TempJob);
-        NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayers, Allocator.TempJob);
-        NativeArray<NoiseLayer> nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayers, Allocator.TempJob);
-        NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockData.mappings, Allocator.TempJob);
+        MeshGenerator.ScheduleMeshJob(
+            coord,
+            noiseLayers,
+            warpLayers,
+            caveLayers,
+            blockData.mappings,
+            baseHeight,
+            heightVariation,
+            offsetX,
+            offsetZ,
+            atlasTilesX,
+            atlasTilesY,
+            true,
+            seaLevel,
+            caveThreshold,
+            caveStride,
+            maxCaveDepthMultiplier,
+            out JobHandle handle,
+            out NativeList<Vector3> vertices,
+            out NativeList<int> opaqueTriangles,
+            out NativeList<int> waterTriangles,
+            out NativeList<Vector2> uvs,
+            out NativeList<Vector3> normals
+        );
 
-        ChunkBuildJob job = new ChunkBuildJob
+        pendingMeshes.Add(new PendingMesh
         {
+            handle = handle,
+            vertices = vertices,
+            opaqueTriangles = opaqueTriangles,
+            waterTriangles = waterTriangles,
+            uvs = uvs,
+            normals = normals,
             coord = coord,
-            noiseLayers = nativeNoiseLayers,
-            baseHeight = baseHeight,
-            heightVariation = heightVariation,
-            offsetX = offsetX,
-            offsetZ = offsetZ,
-            blockMappings = nativeBlockMappings,
-            atlasTilesX = atlasTilesX,
-            atlasTilesY = atlasTilesY,
-            generateSides = true,
-            seaLevel = seaLevel,
-            warpLayers = nativeWarpLayers,
-            expectedGen = expectedGen,
-            caveLayers = nativeCaveLayers,
-            caveThreshold = caveThreshold,
-            caveStride = caveStride,
-            maxCaveDepthMultiplier = maxCaveDepthMultiplier
-
-        };
-
-        // Schedule only the ChunkBuildJob (DisposeJob is removed)
-        JobHandle computeHandle = job.Schedule();
-
-
-    }
-
-    [BurstCompile]
-    public struct DisposeJob : IJob
-    {
-        public NativeArray<NoiseLayer> noise;
-        public NativeArray<WarpLayer> warp;
-        public NativeArray<BlockTextureMapping> blocks;
-
-        public void Execute()
-        {
-            noise.Dispose();
-            warp.Dispose();
-            blocks.Dispose();
-        }
-    }
-    [BurstCompile]
-    public struct ChunkBuildJob : IJob
-    {
-        public Vector2Int coord;
-
-        // Add [DeallocateOnJobCompletion] to each NativeArray field
-        [DeallocateOnJobCompletion]
-        public NativeArray<NoiseLayer> noiseLayers;
-
-        [DeallocateOnJobCompletion]
-        public NativeArray<WarpLayer> warpLayers;
-
-        [DeallocateOnJobCompletion]
-        public NativeArray<BlockTextureMapping> blockMappings;
-        [DeallocateOnJobCompletion]
-        public NativeArray<NoiseLayer> caveLayers;
-        public int caveStride;
-        public int maxCaveDepthMultiplier;
-        public float caveThreshold;
-        public int baseHeight;
-        public int heightVariation;
-        public float offsetX;
-        public float offsetZ;
-        public int atlasTilesX;
-        public int atlasTilesY;
-        public bool generateSides;
-        public float seaLevel;  // Note: This was typed as 'float' but used as 'int' in some places—consider changing to int if it's always integral.
-        public int expectedGen;
-
-        public void Execute()
-        {
-            MeshBuildResult result = MeshGenerator.BuildChunkMesh(
-     coord, noiseLayers, baseHeight, heightVariation,
-     offsetX, offsetZ,
-     blockMappings, atlasTilesX, atlasTilesY, generateSides, seaLevel,
-     warpLayers, caveLayers, caveThreshold,
-    caveStride, maxCaveDepthMultiplier);  // Adicione caveLayers e caveThreshold
-
-            result.expectedGen = expectedGen;
-            World.Instance.meshResults.Enqueue(result);
-        }
+            expectedGen = expectedGen
+        });
     }
 
 }

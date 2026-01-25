@@ -1,6 +1,5 @@
-
-using System.Collections.Generic;
 using UnityEngine;
+using Unity.Collections;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
@@ -15,14 +14,14 @@ public class Chunk : MonoBehaviour
     private Mesh mesh; // reuso
 
     [SerializeField] private Material[] materials;  // MODIFICAÇÃO: Nova
-public enum ChunkState
-{
-    Requested,   // job agendado
-    MeshReady,   // resultado chegou
-    Active       // mesh aplicado
-}
+    public enum ChunkState
+    {
+        Requested,   // job agendado
+        MeshReady,   // resultado chegou
+        Active       // mesh aplicado
+    }
 
-public ChunkState state;
+    public ChunkState state;
 
     private void Awake()
     {
@@ -41,25 +40,25 @@ public ChunkState state;
             meshRenderer.sharedMaterials = mats;
     }
 
-    public void ApplyMeshData(List<Vector3> vertices, List<int> opaqueTris, List<int> waterTris, List<Vector2> uvs, List<Vector3> normals)  // MODIFICAÇÃO: Assinatura atualizada
+    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals)  // Atualizado para NativeArray
     {
         mesh.Clear(false);
 
         mesh.SetVertices(vertices);
         mesh.SetUVs(0, uvs);
 
-        if (normals != null && normals.Count > 0)
+        if (normals.Length > 0)
             mesh.SetNormals(normals);
         else
             mesh.RecalculateNormals();
 
         mesh.subMeshCount = 2;  // MODIFICAÇÃO: Define 2 submeshes
-        mesh.SetTriangles(opaqueTris, 0);  // Submesh 0: Opacos
-        mesh.SetTriangles(waterTris, 1);   // Submesh 1: Água
+        mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
+        mesh.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
 
         mesh.RecalculateBounds();
     }
-   
+
     public Vector2Int coord;
     public void SetCoord(Vector2Int c)
     {
