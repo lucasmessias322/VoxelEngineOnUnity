@@ -8,6 +8,9 @@ public class Chunk : MonoBehaviour
     public const int SizeX = 16;
     public const int SizeY = 256;
     public const int SizeZ = 16;
+    public NativeArray<byte> skylight; // tamanho: voxelSizeX * SizeY * voxelSizeZ
+    public bool HasSkylight => skylight.IsCreated;
+
 
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
@@ -50,8 +53,8 @@ public class Chunk : MonoBehaviour
 
         if (normals.Length > 0)
             mesh.SetNormals(normals);
-        else
-            mesh.RecalculateNormals();
+        // else
+        //     // mesh.RecalculateNormals();
 
         mesh.subMeshCount = 2;
         mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
@@ -65,8 +68,12 @@ public class Chunk : MonoBehaviour
             const float ambientMin = 0.15f; // ajuste global de ambiência (0.1 - 0.25)
                                             // constantes de shading por face (ajuste se quiser)
             const float shadeTop = 1.00f;
-            const float shadeSide = 0.2f;
-            const float shadeBottom = 0.60f;
+            const float shadeBottom = 0.50f;
+
+            // diferencia X/Z como no Java
+            const float shadeZ = 0.50f; // north/south
+            const float shadeX = 0.25f; // east/west
+
 
             bool haveNormalsPerVertex = (normals.Length == vertices.Length);
 
@@ -83,19 +90,21 @@ public class Chunk : MonoBehaviour
                                             // normal deve ser eixo principal (0/±1); usamos thresholds simples
                     if (Mathf.Abs(n.y) > 0.5f)
                     {
-                        // cima ou baixo
                         faceShade = (n.y > 0f) ? shadeTop : shadeBottom;
+                    }
+                    else if (Mathf.Abs(n.z) > 0.5f)
+                    {
+                        faceShade = shadeZ;
                     }
                     else
                     {
-                        // laterais (x/z)
-                        faceShade = shadeSide;
+                        faceShade = shadeX;
                     }
+
                 }
                 else
                 {
-                    // fallback simples — trata tudo como lateral
-                    faceShade = shadeSide;
+                    faceShade = shadeX;
                 }
 
                 l *= faceShade;

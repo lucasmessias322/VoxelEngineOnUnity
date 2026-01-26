@@ -394,6 +394,7 @@ public class World : MonoBehaviour
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
              out NativeList<byte> vertexLights // novo out
+             
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -409,5 +410,6 @@ public class World : MonoBehaviour
             expectedGen = expectedGen
         });
     }
+
 
 }
