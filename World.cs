@@ -23,10 +23,18 @@ public struct WarpLayer
 public class World : MonoBehaviour
 {
     public static World Instance { get; private set; }
+    public Camera mainCamera;
 
     public Transform player;
     public GameObject chunkPrefab;
-    public int renderDistance = 4;
+
+    [Header("Render Distance")]
+    public int chunkRenderDistance = 8;
+
+    // Bedrock-style vertical subchunk culling
+    public int subchunkRenderUp = 2;
+    public int subchunkRenderDown = 1;
+
     public int poolSize = 200;
 
     [Header("Atlas / Material")]
@@ -77,6 +85,8 @@ public class World : MonoBehaviour
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
+        public NativeList<byte> subchunkIds; // novo: id do subchunk por vértice
+        public NativeArray<int> surfaceSubY; // <-- adicionar isso
         public Vector2Int coord;
         public int expectedGen;
     }
@@ -238,46 +248,147 @@ public class World : MonoBehaviour
             if (pm.handle.IsCompleted)
             {
                 pm.handle.Complete();
-                // if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
-                // {
-                //     activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
-                //     activeChunk.gameObject.SetActive(true);
-                //     applied++;
-                // }
-                // // Dispose NativeLists
-                // pm.vertices.Dispose();
-                // pm.opaqueTriangles.Dispose();
-                // pm.waterTriangles.Dispose();
-                // pm.uvs.Dispose();
-                // pm.normals.Dispose();
-                // pendingMeshes.RemoveAt(i);
+
                 if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
                 {
-                    // NOVA ASSINATURA: ApplyMeshData(..., NativeArray<byte> vertexLights)
-                    activeChunk.ApplyMeshData(
-                        pm.vertices.AsArray(),
-                        pm.opaqueTriangles.AsArray(),
-                        pm.waterTriangles.AsArray(),
-                        pm.uvs.AsArray(),
-                        pm.normals.AsArray(),
-                        pm.lightValues.AsArray()
-                    );
-                    activeChunk.gameObject.SetActive(true);
+                    // AQUI: vamos splitar por subchunk usando pm.subchunkIds
+                    int subCount = MeshGenerator.SubChunkCountY;
+
+                    // preparar estruturas temporárias gerenciadas
+                    List<Vector3>[] verts = new List<Vector3>[subCount];
+                    List<Vector2>[] uvs = new List<Vector2>[subCount];
+                    List<Vector3>[] norms = new List<Vector3>[subCount];
+                    List<byte>[] lights = new List<byte>[subCount];
+                    List<int>[] opaqueTris = new List<int>[subCount];
+                    List<int>[] waterTris = new List<int>[subCount];
+                    Dictionary<int, int>[] remap = new Dictionary<int, int>[subCount];
+
+                    for (int s = 0; s < subCount; s++)
+                    {
+                        verts[s] = new List<Vector3>(); uvs[s] = new List<Vector2>(); norms[s] = new List<Vector3>(); lights[s] = new List<byte>();
+                        opaqueTris[s] = new List<int>(); waterTris[s] = new List<int>(); remap[s] = new Dictionary<int, int>();
+                    }
+
+                    // Distribui vértices por subchunk
+                    for (int vi = 0; vi < pm.vertices.Length; vi++)
+                    {
+                        byte sid = pm.subchunkIds[vi];
+                        int s = sid;
+                        int newIndex = verts[s].Count;
+                        remap[s][vi] = newIndex;
+                        verts[s].Add(pm.vertices[vi]);
+                        uvs[s].Add(pm.uvs[vi]);
+                        norms[s].Add(pm.normals[vi]);
+                        lights[s].Add(pm.lightValues[vi]);
+                    }
+
+                    // Recria índices por subchunk (opaque)
+                    for (int t = 0; t < pm.opaqueTriangles.Length; t += 3)
+                    {
+                        int a = pm.opaqueTriangles[t + 0];
+                        int b = pm.opaqueTriangles[t + 1];
+                        int c = pm.opaqueTriangles[t + 2];
+
+                        byte sid = pm.subchunkIds[a]; // assume tri pertence ao mesmo subchunk
+                        int s = sid;
+
+                        // remapeia
+                        int ra = remap[s][a];
+                        int rb = remap[s][b];
+                        int rc = remap[s][c];
+
+                        opaqueTris[s].Add(ra);
+                        opaqueTris[s].Add(rb);
+                        opaqueTris[s].Add(rc);
+                    }
+
+                    // Recria índices por subchunk (water)
+                    for (int t = 0; t < pm.waterTriangles.Length; t += 3)
+                    {
+                        int a = pm.waterTriangles[t + 0];
+                        int b = pm.waterTriangles[t + 1];
+                        int c = pm.waterTriangles[t + 2];
+
+                        byte sid = pm.subchunkIds[a];
+                        int s = sid;
+
+                        int ra = remap[s][a];
+                        int rb = remap[s][b];
+                        int rc = remap[s][c];
+
+                        waterTris[s].Add(ra);
+                        waterTris[s].Add(rb);
+                        waterTris[s].Add(rc);
+                    }
+
+                    // Aplica em cada subchunk
+                    bool anyActive = false;
+                    for (int s = 0; s < subCount; s++)
+                    {
+                        if (verts[s].Count == 0)
+                        {
+                            activeChunk.ApplySubChunkMeshData(s, null, null, null, null, null, null);
+                            continue;
+                        }
+
+                        anyActive = true;
+
+                        Vector3[] aVerts = verts[s].ToArray();
+                        Vector2[] aUVs = uvs[s].ToArray();
+                        Vector3[] aNorms = norms[s].ToArray();
+                        byte[] aLights = lights[s].ToArray();
+                        int[] aOpaque = opaqueTris[s].ToArray();
+                        int[] aWater = waterTris[s].ToArray();
+
+                        activeChunk.ApplySubChunkMeshData(s, aVerts, aOpaque, aWater, aUVs, aNorms, aLights);
+                    }
+
+                    activeChunk.gameObject.SetActive(anyActive);
+                    // ✅ AQUI é o lugar correto
+                    if (pm.surfaceSubY.IsCreated)
+                    {
+                        activeChunk.surfaceSubY = pm.surfaceSubY[0];
+                    }
+
                     applied++;
                 }
 
-                // Dispose NativeLists (inclui lightValues)
+
+                // Dispose NativeLists (inclui lightValues e subchunkIds)
                 pm.vertices.Dispose();
                 pm.opaqueTriangles.Dispose();
                 pm.waterTriangles.Dispose();
                 pm.uvs.Dispose();
                 pm.normals.Dispose();
                 pm.lightValues.Dispose(); // novo: limpar o NativeList<byte>
+                pm.subchunkIds.Dispose();
+                if (pm.surfaceSubY.IsCreated) pm.surfaceSubY.Dispose(); // <-- dispose aqui
                 pendingMeshes.RemoveAt(i);
 
             }
         }
     }
+
+    private void LateUpdate()
+    {
+        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(Camera.main);
+
+        int playerSubY = Mathf.FloorToInt(player.position.y / Chunk.SubChunkSize);
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+
+            chunk.UpdateSubchunkVisibilityBedrock(
+                playerSubY,
+                chunk.surfaceSubY,
+                subchunkRenderUp,
+                subchunkRenderDown,
+                planes
+            );
+        }
+    }
+
 
 
 
@@ -290,9 +401,9 @@ public class World : MonoBehaviour
 
         HashSet<Vector2Int> needed = new HashSet<Vector2Int>();
 
-        for (int x = -renderDistance; x <= renderDistance; x++)
+        for (int x = -chunkRenderDistance; x <= chunkRenderDistance; x++)
         {
-            for (int z = -renderDistance; z <= renderDistance; z++)
+            for (int z = -chunkRenderDistance; z <= chunkRenderDistance; z++)
             {
                 Vector2Int coord = new Vector2Int(playerChunk.x + x, playerChunk.y + z);
                 needed.Add(coord);
@@ -393,8 +504,11 @@ public class World : MonoBehaviour
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-             out NativeList<byte> vertexLights // novo out
-             
+             out NativeList<byte> vertexLights, // novo out
+             out NativeList<byte> vertexSubchunkIds,
+             out NativeArray<int> surfaceSubY
+
+
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -406,8 +520,11 @@ public class World : MonoBehaviour
             uvs = uvs,
             normals = normals,
             lightValues = vertexLights,  // Novo
+            subchunkIds = vertexSubchunkIds,
+            surfaceSubY = surfaceSubY, // <-- guardar aqui
             coord = coord,
-            expectedGen = expectedGen
+            expectedGen = expectedGen,
+
         });
     }
 

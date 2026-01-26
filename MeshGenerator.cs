@@ -12,6 +12,10 @@ public static class MeshGenerator
     private const int SizeY = 256;
     private const int SizeZ = 16;
 
+    // Subchunk config
+    private const int SubChunkSize = 16; // 16 high -> 256/16 = 16 subchunks
+    public const int SubChunkCountY = SizeY / SubChunkSize;
+
     // Ajuste de border: aumentamos para 2 para reduzir seams quando chunks vizinhos ainda não existem.
     private const int Border = 2;
 
@@ -38,7 +42,9 @@ public static class MeshGenerator
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights  // Novo: saída com luz por vértice
+        out NativeList<byte> vertexLights,  // Novo: saída com luz por vértice
+        out NativeList<byte> vertexSubchunkIds, // Novo: para identificar a qual subchunk cada vértice pertence
+        out NativeArray<int> surfaceSubY
     )
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
@@ -52,6 +58,8 @@ public static class MeshGenerator
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // 4 vértices por face
+        vertexSubchunkIds = new NativeList<byte>(4096 * 4, Allocator.Persistent); // 4 ids por face
+        surfaceSubY = new NativeArray<int>(1, Allocator.Persistent);
 
         var job = new ChunkMeshJob
         {
@@ -76,7 +84,9 @@ public static class MeshGenerator
             waterTriangles = waterTriangles,
             uvs = uvs,
             normals = normals,
-            vertexLights = vertexLights  // atribui ao job
+            vertexLights = vertexLights,  // atribui ao job
+            vertexSubchunkIds = vertexSubchunkIds,
+            surfaceSubY = surfaceSubY
         };
 
         handle = job.Schedule();
@@ -109,12 +119,14 @@ public static class MeshGenerator
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
+        public NativeList<byte> vertexSubchunkIds; // 0..15 por vértice
+        public NativeArray<int> surfaceSubY;
 
         public void Execute()
         {
             // Passo 1: Gerar heightCache (flattened) — agora cobrimos o padding (Border)
             NativeArray<int> heightCache = GenerateHeightCache();
-
+            CalculateSurfaceSubY(heightCache); // 👈 AQUI
             // Passo 2: Popular voxels (blockTypes e solids, flattened)
             const int border = Border;
             int voxelSizeX = SizeX + 2 * border;
@@ -137,6 +149,34 @@ public static class MeshGenerator
             heightCache.Dispose();
             blockTypes.Dispose();
             solids.Dispose();
+        }
+        private void CalculateSurfaceSubY(NativeArray<int> heightCache)
+        {
+            const int border = Border;
+            int heightStride = SizeX + 2 * border;
+
+            int maxSurfaceY = 0;
+
+            // ⚠️ IMPORTANTÍSSIMO:
+            // percorre SOMENTE a área útil do chunk (sem o border)
+            for (int x = 0; x < SizeX; x++)
+            {
+                for (int z = 0; z < SizeZ; z++)
+                {
+                    int idx =
+                        (x + border) +
+                        (z + border) * heightStride;
+
+                    int h = heightCache[idx];
+                    if (h > maxSurfaceY)
+                        maxSurfaceY = h;
+                }
+            }
+
+            int subY = maxSurfaceY / SubChunkSize;
+            subY = math.clamp(subY, 0, SubChunkCountY - 1);
+
+            surfaceSubY[0] = subY;
         }
 
         private NativeArray<int> GenerateHeightCache()
@@ -685,6 +725,10 @@ public static class MeshGenerator
                                     vertices.Add(vertPos);
                                 }
 
+                                // compute subchunk index based on voxel Y (0..255)
+                                int subchunkIndex = y / SubChunkSize;
+                                subchunkIndex = math.clamp(subchunkIndex, 0, SubChunkCountY - 1);
+
                                 // --- Suavização por vértice: média de 4 amostras em XZ (mesma Y) ---
                                 for (int vi = 0; vi < 4; vi++)
                                 {
@@ -745,11 +789,9 @@ public static class MeshGenerator
 
                                     byte vertLight = (byte)vert;
 
-
-
-
-
+                                    // store vertex light and subchunk id for each vertex
                                     vertexLights.Add(vertLight);
+                                    vertexSubchunkIds.Add((byte)subchunkIndex);
                                 }
 
                                 // UVs
