@@ -76,9 +76,11 @@ public class World : MonoBehaviour
         public NativeList<int> waterTriangles;
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
+        public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
         public Vector2Int coord;
         public int expectedGen;
     }
+
 
     private void Start()
     {
@@ -236,19 +238,43 @@ public class World : MonoBehaviour
             if (pm.handle.IsCompleted)
             {
                 pm.handle.Complete();
+                // if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
+                // {
+                //     activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
+                //     activeChunk.gameObject.SetActive(true);
+                //     applied++;
+                // }
+                // // Dispose NativeLists
+                // pm.vertices.Dispose();
+                // pm.opaqueTriangles.Dispose();
+                // pm.waterTriangles.Dispose();
+                // pm.uvs.Dispose();
+                // pm.normals.Dispose();
+                // pendingMeshes.RemoveAt(i);
                 if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
                 {
-                    activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
+                    // NOVA ASSINATURA: ApplyMeshData(..., NativeArray<byte> vertexLights)
+                    activeChunk.ApplyMeshData(
+                        pm.vertices.AsArray(),
+                        pm.opaqueTriangles.AsArray(),
+                        pm.waterTriangles.AsArray(),
+                        pm.uvs.AsArray(),
+                        pm.normals.AsArray(),
+                        pm.lightValues.AsArray()
+                    );
                     activeChunk.gameObject.SetActive(true);
                     applied++;
                 }
-                // Dispose NativeLists
+
+                // Dispose NativeLists (inclui lightValues)
                 pm.vertices.Dispose();
                 pm.opaqueTriangles.Dispose();
                 pm.waterTriangles.Dispose();
                 pm.uvs.Dispose();
                 pm.normals.Dispose();
+                pm.lightValues.Dispose(); // novo: limpar o NativeList<byte>
                 pendingMeshes.RemoveAt(i);
+
             }
         }
     }
@@ -366,7 +392,8 @@ public class World : MonoBehaviour
             out NativeList<int> opaqueTriangles,
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
-            out NativeList<Vector3> normals
+            out NativeList<Vector3> normals,
+             out NativeList<byte> vertexLights // novo out
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -377,6 +404,7 @@ public class World : MonoBehaviour
             waterTriangles = waterTriangles,
             uvs = uvs,
             normals = normals,
+            lightValues = vertexLights,  // Novo
             coord = coord,
             expectedGen = expectedGen
         });

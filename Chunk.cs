@@ -40,7 +40,8 @@ public class Chunk : MonoBehaviour
             meshRenderer.sharedMaterials = mats;
     }
 
-    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals)  // Atualizado para NativeArray
+
+    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals, NativeArray<byte> vertexLights)
     {
         mesh.Clear(false);
 
@@ -52,12 +53,62 @@ public class Chunk : MonoBehaviour
         else
             mesh.RecalculateNormals();
 
-        mesh.subMeshCount = 2;  // MODIFICAÇÃO: Define 2 submeshes
+        mesh.subMeshCount = 2;
         mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
         mesh.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
 
+        // Aplicar vertex color a partir dos bytes (0..15) com Face Shading
+        if (vertexLights.Length == vertices.Length)
+        {
+            Color[] cols = new Color[vertices.Length];
+
+            const float ambientMin = 0.15f; // ajuste global de ambiência (0.1 - 0.25)
+                                            // constantes de shading por face (ajuste se quiser)
+            const float shadeTop = 1.00f;
+            const float shadeSide = 0.2f;
+            const float shadeBottom = 0.60f;
+
+            bool haveNormalsPerVertex = (normals.Length == vertices.Length);
+
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                float raw = vertexLights[i] / 15f;
+                float l = Mathf.Lerp(ambientMin, 1f, raw);
+
+                // Determina tipo de face a partir da normal do vértice
+                float faceShade = 1f;
+                if (haveNormalsPerVertex)
+                {
+                    Vector3 n = normals[i]; // normal por vértice (de MeshGenerator)
+                                            // normal deve ser eixo principal (0/±1); usamos thresholds simples
+                    if (Mathf.Abs(n.y) > 0.5f)
+                    {
+                        // cima ou baixo
+                        faceShade = (n.y > 0f) ? shadeTop : shadeBottom;
+                    }
+                    else
+                    {
+                        // laterais (x/z)
+                        faceShade = shadeSide;
+                    }
+                }
+                else
+                {
+                    // fallback simples — trata tudo como lateral
+                    faceShade = shadeSide;
+                }
+
+                l *= faceShade;
+                l = Mathf.Clamp01(l);
+                cols[i] = new Color(l, l, l, 1f);
+            }
+
+            mesh.colors = cols;
+        }
+
         mesh.RecalculateBounds();
     }
+
 
     public Vector2Int coord;
     public void SetCoord(Vector2Int c)
