@@ -44,7 +44,8 @@ public static class MeshGenerator
         out NativeList<Vector3> normals,
         out NativeList<byte> vertexLights,  // Novo: saída com luz por vértice
         out NativeList<byte> vertexSubchunkIds, // Novo: para identificar a qual subchunk cada vértice pertence
-        out NativeArray<int> surfaceSubY
+        out NativeArray<int> surfaceSubY,
+        out NativeArray<byte> voxelBytes
     )
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
@@ -60,7 +61,8 @@ public static class MeshGenerator
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // 4 vértices por face
         vertexSubchunkIds = new NativeList<byte>(4096 * 4, Allocator.Persistent); // 4 ids por face
         surfaceSubY = new NativeArray<int>(1, Allocator.Persistent);
-
+        // 🔥 AQUI ESTÁ O PONTO-CHAVE PARA OS COLLIDERS
+        voxelBytes = new NativeArray<byte>(SizeX * SizeY * SizeZ, Allocator.Persistent);
         var job = new ChunkMeshJob
         {
             coord = coord,
@@ -86,7 +88,8 @@ public static class MeshGenerator
             normals = normals,
             vertexLights = vertexLights,  // atribui ao job
             vertexSubchunkIds = vertexSubchunkIds,
-            surfaceSubY = surfaceSubY
+            surfaceSubY = surfaceSubY,
+            voxelBytes = voxelBytes
         };
 
         handle = job.Schedule();
@@ -121,7 +124,7 @@ public static class MeshGenerator
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> vertexSubchunkIds; // 0..15 por vértice
         public NativeArray<int> surfaceSubY;
-
+        public NativeArray<byte> voxelBytes;
         public void Execute()
         {
             // Passo 1: Gerar heightCache (flattened) — agora cobrimos o padding (Border)
@@ -131,6 +134,7 @@ public static class MeshGenerator
             const int border = Border;
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
+            int planeSize = voxelSizeX * SizeY;
             int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
 
             NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.Temp);
@@ -143,7 +147,18 @@ public static class MeshGenerator
 
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
             GenerateMesh(heightCache, blockTypes, solids, sunlight);
-
+            for (int x = 0; x < SizeX; x++)
+            {
+                for (int z = 0; z < SizeZ; z++)
+                {
+                    for (int y = 0; y < SizeY; y++)
+                    {
+                        int src = (x + border) + y * voxelSizeX + (z + border) * planeSize;
+                        int dst = x + y * SizeX + z * (SizeX * SizeY);
+                        voxelBytes[dst] = (byte)blockTypes[src];
+                    }
+                }
+            }
             // Limpeza
             sunlight.Dispose();
             heightCache.Dispose();

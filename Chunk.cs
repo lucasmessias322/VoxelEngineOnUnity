@@ -1,5 +1,6 @@
 using UnityEngine;
 using Unity.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
@@ -8,29 +9,40 @@ public class Chunk : MonoBehaviour
     public const int SizeX = 16;
     public const int SizeY = 256;
     public const int SizeZ = 16;
-    public NativeArray<byte> skylight; // tamanho: voxelSizeX * SizeY * voxelSizeZ
+
+    public const int SubChunkSize = 16;
+    public const int SubChunkCountY = SizeY / SubChunkSize;
+
+    public NativeArray<byte> skylight;
     public bool HasSkylight => skylight.IsCreated;
 
     public int surfaceSubY;
 
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
-    private Mesh mesh; // reuso
-    public const int SubChunkSize = 16;
-    public const int SubChunkCountY = Chunk.SizeY / SubChunkSize; // 256 / 16 = 16
+    private Mesh mesh;
 
     public SubChunk[] subChunks = new SubChunk[SubChunkCountY];
 
-    [SerializeField] private Material[] materials;  // MODIFICAÇÃO: Nova
+    [SerializeField] private Material[] materials;
+
+    // 🔥 voxel data usado SOMENTE para colisão
+    public byte[,,] voxelData;
+
     public enum ChunkState
     {
-        Requested,   // job agendado
-        MeshReady,   // resultado chegou
-        Active       // mesh aplicado
+        Requested,
+        MeshReady,
+        Active
     }
 
     public ChunkState state;
+    public int generation;
+    public Vector2Int coord;
 
+    // =========================
+    // INIT
+    // =========================
     private void Awake()
     {
         meshFilter = GetComponent<MeshFilter>();
@@ -40,14 +52,13 @@ public class Chunk : MonoBehaviour
         mesh.MarkDynamic();
         meshFilter.sharedMesh = mesh;
 
-        // Inicializar subchunks (child gameobjects com MeshFilter/Renderer)
         for (int i = 0; i < SubChunkCountY; i++)
         {
-            var go = new GameObject($"SubChunk_{i}");
+            GameObject go = new GameObject($"SubChunk_{i}");
             go.transform.SetParent(transform, false);
-            // keep local position zero — vertices estão em espaço do chunk
-            var mf = go.AddComponent<MeshFilter>();
-            var mr = go.AddComponent<MeshRenderer>();
+
+            MeshFilter mf = go.AddComponent<MeshFilter>();
+            MeshRenderer mr = go.AddComponent<MeshRenderer>();
 
             Mesh m = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
             m.MarkDynamic();
@@ -63,124 +74,54 @@ public class Chunk : MonoBehaviour
                 filter = mf,
                 renderer = mr,
                 isEmpty = true,
+                collidersBuilt = false,
+                aabbColliders = new List<BoxCollider>(32),
                 bounds = new Bounds(
-         new Vector3(
-             SizeX * 0.5f,
-             i * SubChunkSize + SubChunkSize * 0.5f,
-             SizeZ * 0.5f
-         ),
-         new Vector3(SizeX, SubChunkSize, SizeZ)
-     )
+                    new Vector3(SizeX * 0.5f, i * SubChunkSize + SubChunkSize * 0.5f, SizeZ * 0.5f),
+                    new Vector3(SizeX, SubChunkSize, SizeZ)
+                )
             };
-
         }
     }
 
-    public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)
+    public void SetVoxelData(byte[,,] data)
+    {
+        voxelData = data;
+    }
+
+    public void SetMaterials(Material[] mats)
     {
         materials = mats;
         if (meshRenderer != null)
             meshRenderer.sharedMaterials = mats;
 
-        // aplicar para subchunks existentes
-        if (subChunks != null)
-        {
-            foreach (var sc in subChunks)
-            {
-                if (sc != null && sc.renderer != null)
-                    sc.renderer.sharedMaterials = mats;
-            }
-        }
+        foreach (var sc in subChunks)
+            if (sc?.renderer != null)
+                sc.renderer.sharedMaterials = mats;
     }
 
-
-    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals, NativeArray<byte> vertexLights)
-    {
-        // Mantido para compatibilidade (mesh único)
-        mesh.Clear(false);
-
-        mesh.SetVertices(vertices);
-        mesh.SetUVs(0, uvs);
-
-        if (normals.Length > 0)
-            mesh.SetNormals(normals);
-
-        mesh.subMeshCount = 2;
-        mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
-        mesh.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
-
-        // Aplicar vertex color a partir dos bytes (0..15) com Face Shading
-        if (vertexLights.Length == vertices.Length)
-        {
-            Color[] cols = new Color[vertices.Length];
-
-            const float ambientMin = 0.15f; // ajuste global de ambiência (0.1 - 0.25)
-                                            // constantes de shading por face (ajuste se quiser)
-            const float shadeTop = 1.00f;
-            const float shadeBottom = 0.50f;
-
-            // diferencia X/Z como no Java
-            const float shadeZ = 0.50f; // north/south
-            const float shadeX = 0.25f; // east/west
-
-
-            bool haveNormalsPerVertex = (normals.Length == vertices.Length);
-
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                float raw = vertexLights[i] / 15f;
-                float l = Mathf.Lerp(ambientMin, 1f, raw);
-
-                // Determina tipo de face a partir da normal do vértice
-                float faceShade = 1f;
-                if (haveNormalsPerVertex)
-                {
-                    Vector3 n = normals[i]; // normal por vértice (de MeshGenerator)
-                                            // normal deve ser eixo principal (0/±1); usamos thresholds simples
-                    if (Mathf.Abs(n.y) > 0.5f)
-                    {
-                        faceShade = (n.y > 0f) ? shadeTop : shadeBottom;
-                    }
-                    else if (Mathf.Abs(n.z) > 0.5f)
-                    {
-                        faceShade = shadeZ;
-                    }
-                    else
-                    {
-                        faceShade = shadeX;
-                    }
-
-                }
-                else
-                {
-                    faceShade = shadeX;
-                }
-
-                l *= faceShade;
-                l = Mathf.Clamp01(l);
-                cols[i] = new Color(l, l, l, 1f);
-            }
-
-            mesh.colors = cols;
-        }
-
-        mesh.RecalculateBounds();
-    }
-
-    // Novo: aplica mesh para um subchunk específico (arrays gerenciados)
-    public void ApplySubChunkMeshData(int subIndex, Vector3[] verts, int[] opaqueTris, int[] waterTris, Vector2[] uvsArr, Vector3[] normalsArr, byte[] vertexLightsArr)
+    // =========================
+    // SUBCHUNK MESH + COLLISION
+    // =========================
+    public void ApplySubChunkMeshData(
+        int subIndex,
+        Vector3[] verts,
+        int[] opaqueTris,
+        int[] waterTris,
+        Vector2[] uvs,
+        Vector3[] normals,
+        byte[] vertexLights
+    )
     {
         if (subIndex < 0 || subIndex >= SubChunkCountY) return;
-        var sc = subChunks[subIndex];
+        SubChunk sc = subChunks[subIndex];
         if (sc == null) return;
 
         if (verts == null || verts.Length == 0)
         {
-            // marca vazio e desligar renderer
             sc.isEmpty = true;
-            if (sc.renderer != null) sc.renderer.enabled = false;
-            // limpar mesh
-            if (sc.mesh != null) sc.mesh.Clear(false);
+            sc.renderer.enabled = false;
+            sc.mesh.Clear(false);
             return;
         }
 
@@ -190,122 +131,233 @@ public class Chunk : MonoBehaviour
         m.Clear(false);
         m.SetVertices(verts);
 
-        if (uvsArr != null && uvsArr.Length == verts.Length)
-            m.SetUVs(0, uvsArr);
+        if (uvs != null && uvs.Length == verts.Length)
+            m.SetUVs(0, uvs);
 
-        if (normalsArr != null && normalsArr.Length == verts.Length)
-            m.SetNormals(normalsArr);
+        if (normals != null && normals.Length == verts.Length)
+            m.SetNormals(normals);
 
         m.subMeshCount = 2;
-        if (opaqueTris != null && opaqueTris.Length > 0)
-            m.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
-        else
-            m.SetIndices(new int[0], MeshTopology.Triangles, 0, false);
+        m.SetIndices(opaqueTris ?? new int[0], MeshTopology.Triangles, 0, false);
+        m.SetIndices(waterTris ?? new int[0], MeshTopology.Triangles, 1, false);
 
-        if (waterTris != null && waterTris.Length > 0)
-            m.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
-        else
-            m.SetIndices(new int[0], MeshTopology.Triangles, 1, false);
-
-        // colors
-        if (vertexLightsArr != null && vertexLightsArr.Length == verts.Length)
+        if (vertexLights != null && vertexLights.Length == verts.Length)
         {
             Color[] cols = new Color[verts.Length];
-            const float ambientMin = 0.15f;
-            const float shadeTop = 1f; const float shadeBottom = 0.5f;
-            const float shadeZ = 0.5f; const float shadeX = 0.25f;
-
-            bool haveNormalsPerVertex = (normalsArr != null && normalsArr.Length == verts.Length);
-
             for (int i = 0; i < verts.Length; i++)
             {
-                float raw = vertexLightsArr[i] / 15f;
-                float l = Mathf.Lerp(ambientMin, 1f, raw);
-                float faceShade = haveNormalsPerVertex ? (Mathf.Abs(normalsArr[i].y) > 0.5f ? (normalsArr[i].y > 0f ? shadeTop : shadeBottom) : (Mathf.Abs(normalsArr[i].z) > 0.5f ? shadeZ : shadeX)) : shadeX;
-                l *= faceShade;
-                l = Mathf.Clamp01(l);
+                float l = Mathf.Lerp(0.15f, 1f, vertexLights[i] / 15f);
                 cols[i] = new Color(l, l, l, 1f);
             }
-
             m.colors = cols;
         }
 
         m.RecalculateBounds();
+        sc.filter.sharedMesh = m;
+        sc.renderer.enabled = true;
 
-        if (sc.filter != null) sc.filter.sharedMesh = m;
-        if (sc.renderer != null)
+
+    }
+
+    // =========================
+    // AABB COLLISION (BEDROCK)
+    // =========================
+
+
+    // Substitui ClearAABBs
+    private void ClearAABBs(SubChunk sc)
+    {
+        // Em vez de destruir, apenas desativa para reutilização posterior.
+        if (sc.aabbColliders != null)
         {
-            sc.renderer.enabled = true;
-            if (materials != null && materials.Length > 0) sc.renderer.sharedMaterials = materials;
+            for (int i = 0; i < sc.aabbColliders.Count; i++)
+            {
+                var c = sc.aabbColliders[i];
+                if (c) c.enabled = false;
+            }
+        }
+        sc.collidersBuilt = false;
+    }
+    // Substitui GenerateAABBsMerged
+    private void GenerateAABBsMerged(SubChunk sc)
+    {
+        int yBase = sc.yIndex * SubChunkSize;
+
+        // Dicionário: key = (startY << 8) | height  -> lista de células (x,z)
+        var runs = new Dictionary<int, List<Vector2Int>>();
+
+        for (int x = 0; x < SizeX; x++)
+        {
+            for (int z = 0; z < SizeZ; z++)
+            {
+                int startY = -1;
+                for (int y = 0; y < SubChunkSize; y++)
+                {
+                    byte block = voxelData[x, yBase + y, z];
+                    bool solid = BlockDataSO.IsSolidCache[block];
+
+                    if (solid && startY == -1)
+                    {
+                        startY = y;
+                    }
+
+                    if ((!solid || y == SubChunkSize - 1) && startY != -1)
+                    {
+                        int endY = (solid && y == SubChunkSize - 1) ? y : y - 1;
+                        int height = endY - startY + 1;
+
+                        int key = (startY << 8) | (height & 0xFF);
+                        if (!runs.TryGetValue(key, out var list))
+                        {
+                            list = new List<Vector2Int>();
+                            runs[key] = list;
+                        }
+                        list.Add(new Vector2Int(x, z));
+                        startY = -1;
+                    }
+                }
+            }
+        }
+
+        // Reuse existing colliders em sc.aabbColliders em vez de destruir/criar.
+        int usedColliders = 0;
+
+        foreach (var kv in runs)
+        {
+            int key = kv.Key;
+            int startY = (key >> 8) & 0xFF;
+            int height = key & 0xFF;
+
+            // occupancy grid
+            bool[,] occ = new bool[SizeX, SizeZ];
+            foreach (var cell in kv.Value)
+                occ[cell.x, cell.y] = true;
+
+            bool[,] visited = new bool[SizeX, SizeZ];
+
+            for (int zx = 0; zx < SizeX; zx++)
+            {
+                for (int zz = 0; zz < SizeZ; zz++)
+                {
+                    if (!occ[zx, zz] || visited[zx, zz]) continue;
+
+                    // expand largura (x)
+                    int w = 1;
+                    while (zx + w < SizeX && occ[zx + w, zz] && !visited[zx + w, zz]) w++;
+
+                    // expand profundidade (z)
+                    int d = 1;
+                    bool canExpand = true;
+                    while (canExpand && (zz + d) < SizeZ)
+                    {
+                        for (int xi = zx; xi < zx + w; xi++)
+                        {
+                            if (!occ[xi, zz + d] || visited[xi, zz + d])
+                            {
+                                canExpand = false;
+                                break;
+                            }
+                        }
+                        if (canExpand) d++;
+                    }
+
+                    // marca visitado
+                    for (int xi = zx; xi < zx + w; xi++)
+                        for (int zi = zz; zi < zz + d; zi++)
+                            visited[xi, zi] = true;
+
+                    // Reuse ou crie novo collider apenas se necessário
+                    BoxCollider bc;
+                    if (usedColliders < sc.aabbColliders.Count && sc.aabbColliders[usedColliders] != null)
+                    {
+                        bc = sc.aabbColliders[usedColliders];
+                        bc.enabled = true;
+                    }
+                    else
+                    {
+                        bc = sc.filter.gameObject.AddComponent<BoxCollider>();
+                        // assegura lista inicializada
+                        if (sc.aabbColliders == null) sc.aabbColliders = new List<BoxCollider>();
+                        sc.aabbColliders.Add(bc);
+                    }
+
+                    // center (local ao chunk/subchunk root)
+                    bc.center = new Vector3(
+                        zx + (w * 0.5f),
+                        yBase + startY + (height * 0.5f),
+                        zz + (d * 0.5f)
+                    );
+                    bc.size = new Vector3(w, height, d);
+
+                    usedColliders++;
+                }
+            }
+        }
+
+        // Desativa colliders excedentes (mantém-os para reutilização futura)
+        for (int i = usedColliders; i < sc.aabbColliders.Count; i++)
+        {
+            if (sc.aabbColliders[i]) sc.aabbColliders[i].enabled = false;
         }
     }
 
-    // Opcional: update culling baseado na câmera
-
-    // public void UpdateSubchunkVisibility(
-    //     int playerSubY,
-    //     int up,
-    //     int down,
-    //     Plane[] planes
-    // )
-    // {
-    //     for (int i = 0; i < SubChunkCountY; i++)
-    //     {
-    //         var sc = subChunks[i];
-
-    //         if (sc == null || sc.isEmpty)
-    //         {
-    //             sc.renderer.enabled = false;
-    //             continue;
-    //         }
-
-    //         // 🔥 CORTE VERTICAL BEDROCK
-    //         if (i < playerSubY - down || i > playerSubY + up)
-    //         {
-    //             sc.renderer.enabled = false;
-    //             continue;
-    //         }
-
-    //         // frustum opcional (Bedrock usa, mas depois do corte)
-    //         Bounds worldBounds = sc.bounds;
-    //         worldBounds.center = transform.TransformPoint(sc.bounds.center);
-
-    //         sc.renderer.enabled =
-    //             GeometryUtility.TestPlanesAABB(planes, worldBounds);
-    //     }
-    // }
-
-    public void UpdateSubchunkVisibilityBedrock(
-      int playerSubY,
-      int surfaceSubY,
-      int up,
-      int down,
-      Plane[] planes
-  )
+    public void EnableColliders()
     {
-        // 🔥 centro dinâmico (igual Bedrock)
-        int centerY = playerSubY < surfaceSubY
-            ? playerSubY
-            : surfaceSubY;
+        if (voxelData == null) return;
+
+        foreach (var sc in subChunks)
+        {
+            if (sc == null || sc.isEmpty || sc.collidersBuilt)
+                continue;
+
+
+            if (!sc.collidersBuilt)
+            {
+                GenerateAABBsMerged(sc);
+                sc.collidersBuilt = true;
+            }
+
+        }
+    }
+    public void DisableColliders()
+    {
+        foreach (var sc in subChunks)
+        {
+            if (sc == null || !sc.collidersBuilt)
+                continue;
+
+            ClearAABBs(sc);
+        }
+    }
+
+    // =========================
+    // VISIBILITY (BEDROCK)
+    // =========================
+    public void UpdateSubchunkVisibilityBedrock(
+        int playerSubY,
+        int surfaceSubY,
+        int up,
+        int down,
+        Plane[] planes
+    )
+    {
+        int centerY = playerSubY < surfaceSubY ? playerSubY : surfaceSubY;
 
         for (int i = 0; i < SubChunkCountY; i++)
         {
             var sc = subChunks[i];
-
             if (sc == null || sc.isEmpty)
             {
                 sc.renderer.enabled = false;
                 continue;
             }
 
-            // corte vertical
             if (i < centerY - down || i > centerY + up)
             {
                 sc.renderer.enabled = false;
                 continue;
             }
 
-            // frustum depois
             Bounds worldBounds = sc.bounds;
             worldBounds.center = transform.TransformPoint(sc.bounds.center);
 
@@ -314,43 +366,45 @@ public class Chunk : MonoBehaviour
         }
     }
 
-
-
-
-    public Vector2Int coord;
+    // =========================
+    // LIFECYCLE
+    // =========================
     public void SetCoord(Vector2Int c)
     {
         coord = c;
         gameObject.name = $"Chunk_{c.x}_{c.y}";
     }
+
     public void ResetChunk()
     {
         gameObject.SetActive(false);
         generation = 0;
-        // opcional: limpar coord
-        // coord = new Vector2Int(int.MinValue, int.MinValue);
 
-        // desligar subchunks
-        if (subChunks != null)
+        foreach (var sc in subChunks)
         {
-            foreach (var sc in subChunks)
-            {
-                if (sc != null && sc.renderer != null)
-                    sc.renderer.enabled = false;
-                if (sc != null) sc.isEmpty = true;
-            }
+            if (sc == null) continue;
+            ClearAABBs(sc); // agora apenas desativa, não destrói
+            sc.isEmpty = true;
+            if (sc.renderer) sc.renderer.enabled = false;
         }
     }
 
-    public int generation;
 }
+
+// =========================
+// DATA STRUCTURES
+// =========================
 public class SubChunk
 {
-    public int yIndex; // 0..15
+    public int yIndex;
     public Mesh mesh;
     public MeshRenderer renderer;
     public MeshFilter filter;
     public bool isEmpty;
-
     public Bounds bounds;
+
+    public bool collidersBuilt;
+    public List<BoxCollider> aabbColliders;
+
+
 }
