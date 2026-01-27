@@ -77,9 +77,9 @@ public class Chunk : MonoBehaviour
         {
             Color[] cols = new Color[vertices.Length];
 
-            const float ambientMin = 0.15f; // ajuste global de ambiência (0.1 - 0.25)
+            const float ambientMin = 0.25f; // ajuste global de ambiência (0.1 - 0.25)
             const float shadeTop = 1.00f;
-            const float shadeSide = 0.2f;
+            const float shadeSide = 0.25f;
             const float shadeBottom = 0.60f;
 
             bool haveNormalsPerVertex = (normals.Length == vertices.Length);

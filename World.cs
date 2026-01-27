@@ -93,8 +93,6 @@ public class World : MonoBehaviour
 
         Instance = this;
 
-        // Opcional: manter entre cenas
-        // DontDestroyOnLoad(gameObject);
     }
 
     private void Start()
@@ -553,11 +551,7 @@ public class World : MonoBehaviour
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
-
-
         BlockType current = GetBlockAt(worldPos);
-
-
 
 
         // Impede alterar Bedrock (y <= 2)
@@ -566,17 +560,10 @@ public class World : MonoBehaviour
             Debug.Log("Attempt to modify Bedrock ignored: " + worldPos);
             return;
         }
+        // sempre registre a edição — se for Air, grava explicitamente Air para que o MeshGenerator
+        // receba a instrução de remover o bloco gerado desse lugar
+        blockOverrides[worldPos] = type;
 
-        // Atualiza overrides
-        if (type == BlockType.Air)
-        {
-            // podemos optar por remover da tabela se quisermos, mas manter o registro de Air força ausência
-            blockOverrides[worldPos] = BlockType.Air;
-        }
-        else
-        {
-            blockOverrides[worldPos] = type;
-        }
 
         // Determina chunks afetados: chunk que contém o bloco + vizinhos se estiver na borda
         Vector2Int chunkCoord = new Vector2Int(

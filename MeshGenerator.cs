@@ -659,6 +659,33 @@ public static class MeshGenerator
                     int h = heightCache[cacheIdx];
                     int maxY = math.max(h, (int)seaLevel);
 
+                    // --- START PATCH ---
+                    // compute world coords for this column
+                    int baseWorldX = coord.x * SizeX;
+                    int baseWorldZ = coord.y * SizeZ;
+                    int worldX = baseWorldX + x;
+                    int worldZ = baseWorldZ + z;
+
+                    // previous maxY (surface or sea)
+
+
+                    // ensure we include any manual edits placed by the player that may be above 'h'
+                    if (blockEdits.Length > 0)
+                    {
+                        for (int ei = 0; ei < blockEdits.Length; ei++)
+                        {
+                            var e = blockEdits[ei];
+                            if (e.x == worldX && e.z == worldZ)
+                            {
+                                // clamp e.y just in case (defensive)
+                                int editY = math.clamp(e.y, 0, SizeY - 1);
+                                if (editY > maxY) maxY = editY;
+                            }
+                        }
+                    }
+                    // --- END PATCH ---
+
+
                     for (int y = 0; y <= maxY; y++)
                     {
                         int internalX = x + border;

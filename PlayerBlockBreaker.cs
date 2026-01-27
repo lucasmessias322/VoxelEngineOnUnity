@@ -6,7 +6,8 @@ public class PlayerBlockBreaker : MonoBehaviour
 {
     public BlockSelector selector;
     public Camera cam;
-
+    [Header("Place settings")]
+    public BlockType placeBlockType = BlockType.Stone; // tipo a ser colocado (ajuste no Inspector)
     void Awake()
     {
         if (selector == null) selector = GetComponent<BlockSelector>();
@@ -36,5 +37,56 @@ public class PlayerBlockBreaker : MonoBehaviour
                 Debug.Log($"Break request at {sel} -> queued");
             }
         }
+
+        // Colocar bloco (botão direito) - replace no seu PlayerBlockBreaker
+        if (Input.GetMouseButtonDown(1))
+        {
+            Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+
+            if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
+            {
+                // bloco atingido (mesma lógica do selector)
+                Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point - hit.normal * 0.01f);
+
+                // conversão segura da normal -> inteiro (-1,0,1)
+                Vector3Int normalInt = new Vector3Int(
+                    Mathf.RoundToInt(hit.normal.x),
+                    Mathf.RoundToInt(hit.normal.y),
+                    Mathf.RoundToInt(hit.normal.z)
+                );
+
+                Vector3Int placePos = targetBlock + normalInt;
+
+                Debug.Log($"[Place] hit.point={hit.point} normal={hit.normal} target={targetBlock} normalInt={normalInt} placePos={placePos}");
+
+                // proteção Y
+                if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
+                {
+                    Debug.Log("[Place] posição inválida Y");
+                    return;
+                }
+
+                // não colocar dentro do jogador (opcional) - exemplo rápido
+                Vector3 playerPos = World.Instance.player.position;
+                Vector3Int playerBlock = Vector3Int.FloorToInt(playerPos);
+                if (placePos == playerBlock || placePos == playerBlock + Vector3Int.up)
+                {
+                    Debug.Log("[Place] impedido: dentro do jogador");
+                    return;
+                }
+
+                // só coloca se estiver vazio segundo o World
+                if (World.Instance.GetBlockAt(placePos) != BlockType.Air)
+                {
+                    Debug.Log($"[Place] local já ocupado por {World.Instance.GetBlockAt(placePos)}");
+                    return;
+                }
+
+                World.Instance.SetBlockAt(placePos, placeBlockType);
+                Debug.Log($"[Place] requested {placeBlockType} at {placePos}");
+            }
+        }
+
+
     }
 }
