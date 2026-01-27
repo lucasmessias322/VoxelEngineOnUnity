@@ -19,6 +19,7 @@ public static class MeshGenerator
     // Ajuste de border: aumentamos para 2 para reduzir seams quando chunks vizinhos ainda não existem.
     private const int Border = 2;
 
+    // assinatura modificada: adiciona `targetSubchunk`
     public static void ScheduleMeshJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
@@ -36,17 +37,20 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
+        NativeArray<VoxelOverride> overrides, // já tinha
+        int targetSubchunk, // <-- novo: -1 = rebuild full chunk; >=0 = only that subchunk
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,  // Novo: saída com luz por vértice
-        out NativeList<byte> vertexSubchunkIds, // Novo: para identificar a qual subchunk cada vértice pertence
+        out NativeList<byte> vertexLights,
+        out NativeList<byte> vertexSubchunkIds,
         out NativeArray<int> surfaceSubY,
         out NativeArray<byte> voxelBytes
     )
+
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
@@ -81,6 +85,8 @@ public static class MeshGenerator
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
+            overrides = overrides, // 🔥
+            targetSubchunk = targetSubchunk, // <-- atribui aqui
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
@@ -115,6 +121,8 @@ public static class MeshGenerator
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
+        [ReadOnly] public NativeArray<VoxelOverride> overrides;
+        public int targetSubchunk; // -1 = all, >=0 = only that subchunk
 
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
@@ -144,6 +152,30 @@ public static class MeshGenerator
             // Passo 2.5: Calcular skylight (vertical fill + BFS propagation)
             NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             CalculateSkylight(blockTypes, solids, sunlight, voxelSizeX, voxelSizeZ);
+
+            // 🔥 PASSO CRÍTICO: aplicar overrides DO JOGADOR
+            if (overrides.IsCreated)
+            {
+                int voxelPlaneSize = voxelSizeX * SizeY;
+
+                for (int i = 0; i < overrides.Length; i++)
+                {
+                    var ov = overrides[i];
+
+                    int lx = ov.index % SizeX;
+                    int ly = (ov.index / SizeX) % SizeY;
+                    int lz = ov.index / (SizeX * SizeY);
+
+                    int ix = lx + border;
+                    int iz = lz + border;
+
+                    int voxelIdx = ix + ly * voxelSizeX + iz * voxelPlaneSize;
+
+                    blockTypes[voxelIdx] = (BlockType)ov.value;
+                    solids[voxelIdx] = blockMappings[(int)ov.value].isSolid;
+                }
+            }
+
 
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
             GenerateMesh(heightCache, blockTypes, solids, sunlight);
@@ -617,6 +649,15 @@ public static class MeshGenerator
             const int voxelPlaneSize = voxelSizeX * SizeY;
             int heightStride = SizeX + 2 * border;
 
+            // Calcular faixa Y que vamos gerar
+            int yStart = 0;
+            int yEnd = SizeY - 1;
+            if (targetSubchunk >= 0)
+            {
+                yStart = targetSubchunk * SubChunkSize;
+                yEnd = math.min(yStart + SubChunkSize - 1, SizeY - 1);
+            }
+
             NativeArray<Vector3Int> faceChecks = new NativeArray<Vector3Int>(6, Allocator.Temp);
             faceChecks[0] = new Vector3Int(0, 0, 1);
             faceChecks[1] = new Vector3Int(0, 0, -1);
@@ -665,7 +706,7 @@ public static class MeshGenerator
                     int h = heightCache[cacheIdx];
                     int maxY = math.max(h, (int)seaLevel);
 
-                    for (int y = 0; y <= maxY; y++)
+                  for (int y = yStart; y <= yEnd; y++)
                     {
                         int internalX = x + border;
                         int internalZ = z + border;
@@ -867,6 +908,8 @@ public static class MeshGenerator
                             }
                         }
                     }
+              
+              
                 }
             }
 
@@ -909,4 +952,10 @@ public class MeshBuildResult
         uvs = u;
         normals = n;
     }
+}
+
+public struct VoxelOverride
+{
+    public int index;
+    public byte value;
 }
