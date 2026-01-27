@@ -67,7 +67,8 @@ public class World : MonoBehaviour
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
 
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
-
+    // Adicionar no topo da classe:
+    private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
     private struct PendingMesh
     {
         public JobHandle handle;
@@ -77,14 +78,28 @@ public class World : MonoBehaviour
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
+        public NativeArray<MeshGenerator.BlockEdit> edits;
         public Vector2Int coord;
         public int expectedGen;
     }
 
+    void Awake()
+    {
+        if (Instance != null && Instance != this)
+        {
+            Destroy(gameObject);
+            return;
+        }
+
+        Instance = this;
+
+        // Opcional: manter entre cenas
+        // DontDestroyOnLoad(gameObject);
+    }
 
     private void Start()
     {
-        Instance = this;
+
 
         // garante dicionário inicializado
         if (blockData != null) blockData.InitializeDictionary();
@@ -226,7 +241,6 @@ public class World : MonoBehaviour
             chunkPool.Enqueue(chunk);
         }
     }
-
     private void Update()
     {
         UpdateChunks();
@@ -238,22 +252,8 @@ public class World : MonoBehaviour
             if (pm.handle.IsCompleted)
             {
                 pm.handle.Complete();
-                // if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
-                // {
-                //     activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
-                //     activeChunk.gameObject.SetActive(true);
-                //     applied++;
-                // }
-                // // Dispose NativeLists
-                // pm.vertices.Dispose();
-                // pm.opaqueTriangles.Dispose();
-                // pm.waterTriangles.Dispose();
-                // pm.uvs.Dispose();
-                // pm.normals.Dispose();
-                // pendingMeshes.RemoveAt(i);
                 if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
                 {
-                    // NOVA ASSINATURA: ApplyMeshData(..., NativeArray<byte> vertexLights)
                     activeChunk.ApplyMeshData(
                         pm.vertices.AsArray(),
                         pm.opaqueTriangles.AsArray(),
@@ -266,19 +266,17 @@ public class World : MonoBehaviour
                     applied++;
                 }
 
-                // Dispose NativeLists (inclui lightValues)
                 pm.vertices.Dispose();
                 pm.opaqueTriangles.Dispose();
                 pm.waterTriangles.Dispose();
                 pm.uvs.Dispose();
                 pm.normals.Dispose();
-                pm.lightValues.Dispose(); // novo: limpar o NativeList<byte>
+                pm.lightValues.Dispose();
+                if (pm.edits.IsCreated) pm.edits.Dispose(); // IMPORTANTE: liberar o NativeArray de edits
                 pendingMeshes.RemoveAt(i);
-
             }
         }
     }
-
 
 
     private void UpdateChunks()
@@ -370,6 +368,52 @@ public class World : MonoBehaviour
 
         activeChunks.Add(coord, chunk);
 
+        // --- BUILD edits FOR THIS CHUNK ---
+        // --- Substituir o bloco anterior de build de edits por este ---
+        var editsList = new List<MeshGenerator.BlockEdit>();
+
+        // limites do chunk (em world coords)
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
+        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
+
+        // estender 1 bloco nas bordas para cobrir voxels "border" usados pelo job
+        int extend = 1;
+        int minX = chunkMinX - extend;
+        int minZ = chunkMinZ - extend;
+        int maxX = chunkMaxX + extend;
+        int maxZ = chunkMaxZ + extend;
+
+        // coletar overrides que caem dentro da área estendida (inclui blocos do chunk vizinho
+        // que afetam a borda do chunk corrente)
+        foreach (var kv in blockOverrides)
+        {
+            Vector3Int wp = kv.Key;
+            if (wp.x >= minX && wp.x <= maxX && wp.z >= minZ && wp.z <= maxZ && wp.y >= 0 && wp.y < Chunk.SizeY)
+            {
+                MeshGenerator.BlockEdit be = new MeshGenerator.BlockEdit
+                {
+                    x = wp.x,
+                    y = wp.y,
+                    z = wp.z,
+                    type = (int)kv.Value
+                };
+                editsList.Add(be);
+            }
+        }
+
+        NativeArray<MeshGenerator.BlockEdit> nativeEdits;
+        if (editsList.Count > 0)
+        {
+            nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(editsList.Count, Allocator.Persistent);
+            for (int i = 0; i < editsList.Count; i++) nativeEdits[i] = editsList[i];
+        }
+        else
+        {
+            nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(0, Allocator.Persistent);
+        }
+
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -387,6 +431,7 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
+             nativeEdits, // EDIT: pass edits
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
@@ -405,9 +450,322 @@ public class World : MonoBehaviour
             uvs = uvs,
             normals = normals,
             lightValues = vertexLights,  // Novo
+            edits = nativeEdits, // store to dispose later
             coord = coord,
             expectedGen = expectedGen
         });
+    }
+    // --- NEW: Request rebuild for an *active* chunk (usado quando editamos um bloco) ---
+    private void RequestChunkRebuild(Vector2Int coord)
+    {
+        if (!activeChunks.TryGetValue(coord, out Chunk chunk)) return;
+
+        int expectedGen = nextChunkGeneration++;
+        chunk.generation = expectedGen;
+
+        // --- Substituir o bloco anterior de build de edits por este ---
+        var editsList = new List<MeshGenerator.BlockEdit>();
+
+        // limites do chunk (em world coords)
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
+        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
+
+        // estender 1 bloco nas bordas para cobrir voxels "border" usados pelo job
+        int extend = 1;
+        int minX = chunkMinX - extend;
+        int minZ = chunkMinZ - extend;
+        int maxX = chunkMaxX + extend;
+        int maxZ = chunkMaxZ + extend;
+
+        // coletar overrides que caem dentro da área estendida (inclui blocos do chunk vizinho
+        // que afetam a borda do chunk corrente)
+        foreach (var kv in blockOverrides)
+        {
+            Vector3Int wp = kv.Key;
+            if (wp.x >= minX && wp.x <= maxX && wp.z >= minZ && wp.z <= maxZ && wp.y >= 0 && wp.y < Chunk.SizeY)
+            {
+                MeshGenerator.BlockEdit be = new MeshGenerator.BlockEdit
+                {
+                    x = wp.x,
+                    y = wp.y,
+                    z = wp.z,
+                    type = (int)kv.Value
+                };
+                editsList.Add(be);
+            }
+        }
+
+
+        NativeArray<MeshGenerator.BlockEdit> nativeEdits;
+        if (editsList.Count > 0)
+        {
+            nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(editsList.Count, Allocator.Persistent);
+            for (int i = 0; i < editsList.Count; i++) nativeEdits[i] = editsList[i];
+        }
+        else
+        {
+            nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(0, Allocator.Persistent);
+        }
+
+        MeshGenerator.ScheduleMeshJob(
+            coord,
+            noiseLayers,
+            warpLayers,
+            caveLayers,
+            blockData.mappings,
+            baseHeight,
+            heightVariation,
+            offsetX,
+            offsetZ,
+            atlasTilesX,
+            atlasTilesY,
+            true,
+            seaLevel,
+            caveThreshold,
+            caveStride,
+            maxCaveDepthMultiplier,
+            nativeEdits, // pass edits
+            out JobHandle handle,
+            out NativeList<Vector3> vertices,
+            out NativeList<int> opaqueTriangles,
+            out NativeList<int> waterTriangles,
+            out NativeList<Vector2> uvs,
+            out NativeList<Vector3> normals,
+             out NativeList<byte> vertexLights // novo out
+        );
+
+        pendingMeshes.Add(new PendingMesh
+        {
+            handle = handle,
+            vertices = vertices,
+            opaqueTriangles = opaqueTriangles,
+            waterTriangles = waterTriangles,
+            uvs = uvs,
+            normals = normals,
+            lightValues = vertexLights,
+            edits = nativeEdits,
+            coord = coord,
+            expectedGen = expectedGen
+        });
+    }
+
+    public void SetBlockAt(Vector3Int worldPos, BlockType type)
+    {
+
+
+        BlockType current = GetBlockAt(worldPos);
+
+
+
+
+        // Impede alterar Bedrock (y <= 2)
+        if (current == BlockType.Bedrock)
+        {
+            Debug.Log("Attempt to modify Bedrock ignored: " + worldPos);
+            return;
+        }
+
+        // Atualiza overrides
+        if (type == BlockType.Air)
+        {
+            // podemos optar por remover da tabela se quisermos, mas manter o registro de Air força ausência
+            blockOverrides[worldPos] = BlockType.Air;
+        }
+        else
+        {
+            blockOverrides[worldPos] = type;
+        }
+
+        // Determina chunks afetados: chunk que contém o bloco + vizinhos se estiver na borda
+        Vector2Int chunkCoord = new Vector2Int(
+            Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
+            Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
+        );
+
+        // Sempre re-gerar o chunk onde foi modificado
+        if (activeChunks.ContainsKey(chunkCoord))
+            RequestChunkRebuild(chunkCoord);
+
+        // Se estiver na borda X/Z, regen vizinhos (x-1, x+1, z-1, z+1)
+        int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
+        int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+
+        if (localX == 0 && activeChunks.ContainsKey(new Vector2Int(chunkCoord.x - 1, chunkCoord.y)))
+            RequestChunkRebuild(new Vector2Int(chunkCoord.x - 1, chunkCoord.y));
+        if (localX == Chunk.SizeX - 1 && activeChunks.ContainsKey(new Vector2Int(chunkCoord.x + 1, chunkCoord.y)))
+            RequestChunkRebuild(new Vector2Int(chunkCoord.x + 1, chunkCoord.y));
+        if (localZ == 0 && activeChunks.ContainsKey(new Vector2Int(chunkCoord.x, chunkCoord.y - 1)))
+            RequestChunkRebuild(new Vector2Int(chunkCoord.x, chunkCoord.y - 1));
+        if (localZ == Chunk.SizeZ - 1 && activeChunks.ContainsKey(new Vector2Int(chunkCoord.x, chunkCoord.y + 1)))
+            RequestChunkRebuild(new Vector2Int(chunkCoord.x, chunkCoord.y + 1));
+    }
+
+    // ADICIONE ESSA FUNÇÃO NA SUA CLASSE World
+    public BlockType GetBlockAt(Vector3Int worldPos)
+    {
+        // 1) limites Y
+        // 1) limites Y / bedrock consistente com o gerador (mesmo limite usado no MeshGenerator)
+        if (worldPos.y < 0)
+            return BlockType.Air;         // fora da área válida abaixo do mundo
+
+        // MeshGenerator trata y <= 2 como bedrock; manter consistência evita permitir quebra.
+        if (worldPos.y <= 2)
+            return BlockType.Bedrock;     // camada inquebrável do fundo
+
+        if (worldPos.y >= Chunk.SizeY)
+            return BlockType.Air;         // fora do range vertical acima
+
+        // 2) overrides (edits feitos pelo jogador / sistema)
+        if (blockOverrides != null && blockOverrides.TryGetValue(worldPos, out BlockType overridden))
+        {
+            return overridden;
+        }
+
+        // 3) gerar height usando mesmas layers de world (warp + noise)
+        // -> replica a lógica de GenerateHeightCache do MeshGenerator, mas apenas para um (x,z)
+
+        int worldX = worldPos.x;
+        int worldZ = worldPos.z;
+
+        // Domain warping
+        float warpX = 0f;
+        float warpZ = 0f;
+        float sumWarpAmp = 0f;
+        if (warpLayers != null)
+        {
+            for (int i = 0; i < warpLayers.Length; i++)
+            {
+                var layer = warpLayers[i];
+                if (!layer.enabled) continue;
+
+                float baseNx = worldX + layer.offset.x;
+                float baseNz = worldZ + layer.offset.y;
+
+                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
+                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
+
+                warpX += sampleX * layer.amplitude;
+                warpZ += sampleZ * layer.amplitude;
+                sumWarpAmp += math.max(1e-5f, layer.amplitude);
+            }
+        }
+        if (sumWarpAmp > 0f)
+        {
+            warpX /= sumWarpAmp;
+            warpZ /= sumWarpAmp;
+        }
+        warpX = (warpX - 0.5f) * 2f;
+        warpZ = (warpZ - 0.5f) * 2f;
+
+        // Noise layers (surface)
+        float totalNoise = 0f;
+        float sumAmp = 0f;
+        if (noiseLayers != null)
+        {
+            for (int i = 0; i < noiseLayers.Length; i++)
+            {
+                var layer = noiseLayers[i];
+                if (!layer.enabled) continue;
+
+                float nx = (worldX + warpX) + layer.offset.x;
+                float nz = (worldZ + warpZ) + layer.offset.y;
+
+                float sample = MyNoise.OctavePerlin(nx, nz, layer);
+                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+
+                totalNoise += sample * layer.amplitude;
+                sumAmp += math.max(1e-5f, layer.amplitude);
+            }
+        }
+
+        if (sumAmp > 0f) totalNoise /= sumAmp;
+        else
+        {
+            // fallback caso não haja layers
+            float nx = (worldX + warpX) * 0.05f + offsetX;
+            float nz = (worldZ + warpZ) * 0.05f + offsetZ;
+            totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+        }
+
+        int h = GetHeightFromNoise(totalNoise);
+
+        // 4) cavernas (aplica somente até certa profundidade)
+        bool isCave = false;
+        if (caveLayers != null && caveLayers.Length > 0)
+        {
+            int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
+            if (worldPos.y <= maxCaveY)
+            {
+                float totalCave = 0f;
+                float sumCaveAmp = 0f;
+                for (int i = 0; i < caveLayers.Length; i++)
+                {
+                    var layer = caveLayers[i];
+                    if (!layer.enabled) continue;
+
+                    float nx = worldX + layer.offset.x;
+                    float ny = worldPos.y;
+                    float nz = worldZ + layer.offset.y;
+
+                    float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+                    if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                        sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+
+                    totalCave += sample * layer.amplitude;
+                    sumCaveAmp += math.max(1e-5f, layer.amplitude);
+                }
+                if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
+
+                // small surface bias (imita seu código de geração)
+                float maxPossibleY = math.max(1f, (float)math.max(1, h));
+                float relativeHeight = (float)worldPos.y / maxPossibleY;
+                float surfaceBias = 0.001f * relativeHeight;
+                if (worldPos.y < 5) surfaceBias -= 0.08f;
+
+                float adjustedThreshold = caveThreshold - surfaceBias;
+                if (totalCave > adjustedThreshold) isCave = true;
+            }
+        }
+
+        // 5) decidir tipo final
+        if (isCave)
+        {
+            return BlockType.Air;
+        }
+
+        if (worldPos.y > h)
+        {
+            // acima do terreno: se abaixo do mar -> água
+            if (worldPos.y <= seaLevel)
+                return BlockType.Water;
+            return BlockType.Air;
+        }
+        else
+        {
+            // abaixo ou igual à superfície
+            bool isBeachArea = (h <= seaLevel + 2);
+            if (worldPos.y == h)
+            {
+                return isBeachArea ? BlockType.Sand : BlockType.Grass;
+            }
+            else if (worldPos.y > h - 4)
+            {
+                return isBeachArea ? BlockType.Sand : BlockType.Dirt;
+            }
+            else
+            {
+                return BlockType.Stone;
+            }
+        }
+    }
+
+    // helper local (replika do Job)
+    private int GetHeightFromNoise(float noise)
+    {
+        return math.clamp(baseHeight + (int)math.floor((noise - 0.5f) * 2f * heightVariation), 1, Chunk.SizeY - 1);
     }
 
 }

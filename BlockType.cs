@@ -6,5 +6,5 @@ public enum BlockType
     Stone = 3,
     Sand = 4,
     Water = 5,
-    // adicione o que precisar...
+    Bedrock = 6,
 }

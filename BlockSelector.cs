@@ -5,7 +5,7 @@ public class BlockSelector : MonoBehaviour
 {
     public Camera cam;
     public float reach = 6f;
-
+    public BlockType CurrentBlock { get; private set; } = BlockType.Air;
     private LineRenderer line;
     private Vector3Int currentBlock;
     private bool hasBlock;
@@ -27,6 +27,12 @@ public class BlockSelector : MonoBehaviour
 
     void Update()
     {
+        UpdateSelection();
+    }
+
+    void UpdateSelection()
+    {
+
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
         if (Physics.Raycast(ray, out RaycastHit hit, reach))
@@ -35,7 +41,7 @@ public class BlockSelector : MonoBehaviour
             Vector3 point = hit.point - hit.normal * 0.01f;
 
             Vector3Int blockPos = Vector3Int.FloorToInt(point);
-
+            CurrentBlock = World.Instance.GetBlockAt(blockPos);
             if (!hasBlock || blockPos != currentBlock)
             {
                 currentBlock = blockPos;

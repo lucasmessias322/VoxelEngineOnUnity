@@ -13,6 +13,15 @@ public static class MeshGenerator
     private const int SizeY = 256;
     private const int SizeZ = 16;
 
+    // EDIT: struct para representar uma edição (posição world + tipo do bloco)
+    public struct BlockEdit
+    {
+        public int x;
+        public int y;
+        public int z;
+        public int type; // enum BlockType como int
+    }
+
     public static void ScheduleMeshJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
@@ -30,6 +39,8 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
+        // EDIT: receber NativeArray<BlockEdit> com edits locais (pode ter Length==0)
+        NativeArray<BlockEdit> blockEdits,
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -74,7 +85,8 @@ public static class MeshGenerator
             waterTriangles = waterTriangles,
             uvs = uvs,
             normals = normals,
-            vertexLights = vertexLights  // Novo: atribua ao job
+            vertexLights = vertexLights,  // Novo: atribua ao job
+            blockEdits = blockEdits       // EDIT: atribui edits ao job
         };
 
         handle = job.Schedule();
@@ -88,7 +100,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<WarpLayer> warpLayers;
         [ReadOnly] public NativeArray<NoiseLayer> caveLayers;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-
+        [ReadOnly] public NativeArray<BlockEdit> blockEdits; // EDIT: lista de edits aplicáveis ao chunk
         public int baseHeight;
         public int heightVariation;
         public float offsetX;
@@ -123,6 +135,10 @@ public static class MeshGenerator
             NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.Temp);
             PopulateVoxels(heightCache, blockTypes, solids);
 
+            // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
+            ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
+
+
             // Passo 2.5: Calcular skylight (vertical fill + BFS propagation)
             NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             CalculateSkylight(blockTypes, solids, sunlight, voxelSizeX, voxelSizeZ);
@@ -135,6 +151,36 @@ public static class MeshGenerator
             heightCache.Dispose();
             blockTypes.Dispose();
             solids.Dispose();
+        }
+        private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
+        {
+            if (blockEdits.Length == 0) return;
+
+            int border = 1;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int baseWorldX = coord.x * SizeX;
+            int baseWorldZ = coord.y * SizeZ;
+
+            for (int i = 0; i < blockEdits.Length; i++)
+            {
+                var e = blockEdits[i];
+                int localX = e.x - baseWorldX; // 0..15 expected
+                int localZ = e.z - baseWorldZ;
+                int y = e.y;
+
+                int internalX = localX + border;
+                int internalZ = localZ + border;
+
+                if (internalX >= 0 && internalX < voxelSizeX && y >= 0 && y < SizeY && internalZ >= 0 && internalZ < voxelSizeZ)
+                {
+                    int idx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
+                    BlockType bt = (BlockType)math.clamp(e.type, 0, 255);
+                    blockTypes[idx] = bt;
+                    // atualizar solid flag a partir do mapping
+                    BlockTextureMapping mapping = blockMappings[(int)bt];
+                    solids[idx] = mapping.isSolid;
+                }
+            }
         }
 
         private NativeArray<int> GenerateHeightCache()
@@ -257,6 +303,10 @@ public static class MeshGenerator
                             else if (y > h - 4)
                             {
                                 bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                            }
+                            else if (y <= 2)
+                            {
+                                bt = BlockType.Bedrock;
                             }
                             else
                             {
