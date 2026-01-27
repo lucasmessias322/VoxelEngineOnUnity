@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -12,14 +13,6 @@ public static class MeshGenerator
     private const int SizeY = 256;
     private const int SizeZ = 16;
 
-    // Subchunk config
-    private const int SubChunkSize = 16; // 16 high -> 256/16 = 16 subchunks
-    public const int SubChunkCountY = SizeY / SubChunkSize;
-
-    // Ajuste de border: aumentamos para 2 para reduzir seams quando chunks vizinhos ainda não existem.
-    private const int Border = 2;
-
-    // assinatura modificada: adiciona `targetSubchunk`
     public static void ScheduleMeshJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
@@ -37,20 +30,14 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
-        NativeArray<VoxelOverride> overrides, // já tinha
-        int targetSubchunk, // <-- novo: -1 = rebuild full chunk; >=0 = only that subchunk
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,
-        out NativeList<byte> vertexSubchunkIds,
-        out NativeArray<int> surfaceSubY,
-        out NativeArray<byte> voxelBytes
+       out NativeList<byte> vertexLights  // Novo: adicione isso
     )
-
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
@@ -62,11 +49,8 @@ public static class MeshGenerator
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // 4 vértices por face
-        vertexSubchunkIds = new NativeList<byte>(4096 * 4, Allocator.Persistent); // 4 ids por face
-        surfaceSubY = new NativeArray<int>(1, Allocator.Persistent);
-        // 🔥 AQUI ESTÁ O PONTO-CHAVE PARA OS COLLIDERS
-        voxelBytes = new NativeArray<byte>(SizeX * SizeY * SizeZ, Allocator.Persistent);
+        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
+
         var job = new ChunkMeshJob
         {
             coord = coord,
@@ -85,17 +69,12 @@ public static class MeshGenerator
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
-            overrides = overrides, // 🔥
-            targetSubchunk = targetSubchunk, // <-- atribui aqui
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
             uvs = uvs,
             normals = normals,
-            vertexLights = vertexLights,  // atribui ao job
-            vertexSubchunkIds = vertexSubchunkIds,
-            surfaceSubY = surfaceSubY,
-            voxelBytes = voxelBytes
+            vertexLights = vertexLights  // Novo: atribua ao job
         };
 
         handle = job.Schedule();
@@ -121,8 +100,6 @@ public static class MeshGenerator
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
-        [ReadOnly] public NativeArray<VoxelOverride> overrides;
-        public int targetSubchunk; // -1 = all, >=0 = only that subchunk
 
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
@@ -130,19 +107,16 @@ public static class MeshGenerator
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
-        public NativeList<byte> vertexSubchunkIds; // 0..15 por vértice
-        public NativeArray<int> surfaceSubY;
-        public NativeArray<byte> voxelBytes;
+
         public void Execute()
         {
-            // Passo 1: Gerar heightCache (flattened) — agora cobrimos o padding (Border)
+            // Passo 1: Gerar heightCache (flattened)
             NativeArray<int> heightCache = GenerateHeightCache();
-            CalculateSurfaceSubY(heightCache); // 👈 AQUI
+
             // Passo 2: Popular voxels (blockTypes e solids, flattened)
-            const int border = Border;
+            const int border = 1;
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int planeSize = voxelSizeX * SizeY;
             int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
 
             NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.Temp);
@@ -153,96 +127,31 @@ public static class MeshGenerator
             NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             CalculateSkylight(blockTypes, solids, sunlight, voxelSizeX, voxelSizeZ);
 
-            // 🔥 PASSO CRÍTICO: aplicar overrides DO JOGADOR
-            if (overrides.IsCreated)
-            {
-                int voxelPlaneSize = voxelSizeX * SizeY;
-
-                for (int i = 0; i < overrides.Length; i++)
-                {
-                    var ov = overrides[i];
-
-                    int lx = ov.index % SizeX;
-                    int ly = (ov.index / SizeX) % SizeY;
-                    int lz = ov.index / (SizeX * SizeY);
-
-                    int ix = lx + border;
-                    int iz = lz + border;
-
-                    int voxelIdx = ix + ly * voxelSizeX + iz * voxelPlaneSize;
-
-                    blockTypes[voxelIdx] = (BlockType)ov.value;
-                    solids[voxelIdx] = blockMappings[(int)ov.value].isSolid;
-                }
-            }
-
-
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
             GenerateMesh(heightCache, blockTypes, solids, sunlight);
-            for (int x = 0; x < SizeX; x++)
-            {
-                for (int z = 0; z < SizeZ; z++)
-                {
-                    for (int y = 0; y < SizeY; y++)
-                    {
-                        int src = (x + border) + y * voxelSizeX + (z + border) * planeSize;
-                        int dst = x + y * SizeX + z * (SizeX * SizeY);
-                        voxelBytes[dst] = (byte)blockTypes[src];
-                    }
-                }
-            }
+
             // Limpeza
             sunlight.Dispose();
             heightCache.Dispose();
             blockTypes.Dispose();
             solids.Dispose();
         }
-        private void CalculateSurfaceSubY(NativeArray<int> heightCache)
-        {
-            const int border = Border;
-            int heightStride = SizeX + 2 * border;
-
-            int maxSurfaceY = 0;
-
-            // ⚠️ IMPORTANTÍSSIMO:
-            // percorre SOMENTE a área útil do chunk (sem o border)
-            for (int x = 0; x < SizeX; x++)
-            {
-                for (int z = 0; z < SizeZ; z++)
-                {
-                    int idx =
-                        (x + border) +
-                        (z + border) * heightStride;
-
-                    int h = heightCache[idx];
-                    if (h > maxSurfaceY)
-                        maxSurfaceY = h;
-                }
-            }
-
-            int subY = maxSurfaceY / SubChunkSize;
-            subY = math.clamp(subY, 0, SubChunkCountY - 1);
-
-            surfaceSubY[0] = subY;
-        }
 
         private NativeArray<int> GenerateHeightCache()
         {
-            const int border = Border;
-            int heightSizeX = SizeX + 2 * border;
-            int heightSizeZ = SizeZ + 2 * border;
+            const int heightSizeX = SizeX + 2;
+            const int heightSizeZ = SizeZ + 2;
             NativeArray<int> heightCache = new NativeArray<int>(heightSizeX * heightSizeZ, Allocator.Temp);
             int heightStride = heightSizeX;
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
 
-            // Looping de lx/lz cobrindo o padding -border .. SizeX+border-1
-            for (int lx = -border; lx <= SizeX + border - 1; lx++)
+            for (int lx = -1; lx <= SizeX; lx++)
             {
-                for (int lz = -border; lz <= SizeZ + border - 1; lz++)
+                for (int lz = -1; lz <= SizeZ; lz++)
                 {
-                    int cacheIdx = (lx + border) + (lz + border) * heightStride;
+                    int cacheIdx = (lx + 1) + (lz + 1) * heightStride;
                     int worldX = baseWorldX + lx;
                     int worldZ = baseWorldZ + lz;
 
@@ -314,11 +223,11 @@ public static class MeshGenerator
 
         private void PopulateVoxels(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
-            const int border = Border;
+            const int border = 1;
             const int voxelSizeX = SizeX + 2 * border;
             const int voxelSizeZ = SizeZ + 2 * border;
             const int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
+            const int heightStride = SizeX + 2;
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
@@ -541,6 +450,8 @@ public static class MeshGenerator
                         {
                             sunlight[idx] = light;
                         }
+
+                        sunlight[idx] = light;
                     }
                 }
             }
@@ -643,20 +554,11 @@ public static class MeshGenerator
 
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> sunlight)
         {
-            const int border = Border;
+            const int border = 1;
             const int voxelSizeX = SizeX + 2 * border;
             const int voxelSizeZ = SizeZ + 2 * border;
             const int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
-
-            // Calcular faixa Y que vamos gerar
-            int yStart = 0;
-            int yEnd = SizeY - 1;
-            if (targetSubchunk >= 0)
-            {
-                yStart = targetSubchunk * SubChunkSize;
-                yEnd = math.min(yStart + SubChunkSize - 1, SizeY - 1);
-            }
+            const int heightStride = SizeX + 2;
 
             NativeArray<Vector3Int> faceChecks = new NativeArray<Vector3Int>(6, Allocator.Temp);
             faceChecks[0] = new Vector3Int(0, 0, 1);
@@ -667,6 +569,7 @@ public static class MeshGenerator
             faceChecks[5] = new Vector3Int(-1, 0, 0);
 
             NativeArray<Vector3> faceVerts = new NativeArray<Vector3>(24, Allocator.Temp);
+            // ... (mesmas definições de faceVerts do seu código original)
             // Frente (dir 0)
             faceVerts[0] = new Vector3(0, 0, 1);
             faceVerts[1] = new Vector3(1, 0, 1);
@@ -702,11 +605,11 @@ public static class MeshGenerator
             {
                 for (int z = 0; z < SizeZ; z++)
                 {
-                    int cacheIdx = (x + border) + (z + border) * heightStride;
+                    int cacheIdx = (x + 1) + (z + 1) * heightStride;
                     int h = heightCache[cacheIdx];
                     int maxY = math.max(h, (int)seaLevel);
 
-                  for (int y = yStart; y <= yEnd; y++)
+                    for (int y = 0; y <= maxY; y++)
                     {
                         int internalX = x + border;
                         int internalZ = z + border;
@@ -758,7 +661,6 @@ public static class MeshGenerator
 
                                 float waterOffset = 0.15f;
 
-                                // Adiciona vértices da face
                                 for (int i = 0; i < 4; i++)
                                 {
                                     Vector3 vertPos = new Vector3(x, y, z) + faceVerts[dir * 4 + i];
@@ -781,74 +683,18 @@ public static class MeshGenerator
                                     vertices.Add(vertPos);
                                 }
 
-                                // compute subchunk index based on voxel Y (0..255)
-                                int subchunkIndex = y / SubChunkSize;
-                                subchunkIndex = math.clamp(subchunkIndex, 0, SubChunkCountY - 1);
+                                // registrar luz por vértice (mesmo valor por face)
+                                int lightIdx = voxelIdx +
+                check.x +
+                check.y * voxelSizeX +
+                check.z * voxelPlaneSize;
 
-                                // --- Suavização por vértice: média de 4 amostras em XZ (mesma Y) ---
-                                for (int vi = 0; vi < 4; vi++)
-                                {
-                                    Vector3 lv = faceVerts[dir * 4 + vi];
+                                byte lightVal = sunlight[lightIdx];
 
-                                    // coordenadas do vértice em espaço de voxels (inteiros)
-                                    // se lv.x > 0.5 -> usamos o lado +1; caso contrário usamos o lado 0
-                                    int vx = internalX + (lv.x > 0.5f ? 1 : 0);
-                                    int vz = internalZ + (lv.z > 0.5f ? 1 : 0);
-                                    int vy = y + (lv.y > 0.5f ? 1 : 0);
-
-                                    // amostras ao redor do canto em XZ (mantendo Y)
-                                    int s0x = vx;
-                                    int s0z = vz;
-
-                                    int s1x = vx - 1;
-                                    int s1z = vz;
-
-                                    int s2x = vx;
-                                    int s2z = vz - 1;
-
-                                    int s3x = vx - 1;
-                                    int s3z = vz - 1;
-
-                                    // clamp coordenadas para ficar dentro do array sunlight
-                                    s0x = math.clamp(s0x, 0, voxelSizeX - 1);
-                                    s1x = math.clamp(s1x, 0, voxelSizeX - 1);
-                                    s2x = math.clamp(s2x, 0, voxelSizeX - 1);
-                                    s3x = math.clamp(s3x, 0, voxelSizeX - 1);
-
-                                    int cy = math.clamp(vy, 0, SizeY - 1);
-
-                                    s0z = math.clamp(s0z, 0, voxelSizeZ - 1);
-                                    s1z = math.clamp(s1z, 0, voxelSizeZ - 1);
-                                    s2z = math.clamp(s2z, 0, voxelSizeZ - 1);
-                                    s3z = math.clamp(s3z, 0, voxelSizeZ - 1);
-
-                                    int sampleIdx0 = s0x + cy * voxelSizeX + s0z * voxelPlaneSize;
-                                    int sampleIdx1 = s1x + cy * voxelSizeX + s1z * voxelPlaneSize;
-                                    int sampleIdx2 = s2x + cy * voxelSizeX + s2z * voxelPlaneSize;
-                                    int sampleIdx3 = s3x + cy * voxelSizeX + s3z * voxelPlaneSize;
-
-                                    byte a = sunlight[sampleIdx0];
-                                    byte b = sunlight[sampleIdx1];
-                                    byte c = sunlight[sampleIdx2];
-                                    byte d = sunlight[sampleIdx3];
-
-                                    int ia = a;
-                                    int ib = b;
-                                    int ic = c;
-                                    int id = d;
-
-                                    int min = math.min(math.min(ia, ib), math.min(ic, id));
-                                    int max = math.max(math.max(ia, ib), math.max(ic, id));
-
-                                    int vert = (ia + ib + ic + id + max) / 5;
-
-
-                                    byte vertLight = (byte)vert;
-
-                                    // store vertex light and subchunk id for each vertex
-                                    vertexLights.Add(vertLight);
-                                    vertexSubchunkIds.Add((byte)subchunkIndex);
-                                }
+                                vertexLights.Add(lightVal);
+                                vertexLights.Add(lightVal);
+                                vertexLights.Add(lightVal);
+                                vertexLights.Add(lightVal);
 
                                 // UVs
                                 BlockFace face = (dir == 2) ? BlockFace.Top : (dir == 3) ? BlockFace.Bottom : BlockFace.Side;
@@ -908,8 +754,6 @@ public static class MeshGenerator
                             }
                         }
                     }
-              
-              
                 }
             }
 
@@ -952,10 +796,4 @@ public class MeshBuildResult
         uvs = u;
         normals = n;
     }
-}
-
-public struct VoxelOverride
-{
-    public int index;
-    public byte value;
 }

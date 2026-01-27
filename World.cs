@@ -23,19 +23,10 @@ public struct WarpLayer
 public class World : MonoBehaviour
 {
     public static World Instance { get; private set; }
-    public Camera mainCamera;
 
     public Transform player;
     public GameObject chunkPrefab;
-    public int collisionDistance = 2; // em chunks
-
-    [Header("Render Distance")]
-    public int chunkRenderDistance = 8;
-
-    // Bedrock-style vertical subchunk culling
-    public int subchunkRenderUp = 2;
-    public int subchunkRenderDown = 1;
-
+    public int renderDistance = 4;
     public int poolSize = 200;
 
     [Header("Atlas / Material")]
@@ -86,20 +77,17 @@ public class World : MonoBehaviour
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
-        public NativeList<byte> subchunkIds; // novo: id do subchunk por vértice
-        public NativeArray<int> surfaceSubY; // <-- adicionar isso
         public Vector2Int coord;
         public int expectedGen;
-        // 🔥 NOVO – voxels do chunk (para collider)
-        public NativeArray<byte> voxelBytes;
-        public NativeArray<VoxelOverride> overrides;
     }
 
-    private Vector2Int lastPlayerChunk;
 
     private void Start()
     {
         Instance = this;
+
+        // garante dicionário inicializado
+        if (blockData != null) blockData.InitializeDictionary();
 
         // offsets base a partir do seed (aplicado globalmente por segurança)
         offsetX = seed * 17.123f;
@@ -244,245 +232,54 @@ public class World : MonoBehaviour
         UpdateChunks();
 
         int applied = 0;
-
         for (int i = pendingMeshes.Count - 1; i >= 0 && applied < maxMeshAppliesPerFrame; i--)
         {
             var pm = pendingMeshes[i];
-            if (!pm.handle.IsCompleted) continue;
-
-            pm.handle.Complete();
-
-            // --- Primeiro: obtemos o chunk ativo (se existir) ---
-            Chunk activeChunk;
-            bool chunkExists = activeChunks.TryGetValue(pm.coord, out activeChunk) && activeChunk.generation == pm.expectedGen;
-            // dentro do loop pendingMeshes, substitua a parte de pm.voxelBytes por isto:
-            if (pm.voxelBytes.IsCreated)
+            if (pm.handle.IsCompleted)
             {
-                int sx = Chunk.SizeX;
-                int sy = Chunk.SizeY;
-                int sz = Chunk.SizeZ;
-
-                // converte flattened -> 3D [x,y,z]
-                // World.cs — dentro do processamento do PendingMesh
-                byte[,,] voxelData = new byte[sx, sy, sz];
-
-                for (int x = 0; x < sx; x++)
-                    for (int y = 0; y < sy; y++)
-                        for (int z = 0; z < sz; z++)
-                        {
-                            int idx = x + y * sx + z * (sx * sy);
-                            voxelData[x, y, z] = pm.voxelBytes[idx];
-                        }
-
-                // Tente obter o chunk (independente de generation) para reaplicar overrides no estado interno
-                if (activeChunks.TryGetValue(pm.coord, out var chunkForVoxel))
+                pm.handle.Complete();
+                // if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
+                // {
+                //     activeChunk.ApplyMeshData(pm.vertices.AsArray(), pm.opaqueTriangles.AsArray(), pm.waterTriangles.AsArray(), pm.uvs.AsArray(), pm.normals.AsArray());
+                //     activeChunk.gameObject.SetActive(true);
+                //     applied++;
+                // }
+                // // Dispose NativeLists
+                // pm.vertices.Dispose();
+                // pm.opaqueTriangles.Dispose();
+                // pm.waterTriangles.Dispose();
+                // pm.uvs.Dispose();
+                // pm.normals.Dispose();
+                // pendingMeshes.RemoveAt(i);
+                if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
                 {
-                    if (chunkForVoxel.overrides != null && chunkForVoxel.overrides.Count > 0)
-                    {
-                        foreach (var kv in chunkForVoxel.overrides)
-                        {
-                            int flat = kv.Key;
-                            byte val = kv.Value;
-
-                            int lx = flat % Chunk.SizeX;
-                            int ly = (flat / Chunk.SizeX) % Chunk.SizeY;
-                            int lz = flat / (Chunk.SizeX * Chunk.SizeY);
-
-                            if (lx >= 0 && lx < Chunk.SizeX && ly >= 0 && ly < Chunk.SizeY && lz >= 0 && lz < Chunk.SizeZ)
-                                voxelData[lx, ly, lz] = val;
-                        }
-                        Debug.Log($"Applied {chunkForVoxel.overrides.Count} overrides to voxelData for chunk {pm.coord}");
-                    }
-
-                    // Só setamos voxelData no chunk se o chunk ainda é o alvo lógico (não null)
-                    chunkForVoxel.SetVoxelData(voxelData);
-                }
-                else
-                {
-                    // chunk foi descarregado enquanto o job rodava, mas devemos descartar os dados de todo modo
-                    Debug.Log($"pm.voxelBytes: chunk {pm.coord} not active when job completed. Discarding voxelData.");
+                    // NOVA ASSINATURA: ApplyMeshData(..., NativeArray<byte> vertexLights)
+                    activeChunk.ApplyMeshData(
+                        pm.vertices.AsArray(),
+                        pm.opaqueTriangles.AsArray(),
+                        pm.waterTriangles.AsArray(),
+                        pm.uvs.AsArray(),
+                        pm.normals.AsArray(),
+                        pm.lightValues.AsArray()
+                    );
+                    activeChunk.gameObject.SetActive(true);
+                    applied++;
                 }
 
-                // pm.voxelBytes.Dispose();
-            }
+                // Dispose NativeLists (inclui lightValues)
+                pm.vertices.Dispose();
+                pm.opaqueTriangles.Dispose();
+                pm.waterTriangles.Dispose();
+                pm.uvs.Dispose();
+                pm.normals.Dispose();
+                pm.lightValues.Dispose(); // novo: limpar o NativeList<byte>
+                pendingMeshes.RemoveAt(i);
 
-            // --- 2) Agora, se o chunk existe, aplique o mesh (split por subchunk) ---
-            if (chunkExists)
-            {
-                int subCount = MeshGenerator.SubChunkCountY;
-
-                List<Vector3>[] verts = new List<Vector3>[subCount];
-                List<Vector2>[] uvs = new List<Vector2>[subCount];
-                List<Vector3>[] norms = new List<Vector3>[subCount];
-                List<byte>[] lights = new List<byte>[subCount];
-                List<int>[] opaqueTris = new List<int>[subCount];
-                List<int>[] waterTris = new List<int>[subCount];
-                Dictionary<int, int>[] remap = new Dictionary<int, int>[subCount];
-
-                for (int s = 0; s < subCount; s++)
-                {
-                    verts[s] = new List<Vector3>(); uvs[s] = new List<Vector2>(); norms[s] = new List<Vector3>(); lights[s] = new List<byte>();
-                    opaqueTris[s] = new List<int>(); waterTris[s] = new List<int>(); remap[s] = new Dictionary<int, int>();
-                }
-
-                for (int vi = 0; vi < pm.vertices.Length; vi++)
-                {
-                    byte sid = pm.subchunkIds[vi];
-                    int s = sid;
-                    int newIndex = verts[s].Count;
-                    remap[s][vi] = newIndex;
-                    verts[s].Add(pm.vertices[vi]);
-                    uvs[s].Add(pm.uvs[vi]);
-                    norms[s].Add(pm.normals[vi]);
-                    lights[s].Add(pm.lightValues[vi]);
-                }
-
-                for (int t = 0; t < pm.opaqueTriangles.Length; t += 3)
-                {
-                    int a = pm.opaqueTriangles[t + 0];
-                    int b = pm.opaqueTriangles[t + 1];
-                    int c = pm.opaqueTriangles[t + 2];
-                    byte sid = pm.subchunkIds[a];
-                    int s = sid;
-                    int ra = remap[s][a];
-                    int rb = remap[s][b];
-                    int rc = remap[s][c];
-                    opaqueTris[s].Add(ra); opaqueTris[s].Add(rb); opaqueTris[s].Add(rc);
-                }
-
-                for (int t = 0; t < pm.waterTriangles.Length; t += 3)
-                {
-                    int a = pm.waterTriangles[t + 0];
-                    int b = pm.waterTriangles[t + 1];
-                    int c = pm.waterTriangles[t + 2];
-                    byte sid = pm.subchunkIds[a];
-                    int s = sid;
-                    int ra = remap[s][a];
-                    int rb = remap[s][b];
-                    int rc = remap[s][c];
-                    waterTris[s].Add(ra); waterTris[s].Add(rb); waterTris[s].Add(rc);
-                }
-
-                bool anyActive = false;
-                for (int s = 0; s < subCount; s++)
-                {
-                    if (verts[s].Count == 0)
-                    {
-                        activeChunk.ApplySubChunkMeshData(s, null, null, null, null, null, null);
-                        continue;
-                    }
-
-                    anyActive = true;
-                    Vector3[] aVerts = verts[s].ToArray();
-                    Vector2[] aUVs = uvs[s].ToArray();
-                    Vector3[] aNorms = norms[s].ToArray();
-                    byte[] aLights = lights[s].ToArray();
-                    int[] aOpaque = opaqueTris[s].ToArray();
-                    int[] aWater = waterTris[s].ToArray();
-
-                    activeChunk.ApplySubChunkMeshData(s, aVerts, aOpaque, aWater, aUVs, aNorms, aLights);
-                }
-
-                activeChunk.gameObject.SetActive(anyActive);
-                if (pm.surfaceSubY.IsCreated)
-                    activeChunk.surfaceSubY = pm.surfaceSubY[0];
-
-                applied++;
-            }
-
-            // --- 3) dispose de todos os NativeLists/Arrays (sempre) ---
-            pm.vertices.Dispose();
-            pm.opaqueTriangles.Dispose();
-            pm.waterTriangles.Dispose();
-            pm.uvs.Dispose();
-            pm.normals.Dispose();
-            pm.lightValues.Dispose();
-            pm.subchunkIds.Dispose();
-            if (pm.overrides.IsCreated) pm.overrides.Dispose();
-            if (pm.surfaceSubY.IsCreated) pm.surfaceSubY.Dispose();
-            if (pm.voxelBytes.IsCreated) pm.voxelBytes.Dispose();
-            // remover da lista
-            pendingMeshes.RemoveAt(i);
-        }
-        Vector2Int currentChunk = WorldToChunk(player.position);
-
-        if (currentChunk != lastPlayerChunk)
-        {
-            UpdateChunkColliders(player.position);
-            lastPlayerChunk = currentChunk;
-        }
-
-    }
-
-
-    private void LateUpdate()
-    {
-        Plane[] planes = GeometryUtility.CalculateFrustumPlanes(Camera.main);
-
-        int playerSubY = Mathf.FloorToInt(player.position.y / Chunk.SubChunkSize);
-
-        foreach (var kv in activeChunks)
-        {
-            Chunk chunk = kv.Value;
-
-            chunk.UpdateSubchunkVisibilityBedrock(
-                playerSubY,
-                chunk.surfaceSubY,
-                subchunkRenderUp,
-                subchunkRenderDown,
-                planes
-            );
-        }
-    }
-
-    void Awake()
-    {   // garante dicionário inicializado
-        if (blockData != null) blockData.InitializeDictionary();
-        InitBlockCaches();
-    }
-
-
-
-    void InitBlockCaches()
-    {
-        int count = System.Enum.GetValues(typeof(BlockType)).Length;
-
-        BlockDataSO.IsSolidCache = new bool[count];
-        BlockDataSO.IsEmptyCache = new bool[count];
-
-        foreach (var mapping in blockData.blockTextures)
-        {
-            int id = (int)mapping.blockType;
-            BlockDataSO.IsSolidCache[id] = mapping.isSolid;
-            BlockDataSO.IsEmptyCache[id] = mapping.isEmpty;
-        }
-    }
-    void UpdateChunkColliders(Vector3 playerPos)
-    {
-        Vector2Int playerChunk = WorldToChunk(playerPos);
-
-        foreach (var chunk in activeChunks.Values)
-
-        {
-            int dist = DistanceInChunks(chunk.coord, playerChunk);
-
-            if (dist <= collisionDistance)
-            {
-                chunk.EnableColliders();
-            }
-            else
-            {
-                chunk.DisableColliders();
             }
         }
     }
-    Vector2Int WorldToChunk(Vector3 pos)
-    {
-        return new Vector2Int(
-            Mathf.FloorToInt(pos.x / Chunk.SizeX),
-            Mathf.FloorToInt(pos.z / Chunk.SizeZ)
-        );
-    }
+
+
 
     private void UpdateChunks()
     {
@@ -493,9 +290,9 @@ public class World : MonoBehaviour
 
         HashSet<Vector2Int> needed = new HashSet<Vector2Int>();
 
-        for (int x = -chunkRenderDistance; x <= chunkRenderDistance; x++)
+        for (int x = -renderDistance; x <= renderDistance; x++)
         {
-            for (int z = -chunkRenderDistance; z <= chunkRenderDistance; z++)
+            for (int z = -renderDistance; z <= renderDistance; z++)
             {
                 Vector2Int coord = new Vector2Int(playerChunk.x + x, playerChunk.y + z);
                 needed.Add(coord);
@@ -555,257 +352,6 @@ public class World : MonoBehaviour
         }
         foreach (var r in toRemove) activeChunks.Remove(r);
     }
-    int DistanceInChunks(Vector2Int a, Vector2Int b)
-    {
-        return Mathf.Max(Mathf.Abs(a.x - b.x), Mathf.Abs(a.y - b.y));
-    }
-    // Em World.cs — adicione este método na classe World
-    public bool IsSolidAtWorld(int wx, int wy, int wz)
-    {
-        // transforma coords de mundo (inteiras) para chunk + local
-        int cx = Mathf.FloorToInt((float)wx / Chunk.SizeX);
-        int cz = Mathf.FloorToInt((float)wz / Chunk.SizeZ);
-        Vector2Int coord = new Vector2Int(cx, cz);
-
-        if (!activeChunks.TryGetValue(coord, out var chunk))
-            return false; // chunk não carregado -> assume vazio para evitar colisões inesperadas
-
-        if (chunk.voxelData == null) return false;
-
-        int localX = wx - cx * Chunk.SizeX;
-        if (localX < 0) localX += Chunk.SizeX;
-
-        int localZ = wz - cz * Chunk.SizeZ;
-        if (localZ < 0) localZ += Chunk.SizeZ;
-
-        int localY = wy;
-
-        if (localX < 0 || localX >= Chunk.SizeX ||
-            localY < 0 || localY >= Chunk.SizeY ||
-            localZ < 0 || localZ >= Chunk.SizeZ)
-            return false;
-
-        byte block = chunk.voxelData[localX, localY, localZ];
-        return BlockDataSO.IsSolidCache[block];
-    }
-
-    public bool SetBlockAtWorld(int wx, int wy, int wz, BlockType newType)
-    {
-        int cx = Mathf.FloorToInt((float)wx / Chunk.SizeX);
-        int cz = Mathf.FloorToInt((float)wz / Chunk.SizeZ);
-        Vector2Int coord = new Vector2Int(cx, cz);
-
-        if (!activeChunks.TryGetValue(coord, out var chunk))
-        {
-            Debug.Log($"SetBlockAtWorld FAIL: chunk {coord} not loaded.");
-            return false;
-        }
-
-        if (chunk.voxelData == null)
-        {
-            Debug.Log($"SetBlockAtWorld FAIL: chunk.voxelData == null for {coord}");
-            return false;
-        }
-
-        int localX = wx - cx * Chunk.SizeX;
-        if (localX < 0) localX += Chunk.SizeX;
-        int localZ = wz - cz * Chunk.SizeZ;
-        if (localZ < 0) localZ += Chunk.SizeZ;
-        int localY = wy;
-
-        if (localX < 0 || localX >= Chunk.SizeX ||
-            localY < 0 || localY >= Chunk.SizeY ||
-            localZ < 0 || localZ >= Chunk.SizeZ)
-        {
-            Debug.Log($"SetBlockAtWorld FAIL: local out of range {localX},{localY},{localZ}");
-            return false;
-        }
-
-        // escrever no voxelData local (colisões imediatas)
-        try
-        {
-            chunk.voxelData[localX, localY, localZ] = (byte)newType;
-        }
-        catch (Exception ex)
-        {
-            Debug.LogError($"SetBlockAtWorld: erro ao escrever voxelData: {ex}");
-            return false;
-        }
-
-        // registrar override
-        int key = Chunk.ToIndex(localX, localY, localZ);
-        if (chunk.overrides == null) chunk.overrides = new Dictionary<int, byte>();
-        chunk.overrides[key] = (byte)newType;
-
-        Debug.Log($"SetBlockAtWorld: set {wx},{wy},{wz} -> local {localX},{localY},{localZ} key {key} type {newType}. OverridesCount={chunk.overrides.Count}");
-
-        // rebuild sync do collider do subchunk afetado para evitar 'hit' antigo
-        int worldY = wy;
-        int subIdxForChunk = localY / Chunk.SubChunkSize;
-
-        // lista de subchunks que precisam rebuild
-        List<int> subChunksToRebuild = new List<int>();
-        subChunksToRebuild.Add(subIdxForChunk);
-
-        // se o bloco está no limite inferior do subchunk → rebuild abaixo
-        if (localY % Chunk.SubChunkSize == 0 && subIdxForChunk > 0)
-        {
-            subChunksToRebuild.Add(subIdxForChunk - 1);
-        }
-
-        // se o bloco está no limite superior → rebuild acima
-        if (localY % Chunk.SubChunkSize == Chunk.SubChunkSize - 1 &&
-            subIdxForChunk < Chunk.SubChunkCountY - 1)
-        {
-            subChunksToRebuild.Add(subIdxForChunk + 1);
-        }
-
-
-        // rebuild sync do collider do subchunk afetado (no chunk local)
-        if (chunk.subChunks != null && subIdxForChunk >= 0 && subIdxForChunk < chunk.subChunks.Length)
-        {
-            chunk.subChunks[subIdxForChunk].collidersBuilt = false;
-            chunk.RebuildCollidersForSubchunk(subIdxForChunk);
-            Debug.Log($"RebuildCollidersForSubchunk called for chunk {coord} subIdx {subIdxForChunk}. Current colliders: {(chunk.subChunks[subIdxForChunk].aabbColliders != null ? chunk.subChunks[subIdxForChunk].aabbColliders.Count : 0)}");
-        }
-
-        // schedule mesh jobs para chunk e bordas
-        List<Vector2Int> coordsToUpdate = new List<Vector2Int>() { coord };
-        if (localX == 0) coordsToUpdate.Add(new Vector2Int(cx - 1, cz));
-        if (localX == Chunk.SizeX - 1) coordsToUpdate.Add(new Vector2Int(cx + 1, cz));
-        if (localZ == 0) coordsToUpdate.Add(new Vector2Int(cx, cz - 1));
-        if (localZ == Chunk.SizeZ - 1) coordsToUpdate.Add(new Vector2Int(cx, cz + 1));
-
-        foreach (var ccoord in coordsToUpdate)
-        {
-            if (!activeChunks.TryGetValue(ccoord, out var cchunk)) continue;
-
-            int expectedGen = nextChunkGeneration++;
-            cchunk.generation = expectedGen;
-
-            // Para cada subchunk alvo que precisamos rebuildar (pode ser subIdxForChunk ±1)
-            foreach (int targetSub in subChunksToRebuild)
-            {
-                // construir overrides NativeArray (se houver) — filtrando pelo subIdx correto (targetSub)
-                var list = new List<VoxelOverride>();
-
-                // 1) inclui overrides existentes do próprio chunk alvo (filtrando para o subchunk relevante)
-                if (cchunk.overrides != null && cchunk.overrides.Count > 0)
-                {
-                    foreach (var kv in cchunk.overrides)
-                    {
-                        int flat = kv.Key;
-                        int ly = (flat / Chunk.SizeX) % Chunk.SizeY;
-                        int itemSub = ly / Chunk.SubChunkSize;
-                        if (itemSub == targetSub)
-                        {
-                            list.Add(new VoxelOverride { index = kv.Key, value = kv.Value });
-                        }
-                    }
-                }
-
-                // 2) SE este ccoord for diferente do chunk onde a quebra ocorreu,
-                //    adiciona também um override representando o bloco quebrado traduzido
-                //    para as coords LOCAIS do chunk alvo (isso faz o vizinho "ver" a remoção).
-                if (ccoord != coord)
-                {
-                    // coords do chunk vizinho
-                    int neighborCx = ccoord.x;
-                    int neighborCz = ccoord.y;
-
-                    // delta de chunk entre o vizinho e o chunk original (-1,0,+1)
-                    int dxChunk = neighborCx - coord.x;
-                    int dzChunk = neighborCz - coord.y;
-
-                    // o voxel relevante para o vizinho é o voxel ADJACENTE ao quebrado:
-                    // ex: se vizinho está à esquerda (dxChunk == -1) então adjWorldX = wx - 1
-                    int adjWorldX = wx + dxChunk;
-                    int adjWorldZ = wz + dzChunk;
-                    int adjWorldY = wy;
-
-                    // traduz para coords LOCAIS do chunk vizinho
-                    int localXforNeighbor = adjWorldX - neighborCx * Chunk.SizeX;
-                    int localZforNeighbor = adjWorldZ - neighborCz * Chunk.SizeZ;
-                    int localYforNeighbor = adjWorldY;
-
-                    // somente adiciona se estiver dentro dos limites do chunk alvo e no subchunk alvo
-                    if (localXforNeighbor >= 0 && localXforNeighbor < Chunk.SizeX &&
-                        localYforNeighbor >= 0 && localYforNeighbor < Chunk.SizeY &&
-                        localZforNeighbor >= 0 && localZforNeighbor < Chunk.SizeZ)
-                    {
-                        int neighborSub = localYforNeighbor / Chunk.SubChunkSize;
-                        if (neighborSub == targetSub)
-                        {
-                            int neighborFlat = Chunk.ToIndex(localXforNeighbor, localYforNeighbor, localZforNeighbor);
-                            // newType já é o valor que você escreveu (no seu caso Air)
-                            list.Add(new VoxelOverride { index = neighborFlat, value = (byte)newType });
-                        }
-                    }
-                }
-
-                NativeArray<VoxelOverride> overridesArray;
-                if (list.Count > 0)
-                {
-                    overridesArray = new NativeArray<VoxelOverride>(list.Count, Allocator.TempJob);
-                    for (int i = 0; i < list.Count; i++) overridesArray[i] = list[i];
-                }
-                else
-                {
-                    overridesArray = new NativeArray<VoxelOverride>(0, Allocator.TempJob);
-                }
-
-                MeshGenerator.ScheduleMeshJob(
-                    ccoord,
-                    noiseLayers,
-                    warpLayers,
-                    caveLayers,
-                    blockData.mappings,
-                    baseHeight,
-                    heightVariation,
-                    offsetX,
-                    offsetZ,
-                    atlasTilesX,
-                    atlasTilesY,
-                    true,
-                    seaLevel,
-                    caveThreshold,
-                    caveStride,
-                    maxCaveDepthMultiplier,
-                    overridesArray,
-                    targetSub, // subchunk alvo (agora usa targetSub)
-                    out JobHandle handle,
-                    out NativeList<Vector3> vertices,
-                    out NativeList<int> opaqueTriangles,
-                    out NativeList<int> waterTriangles,
-                    out NativeList<Vector2> uvs,
-                    out NativeList<Vector3> normals,
-                    out NativeList<byte> vertexLights,
-                    out NativeList<byte> vertexSubchunkIds,
-                    out NativeArray<int> surfaceSubY,
-                    out NativeArray<byte> voxelBytes
-                );
-
-                pendingMeshes.Add(new PendingMesh
-                {
-                    handle = handle,
-                    vertices = vertices,
-                    opaqueTriangles = opaqueTriangles,
-                    waterTriangles = waterTriangles,
-                    uvs = uvs,
-                    normals = normals,
-                    lightValues = vertexLights,
-                    subchunkIds = vertexSubchunkIds,
-                    surfaceSubY = surfaceSubY,
-                    coord = ccoord,
-                    expectedGen = expectedGen,
-                    voxelBytes = voxelBytes,
-                    overrides = overridesArray, // guardamos para dar Dispose() depois
-                });
-            } // end foreach targetSub
-        }
-
-        return true;
-    }
 
     private void RequestChunk(Vector2Int coord)
     {
@@ -824,9 +370,6 @@ public class World : MonoBehaviour
 
         activeChunks.Add(coord, chunk);
 
-        NativeArray<VoxelOverride> emptyOverrides =
-     new NativeArray<VoxelOverride>(0, Allocator.TempJob);
-
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -844,20 +387,14 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
-            emptyOverrides,
-    -1, // 🔥 FULL CHUNK BUILD
-    out JobHandle handle,
+            out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-            out NativeList<byte> vertexLights,
-            out NativeList<byte> vertexSubchunkIds,
-            out NativeArray<int> surfaceSubY,
-            out NativeArray<byte> voxelBytes
+             out NativeList<byte> vertexLights // novo out
         );
-
 
         pendingMeshes.Add(new PendingMesh
         {
@@ -868,15 +405,9 @@ public class World : MonoBehaviour
             uvs = uvs,
             normals = normals,
             lightValues = vertexLights,  // Novo
-            subchunkIds = vertexSubchunkIds,
-            surfaceSubY = surfaceSubY, // <-- guardar aqui
             coord = coord,
-            expectedGen = expectedGen,
-            voxelBytes = voxelBytes, // 🔥 AQUI
-            overrides = emptyOverrides
-
+            expectedGen = expectedGen
         });
     }
-
 
 }
