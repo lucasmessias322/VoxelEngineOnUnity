@@ -20,6 +20,19 @@ public struct WarpLayer
     public float maxAmp;      // Precomputado, como em NoiseLayer
 }
 
+[Serializable]
+public struct TreeSettings
+{
+    public int minHeight;
+    public int maxHeight;
+
+    public int canopyRadius;
+    public int canopyHeight;
+
+    public int minSpacing; // distância mínima entre árvores (em blocos)
+    public float density;  // 0..1 probabilidade por célula
+}
+
 public class World : MonoBehaviour
 {
     public static World Instance { get; private set; }
@@ -36,12 +49,13 @@ public class World : MonoBehaviour
 
     [Header("Noise Settings")]
     public NoiseLayer[] noiseLayers; // agora configurável no inspector (várias layers)
-                                     // No topo da classe World, após warpLayers:
+
     [Header("Cave Settings")]
     public NoiseLayer[] caveLayers;
     public float caveThreshold = 0.58f; // Aumente um pouco (+0.03) para compensar interpolação
     public int caveStride = 4; // 3-5x mais rápido! 1=original, 4=suave e rápido como Bedrock
     public int maxCaveDepthMultiplier = 1; // Limite: cavernas só até seaLevel * isso
+
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers; // Configurável no inspector (ex.: 1-2 layers para warping em X/Z)
     public int baseHeight = 64;
@@ -69,6 +83,7 @@ public class World : MonoBehaviour
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
     // Adicionar no topo da classe:
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
+
     private struct PendingMesh
     {
         public JobHandle handle;
@@ -79,9 +94,13 @@ public class World : MonoBehaviour
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
         public NativeArray<MeshGenerator.BlockEdit> edits;
+        public NativeArray<MeshGenerator.TreeInstance> trees; // NEW: árvores aplicadas no job
         public Vector2Int coord;
         public int expectedGen;
     }
+
+    [Header("Tree Settings")]
+    public TreeSettings treeSettings;
 
     void Awake()
     {
@@ -92,13 +111,10 @@ public class World : MonoBehaviour
         }
 
         Instance = this;
-
     }
 
     private void Start()
     {
-
-
         // garante dicionário inicializado
         if (blockData != null) blockData.InitializeDictionary();
 
@@ -111,7 +127,6 @@ public class World : MonoBehaviour
         {
             for (int i = 0; i < noiseLayers.Length; i++)
             {
-
                 NoiseLayer layer = noiseLayers[i];
                 if (!layer.enabled) continue;
                 // Defaults Bedrock-like para superfície
@@ -125,7 +140,6 @@ public class World : MonoBehaviour
                 if (layer.ridgeFactor <= 0f) layer.ridgeFactor = 1f + i * 0.2f; // Ridge crescente para details
 
                 // se offset não definido, atribui um offset derivado do seed + index para variação entre layers
-
                 if (layer.offset == Vector2.zero)
                 {
                     layer.offset = new Vector2(offsetX + i * 13.37f, offsetZ + i * 7.53f);
@@ -160,7 +174,6 @@ public class World : MonoBehaviour
                 if (layer.amplitude <= 0f) layer.amplitude = 28f; // Dist ~50 blocks
 
                 // Garantir valores seguros
-
                 if (layer.octaves <= 0) layer.octaves = 1;
                 if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
                 if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
@@ -205,7 +218,6 @@ public class World : MonoBehaviour
                 if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
                 if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
 
-
                 if (layer.offset == Vector2.zero)
                 {
                     layer.offset = new Vector2(offsetX + i * 19.87f, offsetZ + i * 8.76f); // Offsets únicos
@@ -229,7 +241,6 @@ public class World : MonoBehaviour
             }
         }
 
-
         for (int i = 0; i < poolSize; i++)
         {
             GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
@@ -239,6 +250,7 @@ public class World : MonoBehaviour
             chunkPool.Enqueue(chunk);
         }
     }
+
     private void Update()
     {
         UpdateChunks();
@@ -264,18 +276,21 @@ public class World : MonoBehaviour
                     applied++;
                 }
 
+                // dispose NativeLists
                 pm.vertices.Dispose();
                 pm.opaqueTriangles.Dispose();
                 pm.waterTriangles.Dispose();
                 pm.uvs.Dispose();
                 pm.normals.Dispose();
                 pm.lightValues.Dispose();
+
+                // dispose NativeArrays (edits & trees) if created
                 if (pm.edits.IsCreated) pm.edits.Dispose(); // IMPORTANTE: liberar o NativeArray de edits
+                if (pm.trees.IsCreated) pm.trees.Dispose(); // liberar trees
                 pendingMeshes.RemoveAt(i);
             }
         }
     }
-
 
     private void UpdateChunks()
     {
@@ -367,7 +382,6 @@ public class World : MonoBehaviour
         activeChunks.Add(coord, chunk);
 
         // --- BUILD edits FOR THIS CHUNK ---
-        // --- Substituir o bloco anterior de build de edits por este ---
         var editsList = new List<MeshGenerator.BlockEdit>();
 
         // limites do chunk (em world coords)
@@ -412,6 +426,12 @@ public class World : MonoBehaviour
             nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(0, Allocator.Persistent);
         }
 
+        // --- BUILD tree instances FOR THIS CHUNK ---
+        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord);
+
+        // calcular margin baseado nas configurações (maior altura possível + canopy)
+        int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -429,14 +449,16 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
-             nativeEdits, // EDIT: pass edits
+            nativeEdits, // EDIT: pass edits
+            nativeTrees, // NEW: pass trees
+            treeMargin,  // NEW: pass margin
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-             out NativeList<byte> vertexLights // novo out
+            out NativeList<byte> vertexLights // novo out
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -449,10 +471,12 @@ public class World : MonoBehaviour
             normals = normals,
             lightValues = vertexLights,  // Novo
             edits = nativeEdits, // store to dispose later
+            trees = nativeTrees,  // store trees to dispose later
             coord = coord,
             expectedGen = expectedGen
         });
     }
+
     // --- NEW: Request rebuild for an *active* chunk (usado quando editamos um bloco) ---
     private void RequestChunkRebuild(Vector2Int coord)
     {
@@ -495,7 +519,6 @@ public class World : MonoBehaviour
             }
         }
 
-
         NativeArray<MeshGenerator.BlockEdit> nativeEdits;
         if (editsList.Count > 0)
         {
@@ -506,6 +529,10 @@ public class World : MonoBehaviour
         {
             nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(0, Allocator.Persistent);
         }
+
+        // Rebuild tree instances for this chunk
+        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord);
+        int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
 
         MeshGenerator.ScheduleMeshJob(
             coord,
@@ -525,13 +552,15 @@ public class World : MonoBehaviour
             caveStride,
             maxCaveDepthMultiplier,
             nativeEdits, // pass edits
+            nativeTrees, // pass trees
+            treeMargin,  // pass margin
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-             out NativeList<byte> vertexLights // novo out
+            out NativeList<byte> vertexLights // novo out
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -544,6 +573,7 @@ public class World : MonoBehaviour
             normals = normals,
             lightValues = vertexLights,
             edits = nativeEdits,
+            trees = nativeTrees,
             coord = coord,
             expectedGen = expectedGen
         });
@@ -552,7 +582,6 @@ public class World : MonoBehaviour
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
         BlockType current = GetBlockAt(worldPos);
-
 
         // Impede alterar Bedrock (y <= 2)
         if (current == BlockType.Bedrock)
@@ -563,7 +592,6 @@ public class World : MonoBehaviour
         // sempre registre a edição — se for Air, grava explicitamente Air para que o MeshGenerator
         // receba a instrução de remover o bloco gerado desse lugar
         blockOverrides[worldPos] = type;
-
 
         // Determina chunks afetados: chunk que contém o bloco + vizinhos se estiver na borda
         Vector2Int chunkCoord = new Vector2Int(
@@ -593,7 +621,6 @@ public class World : MonoBehaviour
     public BlockType GetBlockAt(Vector3Int worldPos)
     {
         // 1) limites Y
-        // 1) limites Y / bedrock consistente com o gerador (mesmo limite usado no MeshGenerator)
         if (worldPos.y < 0)
             return BlockType.Air;         // fora da área válida abaixo do mundo
 
@@ -611,73 +638,11 @@ public class World : MonoBehaviour
         }
 
         // 3) gerar height usando mesmas layers de world (warp + noise)
-        // -> replica a lógica de GenerateHeightCache do MeshGenerator, mas apenas para um (x,z)
-
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
 
-        // Domain warping
-        float warpX = 0f;
-        float warpZ = 0f;
-        float sumWarpAmp = 0f;
-        if (warpLayers != null)
-        {
-            for (int i = 0; i < warpLayers.Length; i++)
-            {
-                var layer = warpLayers[i];
-                if (!layer.enabled) continue;
-
-                float baseNx = worldX + layer.offset.x;
-                float baseNz = worldZ + layer.offset.y;
-
-                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
-
-                warpX += sampleX * layer.amplitude;
-                warpZ += sampleZ * layer.amplitude;
-                sumWarpAmp += math.max(1e-5f, layer.amplitude);
-            }
-        }
-        if (sumWarpAmp > 0f)
-        {
-            warpX /= sumWarpAmp;
-            warpZ /= sumWarpAmp;
-        }
-        warpX = (warpX - 0.5f) * 2f;
-        warpZ = (warpZ - 0.5f) * 2f;
-
-        // Noise layers (surface)
-        float totalNoise = 0f;
-        float sumAmp = 0f;
-        if (noiseLayers != null)
-        {
-            for (int i = 0; i < noiseLayers.Length; i++)
-            {
-                var layer = noiseLayers[i];
-                if (!layer.enabled) continue;
-
-                float nx = (worldX + warpX) + layer.offset.x;
-                float nz = (worldZ + warpZ) + layer.offset.y;
-
-                float sample = MyNoise.OctavePerlin(nx, nz, layer);
-                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-
-                totalNoise += sample * layer.amplitude;
-                sumAmp += math.max(1e-5f, layer.amplitude);
-            }
-        }
-
-        if (sumAmp > 0f) totalNoise /= sumAmp;
-        else
-        {
-            // fallback caso não haja layers
-            float nx = (worldX + warpX) * 0.05f + offsetX;
-            float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-            totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-        }
-
-        int h = GetHeightFromNoise(totalNoise);
+        // Compute surface height via helper
+        int h = GetSurfaceHeight(worldX, worldZ);
 
         // 4) cavernas (aplica somente até certa profundidade)
         bool isCave = false;
@@ -749,10 +714,144 @@ public class World : MonoBehaviour
         }
     }
 
+    // helper local (replika do Job) - calcula altura da superfície para um (x,z)
+    private int GetSurfaceHeight(int worldX, int worldZ)
+    {
+        // Domain warping
+        float warpX = 0f;
+        float warpZ = 0f;
+        float sumWarpAmp = 0f;
+        if (warpLayers != null)
+        {
+            for (int i = 0; i < warpLayers.Length; i++)
+            {
+                var layer = warpLayers[i];
+                if (!layer.enabled) continue;
+
+                float baseNx = worldX + layer.offset.x;
+                float baseNz = worldZ + layer.offset.y;
+
+                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
+                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
+
+                warpX += sampleX * layer.amplitude;
+                warpZ += sampleZ * layer.amplitude;
+                sumWarpAmp += math.max(1e-5f, layer.amplitude);
+            }
+        }
+        if (sumWarpAmp > 0f)
+        {
+            warpX /= sumWarpAmp;
+            warpZ /= sumWarpAmp;
+        }
+        warpX = (warpX - 0.5f) * 2f;
+        warpZ = (warpZ - 0.5f) * 2f;
+
+        // Noise layers (surface)
+        float totalNoise = 0f;
+        float sumAmp = 0f;
+        if (noiseLayers != null)
+        {
+            for (int i = 0; i < noiseLayers.Length; i++)
+            {
+                var layer = noiseLayers[i];
+                if (!layer.enabled) continue;
+
+                float nx = (worldX + warpX) + layer.offset.x;
+                float nz = (worldZ + warpZ) + layer.offset.y;
+
+                float sample = MyNoise.OctavePerlin(nx, nz, layer);
+                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+
+                totalNoise += sample * layer.amplitude;
+                sumAmp += math.max(1e-5f, layer.amplitude);
+            }
+        }
+
+        if (sumAmp > 0f) totalNoise /= sumAmp;
+        else
+        {
+            // fallback caso não haja layers
+            float nx = (worldX + warpX) * 0.05f + offsetX;
+            float nz = (worldZ + warpZ) * 0.05f + offsetZ;
+            totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+        }
+
+        return GetHeightFromNoise(totalNoise);
+    }
+
+    // Constrói as instâncias de árvore para um chunk (determinístico)
+    private NativeArray<MeshGenerator.TreeInstance> BuildTreeInstancesForChunk(Vector2Int coord)
+    {
+        int cellSize = math.max(1, treeSettings.minSpacing); // células para evitar colagem
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
+        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
+
+        List<MeshGenerator.TreeInstance> tmp = new List<MeshGenerator.TreeInstance>();
+
+        int cellX0 = Mathf.FloorToInt((float)chunkMinX / cellSize);
+        int cellX1 = Mathf.FloorToInt((float)chunkMaxX / cellSize);
+        int cellZ0 = Mathf.FloorToInt((float)chunkMinZ / cellSize);
+        int cellZ1 = Mathf.FloorToInt((float)chunkMaxZ / cellSize);
+
+        // deterministic freq / seed-based sampling
+        float freq = 1f / math.max(1, cellSize * 3);
+
+        for (int cx = cellX0; cx <= cellX1; cx++)
+        {
+            for (int cz = cellZ0; cz <= cellZ1; cz++)
+            {
+                // deterministic sample using Perlin + seed
+                float sample = Mathf.PerlinNoise((cx * 12.9898f + seed) * freq, (cz * 78.233f + seed) * freq);
+                if (sample > treeSettings.density) continue; // não gera árvore nesta célula
+
+                // world position center-of-cell (small random offset could be added)
+                int worldX = cx * cellSize + (cellSize / 2);
+                int worldZ = cz * cellSize + (cellSize / 2);
+
+                // ensure inside chunk bounds
+                if (worldX < chunkMinX || worldX > chunkMaxX || worldZ < chunkMinZ || worldZ > chunkMaxZ) continue;
+
+                // compute surface height
+                int h = GetSurfaceHeight(worldX, worldZ);
+                if (h <= 0 || h >= Chunk.SizeY) continue;
+
+                // only on grass
+                if (GetBlockAt(new Vector3Int(worldX, h, worldZ)) != BlockType.Grass) continue;
+
+                // trunk height (deterministic per position)
+                float th = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + seed * 0.001f, (worldZ + 0.1f) * 0.243f + seed * 0.001f);
+                int trunkH = treeSettings.minHeight + (int)(th * (treeSettings.maxHeight - treeSettings.minHeight + 0.0001f));
+                trunkH = math.clamp(trunkH, treeSettings.minHeight, treeSettings.maxHeight);
+
+                MeshGenerator.TreeInstance t = new MeshGenerator.TreeInstance
+                {
+                    worldX = worldX,
+                    worldZ = worldZ,
+                    trunkHeight = trunkH,
+                    canopyRadius = treeSettings.canopyRadius,
+                    canopyHeight = treeSettings.canopyHeight
+                };
+                tmp.Add(t);
+            }
+        }
+
+        if (tmp.Count == 0)
+        {
+            return new NativeArray<MeshGenerator.TreeInstance>(0, Allocator.Persistent);
+        }
+
+        var arr = new NativeArray<MeshGenerator.TreeInstance>(tmp.Count, Allocator.Persistent);
+        for (int i = 0; i < tmp.Count; i++) arr[i] = tmp[i];
+        return arr;
+    }
+
     // helper local (replika do Job)
     private int GetHeightFromNoise(float noise)
     {
         return math.clamp(baseHeight + (int)math.floor((noise - 0.5f) * 2f * heightVariation), 1, Chunk.SizeY - 1);
     }
-
 }

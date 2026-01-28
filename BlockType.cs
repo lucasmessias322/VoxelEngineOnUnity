@@ -7,4 +7,6 @@ public enum BlockType
     Sand = 4,
     Water = 5,
     Bedrock = 6,
+    Leaves = 7,
+    Log = 8
 }
