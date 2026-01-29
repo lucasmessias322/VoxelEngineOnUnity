@@ -432,6 +432,10 @@ public class World : MonoBehaviour
         // calcular margin baseado nas configurações (maior altura possível + canopy)
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
 
+        // NOVO: calcular borderSize e maxTreeRadius
+        int borderSize = treeSettings.canopyRadius + 2;  // ex: 5 para radius=3
+        int maxTreeRadius = treeSettings.canopyRadius;
+
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -452,6 +456,8 @@ public class World : MonoBehaviour
             nativeEdits, // EDIT: pass edits
             nativeTrees, // NEW: pass trees
             treeMargin,  // NEW: pass margin
+            borderSize,      // NOVO
+            maxTreeRadius,   // NOVO
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
@@ -533,6 +539,8 @@ public class World : MonoBehaviour
         // Rebuild tree instances for this chunk
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord);
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+        int borderSize = treeSettings.canopyRadius + 2;  // ex: 5 para radius=3
+        int maxTreeRadius = treeSettings.canopyRadius;
 
         MeshGenerator.ScheduleMeshJob(
             coord,
@@ -554,6 +562,8 @@ public class World : MonoBehaviour
             nativeEdits, // pass edits
             nativeTrees, // pass trees
             treeMargin,  // pass margin
+            borderSize,      // NOVO
+            maxTreeRadius,   // NOVO
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
@@ -784,7 +794,7 @@ public class World : MonoBehaviour
     // Constrói as instâncias de árvore para um chunk (determinístico)
     private NativeArray<MeshGenerator.TreeInstance> BuildTreeInstancesForChunk(Vector2Int coord)
     {
-        int cellSize = math.max(1, treeSettings.minSpacing); // células para evitar colagem
+        int cellSize = math.max(1, treeSettings.minSpacing);
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
         int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
@@ -792,51 +802,46 @@ public class World : MonoBehaviour
 
         List<MeshGenerator.TreeInstance> tmp = new List<MeshGenerator.TreeInstance>();
 
-        int cellX0 = Mathf.FloorToInt((float)chunkMinX / cellSize);
-        int cellX1 = Mathf.FloorToInt((float)chunkMaxX / cellSize);
-        int cellZ0 = Mathf.FloorToInt((float)chunkMinZ / cellSize);
-        int cellZ1 = Mathf.FloorToInt((float)chunkMaxZ / cellSize);
+        // EXPANDIDO: margem para copas overhang
+        int searchMargin = treeSettings.canopyRadius + treeSettings.minSpacing;
+        int cellX0 = Mathf.FloorToInt((float)(chunkMinX - searchMargin) / cellSize);
+        int cellX1 = Mathf.FloorToInt((float)(chunkMaxX + searchMargin) / cellSize);
+        int cellZ0 = Mathf.FloorToInt((float)(chunkMinZ - searchMargin) / cellSize);
+        int cellZ1 = Mathf.FloorToInt((float)(chunkMaxZ + searchMargin) / cellSize);
 
-        // deterministic freq / seed-based sampling
         float freq = 1f / math.max(1, cellSize * 3);
 
         for (int cx = cellX0; cx <= cellX1; cx++)
         {
             for (int cz = cellZ0; cz <= cellZ1; cz++)
             {
-                // deterministic sample using Perlin + seed
                 float sample = Mathf.PerlinNoise((cx * 12.9898f + seed) * freq, (cz * 78.233f + seed) * freq);
-                if (sample > treeSettings.density) continue; // não gera árvore nesta célula
+                if (sample > treeSettings.density) continue;
 
-                // world position center-of-cell (small random offset could be added)
                 int worldX = cx * cellSize + (cellSize / 2);
                 int worldZ = cz * cellSize + (cellSize / 2);
 
-                // ensure inside chunk bounds
-                if (worldX < chunkMinX || worldX > chunkMaxX || worldZ < chunkMinZ || worldZ > chunkMaxZ) continue;
+                // REMOVIDO: sem skip de bounds do chunk - agora inclui overhang
 
-                // compute surface height
                 int h = GetSurfaceHeight(worldX, worldZ);
                 if (h <= 0 || h >= Chunk.SizeY) continue;
 
-                // only on grass
                 if (GetBlockAt(new Vector3Int(worldX, h, worldZ)) != BlockType.Grass) continue;
 
-                // trunk height (deterministic per position)
                 float th = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + seed * 0.001f, (worldZ + 0.1f) * 0.243f + seed * 0.001f);
                 int trunkH = treeSettings.minHeight + (int)(th * (treeSettings.maxHeight - treeSettings.minHeight + 0.0001f));
                 trunkH = math.clamp(trunkH, treeSettings.minHeight, treeSettings.maxHeight);
 
-                MeshGenerator.TreeInstance t = new MeshGenerator.TreeInstance
+                tmp.Add(new MeshGenerator.TreeInstance
                 {
                     worldX = worldX,
                     worldZ = worldZ,
                     trunkHeight = trunkH,
                     canopyRadius = treeSettings.canopyRadius,
                     canopyHeight = treeSettings.canopyHeight
-                };
-                tmp.Add(t);
+                });
             }
+
         }
 
         if (tmp.Count == 0)

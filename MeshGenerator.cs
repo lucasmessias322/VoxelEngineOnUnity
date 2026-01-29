@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -53,6 +54,8 @@ public static class MeshGenerator
         // NEW: árvores e margem dinâmica
         NativeArray<TreeInstance> treeInstances,
         int treeMargin,
+        int borderSize,        // NOVO: tamanho do border
+        int maxTreeRadius,
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -100,7 +103,9 @@ public static class MeshGenerator
             vertexLights = vertexLights,  // Novo: atribua ao job
             blockEdits = blockEdits,       // EDIT: atribui edits ao job
             treeInstances = treeInstances, // NEW
-            treeMargin = treeMargin        // NEW
+            treeMargin = treeMargin,       // NEW
+            border = borderSize,              // NOVO
+            maxTreeRadius = maxTreeRadius,    // NOVO
         };
 
         handle = job.Schedule();
@@ -117,7 +122,8 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<BlockEdit> blockEdits; // EDIT: lista de edits aplicáveis ao chunk
         [ReadOnly] public NativeArray<TreeInstance> treeInstances; // NEW
         public int treeMargin; // NEW
-
+        public int border;                    // NOVO
+        public int maxTreeRadius;             // NOVO
         public int baseHeight;
         public int heightVariation;
         public float offsetX;
@@ -143,7 +149,6 @@ public static class MeshGenerator
             NativeArray<int> heightCache = GenerateHeightCache();
 
             // Passo 2: Popular voxels (blockTypes e solids, flattened)
-            const int border = 1;
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
@@ -174,47 +179,12 @@ public static class MeshGenerator
             solids.Dispose();
         }
 
-        // ---------------- helper noises (mantive caso queira reusar) ----------------
-        [BurstCompile]
-        private float TreeDensityNoise(float wx, float wz)
-        {
-            const float freqBase = 0.012f;
-            float nx = wx * freqBase + 123.45f;
-            float nz = wz * freqBase + 67.89f;
-            float total = 0f;
-            float amplitude = 1f;
-            float frequency = 1f;
-            float maxAmp = 0f;
-            const int octaves = 2;
-            const float persistence = 0.5f;
-            const float lacunarity = 2f;
-            for (int i = 0; i < octaves; i++)
-            {
-                float sample = noise.snoise(new float2(nx * frequency, nz * frequency)) * 0.5f + 0.5f;
-                total += sample * amplitude;
-                maxAmp += amplitude;
-                amplitude *= persistence;
-                frequency *= lacunarity;
-            }
-            return maxAmp > 0f ? total / maxAmp : 0f;
-        }
-
-        [BurstCompile]
-        private float TrunkHeightNoise(float wx, float wz)
-        {
-            const float freqBase = 0.15f;
-            float nx = wx * freqBase + 456.78f;
-            float nz = wz * freqBase + 90.12f;
-            return noise.snoise(new float2(nx, nz)) * 0.5f + 0.5f;
-        }
-
-        // ---------------- Apply TreeInstances ----------------
+        // ---------------- Apply TreeInstances (Oak-like improved) ----------------
         [BurstCompile]
         private void ApplyTreeInstancesToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (treeInstances.Length == 0) return;
 
-            const int border = 1;
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
 
@@ -222,9 +192,13 @@ public static class MeshGenerator
             {
                 var t = treeInstances[i];
 
-                int localX = t.worldX - baseWorldX; // 0..15 expected
+                int localX = t.worldX - baseWorldX;
                 int localZ = t.worldZ - baseWorldZ;
-                if (localX < 0 || localX >= SizeX || localZ < 0 || localZ >= SizeZ) continue;
+
+                // MUDADO: permite overhang
+                if (localX < -maxTreeRadius || localX >= SizeX + maxTreeRadius ||
+                    localZ < -maxTreeRadius || localZ >= SizeZ + maxTreeRadius)
+                    continue;
 
                 int ix = localX + border;
                 int iz = localZ + border;
@@ -243,7 +217,7 @@ public static class MeshGenerator
                 }
                 if (surfaceY < 0 || surfaceY >= SizeY) continue;
 
-                // Tronco: só sobrescreve AIR / LEAVES / WATER (não substitui pedra/terra/bedrock)
+                // --- Tronco (1x1) ---
                 for (int dy = 1; dy <= t.trunkHeight; dy++)
                 {
                     int ty = surfaceY + dy;
@@ -257,48 +231,130 @@ public static class MeshGenerator
                     }
                 }
 
-                // Folhas (copa): forma aproximadamente esférica em camadas
+                // --- Copa (Oak-like, variável por camada, com cantos “recortados”) ---
                 int leafBottom = surfaceY + t.trunkHeight - 1;
-                for (int dy = 0; dy < t.canopyHeight; dy++)
+                int canopyH = math.max(1, t.canopyHeight);
+                int canopyR = math.max(0, t.canopyRadius);
+
+                for (int dy = 0; dy < canopyH; dy++)
                 {
                     int ly = leafBottom + dy;
                     if (ly < 0 || ly >= SizeY) continue;
 
-                    int layerRadius = t.canopyRadius;
-                    // optional: tighten radius by layer (para copa mais natural)
-                    int shrink = math.abs(dy - (t.canopyHeight / 2));
-                    int effectiveRadius = math.max(0, layerRadius - (shrink / 2));
-
-                    for (int dx = -effectiveRadius; dx <= effectiveRadius; dx++)
+                    // camada de topo: preservar 2x2 (como oak)
+                    if (dy == canopyH - 1)
                     {
-                        for (int dz = -effectiveRadius; dz <= effectiveRadius; dz++)
+                        for (int dx = -1; dx <= 0; dx++)
                         {
-                            // circulo/esfera simples
-                            int dist2 = dx * dx + dz * dz;
-                            if (dist2 > effectiveRadius * effectiveRadius) continue;
+                            for (int dz = -1; dz <= 0; dz++)
+                            {
+                                int lx = ix + dx;
+                                int lz = iz + dz;
+                                if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
 
+                                int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
+                                BlockType existing = blockTypes[lidx];
+                                if (existing == BlockType.Log) continue;
+                                if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves)
+                                {
+                                    blockTypes[lidx] = BlockType.Leaves;
+                                    solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    // camadas abaixo: raio decresce com a distância da ponta (para dar forma)
+                    // use um "shrink" suave: camadas mais próximas do topo são menores
+                    int shrink = (int)math.floor((float)dy / 2.0f);
+                    int radius = math.max(0, canopyR - shrink);
+
+                    // variação determinística por posição para quebrar simetria (simples hash)
+                    int posHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (dy * 83492791);
+                    int cornerSkipMask = posHash & 0xF; // pequenos bits para decidir canto
+
+                    for (int dx = -radius; dx <= radius; dx++)
+                    {
+                        for (int dz = -radius; dz <= radius; dz++)
+                        {
                             int lx = ix + dx;
                             int lz = iz + dz;
                             if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
 
+                            // pular canto externo ocasionalmente para forma mais natural
+                            int absdx = math.abs(dx);
+                            int absdz = math.abs(dz);
+                            bool isCorner = (absdx == radius && absdz == radius) && (radius > 0);
+
+                            if (isCorner)
+                            {
+                                // use bits de cornerSkipMask para pular ~50% dos cantos dependendo da camada
+                                int bitIndex = (absdx + absdz + dy) & 3;
+                                if (((cornerSkipMask >> bitIndex) & 1) == 1)
+                                    continue;
+                            }
+
                             int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
                             BlockType existing = blockTypes[lidx];
-                            if (existing == BlockType.Air || existing == BlockType.Water)
-                            {
-                                blockTypes[lidx] = BlockType.Leaves;
-                                solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
-                            }
+
+                            if (existing == BlockType.Log) continue;
+                            if (!(existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves)) continue;
+
+                            blockTypes[lidx] = BlockType.Leaves;
+                            solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
                         }
+                    }
+                }
+
+                // Restaurar tronco (defensivo)
+                for (int dy = 1; dy <= t.trunkHeight; dy++)
+                {
+                    int ty = surfaceY + dy;
+                    if (ty >= SizeY) break;
+                    int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
+                    if (blockTypes[tidx] != BlockType.Log)
+                    {
+                        blockTypes[tidx] = BlockType.Log;
+                        solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
                     }
                 }
             }
         }
+        static bool IsFaceOccluded(
+       BlockType current,
+       BlockType neighbor,
+       BlockTextureMapping[] blockMappings
+   )
+        {
+            // Ar nunca oculta
+            if (neighbor == BlockType.Air)
+                return false;
+
+            // Água (ou transparentes) não ocultam
+            if (neighbor == BlockType.Water)
+                return false;
+
+            // Minecraft-like: folhas NÃO ocultam folhas
+            if (current == BlockType.Leaves && neighbor == BlockType.Leaves)
+                return false;
+
+            BlockTextureMapping nbMap = blockMappings[(int)neighbor];
+
+            // Blocos marcados como empty (água, etc.)
+            if (nbMap.isEmpty)
+                return false;
+
+            // Só oculta se o vizinho for realmente sólido
+            return nbMap.isSolid;
+        }
+
+
 
         private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
             if (blockEdits.Length == 0) return;
 
-            int border = 1;
             int voxelPlaneSize = voxelSizeX * SizeY;
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
@@ -327,19 +383,19 @@ public static class MeshGenerator
 
         private NativeArray<int> GenerateHeightCache()
         {
-            const int heightSizeX = SizeX + 2;
-            const int heightSizeZ = SizeZ + 2;
+            int heightSizeX = SizeX + 2 * border;
+            int heightSizeZ = SizeZ + 2 * border;
             NativeArray<int> heightCache = new NativeArray<int>(heightSizeX * heightSizeZ, Allocator.Temp);
             int heightStride = heightSizeX;
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
 
-            for (int lx = -1; lx <= SizeX; lx++)
+            for (int lx = -border; lx < SizeX + border; lx++)
             {
-                for (int lz = -1; lz <= SizeZ; lz++)
+                for (int lz = -border; lz < SizeZ + border; lz++)
                 {
-                    int cacheIdx = (lx + 1) + (lz + 1) * heightStride;
+                    int cacheIdx = (lx + border) + (lz + border) * heightStride;
                     int worldX = baseWorldX + lx;
                     int worldZ = baseWorldZ + lz;
 
@@ -411,11 +467,10 @@ public static class MeshGenerator
 
         private void PopulateVoxels(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
-            const int border = 1;
-            const int voxelSizeX = SizeX + 2 * border;
-            const int voxelSizeZ = SizeZ + 2 * border;
-            const int voxelPlaneSize = voxelSizeX * SizeY;
-            const int heightStride = SizeX + 2;
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int heightStride = SizeX + 2 * border;
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
@@ -746,11 +801,10 @@ public static class MeshGenerator
 
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> sunlight)
         {
-            const int border = 1;
-            const int voxelSizeX = SizeX + 2 * border;
-            const int voxelSizeZ = SizeZ + 2 * border;
-            const int voxelPlaneSize = voxelSizeX * SizeY;
-            const int heightStride = SizeX + 2;
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int heightStride = SizeX + 2 * border;
 
             NativeArray<Vector3Int> faceChecks = new NativeArray<Vector3Int>(6, Allocator.Temp);
             faceChecks[0] = new Vector3Int(0, 0, 1);
@@ -792,11 +846,11 @@ public static class MeshGenerator
             faceVerts[22] = new Vector3(0, 1, 1);
             faceVerts[23] = new Vector3(0, 1, 0);
 
-            for (int x = 0; x < SizeX; x++)
+            for (int x = border; x < border + SizeX; x++)
             {
-                for (int z = 0; z < SizeZ; z++)
+                for (int z = border; z < border + SizeZ; z++)
                 {
-                    int cacheIdx = (x + 1) + (z + 1) * heightStride;
+                    int cacheIdx = (x - border) + (z - border) * heightStride;
                     int h = heightCache[cacheIdx];
 
                     // margem extra para árvores (tronco + folhas) - dinâmico
@@ -810,10 +864,8 @@ public static class MeshGenerator
 
                     // --- START PATCH ---
                     // compute world coords for this column
-                    int baseWorldX = coord.x * SizeX;
-                    int baseWorldZ = coord.y * SizeZ;
-                    int worldX = baseWorldX + x;
-                    int worldZ = baseWorldZ + z;
+                    int worldX = coord.x * SizeX + (x - border);
+                    int worldZ = coord.y * SizeZ + (z - border);
 
                     // ensure we include any manual edits placed by the player that may be above 'h'
                     if (blockEdits.Length > 0)
@@ -834,8 +886,8 @@ public static class MeshGenerator
 
                     for (int y = 0; y <= maxY; y++)
                     {
-                        int internalX = x + border;
-                        int internalZ = z + border;
+                        int internalX = x;
+                        int internalZ = z;
                         int voxelIdx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
 
                         if (!solids[voxelIdx] && blockTypes[voxelIdx] != BlockType.Water) continue;
@@ -886,7 +938,7 @@ public static class MeshGenerator
 
                                 for (int i = 0; i < 4; i++)
                                 {
-                                    Vector3 vertPos = new Vector3(x, y, z) + faceVerts[dir * 4 + i];
+                                    Vector3 vertPos = new Vector3(x - border, y, z - border) + faceVerts[dir * 4 + i];
 
                                     if (currentType == BlockType.Water)
                                     {
