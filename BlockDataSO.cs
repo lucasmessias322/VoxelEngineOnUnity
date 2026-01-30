@@ -85,4 +85,7 @@ public struct BlockTextureMapping
     public bool isEmpty;   // default: false (ex: true para água/ar)
     public bool isSolid;   // default: false (defina como true no Inspector para blocos sólidos)
     public int materialIndex;  // default: 0
+
+     // NOVO: opacidade de luz 0..15 (0 = não reduz, 15 = bloqueia)
+    public byte lightOpacity;
 }
