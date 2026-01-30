@@ -1399,12 +1399,12 @@ public static class MeshGenerator
 
             PopulateVoxels(heightCache, blockTypes, solids);
 
-            // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
-            ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
+
 
             // NEW: aplicar as TreeInstances (vindo do World) - substitui comportamento de geração local
             ApplyTreeInstancesToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-
+            // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
+            ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
             // Passo 2.5: Calcular skylight (vertical fill + BFS propagation)
             NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             CalculateSkylight(blockTypes, solids, sunlight, voxelSizeX, voxelSizeZ);

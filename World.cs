@@ -653,6 +653,51 @@ public class World : MonoBehaviour
 
         // Compute surface height via helper
         int h = GetSurfaceHeight(worldX, worldZ);
+        // --- DETECTAR ÁRVORES (TRONCO / COPA) ---
+        Vector2Int chunkCoord = new Vector2Int(
+            Mathf.FloorToInt((float)worldX / Chunk.SizeX),
+            Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
+        );
+
+        // gerar árvores determinísticas do chunk
+        NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord);
+
+        for (int i = 0; i < trees.Length; i++)
+        {
+            var t = trees[i];
+
+            int baseY = GetSurfaceHeight(t.worldX, t.worldZ);
+            int trunkTop = baseY + t.trunkHeight;
+
+            // TRONCO
+            if (worldPos.x == t.worldX &&
+                worldPos.z == t.worldZ &&
+                worldPos.y > baseY &&
+                worldPos.y <= trunkTop)
+            {
+                trees.Dispose();
+                return BlockType.Log;
+            }
+
+            // COPA
+            int canopyStartY = trunkTop - t.canopyHeight + 1;
+            int canopyEndY = trunkTop + 1;
+
+            if (worldPos.y >= canopyStartY && worldPos.y <= canopyEndY)
+            {
+                int dx = worldPos.x - t.worldX;
+                int dz = worldPos.z - t.worldZ;
+
+                if (dx * dx + dz * dz <= t.canopyRadius * t.canopyRadius)
+                {
+                    trees.Dispose();
+                    return BlockType.Leaves;
+                }
+            }
+        }
+
+        trees.Dispose();
+
 
         // 4) cavernas (aplica somente até certa profundidade)
         bool isCave = false;
@@ -826,7 +871,8 @@ public class World : MonoBehaviour
                 int h = GetSurfaceHeight(worldX, worldZ);
                 if (h <= 0 || h >= Chunk.SizeY) continue;
 
-                if (GetBlockAt(new Vector3Int(worldX, h, worldZ)) != BlockType.Grass) continue;
+                if (GetSurfaceBlockType(worldX, worldZ) != BlockType.Grass) continue;
+
 
                 float th = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + seed * 0.001f, (worldZ + 0.1f) * 0.243f + seed * 0.001f);
                 int trunkH = treeSettings.minHeight + (int)(th * (treeSettings.maxHeight - treeSettings.minHeight + 0.0001f));
@@ -859,4 +905,15 @@ public class World : MonoBehaviour
     {
         return math.clamp(baseHeight + (int)math.floor((noise - 0.5f) * 2f * heightVariation), 1, Chunk.SizeY - 1);
     }
+
+    // NOVO: retorna APENAS o bloco da superfície (sem árvores, sem overrides)
+    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
+    {
+        int h = GetSurfaceHeight(worldX, worldZ);
+        if (h <= 0 || h >= Chunk.SizeY) return BlockType.Air;
+
+        bool isBeachArea = (h <= seaLevel + 2);
+        return isBeachArea ? BlockType.Sand : BlockType.Grass;
+    }
+
 }
