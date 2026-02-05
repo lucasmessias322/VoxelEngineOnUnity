@@ -381,7 +381,6 @@ public static class MeshGenerator
                 }
             }
         }
-
         private NativeArray<int> GenerateHeightCache()
         {
             int heightSizeX = SizeX + 2 * border;
@@ -400,7 +399,7 @@ public static class MeshGenerator
                     int worldX = baseWorldX + lx;
                     int worldZ = baseWorldZ + lz;
 
-                    // Compute domain warping
+                    // === Domain Warping (exatamente igual ao World.cs) ===
                     float warpX = 0f;
                     float warpZ = 0f;
                     float sumWarpAmp = 0f;
@@ -413,15 +412,13 @@ public static class MeshGenerator
                         float baseNx = worldX + layer.offset.x;
                         float baseNz = worldZ + layer.offset.y;
 
-                        float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                        warpX += sampleX * layer.amplitude;
+                        float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);  // [0,1]
+                        float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);  // [0,1]
 
-                        float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
-                        warpZ += sampleZ * layer.amplitude;
-
-                        sumWarpAmp += math.max(1e-5f, layer.amplitude);
+                        // Centre em [-1,1] e aplique amplitude (força da distorção)
+                        warpX += (sampleX * 2f - 1f) * layer.amplitude;
+                        warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
                     }
-
                     if (sumWarpAmp > 0f)
                     {
                         warpX /= sumWarpAmp;
@@ -430,42 +427,49 @@ public static class MeshGenerator
                     warpX = (warpX - 0.5f) * 2f;
                     warpZ = (warpZ - 0.5f) * 2f;
 
-                    // Compute total noise
+                    // === Noise layers (exatamente igual ao World.cs) ===
                     float totalNoise = 0f;
                     float sumAmp = 0f;
 
+                    bool hasActiveLayers = false;
                     for (int i = 0; i < noiseLayers.Length; i++)
                     {
                         var layer = noiseLayers[i];
                         if (!layer.enabled) continue;
 
+                        hasActiveLayers = true;
+
                         float nx = (worldX + warpX) + layer.offset.x;
                         float nz = (worldZ + warpZ) + layer.offset.y;
 
                         float sample = MyNoise.OctavePerlin(nx, nz, layer);
+
                         if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                         {
                             sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
                         }
+
                         totalNoise += sample * layer.amplitude;
                         sumAmp += math.max(1e-5f, layer.amplitude);
                     }
 
-                    if (sumAmp > 0f) totalNoise /= sumAmp;
-                    else
+                    // Fallback caso não haja layers ativas (exatamente como no World.cs)
+                    if (!hasActiveLayers || sumAmp <= 0f)
                     {
                         float nx = (worldX + warpX) * 0.05f + offsetX;
                         float nz = (worldZ + warpZ) * 0.05f + offsetZ;
                         totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+                        sumAmp = 1f;
                     }
 
-                    heightCache[cacheIdx] = GetHeightFromNoise(totalNoise);
+                    // === Conversão para altura (idêntica ao World.cs) ===
+                    int h = GetHeightFromNoise(totalNoise, sumAmp);
+                    heightCache[cacheIdx] = h;
                 }
             }
 
             return heightCache;
         }
-
         private void PopulateVoxels(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -1075,11 +1079,12 @@ public static class MeshGenerator
             faceVerts.Dispose();
         }
 
-        private int GetHeightFromNoise(float noise)
+        // Updated GetHeightFromNoise (now takes sumAmp for centering):
+        private int GetHeightFromNoise(float noise, float sumAmp)
         {
-            return math.clamp(baseHeight + (int)math.floor((noise - 0.5f) * 2f * heightVariation), 1, SizeY - 1);
+            float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
+            return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
         }
-
         private static int FloorDiv(int a, int b)
         {
             int q = a / b;

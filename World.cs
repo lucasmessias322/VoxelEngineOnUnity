@@ -241,6 +241,8 @@ public class World : MonoBehaviour
             }
         }
 
+
+
         for (int i = 0; i < poolSize; i++)
         {
             GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
@@ -786,12 +788,12 @@ public class World : MonoBehaviour
                 float baseNx = worldX + layer.offset.x;
                 float baseNz = worldZ + layer.offset.y;
 
-                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
+                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);  // [0,1]
+                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);  // [0,1]
 
-                warpX += sampleX * layer.amplitude;
-                warpZ += sampleZ * layer.amplitude;
-                sumWarpAmp += math.max(1e-5f, layer.amplitude);
+                // Centre em [-1,1] e aplique amplitude (força da distorção)
+                warpX += (sampleX * 2f - 1f) * layer.amplitude;
+                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
             }
         }
         if (sumWarpAmp > 0f)
@@ -802,7 +804,6 @@ public class World : MonoBehaviour
         warpX = (warpX - 0.5f) * 2f;
         warpZ = (warpZ - 0.5f) * 2f;
 
-        // Noise layers (surface)
         float totalNoise = 0f;
         float sumAmp = 0f;
         if (noiseLayers != null)
@@ -819,21 +820,24 @@ public class World : MonoBehaviour
                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                     sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
 
-                totalNoise += sample * layer.amplitude;
+                totalNoise += sample * layer.amplitude;  // Changed: no /= sumAmp later
                 sumAmp += math.max(1e-5f, layer.amplitude);
             }
         }
 
-        if (sumAmp > 0f) totalNoise /= sumAmp;
+        // Remove the normalization:
+        // if (sumAmp > 0f) totalNoise /= sumAmp;  // DELETE THIS
+
+        // Fallback if no layers (update similarly, without normalization)
         else
         {
-            // fallback caso não haja layers
             float nx = (worldX + warpX) * 0.05f + offsetX;
             float nz = (worldZ + warpZ) * 0.05f + offsetZ;
             totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+            sumAmp = 1f;  // Treat fallback as amp=1
         }
 
-        return GetHeightFromNoise(totalNoise);
+        return GetHeightFromNoise(totalNoise, sumAmp);  // Pass sumAmp to the helper
     }
 
     // Constrói as instâncias de árvore para um chunk (determinístico)
@@ -901,9 +905,12 @@ public class World : MonoBehaviour
     }
 
     // helper local (replika do Job)
-    private int GetHeightFromNoise(float noise)
+    // Updated GetHeightFromNoise (now takes sumAmp for centering):
+    // Updated GetHeightFromNoise (now takes sumAmp for centering):
+    private int GetHeightFromNoise(float noise, float sumAmp)
     {
-        return math.clamp(baseHeight + (int)math.floor((noise - 0.5f) * 2f * heightVariation), 1, Chunk.SizeY - 1);
+        float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
+        return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
     }
 
     // NOVO: retorna APENAS o bloco da superfície (sem árvores, sem overrides)
