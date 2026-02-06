@@ -163,12 +163,32 @@ public static class MeshGenerator
 
 
             // NEW: aplicar as TreeInstances (vindo do World) - substitui comportamento de geração local
-            ApplyTreeInstancesToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            //  ApplyTreeInstancesToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            TreePlacement.ApplyTreeInstancesToVoxels(
+                blockTypes,
+                solids,
+                blockMappings,
+                treeInstances,
+                coord,
+                border,           // o mesmo border que você usa
+                SizeX,            // 16 normalmente
+                SizeZ,            // 16 normalmente
+                SizeY,            // 256 normalmente
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize
+            );
+
+
+
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
+
+
             // Passo 2.5: Calcular skylight (vertical fill + BFS propagation)
             NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
-            CalculateSkylight(blockTypes, solids, sunlight, voxelSizeX, voxelSizeZ);
+            LightingCalculator.CalculateSkylight(blockTypes, solids, sunlight, blockMappings, voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY); // Chamada para o novo arquivo
 
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
             GenerateMesh(heightCache, blockTypes, solids, sunlight);
@@ -179,178 +199,6 @@ public static class MeshGenerator
             blockTypes.Dispose();
             solids.Dispose();
         }
-
-        // ---------------- Apply TreeInstances (Oak-like improved) ----------------
-        [BurstCompile]
-        private void ApplyTreeInstancesToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
-        {
-            if (treeInstances.Length == 0) return;
-
-            int baseWorldX = coord.x * SizeX;
-            int baseWorldZ = coord.y * SizeZ;
-
-            for (int i = 0; i < treeInstances.Length; i++)
-            {
-                var t = treeInstances[i];
-
-                int localX = t.worldX - baseWorldX;
-                int localZ = t.worldZ - baseWorldZ;
-
-                // MUDADO: permite overhang
-                if (localX < -maxTreeRadius || localX >= SizeX + maxTreeRadius ||
-                    localZ < -maxTreeRadius || localZ >= SizeZ + maxTreeRadius)
-                    continue;
-
-                int ix = localX + border;
-                int iz = localZ + border;
-
-                // buscar superfície Y (procura do topo pra baixo)
-                int surfaceY = -1;
-                for (int y = SizeY - 1; y >= 0; y--)
-                {
-                    int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
-                    BlockType bt = blockTypes[idx];
-                    if (bt != BlockType.Air && bt != BlockType.Water)
-                    {
-                        surfaceY = y;
-                        break;
-                    }
-                }
-                if (surfaceY < 0 || surfaceY >= SizeY) continue;
-
-                // --- Tronco (1x1) ---
-                for (int dy = 1; dy <= t.trunkHeight; dy++)
-                {
-                    int ty = surfaceY + dy;
-                    if (ty >= SizeY) break;
-                    int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                    BlockType existing = blockTypes[tidx];
-                    if (existing == BlockType.Air || existing == BlockType.Leaves || existing == BlockType.Water)
-                    {
-                        blockTypes[tidx] = BlockType.Log;
-                        solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
-                    }
-                }
-
-                // --- Copa (Oak-like, variável por camada, com cantos “recortados”) ---
-                int leafBottom = surfaceY + t.trunkHeight - 1;
-                int canopyH = math.max(1, t.canopyHeight);
-                int canopyR = math.max(0, t.canopyRadius);
-
-                for (int dy = 0; dy < canopyH; dy++)
-                {
-                    int ly = leafBottom + dy;
-                    if (ly < 0 || ly >= SizeY) continue;
-
-                    // camada de topo: preservar 2x2 (como oak)
-                    if (dy == canopyH - 1)
-                    {
-                        for (int dx = -1; dx <= 0; dx++)
-                        {
-                            for (int dz = -1; dz <= 0; dz++)
-                            {
-                                int lx = ix + dx;
-                                int lz = iz + dz;
-                                if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
-
-                                int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-                                BlockType existing = blockTypes[lidx];
-                                if (existing == BlockType.Log) continue;
-                                if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves)
-                                {
-                                    blockTypes[lidx] = BlockType.Leaves;
-                                    solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
-                                }
-                            }
-                        }
-                        continue;
-                    }
-
-                    // camadas abaixo: raio decresce com a distância da ponta (para dar forma)
-                    // use um "shrink" suave: camadas mais próximas do topo são menores
-                    int shrink = (int)math.floor((float)dy / 2.0f);
-                    int radius = math.max(0, canopyR - shrink);
-
-                    // variação determinística por posição para quebrar simetria (simples hash)
-                    int posHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (dy * 83492791);
-                    int cornerSkipMask = posHash & 0xF; // pequenos bits para decidir canto
-
-                    for (int dx = -radius; dx <= radius; dx++)
-                    {
-                        for (int dz = -radius; dz <= radius; dz++)
-                        {
-                            int lx = ix + dx;
-                            int lz = iz + dz;
-                            if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
-
-                            // pular canto externo ocasionalmente para forma mais natural
-                            int absdx = math.abs(dx);
-                            int absdz = math.abs(dz);
-                            bool isCorner = (absdx == radius && absdz == radius) && (radius > 0);
-
-                            if (isCorner)
-                            {
-                                // use bits de cornerSkipMask para pular ~50% dos cantos dependendo da camada
-                                int bitIndex = (absdx + absdz + dy) & 3;
-                                if (((cornerSkipMask >> bitIndex) & 1) == 1)
-                                    continue;
-                            }
-
-                            int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-                            BlockType existing = blockTypes[lidx];
-
-                            if (existing == BlockType.Log) continue;
-                            if (!(existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves)) continue;
-
-                            blockTypes[lidx] = BlockType.Leaves;
-                            solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
-                        }
-                    }
-                }
-
-                // Restaurar tronco (defensivo)
-                for (int dy = 1; dy <= t.trunkHeight; dy++)
-                {
-                    int ty = surfaceY + dy;
-                    if (ty >= SizeY) break;
-                    int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                    if (blockTypes[tidx] != BlockType.Log)
-                    {
-                        blockTypes[tidx] = BlockType.Log;
-                        solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
-                    }
-                }
-            }
-        }
-        static bool IsFaceOccluded(
-       BlockType current,
-       BlockType neighbor,
-       BlockTextureMapping[] blockMappings
-   )
-        {
-            // Ar nunca oculta
-            if (neighbor == BlockType.Air)
-                return false;
-
-            // Água (ou transparentes) não ocultam
-            if (neighbor == BlockType.Water)
-                return false;
-
-            // Minecraft-like: folhas NÃO ocultam folhas
-            if (current == BlockType.Leaves && neighbor == BlockType.Leaves)
-                return false;
-
-            BlockTextureMapping nbMap = blockMappings[(int)neighbor];
-
-            // Blocos marcados como empty (água, etc.)
-            if (nbMap.isEmpty)
-                return false;
-
-            // Só oculta se o vizinho for realmente sólido
-            return nbMap.isSolid;
-        }
-
-
 
         private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
@@ -674,115 +522,6 @@ public static class MeshGenerator
                 }
             }
         }
-
-        // ---------- NOVA CalculateSkylight: skyExposed + decay mínimo 1 (CORRIGIDA) ----------
-        private void CalculateSkylight(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> sunlight, int voxelSizeX, int voxelSizeZ)
-        {
-            int planeSize = voxelSizeX * SizeY;
-            int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
-
-            // inicializar
-            for (int i = 0; i < totalVoxels; i++) sunlight[i] = 0;
-
-            // Construir tabela de opacidades (usando blockMappings)
-            int mapCount = blockMappings.Length;
-            NativeArray<byte> opacity = new NativeArray<byte>(mapCount, Allocator.Temp);
-            for (int i = 0; i < mapCount; i++)
-            {
-                opacity[i] = blockMappings[i].lightOpacity;
-            }
-
-            // skyExposed: marca voxels que realmente veem o céu
-            NativeArray<byte> skyExposed = new NativeArray<byte>(totalVoxels, Allocator.Temp); // 0/1 em vez de bool p/ Burst
-
-            // Vertical fill: top -> bottom; marque skyExposed e inicialize sunlight=15 nas colunas visíveis
-            for (int x = 0; x < voxelSizeX; x++)
-            {
-                for (int z = 0; z < voxelSizeZ; z++)
-                {
-                    int idxBase = x + z * planeSize;
-                    bool blocked = false;
-                    for (int y = SizeY - 1; y >= 0; y--)
-                    {
-                        int idx = idxBase + y * voxelSizeX;
-                        BlockType bt = blockTypes[idx];
-                        int bti = (int)bt;
-                        byte blockOp = (bti >= 0 && bti < mapCount) ? opacity[bti] : (byte)15;
-
-                        if (!blocked && blockOp < 15)
-                        {
-                            sunlight[idx] = 15;
-                            skyExposed[idx] = 1;
-                        }
-                        else
-                        {
-                            sunlight[idx] = 0;
-                            skyExposed[idx] = 0;
-                            if (blockOp >= 15) blocked = true;
-                        }
-                    }
-                }
-            }
-
-            // BFS propagation (6-neighbors) com opacidade variável e custo mínimo 1
-            NativeList<int> queue = new NativeList<int>(Allocator.Temp);
-            for (int i = 0; i < totalVoxels; i++)
-            {
-                if (sunlight[i] > 0 && skyExposed[i] == 1)
-                    queue.Add(i);
-            }
-
-            int read = 0;
-            while (read < queue.Length)
-            {
-                int cur = queue[read++];
-                byte curLight = sunlight[cur];
-                if (curLight <= 1) continue;
-
-                int plane = voxelSizeX * SizeY;
-                int y = (cur / voxelSizeX) % SizeY;
-                int x = cur % voxelSizeX;
-                int z = cur / plane;
-
-                // helper local
-                void TryPush(int tx, int ty, int tz)
-                {
-                    if (tx < 0 || tx >= voxelSizeX || ty < 0 || ty >= SizeY || tz < 0 || tz >= voxelSizeZ) return;
-                    int nIdx = tx + ty * voxelSizeX + tz * plane;
-                    byte existing = sunlight[nIdx];
-                    // compute opacidade do bloco destino
-                    BlockType neighborType = blockTypes[nIdx];
-                    int nti = (int)neighborType;
-                    byte op = (nti >= 0 && nti < mapCount) ? opacity[nti] : (byte)15;
-
-                    // custo mínimo 1 (mesmo no ar) — evitar math.max com byte para não gerar ambiguidade
-                    byte cost = (op < 1) ? (byte)1 : op;
-
-                    // fazer cálculo em int para evitar ambiguidade e underflow
-                    int candInt = System.Math.Max(0, (int)curLight - (int)cost);
-                    byte candidate = (byte)candInt;
-
-                    if (candidate > existing)
-                    {
-                        sunlight[nIdx] = candidate;
-                        if (candidate > 1)
-                            queue.Add(nIdx);
-                    }
-                }
-
-                TryPush(x - 1, y, z);
-                TryPush(x + 1, y, z);
-                TryPush(x, y - 1, z);
-                TryPush(x, y + 1, z);
-                TryPush(x, y, z - 1);
-                TryPush(x, y, z + 1);
-            }
-
-            queue.Dispose();
-            skyExposed.Dispose();
-            opacity.Dispose();
-        }
-
 
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> sunlight)
         {
