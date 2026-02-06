@@ -11,7 +11,7 @@ using Unity.Mathematics;
 public static class MeshGenerator
 {
     private const int SizeX = 16;
-    private const int SizeY = 256;
+    private const int SizeY = 384;
     private const int SizeZ = 16;
 
     // ------------------- Tree Instance -------------------
@@ -158,12 +158,18 @@ public static class MeshGenerator
             NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.Temp);
             NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.Temp);
 
-            PopulateVoxels(heightCache, blockTypes, solids);
+            PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
+            GenerateCaves(heightCache, blockTypes, solids);
 
-
-            // NEW: aplicar as TreeInstances (vindo do World) - substitui comportamento de geração local
-            //  ApplyTreeInstancesToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            FillWaterAboveTerrain(
+                heightCache,
+                blockTypes,
+                solids,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize
+            );
 
             TreePlacement.ApplyTreeInstancesToVoxels(
                 blockTypes,
@@ -179,8 +185,6 @@ public static class MeshGenerator
                 voxelSizeZ,
                 voxelPlaneSize
             );
-
-
 
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
@@ -318,15 +322,11 @@ public static class MeshGenerator
 
             return heightCache;
         }
-        private void PopulateVoxels(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
+        private void PopulateTerrainColumns(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
 
-            int baseWorldX = coord.x * SizeX;
-            int baseWorldZ = coord.y * SizeZ;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int heightStride = voxelSizeX;
 
             // Preencher sólidos iniciais e ar acima
             for (int lx = -border; lx < SizeX + border; lx++)
@@ -358,9 +358,13 @@ public static class MeshGenerator
                             {
                                 bt = BlockType.Bedrock;
                             }
-                            else
+                            else if (y > h - 20)
                             {
                                 bt = BlockType.Stone;
+                            }
+                            else
+                            {
+                                bt = BlockType.Deepslate;
                             }
                             blockTypes[voxelIdx] = bt;
                             solids[voxelIdx] = blockMappings[(int)bt].isSolid;
@@ -374,7 +378,18 @@ public static class MeshGenerator
                 }
             }
 
-            // Cavernas (mesma lógica sua original)
+        }
+
+
+        private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
+        {
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int heightStride = SizeX + 2 * border;
+
+            int baseWorldX = coord.x * SizeX;
+            int baseWorldZ = coord.y * SizeZ;
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
                 int stride = math.max(1, caveStride);
@@ -503,7 +518,17 @@ public static class MeshGenerator
                 coarseCaveNoise.Dispose();
             }
 
-            // Preencher água
+        }
+
+        private void FillWaterAboveTerrain(
+            NativeArray<int> heightCache,
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            int heightStride = SizeX + 2 * border;
             for (int lx = -border; lx < SizeX + border; lx++)
             {
                 for (int lz = -border; lz < SizeZ + border; lz++)
