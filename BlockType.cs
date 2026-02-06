@@ -10,5 +10,6 @@ public enum BlockType
     Leaves = 7,
     Log = 8,
     Deepslate = 9,
+    Snow = 10
     
 }

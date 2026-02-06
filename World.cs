@@ -8,6 +8,20 @@ using Unity.Mathematics; // For noise functions if needed (faster than Mathf)
 using System.Collections.Concurrent;
 
 [Serializable]
+public struct RiverLayer
+{
+    public bool enabled;
+    public float scale;         // 0.003f ~ 0.01f → rios grandes e sinuosos
+    public float amplitude;     // profundidade máxima do vale (ex: 8-15)
+    public int octaves;
+    public float persistence;
+    public float lacunarity;
+    public Vector2 offset;
+    public float threshold;     // 0.06f ~ 0.09f → largura do rio
+    public float maxAmp;        // (opcional, pode ignorar)
+}
+
+[Serializable]
 public struct WarpLayer
 {
     public bool enabled;
@@ -61,7 +75,8 @@ public class World : MonoBehaviour
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
-
+    [Header("River Settings")]
+    public RiverLayer[] riverLayers;
     private Dictionary<Vector2Int, Chunk> activeChunks = new Dictionary<Vector2Int, Chunk>();
     private Queue<Chunk> chunkPool = new Queue<Chunk>();
 
@@ -201,6 +216,36 @@ public class World : MonoBehaviour
                 warpLayers[i] = layer;
             }
         }
+
+
+        if (riverLayers != null)
+        {
+            for (int i = 0; i < riverLayers.Length; i++)
+            {
+                RiverLayer layer = riverLayers[i];
+                if (!layer.enabled) continue;
+
+                if (layer.scale <= 0f) layer.scale = 0.005f + i * 0.002f;
+                if (layer.amplitude <= 0f) layer.amplitude = 10f + i * 5f;
+                if (layer.octaves <= 0) layer.octaves = 2;
+                if (layer.persistence <= 0f) layer.persistence = 0.5f;
+                if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
+                if (layer.threshold <= 0f) layer.threshold = 0.075f;
+
+                if (layer.offset == Vector2.zero)
+                    layer.offset = new Vector2(offsetX + i * 19.3f, offsetZ + i * 27.7f);
+                else
+                    layer.offset += new Vector2(offsetX, offsetZ);
+
+                // pré-compute (opcional)
+                float amp = 1f; layer.maxAmp = 0f;
+                for (int o = 0; o < layer.octaves; o++) { layer.maxAmp += amp; amp *= layer.persistence; }
+                if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
+
+                riverLayers[i] = layer;
+            }
+        }
+
 
         // Inicializa caveLayers (semelhante a noiseLayers)
         if (caveLayers != null)
@@ -566,6 +611,7 @@ public class World : MonoBehaviour
             treeMargin,  // pass margin
             borderSize,      // NOVO
             maxTreeRadius,   // NOVO
+            
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,

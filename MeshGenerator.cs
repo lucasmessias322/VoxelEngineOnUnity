@@ -38,6 +38,7 @@ public static class MeshGenerator
         NoiseLayer[] noiseLayersArr,
         WarpLayer[] warpLayersArr,
         NoiseLayer[] caveLayersArr,
+        
         BlockTextureMapping[] blockMappingsArr,
         int baseHeight,
         int heightVariation,
@@ -171,20 +172,20 @@ public static class MeshGenerator
                 voxelPlaneSize
             );
 
-            TreePlacement.ApplyTreeInstancesToVoxels(
-                blockTypes,
-                solids,
-                blockMappings,
-                treeInstances,
-                coord,
-                border,           // o mesmo border que você usa
-                SizeX,            // 16 normalmente
-                SizeZ,            // 16 normalmente
-                SizeY,            // 256 normalmente
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize
-            );
+            // TreePlacement.ApplyTreeInstancesToVoxels(
+            //     blockTypes,
+            //     solids,
+            //     blockMappings,
+            //     treeInstances,
+            //     coord,
+            //     border,           // o mesmo border que você usa
+            //     SizeX,            // 16 normalmente
+            //     SizeZ,            // 16 normalmente
+            //     SizeY,            // 256 normalmente
+            //     voxelSizeX,
+            //     voxelSizeZ,
+            //     voxelPlaneSize
+            // );
 
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
@@ -321,6 +322,13 @@ public static class MeshGenerator
             }
 
             return heightCache;
+        }
+
+        // Updated GetHeightFromNoise (now takes sumAmp for centering):
+        private int GetHeightFromNoise(float noise, float sumAmp)
+        {
+            float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
+            return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
         }
         private void PopulateTerrainColumns(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
@@ -843,12 +851,7 @@ public static class MeshGenerator
             faceVerts.Dispose();
         }
 
-        // Updated GetHeightFromNoise (now takes sumAmp for centering):
-        private int GetHeightFromNoise(float noise, float sumAmp)
-        {
-            float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
-            return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
-        }
+
         private static int FloorDiv(int a, int b)
         {
             int q = a / b;

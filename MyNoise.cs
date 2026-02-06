@@ -3,6 +3,16 @@ using UnityEngine;
 using Unity.Burst;
 using Unity.Mathematics;
 using System;
+public enum NoiseLayerType : byte
+{
+    Generic = 0,
+    Continentalness,
+    Peaks,
+    Valleys,
+    Erosion,
+    Temperature,
+    Humidity
+}
 
 [Serializable]
 public struct NoiseLayer
@@ -14,14 +24,14 @@ public struct NoiseLayer
     public float persistence;
     public float lacunarity;
     public Vector2 offset;
-    public float maxAmp; // precomputado (World.Start já faz isso)
+    public float maxAmp;
+    public float redistributionModifier;
+    public float exponent;
+    public float verticalScale;
+    public float ridgeFactor;
 
-    // novos (opcionais) — controla redistribuição do layer
-    public float redistributionModifier; // default 1
-    public float exponent; // default 1
-
-    public float verticalScale;  // Novo: Frequência vertical (default 0.05f)
-    public float ridgeFactor;    // Novo: Fator para ridging (default 1f-3f, para formas irregulares)
+    // novo campo
+    public NoiseLayerType layerType;
 }
 
 /// <summary>
@@ -129,6 +139,35 @@ public static class MyNoise
         return math.clamp(value, 0f, 1f);
     }
 
+    [BurstCompile]
+    public static float OctavePerlin(float nx, float nz, RiverLayer layer)
+    {
+        float scale = math.max(1e-5f, layer.scale);
+        int octaves = math.max(1, layer.octaves);
+        float persistence = math.clamp(layer.persistence, 0f, 1f);
+        float lacunarity = math.max(1f, layer.lacunarity);
+
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f;
+        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
+
+        for (int i = 0; i < octaves; i++)
+        {
+            float sample =
+                noise.snoise(new float2(
+                    (nx * frequency) / scale,
+                    (nz * frequency) / scale
+                )) * 0.5f + 0.5f;
+
+            total += sample * amplitude;
+            amplitude *= persistence;
+            frequency *= lacunarity;
+        }
+
+        float value = total / maxAmp;
+        return math.clamp(value, 0f, 1f);
+    }
 
     /// <summary>
     /// Octave Perlin 3D CORRIGIDO para cavernas Bedrock-like.
