@@ -11,25 +11,22 @@ public static class TreePlacement
     /// </summary>
     [BurstCompile]
     public static void ApplyTreeInstancesToVoxels(
-        NativeArray<BlockType> blockTypes,
-        NativeArray<bool> solids,
-        NativeArray<BlockTextureMapping> blockMappings,
-        NativeArray<MeshGenerator.TreeInstance> treeInstances,
-        Vector2Int coord,
-        int border,
-        int chunkSizeX,     // geralmente 16
-        int chunkSizeZ,     // geralmente 16
-        int chunkSizeY ,     // geralmente 256
-        int voxelSizeX,
-        int voxelSizeZ,
-        int voxelPlaneSize
-
-    )
+     NativeArray<BlockType> blockTypes,
+     NativeArray<bool> solids,
+     NativeArray<BlockTextureMapping> blockMappings,
+     NativeArray<MeshGenerator.TreeInstance> treeInstances,
+     Vector2Int coord,
+     int border,
+     int chunkSizeX,     // geralmente 16
+     int chunkSizeZ,     // geralmente 16
+     int chunkSizeY,     // geralmente 256
+     int voxelSizeX,
+     int voxelSizeZ,
+     int voxelPlaneSize
+ )
     {
         if (treeInstances.Length == 0)
             return;
-
-     
 
         int baseWorldX = coord.x * chunkSizeX;
         int baseWorldZ = coord.y * chunkSizeZ;
@@ -65,6 +62,64 @@ public static class TreePlacement
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
 
+            // Pre-calc da copa / tronco para as checagens
+            int leafBottom = surfaceY + t.trunkHeight - 1;
+            int canopyH = math.max(1, t.canopyHeight);
+            int canopyR = math.max(0, t.canopyRadius);
+
+            // ---------------------------
+            // PRE-CHECK: evitar árvores sobre/na água e perto de entradas de caverna
+            // ---------------------------
+            bool skipTree = false;
+
+            // 1) Se houver água no volume do tronco + copa -> pular árvore
+            int maxCheckY = math.min(chunkSizeY - 1, surfaceY + t.trunkHeight + canopyH);
+            for (int yy = surfaceY + 1; yy <= maxCheckY && !skipTree; yy++)
+            {
+                for (int dx = -canopyR; dx <= canopyR && !skipTree; dx++)
+                {
+                    for (int dz = -canopyR; dz <= canopyR; dz++)
+                    {
+                        int cx = ix + dx;
+                        int cz = iz + dz;
+                        if (cx < 0 || cx >= voxelSizeX || cz < 0 || cz >= voxelSizeZ) continue;
+                        int cidx = cx + yy * voxelSizeX + cz * voxelPlaneSize;
+                        if (blockTypes[cidx] == BlockType.Water)
+                        {
+                            skipTree = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (skipTree) continue;
+
+            // 2) Detectar possíveis entradas de caverna: se qualquer bloco adjacente (3x3) no nível da superfície
+            // ou até 2 blocos abaixo é Air, então é provável uma entrada — pular árvore.
+            for (int dx = -1; dx <= 1 && !skipTree; dx++)
+            {
+                for (int dz = -1; dz <= 1 && !skipTree; dz++)
+                {
+                    for (int dy = 0; dy >= -2; dy--) // checar surfaceY, surfaceY-1, surfaceY-2
+                    {
+                        int cy = surfaceY + dy;
+                        if (cy < 0) break;
+                        int cx = ix + dx;
+                        int cz = iz + dz;
+                        if (cx < 0 || cx >= voxelSizeX || cz < 0 || cz >= voxelSizeZ) continue;
+                        int cidx = cx + cy * voxelSizeX + cz * voxelPlaneSize;
+                        if (blockTypes[cidx] == BlockType.Air)
+                        {
+                            skipTree = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (skipTree) continue;
+
             // --------------------------------------------------
             // Tronco (1×1)
             // --------------------------------------------------
@@ -76,8 +131,8 @@ public static class TreePlacement
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
 
                 BlockType existing = blockTypes[tidx];
-                // Só substitui se for ar, água ou folhas (evita destruir outros blocos)
-                if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves)
+                // NÃO substituir água — só substitui se for ar ou folhas (evita destruir outros blocos/água)
+                if (existing == BlockType.Air || existing == BlockType.Leaves)
                 {
                     blockTypes[tidx] = BlockType.Log;
                     solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
@@ -87,10 +142,6 @@ public static class TreePlacement
             // --------------------------------------------------
             // Copa (estilo Minecraft Oak com variação)
             // --------------------------------------------------
-            int leafBottom = surfaceY + t.trunkHeight - 1;
-            int canopyH = math.max(1, t.canopyHeight);
-            int canopyR = math.max(0, t.canopyRadius);
-
             // Hash simples para variação determinística por árvore e camada
             int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791);
 
@@ -103,21 +154,22 @@ public static class TreePlacement
                 if (dy == canopyH - 1)
                 {
                     for (int dx = -1; dx <= 0; dx++)
-                    for (int dz = -1; dz <= 0; dz++)
-                    {
-                        int lx = ix + dx;
-                        int lz = iz + dz;
-                        if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
-
-                        int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-                        BlockType ex = blockTypes[lidx];
-                        if (ex == BlockType.Log) continue;
-                        if (ex == BlockType.Air || ex == BlockType.Water || ex == BlockType.Leaves)
+                        for (int dz = -1; dz <= 0; dz++)
                         {
-                            blockTypes[lidx] = BlockType.Leaves;
-                            solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
+                            int lx = ix + dx;
+                            int lz = iz + dz;
+                            if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ) continue;
+
+                            int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
+                            BlockType ex = blockTypes[lidx];
+                            if (ex == BlockType.Log) continue;
+                            // NÃO substituir água
+                            if (ex == BlockType.Air || ex == BlockType.Leaves)
+                            {
+                                blockTypes[lidx] = BlockType.Leaves;
+                                solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
+                            }
                         }
-                    }
                     continue;
                 }
 
@@ -153,7 +205,8 @@ public static class TreePlacement
                         BlockType existing = blockTypes[lidx];
 
                         if (existing == BlockType.Log) continue;
-                        if (!(existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Leaves))
+                        // NÃO substituir água
+                        if (!(existing == BlockType.Air || existing == BlockType.Leaves))
                             continue;
 
                         blockTypes[lidx] = BlockType.Leaves;
@@ -170,10 +223,15 @@ public static class TreePlacement
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
                 if (blockTypes[tidx] != BlockType.Log)
                 {
-                    blockTypes[tidx] = BlockType.Log;
-                    solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
+                    // Só sobrescreve se for Air ou Leaves (nunca água)
+                    if (blockTypes[tidx] == BlockType.Air || blockTypes[tidx] == BlockType.Leaves)
+                    {
+                        blockTypes[tidx] = BlockType.Log;
+                        solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
+                    }
                 }
             }
         }
     }
+
 }

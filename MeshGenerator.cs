@@ -37,11 +37,12 @@ public static class MeshGenerator
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
         WarpLayer[] warpLayersArr,
+
         NoiseLayer[] caveLayersArr,
-        
+
         BlockTextureMapping[] blockMappingsArr,
         int baseHeight,
-        int heightVariation,
+
         float globalOffsetX,
         float globalOffsetZ,
         int atlasTilesX,
@@ -58,6 +59,7 @@ public static class MeshGenerator
         int treeMargin,
         int borderSize,        // NOVO: tamanho do border
         int maxTreeRadius,
+        int CliffTreshold,
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -79,15 +81,18 @@ public static class MeshGenerator
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
 
+
+
         var job = new ChunkMeshJob
         {
             coord = coord,
             noiseLayers = nativeNoiseLayers,
             warpLayers = nativeWarpLayers,
+
             caveLayers = nativeCaveLayers,
             blockMappings = nativeBlockMappings,
             baseHeight = baseHeight,
-            heightVariation = heightVariation,
+
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             atlasTilesX = atlasTilesX,
@@ -108,6 +113,7 @@ public static class MeshGenerator
             treeMargin = treeMargin,       // NEW
             border = borderSize,              // NOVO
             maxTreeRadius = maxTreeRadius,    // NOVO
+            CliffTreshold = CliffTreshold
         };
 
         handle = job.Schedule();
@@ -119,7 +125,7 @@ public static class MeshGenerator
         public Vector2Int coord;
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
         [ReadOnly] public NativeArray<WarpLayer> warpLayers;
-        [ReadOnly] public NativeArray<NoiseLayer> caveLayers;
+        [ReadOnly] public NativeArray<NoiseLayer> caveLayers;       // ← movido para cá
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits; // EDIT: lista de edits aplicáveis ao chunk
         [ReadOnly] public NativeArray<TreeInstance> treeInstances; // NEW
@@ -127,7 +133,7 @@ public static class MeshGenerator
         public int border;                    // NOVO
         public int maxTreeRadius;             // NOVO
         public int baseHeight;
-        public int heightVariation;
+
         public float offsetX;
         public float offsetZ;
         public int atlasTilesX;
@@ -137,6 +143,8 @@ public static class MeshGenerator
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
+
+        public int CliffTreshold;
 
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
@@ -172,20 +180,20 @@ public static class MeshGenerator
                 voxelPlaneSize
             );
 
-            // TreePlacement.ApplyTreeInstancesToVoxels(
-            //     blockTypes,
-            //     solids,
-            //     blockMappings,
-            //     treeInstances,
-            //     coord,
-            //     border,           // o mesmo border que você usa
-            //     SizeX,            // 16 normalmente
-            //     SizeZ,            // 16 normalmente
-            //     SizeY,            // 256 normalmente
-            //     voxelSizeX,
-            //     voxelSizeZ,
-            //     voxelPlaneSize
-            // );
+            TreePlacement.ApplyTreeInstancesToVoxels(
+                blockTypes,
+                solids,
+                blockMappings,
+                treeInstances,
+                coord,
+                border,           // o mesmo border que você usa
+                SizeX,            // 16 normalmente
+                SizeZ,            // 16 normalmente
+                SizeY,            // 256 normalmente
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize
+            );
 
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
@@ -234,6 +242,7 @@ public static class MeshGenerator
                 }
             }
         }
+
         private NativeArray<int> GenerateHeightCache()
         {
             int heightSizeX = SizeX + 2 * border;
@@ -347,6 +356,14 @@ public static class MeshGenerator
                     int h = heightCache[cacheIdx];
                     bool isBeachArea = (h <= seaLevel + 2);
 
+                    // 🔥 NOVO: detectar cliff
+                    bool isCliff = IsCliff(heightCache, cacheX, cacheZ, heightStride, CliffTreshold);
+                    int mountainStoneHeight = baseHeight + 70; // ajuste como quiser
+                    bool isHighMountain = h >= mountainStoneHeight;
+
+
+
+
                     for (int y = 0; y < SizeY; y++)
                     {
                         int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
@@ -356,12 +373,28 @@ public static class MeshGenerator
                             BlockType bt;
                             if (y == h)
                             {
-                                bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+                                if (isHighMountain)
+                                {
+                                    bt = BlockType.Stone; // ⛰️ topo de montanha alta
+                                }
+                                else if (isCliff)
+                                {
+                                    bt = BlockType.Stone;
+                                }
+                                else
+                                {
+                                    bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+                                }
+
                             }
                             else if (y > h - 4)
                             {
-                                bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                                if (isCliff)
+                                    bt = BlockType.Stone;        // 👈 cliff wall
+                                else
+                                    bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
                             }
+
                             else if (y <= 2)
                             {
                                 bt = BlockType.Bedrock;
@@ -387,6 +420,37 @@ public static class MeshGenerator
             }
 
         }
+
+
+        private bool IsCliff(
+            NativeArray<int> heightCache,
+            int x,
+            int z,
+            int heightStride,
+            int threshold = 2
+        )
+        {
+            // 🔒 proteção de borda
+            if (x <= 0 || z <= 0 || x >= heightStride - 1 || z >= heightCache.Length / heightStride - 1)
+                return false;
+
+            int h = heightCache[x + z * heightStride];
+
+            int hN = heightCache[x + (z + 1) * heightStride];
+            int hS = heightCache[x + (z - 1) * heightStride];
+            int hE = heightCache[(x + 1) + z * heightStride];
+            int hW = heightCache[(x - 1) + z * heightStride];
+
+            int maxDiff = 0;
+            maxDiff = math.max(maxDiff, math.abs(h - hN));
+            maxDiff = math.max(maxDiff, math.abs(h - hS));
+            maxDiff = math.max(maxDiff, math.abs(h - hE));
+            maxDiff = math.max(maxDiff, math.abs(h - hW));
+
+            return maxDiff >= threshold;
+        }
+
+
 
 
         private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)

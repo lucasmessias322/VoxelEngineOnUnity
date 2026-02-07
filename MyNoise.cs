@@ -29,6 +29,9 @@ public struct NoiseLayer
     public float exponent;
     public float verticalScale;
     public float ridgeFactor;
+    public bool is3D;  // Novo: true para usar 3D noise (para superfície e caves)
+    public float densityThreshold;  // Novo: threshold para density field (e.g., 0.0 para mais sólido)
+    public float verticalGradient;  // Novo: subtrai y * this para fade com altura (e.g., 0.01f para ilhas flutuantes)
 
     // novo campo
     public NoiseLayerType layerType;
@@ -139,35 +142,6 @@ public static class MyNoise
         return math.clamp(value, 0f, 1f);
     }
 
-    [BurstCompile]
-    public static float OctavePerlin(float nx, float nz, RiverLayer layer)
-    {
-        float scale = math.max(1e-5f, layer.scale);
-        int octaves = math.max(1, layer.octaves);
-        float persistence = math.clamp(layer.persistence, 0f, 1f);
-        float lacunarity = math.max(1f, layer.lacunarity);
-
-        float total = 0f;
-        float amplitude = 1f;
-        float frequency = 1f;
-        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
-
-        for (int i = 0; i < octaves; i++)
-        {
-            float sample =
-                noise.snoise(new float2(
-                    (nx * frequency) / scale,
-                    (nz * frequency) / scale
-                )) * 0.5f + 0.5f;
-
-            total += sample * amplitude;
-            amplitude *= persistence;
-            frequency *= lacunarity;
-        }
-
-        float value = total / maxAmp;
-        return math.clamp(value, 0f, 1f);
-    }
 
     /// <summary>
     /// Octave Perlin 3D CORRIGIDO para cavernas Bedrock-like.
