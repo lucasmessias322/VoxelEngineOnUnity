@@ -75,13 +75,15 @@ public class PlayerBlockBreaker : MonoBehaviour
                     return;
                 }
 
-                // só coloca se estiver vazio segundo o World
-                if (World.Instance.GetBlockAt(placePos) != BlockType.Air)
+                // Inside the if (Input.GetMouseButtonDown(1)) block, replace the existing check:
+                BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
+                if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
                 {
-                    Debug.Log($"[Place] local já ocupado por {World.Instance.GetBlockAt(placePos)}");
+                    Debug.Log($"[Place] local já ocupado por {blockAtPlacePos}");
                     return;
                 }
 
+                // Proceed to place
                 World.Instance.SetBlockAt(placePos, placeBlockType);
                 Debug.Log($"[Place] requested {placeBlockType} at {placePos}");
             }

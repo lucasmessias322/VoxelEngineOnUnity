@@ -824,7 +824,7 @@ public class World : MonoBehaviour
         warpZ = (warpZ - 0.5f) * 2f;
 
         float totalNoise = 0f;
-        float sumAmp = 0f;
+        float sumAmp = 0f;  // Inicialize corretamente (já está)
         if (noiseLayers != null)
         {
             for (int i = 0; i < noiseLayers.Length; i++)
@@ -839,24 +839,24 @@ public class World : MonoBehaviour
                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                     sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
 
-                totalNoise += sample * layer.amplitude;  // Changed: no /= sumAmp later
-                sumWarpAmp += layer.amplitude;  // ← ADICIONE
+                totalNoise += sample * layer.amplitude;
+                sumAmp += math.max(1e-5f, layer.amplitude);
             }
         }
-
         // Remove the normalization:
         // if (sumAmp > 0f) totalNoise /= sumAmp;  // DELETE THIS
 
         // Fallback if no layers (update similarly, without normalization)
-        else
+        // Fallback se não houver layers ativas ou sumAmp == 0 (já está ok)
+        if (sumAmp <= 0f)  // Adicione essa checagem para robustez
         {
             float nx = (worldX + warpX) * 0.05f + offsetX;
             float nz = (worldZ + warpZ) * 0.05f + offsetZ;
             totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-            sumAmp = 1f;  // Treat fallback as amp=1
+            sumAmp = 1f;
         }
 
-        return GetHeightFromNoise(totalNoise, sumAmp);  // Pass sumAmp to the helper
+        return GetHeightFromNoise(totalNoise, sumAmp);
     }
 
     // Constrói as instâncias de árvore para um chunk (determinístico)
