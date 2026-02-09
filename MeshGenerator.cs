@@ -66,7 +66,8 @@ public static class MeshGenerator
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights  // Novo: adicione isso
+        out NativeList<byte> vertexLights,  // Novo: adicione isso
+        out NativeList<byte> tintFlags
     )
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
@@ -80,7 +81,7 @@ public static class MeshGenerator
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
-
+        tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
 
 
         var job = new ChunkMeshJob
@@ -107,7 +108,8 @@ public static class MeshGenerator
             waterTriangles = waterTriangles,
             uvs = uvs,
             normals = normals,
-            vertexLights = vertexLights,  // Novo: atribua ao job
+            vertexLights = vertexLights,
+            tintFlags = tintFlags, // Novo: atribua ao job
             blockEdits = blockEdits,       // EDIT: atribui edits ao job
             treeInstances = treeInstances, // NEW
             treeMargin = treeMargin,       // NEW
@@ -152,7 +154,7 @@ public static class MeshGenerator
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
-
+        public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
         public void Execute()
         {
             // Passo 1: Gerar heightCache (flattened)
@@ -849,6 +851,28 @@ public static class MeshGenerator
                                     vertexLights.Add(final);
                                 }
                                 // --- FIM AMOSTRAGEM SUAVE ---
+
+
+                                // ---Definir flags de tintura---
+
+                                bool shouldTint = false;
+
+                                if (currentType == BlockType.Leaves)
+                                {
+                                    shouldTint = true;
+                                }
+                                else if (currentType == BlockType.Grass)
+                                {
+                                    shouldTint = (dir == 2);  // apenas topo da grama
+                                }
+
+                                byte tintFlag = shouldTint ? (byte)1 : (byte)0;
+
+                                tintFlags.Add(tintFlag);
+                                tintFlags.Add(tintFlag);
+                                tintFlags.Add(tintFlag);
+                                tintFlags.Add(tintFlag);
+
 
                                 // UVs
                                 BlockFace face = (dir == 2) ? BlockFace.Top : (dir == 3) ? BlockFace.Bottom : BlockFace.Side;

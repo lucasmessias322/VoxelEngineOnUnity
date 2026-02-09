@@ -63,8 +63,8 @@ public class World : MonoBehaviour
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
-    
-    
+
+
     private Dictionary<Vector2Int, Chunk> activeChunks = new Dictionary<Vector2Int, Chunk>();
     private Queue<Chunk> chunkPool = new Queue<Chunk>();
 
@@ -100,6 +100,7 @@ public class World : MonoBehaviour
         public NativeArray<MeshGenerator.TreeInstance> trees; // NEW: árvores aplicadas no job
         public Vector2Int coord;
         public int expectedGen;
+        public NativeList<byte> tintFlags;
     }
 
     [Header("Tree Settings")]
@@ -108,6 +109,9 @@ public class World : MonoBehaviour
 
     public int CliffTreshold = 2; // diferença de altura para considerar um cliff
 
+    // No topo da classe Chunk (ou em [Header("Grass Tint")]
+    [Header("Grass Tint Settings")]
+    public Color grassTintBase = new Color(0.8f, 0.4f, 0.4f);  // cor desejada quando bem iluminado
     void Awake()
     {
         if (Instance != null && Instance != this)
@@ -278,12 +282,13 @@ public class World : MonoBehaviour
                         pm.waterTriangles.AsArray(),
                         pm.uvs.AsArray(),
                         pm.normals.AsArray(),
-                        pm.lightValues.AsArray()
+                        pm.lightValues.AsArray(),
+                        pm.tintFlags.AsArray()  // NOVO
                     );
                     activeChunk.gameObject.SetActive(true);
                     applied++;
                 }
-
+                pm.tintFlags.Dispose();  // NOVO
                 // dispose NativeLists
                 pm.vertices.Dispose();
                 pm.opaqueTriangles.Dispose();
@@ -474,7 +479,8 @@ public class World : MonoBehaviour
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-            out NativeList<byte> vertexLights // novo out
+            out NativeList<byte> vertexLights, // novo out
+            out NativeList<byte> tintFlags
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -489,7 +495,8 @@ public class World : MonoBehaviour
             edits = nativeEdits, // store to dispose later
             trees = nativeTrees,  // store trees to dispose later
             coord = coord,
-            expectedGen = expectedGen
+            expectedGen = expectedGen,
+            tintFlags = tintFlags
         });
     }
 
@@ -582,7 +589,8 @@ public class World : MonoBehaviour
             out NativeList<int> waterTriangles,
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
-            out NativeList<byte> vertexLights // novo out
+            out NativeList<byte> vertexLights, // novo out
+            out NativeList<byte> tintFlags // novo out
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -597,7 +605,8 @@ public class World : MonoBehaviour
             edits = nativeEdits,
             trees = nativeTrees,
             coord = coord,
-            expectedGen = expectedGen
+            expectedGen = expectedGen,
+            tintFlags = tintFlags
         });
     }
 

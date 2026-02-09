@@ -55,7 +55,7 @@ public class Chunk : MonoBehaviour
     }
 
 
-    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals, NativeArray<byte> vertexLights)
+    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals, NativeArray<byte> vertexLights, NativeArray<byte> tintFlags)
     {
         // Render mesh (mesma lógica de antes)
         mesh.Clear(false);
@@ -72,54 +72,68 @@ public class Chunk : MonoBehaviour
         mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
         mesh.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
 
-        // Aplicar vertex color a partir dos bytes (0..15) com Face Shading
+        // Aplicar vertex color a partir dos bytes (0..15) com Face Shading + TINTING
         if (vertexLights.Length == vertices.Length)
         {
             Color[] cols = new Color[vertices.Length];
 
-            const float ambientMin = 0.1f; // ajuste global de ambiência (0.1 - 0.25)
+            const float ambientMin = 0.1f;
             const float shadeTop = 1.00f;
             const float shadeSide = 0.8f;
             const float shadeBottom = 0.60f;
 
             bool haveNormalsPerVertex = (normals.Length == vertices.Length);
+            bool haveTintFlags = (tintFlags.Length == vertices.Length);  // NOVO
 
             for (int i = 0; i < vertices.Length; i++)
             {
                 float raw = vertexLights[i] / 15f;
                 float l = Mathf.Lerp(ambientMin, 1f, raw);
 
-                // Determina tipo de face a partir da normal do vértice
                 float faceShade = 1f;
                 if (haveNormalsPerVertex)
                 {
-                    Vector3 n = normals[i]; // normal por vértice (de MeshGenerator)
-                                            // normal deve ser eixo principal (0/±1); usamos thresholds simples
+                    Vector3 n = normals[i];
                     if (Mathf.Abs(n.y) > 0.5f)
-                    {
-                        // cima ou baixo
                         faceShade = (n.y > 0f) ? shadeTop : shadeBottom;
-                    }
                     else
-                    {
-                        // laterais (x/z)
                         faceShade = shadeSide;
-                    }
                 }
                 else
                 {
-                    // fallback simples — trata tudo como lateral
                     faceShade = shadeSide;
                 }
 
                 l *= faceShade;
                 l = Mathf.Clamp01(l);
-                cols[i] = new Color(l, l, l, 1f);
+
+                // NOVO: Tinting para topo de grama (vermelho)
+                // NOVO: Tinting para topo de grama (multiplicativo com iluminação)
+                if (haveTintFlags && tintFlags[i] == 1 && normals.Length > 0 )
+                {
+                    // l já está em 0..1 (depois de aplicar faceShade e clamp)
+                    // Multiplicamos a cor base pela iluminação
+                    Color tinted = World.Instance.grassTintBase * l;
+
+                    // Opcional: evitar que fique muito escuro / sem vida
+                    // tinted = Color.Lerp(tinted, grassTintBase * 0.3f, 0.15f); // leve desaturação em sombra
+
+                    // Ou manter um mínimo de brilho/saturação
+                    tinted.r = Mathf.Max(tinted.r, World.Instance.grassTintBase.r * 0.15f);
+                    tinted.g = Mathf.Max(tinted.g, World.Instance.grassTintBase.g * 0.15f);
+                    tinted.b = Mathf.Max(tinted.b, World.Instance.grassTintBase.b * 0.15f);
+
+                    cols[i] = tinted;
+                }
+                else
+                {
+                    // cinza normal (iluminação padrão)
+                    cols[i] = new Color(l, l, l, 1f);
+                }
             }
 
             mesh.colors = cols;
         }
-
         mesh.RecalculateBounds();
 
         // === Atualizar MeshCollider com somente triângulos opacos ===

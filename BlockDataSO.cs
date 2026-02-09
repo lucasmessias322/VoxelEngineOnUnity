@@ -37,7 +37,7 @@ public class BlockDataSO : ScriptableObject
             }
         }
 
-        
+
     }
 
     /// <summary>
@@ -86,6 +86,7 @@ public struct BlockTextureMapping
     public bool isSolid;   // default: false (defina como true no Inspector para blocos sólidos)
     public int materialIndex;  // default: 0
 
-     // NOVO: opacidade de luz 0..15 (0 = não reduz, 15 = bloqueia)
+    // NOVO: opacidade de luz 0..15 (0 = não reduz, 15 = bloqueia)
     public byte lightOpacity;
+    public bool isBiomeTinted;
 }

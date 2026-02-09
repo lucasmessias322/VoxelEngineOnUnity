@@ -66,12 +66,12 @@ public class PlayerBlockBreaker : MonoBehaviour
                     return;
                 }
 
-                // não colocar dentro do jogador (opcional) - exemplo rápido
+
                 Vector3 playerPos = World.Instance.player.position;
                 Vector3Int playerBlock = Vector3Int.FloorToInt(playerPos);
-                if (placePos == playerBlock || placePos == playerBlock + Vector3Int.up)
+                if (placePos == playerBlock + Vector3Int.up)
                 {
-                    Debug.Log("[Place] impedido: dentro do jogador");
+                    Debug.Log("[Place] impedido: na cabeça do jogador");
                     return;
                 }
 
