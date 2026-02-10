@@ -1,5 +1,6 @@
 using UnityEngine;
 using Unity.Collections;
+using System.Collections.Generic;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
@@ -55,7 +56,17 @@ public class Chunk : MonoBehaviour
     }
 
 
-    public void ApplyMeshData(NativeArray<Vector3> vertices, NativeArray<int> opaqueTris, NativeArray<int> waterTris, NativeArray<Vector2> uvs, NativeArray<Vector3> normals, NativeArray<byte> vertexLights, NativeArray<byte> tintFlags)
+    public void ApplyMeshData(
+     NativeArray<Vector3> vertices,
+     NativeArray<int> opaqueTris,
+     NativeArray<int> transparentTris, // 👈 NOVO
+     NativeArray<int> waterTris,
+     NativeArray<Vector2> uvs,
+     NativeArray<Vector3> normals,
+     NativeArray<byte> vertexLights,
+     NativeArray<byte> tintFlags
+ )
+
     {
         // Render mesh (mesma lógica de antes)
         mesh.Clear(false);
@@ -68,9 +79,17 @@ public class Chunk : MonoBehaviour
         else
             mesh.RecalculateNormals();
 
-        mesh.subMeshCount = 2;
+        mesh.subMeshCount = 3;
+
+        // 0 → opacos
         mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
-        mesh.SetIndices(waterTris, MeshTopology.Triangles, 1, false);
+
+        // 1 → transparentes (vidro, folhas)
+        mesh.SetIndices(transparentTris, MeshTopology.Triangles, 1, false);
+
+        // 2 → água
+        mesh.SetIndices(waterTris, MeshTopology.Triangles, 2, false);
+
 
         // Aplicar vertex color a partir dos bytes (0..15) com Face Shading + TINTING
         if (vertexLights.Length == vertices.Length)
@@ -109,7 +128,7 @@ public class Chunk : MonoBehaviour
 
                 // NOVO: Tinting para topo de grama (vermelho)
                 // NOVO: Tinting para topo de grama (multiplicativo com iluminação)
-                if (haveTintFlags && tintFlags[i] == 1 && normals.Length > 0 )
+                if (haveTintFlags && tintFlags[i] == 1 && normals.Length > 0)
                 {
                     // l já está em 0..1 (depois de aplicar faceShade e clamp)
                     // Multiplicamos a cor base pela iluminação
@@ -138,46 +157,48 @@ public class Chunk : MonoBehaviour
 
         // === Atualizar MeshCollider com somente triângulos opacos ===
         // Reutiliza colliderMesh se possível, para reduzir alocações
-        if (opaqueTris.Length > 0)
+      if (opaqueTris.Length > 0 || transparentTris.Length > 0)  // Só se houver triângulos sólidos
+    {
+        if (colliderMesh == null)
         {
-            if (colliderMesh == null)
-            {
-                colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-                colliderMesh.name = $"ColliderMesh_{gameObject.name}";
-            }
-            else
-            {
-                colliderMesh.Clear(false);
-            }
-
-            // IMPORTANTE: o collider precisa dos mesmos vértices que o mesh de render.
-            // Usamos os mesmos vertices e apenas os índices opacos.
-            // Note que isso duplica memória do mesh (render + collider). Se for um problema,
-            // podemos gerar um mesh de colisão simplificado (greedy boxes / octree).
-            colliderMesh.SetVertices(vertices);
-            colliderMesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
-            colliderMesh.RecalculateBounds();
-
-            // Assign collider mesh
-            meshCollider.sharedMesh = colliderMesh;
-            meshCollider.enabled = true;
+            colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+            colliderMesh.name = $"ColliderMesh_{gameObject.name}";
         }
         else
         {
-            // sem triângulos opacos -> sem colisão
-            if (meshCollider != null)
-            {
-                meshCollider.sharedMesh = null;
-                meshCollider.enabled = false;
-            }
-            if (colliderMesh != null)
-            {
-                // opcional: destruir mesh de colisão para liberar memória
-                Destroy(colliderMesh);
-                colliderMesh = null;
-            }
+            colliderMesh.Clear(false);
         }
 
+        // Use os mesmos vértices da mesh de render
+        colliderMesh.SetVertices(vertices);
+
+        // Combine opacos + transparentes em um único submesh para colisão
+        // (Não precisamos de submeshes no collider; só geometria simples)
+        var colliderTris = new List<int>(opaqueTris.Length + transparentTris.Length);
+        colliderTris.AddRange(opaqueTris);
+        colliderTris.AddRange(transparentTris);  // Inclui transparentes (ex.: folhas, vidro)
+
+        colliderMesh.SetIndices(colliderTris.ToArray(), MeshTopology.Triangles, 0, false);
+        colliderMesh.RecalculateBounds();
+
+        // Atribua ao collider
+        meshCollider.sharedMesh = colliderMesh;
+        meshCollider.enabled = true;
+    }
+    else
+    {
+        // Sem triângulos sólidos -> sem colisão
+        if (meshCollider != null)
+        {
+            meshCollider.sharedMesh = null;
+            meshCollider.enabled = false;
+        }
+        if (colliderMesh != null)
+        {
+            Destroy(colliderMesh);
+            colliderMesh = null;
+        }
+    }
         // Observação: não chamamos mesh.UploadMeshData(true) porque precisamos que o mesh seja legível
         // (leitura necessária caso queira criar collider a partir dos vértices).
     }

@@ -84,6 +84,7 @@ public struct BlockTextureMapping
     [Header("Behavior (use to control face culling / water handling)")]
     public bool isEmpty;   // default: false (ex: true para água/ar)
     public bool isSolid;   // default: false (defina como true no Inspector para blocos sólidos)
+    public bool isTransparent; // default: false (ex: true para vidro, folhas)
     public int materialIndex;  // default: 0
 
     // NOVO: opacidade de luz 0..15 (0 = não reduz, 15 = bloqueia)

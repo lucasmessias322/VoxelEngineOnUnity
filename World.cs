@@ -93,6 +93,7 @@ public class World : MonoBehaviour
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
+        public NativeList<int> transparentTriangles; // NOVO
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
@@ -258,9 +259,19 @@ public class World : MonoBehaviour
             GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
             obj.SetActive(false);
             Chunk chunk = obj.GetComponent<Chunk>();
-            chunk.SetMaterials(new Material[] { Material[0], Material[1] });  // MODIFICAÇÃO: Array de 2 materiais
+
+            // Certifique-se de passar 3 materiais: 0=opaco, 1=transparente, 2=água
+            Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
+                new Material[] { Material[0], Material[1], Material[2] } :
+                // fallback seguro caso o array no inspector esteja incompleto
+                new Material[] { (Material.Length > 0 ? Material[0] : null),
+                         (Material.Length > 1 ? Material[1] : Material[0]),
+                         (Material.Length > 2 ? Material[2] : Material[0]) };
+
+            chunk.SetMaterials(matsForChunk);
             chunkPool.Enqueue(chunk);
         }
+
     }
 
     private void Update()
@@ -276,33 +287,43 @@ public class World : MonoBehaviour
                 pm.handle.Complete();
                 if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
                 {
+                    // <-- chamada atualizada: inserindo transparentTriangles
                     activeChunk.ApplyMeshData(
                         pm.vertices.AsArray(),
                         pm.opaqueTriangles.AsArray(),
+                        pm.transparentTriangles.AsArray(), // <-- NOVO
                         pm.waterTriangles.AsArray(),
                         pm.uvs.AsArray(),
                         pm.normals.AsArray(),
                         pm.lightValues.AsArray(),
-                        pm.tintFlags.AsArray()  // NOVO
+                        pm.tintFlags.AsArray()
                     );
+
                     activeChunk.gameObject.SetActive(true);
                     applied++;
                 }
-                pm.tintFlags.Dispose();  // NOVO
+
+                // liberar tintFlags e todas as NativeLists (agora incluindo transparentTriangles)
+                if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
+
                 // dispose NativeLists
-                pm.vertices.Dispose();
-                pm.opaqueTriangles.Dispose();
-                pm.waterTriangles.Dispose();
-                pm.uvs.Dispose();
-                pm.normals.Dispose();
-                pm.lightValues.Dispose();
+                if (pm.vertices.IsCreated) pm.vertices.Dispose();
+                if (pm.opaqueTriangles.IsCreated) pm.opaqueTriangles.Dispose();
+                if (pm.transparentTriangles.IsCreated) pm.transparentTriangles.Dispose(); // <-- NOVO
+                if (pm.waterTriangles.IsCreated) pm.waterTriangles.Dispose();
+                if (pm.uvs.IsCreated) pm.uvs.Dispose();
+                if (pm.normals.IsCreated) pm.normals.Dispose();
+                if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
 
                 // dispose NativeArrays (edits & trees) if created
-                if (pm.edits.IsCreated) pm.edits.Dispose(); // IMPORTANTE: liberar o NativeArray de edits
-                if (pm.trees.IsCreated) pm.trees.Dispose(); // liberar trees
+                if (pm.edits.IsCreated) pm.edits.Dispose();
+                if (pm.trees.IsCreated) pm.trees.Dispose();
+
                 pendingMeshes.RemoveAt(i);
             }
         }
+
+
     }
 
     private void UpdateChunks()
@@ -380,9 +401,16 @@ public class World : MonoBehaviour
     private void RequestChunk(Vector2Int coord)
     {
         Chunk chunk = (chunkPool.Count > 0) ? chunkPool.Dequeue() :
-                       Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform).GetComponent<Chunk>();
+                  Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform).GetComponent<Chunk>();
 
-        chunk.SetMaterials(new Material[] { Material[0], Material[1] });
+        // garantir array de 3 materiais também aqui
+        Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
+            new Material[] { Material[0], Material[1], Material[2] } :
+            new Material[] { (Material.Length > 0 ? Material[0] : null),
+                     (Material.Length > 1 ? Material[1] : Material[0]),
+                     (Material.Length > 2 ? Material[2] : Material[0]) };
+
+        chunk.SetMaterials(matsForChunk);
 
         Vector3 pos = new Vector3(coord.x * Chunk.SizeX, 0, coord.y * Chunk.SizeZ);
         chunk.transform.position = pos;
@@ -476,7 +504,9 @@ public class World : MonoBehaviour
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
+            out NativeList<int> transparentTriangles,
             out NativeList<int> waterTriangles,
+
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
@@ -488,7 +518,9 @@ public class World : MonoBehaviour
             handle = handle,
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
+            transparentTriangles = transparentTriangles,
             waterTriangles = waterTriangles,
+
             uvs = uvs,
             normals = normals,
             lightValues = vertexLights,  // Novo
@@ -586,7 +618,9 @@ public class World : MonoBehaviour
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
+            out NativeList<int> transparentTriangles,
             out NativeList<int> waterTriangles,
+
             out NativeList<Vector2> uvs,
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
@@ -599,6 +633,7 @@ public class World : MonoBehaviour
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
+            transparentTriangles = transparentTriangles,
             uvs = uvs,
             normals = normals,
             lightValues = vertexLights,

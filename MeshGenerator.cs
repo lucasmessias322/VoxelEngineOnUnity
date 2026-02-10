@@ -63,6 +63,7 @@ public static class MeshGenerator
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
+        out NativeList<int> transparentTriangles,
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector3> normals,
@@ -78,6 +79,7 @@ public static class MeshGenerator
         vertices = new NativeList<Vector3>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
+        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
@@ -106,6 +108,7 @@ public static class MeshGenerator
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
+            transparentTriangles = transparentTriangles,
             uvs = uvs,
             normals = normals,
             vertexLights = vertexLights,
@@ -151,6 +154,8 @@ public static class MeshGenerator
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
+        public NativeList<int> transparentTriangles;
+
         public NativeList<Vector2> uvs;
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
@@ -726,6 +731,32 @@ public static class MeshGenerator
 
                             bool neighborSolid = true;
 
+                            // if (nx >= 0 && nx < voxelSizeX && ny >= 0 && ny < SizeY && nz >= 0 && nz < voxelSizeZ)
+                            // {
+                            //     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
+                            //     BlockType nbType = blockTypes[nIdx];
+                            //     BlockTextureMapping nbMap = blockMappings[(int)nbType];
+                            //     BlockType curType = blockTypes[voxelIdx];
+                            //     BlockTextureMapping curMap = blockMappings[(int)curType];
+
+                            //     if (curMap.isEmpty && nbMap.isEmpty)
+                            //     {
+                            //         neighborSolid = true;
+                            //     }
+                            //     else if (curMap.isEmpty && !nbMap.isEmpty)
+                            //     {
+                            //         neighborSolid = nbMap.isSolid;
+                            //     }
+                            //     else if (!curMap.isEmpty && nbMap.isEmpty)
+                            //     {
+                            //         neighborSolid = false;
+                            //     }
+                            //     else
+                            //     {
+                            //         neighborSolid = nbMap.isSolid;
+                            //     }
+                            // }
+                            // --- substituir a lógica de neighborSolid ---
                             if (nx >= 0 && nx < voxelSizeX && ny >= 0 && ny < SizeY && nz >= 0 && nz < voxelSizeZ)
                             {
                                 int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
@@ -734,13 +765,14 @@ public static class MeshGenerator
                                 BlockType curType = blockTypes[voxelIdx];
                                 BlockTextureMapping curMap = blockMappings[(int)curType];
 
+                                // Se ambos são "empty" (água/ar) trate como vizinho sólido para evitar faces internas.
                                 if (curMap.isEmpty && nbMap.isEmpty)
                                 {
                                     neighborSolid = true;
                                 }
                                 else if (curMap.isEmpty && !nbMap.isEmpty)
                                 {
-                                    neighborSolid = nbMap.isSolid;
+                                    neighborSolid = nbMap.isSolid && !nbMap.isTransparent;
                                 }
                                 else if (!curMap.isEmpty && nbMap.isEmpty)
                                 {
@@ -748,9 +780,11 @@ public static class MeshGenerator
                                 }
                                 else
                                 {
-                                    neighborSolid = nbMap.isSolid;
+                                    // ----- A MUDANÇA IMPORTANTE: blocos transparentes NÃO ocultam -----
+                                    neighborSolid = nbMap.isSolid && !nbMap.isTransparent;
                                 }
                             }
+
 
                             if (!neighborSolid)
                             {
@@ -922,7 +956,20 @@ public static class MeshGenerator
                                 normals.Add(normal);
 
                                 // Triangles
-                                NativeList<int> targetTris = (currentType == BlockType.Water) ? waterTriangles : opaqueTriangles;
+                                NativeList<int> targetTris;
+                                if (currentType == BlockType.Water)
+                                {
+                                    targetTris = waterTriangles;
+                                }
+                                else if (blockMappings[(int)currentType].isTransparent)
+                                {
+                                    targetTris = transparentTriangles; // NOVO submesh para transparentes
+                                }
+                                else
+                                {
+                                    targetTris = opaqueTriangles;
+                                }
+
                                 targetTris.Add(vIndex + 0);
                                 targetTris.Add(vIndex + 1);
                                 targetTris.Add(vIndex + 2);
@@ -958,15 +1005,17 @@ public class MeshBuildResult
     public List<Vector3> vertices;
     public List<int> opaqueTriangles;
     public List<int> waterTriangles;
+    public List<int> transparentTriangles;
     public List<Vector2> uvs;
     public List<Vector3> normals;
 
-    public MeshBuildResult(Vector2Int coord, List<Vector3> v, List<int> opaqueT, List<int> waterT, List<Vector2> u, List<Vector3> n)
+    public MeshBuildResult(Vector2Int coord, List<Vector3> v, List<int> opaqueT, List<int> waterT, List<int> transparentT, List<Vector2> u, List<Vector3> n)
     {
         this.coord = coord;
         vertices = v;
         opaqueTriangles = opaqueT;
         waterTriangles = waterT;
+        transparentTriangles = transparentT;
         uvs = u;
         normals = n;
     }
