@@ -406,7 +406,7 @@ public static class MeshGenerator
                             {
                                 bt = BlockType.Bedrock;
                             }
-                            else if (y > h - 20)
+                            else if (y > h - 50)
                             {
                                 bt = BlockType.Stone;
                             }
@@ -794,137 +794,137 @@ public static class MeshGenerator
 
                                 // // --- AMOSTRAGEM SUAVE POR VÉRTICE (USANDO BASE Y POR FACE) ---
                                 // // Para cada um dos 4 vértices da face, calcule média dos 4 voxels que tocam esse canto
-                                // for (int vi = 0; vi < 4; vi++)
-                                // {
-                                //     Vector3 lv = faceVerts[dir * 4 + vi];                // 0..1 coords
-                                //                                                          // posição do vértice no espaço de voxels local (inteiro)
-                                //     float vxf = (x - border) + lv.x;
-                                //     float vyf = y + lv.y;
-                                //     float vzf = (z - border) + lv.z;
-
-                                //     // escolha baseY dependendo da face (top/mid/bottom) para evitar sampling incorreto em cavernas
-                                //     int sampleBaseY;
-                                //     if (dir == 2) sampleBaseY = y + 1;   // top face -> amostra acima
-                                //     else if (dir == 3) sampleBaseY = y - 1; // bottom face -> amostra abaixo
-                                //     else sampleBaseY = y; // sides -> amostra no mesmo nível
-
-                                //     int sampleY = math.clamp(sampleBaseY, 0, SizeY - 1);
-
-                                //     int sx0 = (int)math.floor(vxf);
-                                //     int sz0 = (int)math.floor(vzf);
-
-                                //     // offsets em X e Z: {0, -1}
-                                //     int s00x = sx0;
-                                //     int s00z = sz0;
-                                //     int s10x = sx0 - 1;
-                                //     int s10z = sz0;
-                                //     int s01x = sx0;
-                                //     int s01z = sz0 - 1;
-                                //     int s11x = sx0 - 1;
-                                //     int s11z = sz0 - 1;
-
-                                //     // converta para índices internos (com border)
-                                //     int ix0 = s00x + border;
-                                //     int iz0 = s00z + border;
-                                //     int ix1 = s10x + border;
-                                //     int iz1 = s10z + border;
-                                //     int ix2 = s01x + border;
-                                //     int iz2 = s01z + border;
-                                //     int ix3 = s11x + border;
-                                //     int iz3 = s11z + border;
-
-                                //     int plane = voxelSizeX * SizeY;
-                                //     int sum = 0;
-                                //     int count = 0;
-
-                                //     void SampleAdd(int sx, int sy, int sz)
-                                //     {
-                                //         if (sx >= 0 && sx < voxelSizeX && sy >= 0 && sy < SizeY && sz >= 0 && sz < voxelSizeZ)
-                                //         {
-                                //             int sIdx = sx + sy * voxelSizeX + sz * plane;
-                                //             sum += light[sIdx];
-                                //             count++;
-                                //         }
-                                //     }
-
-                                //     SampleAdd(ix0, sampleY, iz0);
-                                //     SampleAdd(ix1, sampleY, iz1);
-                                //     SampleAdd(ix2, sampleY, iz2);
-                                //     SampleAdd(ix3, sampleY, iz3);
-
-                                //     byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
-
-                                //     // opcional: correção gama leve para parecer mais natural
-                                //     float lf = (float)avg / 15f;
-                                //     lf = math.pow(lf, 1.1f); // ajustar 1.0..1.3 conforme gosto
-                                //     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
-
-                                //     vertexLights.Add(final);
-                                // }
-
-                                // --- AMOSTRAGEM TRILINEAR POR VÉRTICE (8 amostras) ---
                                 for (int vi = 0; vi < 4; vi++)
                                 {
-                                    Vector3 lv = faceVerts[dir * 4 + vi]; // 0..1 coords dentro do voxel
-                                                                          // posição do vértice no espaço de voxels local (inteiro base + 0..1)
+                                    Vector3 lv = faceVerts[dir * 4 + vi];                // 0..1 coords
+                                                                                         // posição do vértice no espaço de voxels local (inteiro)
                                     float vxf = (x - border) + lv.x;
                                     float vyf = y + lv.y;
                                     float vzf = (z - border) + lv.z;
 
-                                    // usamos lv.x/lv.y/lv.z como frações para interpolação
-                                    float fx = lv.x;
-                                    float fy = lv.y;
-                                    float fz = lv.z;
+                                    // escolha baseY dependendo da face (top/mid/bottom) para evitar sampling incorreto em cavernas
+                                    int sampleBaseY;
+                                    if (dir == 2) sampleBaseY = y + 1;   // top face -> amostra acima
+                                    else if (dir == 3) sampleBaseY = y - 1; // bottom face -> amostra abaixo
+                                    else sampleBaseY = y; // sides -> amostra no mesmo nível
 
-                                    // base integer cell (floor)
-                                    int sx = (int)math.floor(vxf);
-                                    int sy = math.clamp((int)math.floor(vyf), 0, SizeY - 1);
-                                    int sz = (int)math.floor(vzf);
+                                    int sampleY = math.clamp(sampleBaseY, 0, SizeY - 1);
+
+                                    int sx0 = (int)math.floor(vxf);
+                                    int sz0 = (int)math.floor(vzf);
+
+                                    // offsets em X e Z: {0, -1}
+                                    int s00x = sx0;
+                                    int s00z = sz0;
+                                    int s10x = sx0 - 1;
+                                    int s10z = sz0;
+                                    int s01x = sx0;
+                                    int s01z = sz0 - 1;
+                                    int s11x = sx0 - 1;
+                                    int s11z = sz0 - 1;
 
                                     // converta para índices internos (com border)
-                                    int ix = sx + border;
-                                    int iy = sy;
-                                    int iz = sz + border;
+                                    int ix0 = s00x + border;
+                                    int iz0 = s00z + border;
+                                    int ix1 = s10x + border;
+                                    int iz1 = s10z + border;
+                                    int ix2 = s01x + border;
+                                    int iz2 = s01z + border;
+                                    int ix3 = s11x + border;
+                                    int iz3 = s11z + border;
 
                                     int plane = voxelSizeX * SizeY;
+                                    int sum = 0;
+                                    int count = 0;
 
-                                    // função local segura para pegar luz de um voxel (retorna 0..15 como float)
-                                    float GetLightSafe(int rx, int ry, int rz)
+                                    void SampleAdd(int sx, int sy, int sz)
                                     {
-                                        if (rx < 0 || rx >= voxelSizeX || ry < 0 || ry >= SizeY || rz < 0 || rz >= voxelSizeZ)
-                                            return 0f;
-                                        int sIdx = rx + ry * voxelSizeX + rz * plane;
-                                        return (float)light[sIdx];
+                                        if (sx >= 0 && sx < voxelSizeX && sy >= 0 && sy < SizeY && sz >= 0 && sz < voxelSizeZ)
+                                        {
+                                            int sIdx = sx + sy * voxelSizeX + sz * plane;
+                                            sum += light[sIdx];
+                                            count++;
+                                        }
                                     }
 
-                                    // gather the 8 corners (clamp +1 safely)
-                                    float c000 = GetLightSafe(ix, iy, iz);
-                                    float c100 = GetLightSafe(ix + 1, iy, iz);
-                                    float c010 = GetLightSafe(ix, iy + 1, iz);
-                                    float c110 = GetLightSafe(ix + 1, iy + 1, iz);
-                                    float c001 = GetLightSafe(ix, iy, iz + 1);
-                                    float c101 = GetLightSafe(ix + 1, iy, iz + 1);
-                                    float c011 = GetLightSafe(ix, iy + 1, iz + 1);
-                                    float c111 = GetLightSafe(ix + 1, iy + 1, iz + 1);
+                                    SampleAdd(ix0, sampleY, iz0);
+                                    SampleAdd(ix1, sampleY, iz1);
+                                    SampleAdd(ix2, sampleY, iz2);
+                                    SampleAdd(ix3, sampleY, iz3);
 
-                                    // trilinear lerps
-                                    float c00 = math.lerp(c000, c100, fx);
-                                    float c01 = math.lerp(c001, c101, fx);
-                                    float c10 = math.lerp(c010, c110, fx);
-                                    float c11 = math.lerp(c011, c111, fx);
+                                    byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
 
-                                    float c0 = math.lerp(c00, c10, fy);
-                                    float c1 = math.lerp(c01, c11, fy);
-
-                                    float interpolated = math.lerp(c0, c1, fz); // 0..15 (float)
-
-                                    // correção gama/tonemap leve para visual mais natural
-                                    float lf = interpolated / 15f;
-                                    lf = math.pow(lf, 1.1f); // ajuste 1.0..1.2 conforme gosto (1.1 ~ bom ponto)
+                                    // opcional: correção gama leve para parecer mais natural
+                                    float lf = (float)avg / 15f;
+                                    lf = math.pow(lf, 1.1f); // ajustar 1.0..1.3 conforme gosto
                                     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
 
                                     vertexLights.Add(final);
                                 }
+
+                                // --- AMOSTRAGEM TRILINEAR POR VÉRTICE (8 amostras) ---
+                                // for (int vi = 0; vi < 4; vi++)
+                                // {
+                                //     Vector3 lv = faceVerts[dir * 4 + vi]; // 0..1 coords dentro do voxel
+                                //                                           // posição do vértice no espaço de voxels local (inteiro base + 0..1)
+                                //     float vxf = (x - border) + lv.x;
+                                //     float vyf = y + lv.y;
+                                //     float vzf = (z - border) + lv.z;
+
+                                //     // usamos lv.x/lv.y/lv.z como frações para interpolação
+                                //     float fx = lv.x;
+                                //     float fy = lv.y;
+                                //     float fz = lv.z;
+
+                                //     // base integer cell (floor)
+                                //     int sx = (int)math.floor(vxf);
+                                //     int sy = math.clamp((int)math.floor(vyf), 0, SizeY - 1);
+                                //     int sz = (int)math.floor(vzf);
+
+                                //     // converta para índices internos (com border)
+                                //     int ix = sx + border;
+                                //     int iy = sy;
+                                //     int iz = sz + border;
+
+                                //     int plane = voxelSizeX * SizeY;
+
+                                //     // função local segura para pegar luz de um voxel (retorna 0..15 como float)
+                                //     float GetLightSafe(int rx, int ry, int rz)
+                                //     {
+                                //         if (rx < 0 || rx >= voxelSizeX || ry < 0 || ry >= SizeY || rz < 0 || rz >= voxelSizeZ)
+                                //             return 0f;
+                                //         int sIdx = rx + ry * voxelSizeX + rz * plane;
+                                //         return (float)light[sIdx];
+                                //     }
+
+                                //     // gather the 8 corners (clamp +1 safely)
+                                //     float c000 = GetLightSafe(ix, iy, iz);
+                                //     float c100 = GetLightSafe(ix + 1, iy, iz);
+                                //     float c010 = GetLightSafe(ix, iy + 1, iz);
+                                //     float c110 = GetLightSafe(ix + 1, iy + 1, iz);
+                                //     float c001 = GetLightSafe(ix, iy, iz + 1);
+                                //     float c101 = GetLightSafe(ix + 1, iy, iz + 1);
+                                //     float c011 = GetLightSafe(ix, iy + 1, iz + 1);
+                                //     float c111 = GetLightSafe(ix + 1, iy + 1, iz + 1);
+
+                                //     // trilinear lerps
+                                //     float c00 = math.lerp(c000, c100, fx);
+                                //     float c01 = math.lerp(c001, c101, fx);
+                                //     float c10 = math.lerp(c010, c110, fx);
+                                //     float c11 = math.lerp(c011, c111, fx);
+
+                                //     float c0 = math.lerp(c00, c10, fy);
+                                //     float c1 = math.lerp(c01, c11, fy);
+
+                                //     float interpolated = math.lerp(c0, c1, fz); // 0..15 (float)
+
+                                //     // correção gama/tonemap leve para visual mais natural
+                                //     float lf = interpolated / 15f;
+                                //     lf = math.pow(lf, 1.1f); // ajuste 1.0..1.2 conforme gosto (1.1 ~ bom ponto)
+                                //     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
+
+                                //     vertexLights.Add(final);
+                                // }
 
 
 

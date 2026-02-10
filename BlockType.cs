@@ -13,5 +13,6 @@ public enum BlockType
     Snow = 10,
     glass = 11,
     glowstone = 12,
+    oak_planks = 13,
     
 }

@@ -96,7 +96,7 @@ public class Chunk : MonoBehaviour
         {
             Color[] cols = new Color[vertices.Length];
 
-            const float ambientMin = 0.1f;
+            const float ambientMin = .1f;
             const float shadeTop = 1.00f;
             const float shadeSide = 0.8f;
             const float shadeBottom = 0.60f;
@@ -157,48 +157,48 @@ public class Chunk : MonoBehaviour
 
         // === Atualizar MeshCollider com somente triângulos opacos ===
         // Reutiliza colliderMesh se possível, para reduzir alocações
-      if (opaqueTris.Length > 0 || transparentTris.Length > 0)  // Só se houver triângulos sólidos
-    {
-        if (colliderMesh == null)
+        if (opaqueTris.Length > 0 || transparentTris.Length > 0)  // Só se houver triângulos sólidos
         {
-            colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-            colliderMesh.name = $"ColliderMesh_{gameObject.name}";
+            if (colliderMesh == null)
+            {
+                colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+                colliderMesh.name = $"ColliderMesh_{gameObject.name}";
+            }
+            else
+            {
+                colliderMesh.Clear(false);
+            }
+
+            // Use os mesmos vértices da mesh de render
+            colliderMesh.SetVertices(vertices);
+
+            // Combine opacos + transparentes em um único submesh para colisão
+            // (Não precisamos de submeshes no collider; só geometria simples)
+            var colliderTris = new List<int>(opaqueTris.Length + transparentTris.Length);
+            colliderTris.AddRange(opaqueTris);
+            colliderTris.AddRange(transparentTris);  // Inclui transparentes (ex.: folhas, vidro)
+
+            colliderMesh.SetIndices(colliderTris.ToArray(), MeshTopology.Triangles, 0, false);
+            colliderMesh.RecalculateBounds();
+
+            // Atribua ao collider
+            meshCollider.sharedMesh = colliderMesh;
+            meshCollider.enabled = true;
         }
         else
         {
-            colliderMesh.Clear(false);
+            // Sem triângulos sólidos -> sem colisão
+            if (meshCollider != null)
+            {
+                meshCollider.sharedMesh = null;
+                meshCollider.enabled = false;
+            }
+            if (colliderMesh != null)
+            {
+                Destroy(colliderMesh);
+                colliderMesh = null;
+            }
         }
-
-        // Use os mesmos vértices da mesh de render
-        colliderMesh.SetVertices(vertices);
-
-        // Combine opacos + transparentes em um único submesh para colisão
-        // (Não precisamos de submeshes no collider; só geometria simples)
-        var colliderTris = new List<int>(opaqueTris.Length + transparentTris.Length);
-        colliderTris.AddRange(opaqueTris);
-        colliderTris.AddRange(transparentTris);  // Inclui transparentes (ex.: folhas, vidro)
-
-        colliderMesh.SetIndices(colliderTris.ToArray(), MeshTopology.Triangles, 0, false);
-        colliderMesh.RecalculateBounds();
-
-        // Atribua ao collider
-        meshCollider.sharedMesh = colliderMesh;
-        meshCollider.enabled = true;
-    }
-    else
-    {
-        // Sem triângulos sólidos -> sem colisão
-        if (meshCollider != null)
-        {
-            meshCollider.sharedMesh = null;
-            meshCollider.enabled = false;
-        }
-        if (colliderMesh != null)
-        {
-            Destroy(colliderMesh);
-            colliderMesh = null;
-        }
-    }
         // Observação: não chamamos mesh.UploadMeshData(true) porque precisamos que o mesh seja legível
         // (leitura necessária caso queira criar collider a partir dos vértices).
     }
