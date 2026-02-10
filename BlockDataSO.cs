@@ -85,9 +85,12 @@ public struct BlockTextureMapping
     public bool isEmpty;   // default: false (ex: true para água/ar)
     public bool isSolid;   // default: false (defina como true no Inspector para blocos sólidos)
     public bool isTransparent; // default: false (ex: true para vidro, folhas)
+    public bool isLightSource; // default: false (ex: true para blocos que emitem luz, como tochas)
     public int materialIndex;  // default: 0
 
     // NOVO: opacidade de luz 0..15 (0 = não reduz, 15 = bloqueia)
     public byte lightOpacity;
+    // NOVO: quanto este bloco emite (0..15). Ex.: Glowstone = 15, Torch = 14
+    public byte lightEmission;
     public bool isBiomeTinted;
 }

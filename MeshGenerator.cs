@@ -206,15 +206,15 @@ public static class MeshGenerator
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
 
-            // Passo 2.5: Calcular skylight (vertical fill + BFS propagation)
-            NativeArray<byte> sunlight = new NativeArray<byte>(totalVoxels, Allocator.Temp);
-            LightingCalculator.CalculateSkylight(blockTypes, solids, sunlight, blockMappings, voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY); // Chamada para o novo arquivo
+            // depois:
+            NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.Temp);
+            LightingCalculator.CalculateLighting(blockTypes, solids, light, blockMappings, voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY);
 
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
-            GenerateMesh(heightCache, blockTypes, solids, sunlight);
+            GenerateMesh(heightCache, blockTypes, solids, light);
 
             // Limpeza
-            sunlight.Dispose();
+            light.Dispose();
             heightCache.Dispose();
             blockTypes.Dispose();
             solids.Dispose();
@@ -627,7 +627,7 @@ public static class MeshGenerator
             }
         }
 
-        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> sunlight)
+        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -731,30 +731,7 @@ public static class MeshGenerator
 
                             bool neighborSolid = true;
 
-                            // if (nx >= 0 && nx < voxelSizeX && ny >= 0 && ny < SizeY && nz >= 0 && nz < voxelSizeZ)
-                            // {
-                            //     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
-                            //     BlockType nbType = blockTypes[nIdx];
-                            //     BlockTextureMapping nbMap = blockMappings[(int)nbType];
-                            //     BlockType curType = blockTypes[voxelIdx];
-                            //     BlockTextureMapping curMap = blockMappings[(int)curType];
 
-                            //     if (curMap.isEmpty && nbMap.isEmpty)
-                            //     {
-                            //         neighborSolid = true;
-                            //     }
-                            //     else if (curMap.isEmpty && !nbMap.isEmpty)
-                            //     {
-                            //         neighborSolid = nbMap.isSolid;
-                            //     }
-                            //     else if (!curMap.isEmpty && nbMap.isEmpty)
-                            //     {
-                            //         neighborSolid = false;
-                            //     }
-                            //     else
-                            //     {
-                            //         neighborSolid = nbMap.isSolid;
-                            //     }
                             // }
                             // --- substituir a lógica de neighborSolid ---
                             if (nx >= 0 && nx < voxelSizeX && ny >= 0 && ny < SizeY && nz >= 0 && nz < voxelSizeZ)
@@ -815,75 +792,142 @@ public static class MeshGenerator
                                     vertices.Add(vertPos);
                                 }
 
-                                // --- AMOSTRAGEM SUAVE POR VÉRTICE (USANDO BASE Y POR FACE) ---
-                                // Para cada um dos 4 vértices da face, calcule média dos 4 voxels que tocam esse canto
+                                // // --- AMOSTRAGEM SUAVE POR VÉRTICE (USANDO BASE Y POR FACE) ---
+                                // // Para cada um dos 4 vértices da face, calcule média dos 4 voxels que tocam esse canto
+                                // for (int vi = 0; vi < 4; vi++)
+                                // {
+                                //     Vector3 lv = faceVerts[dir * 4 + vi];                // 0..1 coords
+                                //                                                          // posição do vértice no espaço de voxels local (inteiro)
+                                //     float vxf = (x - border) + lv.x;
+                                //     float vyf = y + lv.y;
+                                //     float vzf = (z - border) + lv.z;
+
+                                //     // escolha baseY dependendo da face (top/mid/bottom) para evitar sampling incorreto em cavernas
+                                //     int sampleBaseY;
+                                //     if (dir == 2) sampleBaseY = y + 1;   // top face -> amostra acima
+                                //     else if (dir == 3) sampleBaseY = y - 1; // bottom face -> amostra abaixo
+                                //     else sampleBaseY = y; // sides -> amostra no mesmo nível
+
+                                //     int sampleY = math.clamp(sampleBaseY, 0, SizeY - 1);
+
+                                //     int sx0 = (int)math.floor(vxf);
+                                //     int sz0 = (int)math.floor(vzf);
+
+                                //     // offsets em X e Z: {0, -1}
+                                //     int s00x = sx0;
+                                //     int s00z = sz0;
+                                //     int s10x = sx0 - 1;
+                                //     int s10z = sz0;
+                                //     int s01x = sx0;
+                                //     int s01z = sz0 - 1;
+                                //     int s11x = sx0 - 1;
+                                //     int s11z = sz0 - 1;
+
+                                //     // converta para índices internos (com border)
+                                //     int ix0 = s00x + border;
+                                //     int iz0 = s00z + border;
+                                //     int ix1 = s10x + border;
+                                //     int iz1 = s10z + border;
+                                //     int ix2 = s01x + border;
+                                //     int iz2 = s01z + border;
+                                //     int ix3 = s11x + border;
+                                //     int iz3 = s11z + border;
+
+                                //     int plane = voxelSizeX * SizeY;
+                                //     int sum = 0;
+                                //     int count = 0;
+
+                                //     void SampleAdd(int sx, int sy, int sz)
+                                //     {
+                                //         if (sx >= 0 && sx < voxelSizeX && sy >= 0 && sy < SizeY && sz >= 0 && sz < voxelSizeZ)
+                                //         {
+                                //             int sIdx = sx + sy * voxelSizeX + sz * plane;
+                                //             sum += light[sIdx];
+                                //             count++;
+                                //         }
+                                //     }
+
+                                //     SampleAdd(ix0, sampleY, iz0);
+                                //     SampleAdd(ix1, sampleY, iz1);
+                                //     SampleAdd(ix2, sampleY, iz2);
+                                //     SampleAdd(ix3, sampleY, iz3);
+
+                                //     byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
+
+                                //     // opcional: correção gama leve para parecer mais natural
+                                //     float lf = (float)avg / 15f;
+                                //     lf = math.pow(lf, 1.1f); // ajustar 1.0..1.3 conforme gosto
+                                //     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
+
+                                //     vertexLights.Add(final);
+                                // }
+
+                                // --- AMOSTRAGEM TRILINEAR POR VÉRTICE (8 amostras) ---
                                 for (int vi = 0; vi < 4; vi++)
                                 {
-                                    Vector3 lv = faceVerts[dir * 4 + vi];                // 0..1 coords
-                                                                                         // posição do vértice no espaço de voxels local (inteiro)
+                                    Vector3 lv = faceVerts[dir * 4 + vi]; // 0..1 coords dentro do voxel
+                                                                          // posição do vértice no espaço de voxels local (inteiro base + 0..1)
                                     float vxf = (x - border) + lv.x;
                                     float vyf = y + lv.y;
                                     float vzf = (z - border) + lv.z;
 
-                                    // escolha baseY dependendo da face (top/mid/bottom) para evitar sampling incorreto em cavernas
-                                    int sampleBaseY;
-                                    if (dir == 2) sampleBaseY = y + 1;   // top face -> amostra acima
-                                    else if (dir == 3) sampleBaseY = y - 1; // bottom face -> amostra abaixo
-                                    else sampleBaseY = y; // sides -> amostra no mesmo nível
+                                    // usamos lv.x/lv.y/lv.z como frações para interpolação
+                                    float fx = lv.x;
+                                    float fy = lv.y;
+                                    float fz = lv.z;
 
-                                    int sampleY = math.clamp(sampleBaseY, 0, SizeY - 1);
-
-                                    int sx0 = (int)math.floor(vxf);
-                                    int sz0 = (int)math.floor(vzf);
-
-                                    // offsets em X e Z: {0, -1}
-                                    int s00x = sx0;
-                                    int s00z = sz0;
-                                    int s10x = sx0 - 1;
-                                    int s10z = sz0;
-                                    int s01x = sx0;
-                                    int s01z = sz0 - 1;
-                                    int s11x = sx0 - 1;
-                                    int s11z = sz0 - 1;
+                                    // base integer cell (floor)
+                                    int sx = (int)math.floor(vxf);
+                                    int sy = math.clamp((int)math.floor(vyf), 0, SizeY - 1);
+                                    int sz = (int)math.floor(vzf);
 
                                     // converta para índices internos (com border)
-                                    int ix0 = s00x + border;
-                                    int iz0 = s00z + border;
-                                    int ix1 = s10x + border;
-                                    int iz1 = s10z + border;
-                                    int ix2 = s01x + border;
-                                    int iz2 = s01z + border;
-                                    int ix3 = s11x + border;
-                                    int iz3 = s11z + border;
+                                    int ix = sx + border;
+                                    int iy = sy;
+                                    int iz = sz + border;
 
                                     int plane = voxelSizeX * SizeY;
-                                    int sum = 0;
-                                    int count = 0;
 
-                                    void SampleAdd(int sx, int sy, int sz)
+                                    // função local segura para pegar luz de um voxel (retorna 0..15 como float)
+                                    float GetLightSafe(int rx, int ry, int rz)
                                     {
-                                        if (sx >= 0 && sx < voxelSizeX && sy >= 0 && sy < SizeY && sz >= 0 && sz < voxelSizeZ)
-                                        {
-                                            int sIdx = sx + sy * voxelSizeX + sz * plane;
-                                            sum += sunlight[sIdx];
-                                            count++;
-                                        }
+                                        if (rx < 0 || rx >= voxelSizeX || ry < 0 || ry >= SizeY || rz < 0 || rz >= voxelSizeZ)
+                                            return 0f;
+                                        int sIdx = rx + ry * voxelSizeX + rz * plane;
+                                        return (float)light[sIdx];
                                     }
 
-                                    SampleAdd(ix0, sampleY, iz0);
-                                    SampleAdd(ix1, sampleY, iz1);
-                                    SampleAdd(ix2, sampleY, iz2);
-                                    SampleAdd(ix3, sampleY, iz3);
+                                    // gather the 8 corners (clamp +1 safely)
+                                    float c000 = GetLightSafe(ix, iy, iz);
+                                    float c100 = GetLightSafe(ix + 1, iy, iz);
+                                    float c010 = GetLightSafe(ix, iy + 1, iz);
+                                    float c110 = GetLightSafe(ix + 1, iy + 1, iz);
+                                    float c001 = GetLightSafe(ix, iy, iz + 1);
+                                    float c101 = GetLightSafe(ix + 1, iy, iz + 1);
+                                    float c011 = GetLightSafe(ix, iy + 1, iz + 1);
+                                    float c111 = GetLightSafe(ix + 1, iy + 1, iz + 1);
 
-                                    byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
+                                    // trilinear lerps
+                                    float c00 = math.lerp(c000, c100, fx);
+                                    float c01 = math.lerp(c001, c101, fx);
+                                    float c10 = math.lerp(c010, c110, fx);
+                                    float c11 = math.lerp(c011, c111, fx);
 
-                                    // opcional: correção gama leve para parecer mais natural
-                                    float lf = (float)avg / 15f;
-                                    lf = math.pow(lf, 1.1f); // ajustar 1.0..1.3 conforme gosto
+                                    float c0 = math.lerp(c00, c10, fy);
+                                    float c1 = math.lerp(c01, c11, fy);
+
+                                    float interpolated = math.lerp(c0, c1, fz); // 0..15 (float)
+
+                                    // correção gama/tonemap leve para visual mais natural
+                                    float lf = interpolated / 15f;
+                                    lf = math.pow(lf, 1.1f); // ajuste 1.0..1.2 conforme gosto (1.1 ~ bom ponto)
                                     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
 
                                     vertexLights.Add(final);
                                 }
+
+
+
                                 // --- FIM AMOSTRAGEM SUAVE ---
 
 
@@ -921,8 +965,8 @@ public static class MeshGenerator
 
                                 float tileW = 1f / atlasTilesX;
                                 float tileH = 1f / atlasTilesY;
-                                float padU = tileW * 0.001f;
-                                float padV = tileH * 0.001f;
+                                float padU = tileW * 0.01f;
+                                float padV = tileH * 0.01f;
 
                                 float uMin = tileCoord.x * tileW + padU;
                                 float vMin = tileCoord.y * tileH + padV;
