@@ -862,69 +862,7 @@ public static class MeshGenerator
                                     vertexLights.Add(final);
                                 }
 
-                                // --- AMOSTRAGEM TRILINEAR POR VÉRTICE (8 amostras) ---
-                                // for (int vi = 0; vi < 4; vi++)
-                                // {
-                                //     Vector3 lv = faceVerts[dir * 4 + vi]; // 0..1 coords dentro do voxel
-                                //                                           // posição do vértice no espaço de voxels local (inteiro base + 0..1)
-                                //     float vxf = (x - border) + lv.x;
-                                //     float vyf = y + lv.y;
-                                //     float vzf = (z - border) + lv.z;
 
-                                //     // usamos lv.x/lv.y/lv.z como frações para interpolação
-                                //     float fx = lv.x;
-                                //     float fy = lv.y;
-                                //     float fz = lv.z;
-
-                                //     // base integer cell (floor)
-                                //     int sx = (int)math.floor(vxf);
-                                //     int sy = math.clamp((int)math.floor(vyf), 0, SizeY - 1);
-                                //     int sz = (int)math.floor(vzf);
-
-                                //     // converta para índices internos (com border)
-                                //     int ix = sx + border;
-                                //     int iy = sy;
-                                //     int iz = sz + border;
-
-                                //     int plane = voxelSizeX * SizeY;
-
-                                //     // função local segura para pegar luz de um voxel (retorna 0..15 como float)
-                                //     float GetLightSafe(int rx, int ry, int rz)
-                                //     {
-                                //         if (rx < 0 || rx >= voxelSizeX || ry < 0 || ry >= SizeY || rz < 0 || rz >= voxelSizeZ)
-                                //             return 0f;
-                                //         int sIdx = rx + ry * voxelSizeX + rz * plane;
-                                //         return (float)light[sIdx];
-                                //     }
-
-                                //     // gather the 8 corners (clamp +1 safely)
-                                //     float c000 = GetLightSafe(ix, iy, iz);
-                                //     float c100 = GetLightSafe(ix + 1, iy, iz);
-                                //     float c010 = GetLightSafe(ix, iy + 1, iz);
-                                //     float c110 = GetLightSafe(ix + 1, iy + 1, iz);
-                                //     float c001 = GetLightSafe(ix, iy, iz + 1);
-                                //     float c101 = GetLightSafe(ix + 1, iy, iz + 1);
-                                //     float c011 = GetLightSafe(ix, iy + 1, iz + 1);
-                                //     float c111 = GetLightSafe(ix + 1, iy + 1, iz + 1);
-
-                                //     // trilinear lerps
-                                //     float c00 = math.lerp(c000, c100, fx);
-                                //     float c01 = math.lerp(c001, c101, fx);
-                                //     float c10 = math.lerp(c010, c110, fx);
-                                //     float c11 = math.lerp(c011, c111, fx);
-
-                                //     float c0 = math.lerp(c00, c10, fy);
-                                //     float c1 = math.lerp(c01, c11, fy);
-
-                                //     float interpolated = math.lerp(c0, c1, fz); // 0..15 (float)
-
-                                //     // correção gama/tonemap leve para visual mais natural
-                                //     float lf = interpolated / 15f;
-                                //     lf = math.pow(lf, 1.1f); // ajuste 1.0..1.2 conforme gosto (1.1 ~ bom ponto)
-                                //     byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
-
-                                //     vertexLights.Add(final);
-                                // }
 
 
 
