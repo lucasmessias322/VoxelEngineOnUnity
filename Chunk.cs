@@ -7,7 +7,7 @@ using System.Collections.Generic;
 public class Chunk : MonoBehaviour
 {
     public const int SizeX = 16;
-    public const int SizeY = 256;
+    public const int SizeY = 384;
     public const int SizeZ = 16;
 
     private MeshFilter meshFilter;

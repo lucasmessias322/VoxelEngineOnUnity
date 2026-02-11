@@ -82,7 +82,7 @@ public static class LightingCalculator
             byte curLight = skylight[cur];
             if (curLight <= 1) continue;
 
-            int plane = voxelSizeX * SizeY;
+            int plane = planeSize;
             int y = (cur / voxelSizeX) % SizeY;
             int x = cur % voxelSizeX;
             int z = cur / plane;

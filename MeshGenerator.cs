@@ -10,9 +10,9 @@ using Unity.Mathematics;
 
 public static class MeshGenerator
 {
-    private const int SizeX = 16;
-    private const int SizeY = 384;
-    private const int SizeZ = 16;
+    private const int SizeX = Chunk.SizeX;
+    private const int SizeY = Chunk.SizeY;
+    private const int SizeZ = Chunk.SizeZ;
 
     // ------------------- Tree Instance -------------------
     public struct TreeInstance
@@ -285,8 +285,11 @@ public static class MeshGenerator
                         float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);  // [0,1]
 
                         // Centre em [-1,1] e aplique amplitude (força da distorção)
+                        // dentro do loop de warpLayers:
                         warpX += (sampleX * 2f - 1f) * layer.amplitude;
                         warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
+                        sumWarpAmp += layer.amplitude;   // <<-- faltando
+
                     }
                     if (sumWarpAmp > 0f)
                     {

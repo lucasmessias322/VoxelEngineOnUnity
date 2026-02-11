@@ -62,6 +62,16 @@ public static class TreePlacement
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
 
+            // 🔥 NOVO: só permitir árvores em Grass ou Dirt
+            int groundIdx = ix + surfaceY * voxelSizeX + iz * voxelPlaneSize;
+            BlockType groundType = blockTypes[groundIdx];
+
+            if (groundType != BlockType.Grass && groundType != BlockType.Dirt)
+            {
+                continue; // não gera árvore se não for grama ou terra
+            }
+
+
             // Pre-calc da copa / tronco para as checagens
             int leafBottom = surfaceY + t.trunkHeight - 1;
             int canopyH = math.max(1, t.canopyHeight);
