@@ -32,16 +32,30 @@ public class BlockSelector : MonoBehaviour
 
     void UpdateSelection()
     {
-
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
+        // DICA: Adicione um LayerMask aqui se possível: Physics.Raycast(ray, out hit, reach, seuLayerMask)
         if (Physics.Raycast(ray, out RaycastHit hit, reach))
         {
-            // 🔹 desloca um pouquinho para dentro do bloco
+            // Desloca para dentro do bloco
             Vector3 point = hit.point - hit.normal * 0.01f;
-
             Vector3Int blockPos = Vector3Int.FloorToInt(point);
-            CurrentBlock = World.Instance.GetBlockAt(blockPos);
+
+            // Pega o tipo de bloco na posição calculada
+            BlockType typeAtPos = World.Instance.GetBlockAt(blockPos);
+
+            // 🔍 CORREÇÃO CRÍTICA: Se for Ar, não desenhamos nada e desativamos a linha
+            if (typeAtPos == BlockType.Air)
+            {
+                hasBlock = false;
+                line.enabled = false;
+                CurrentBlock = BlockType.Air;
+                return;
+            }
+
+            // Se chegamos aqui, é um bloco sólido
+            CurrentBlock = typeAtPos;
+
             if (!hasBlock || blockPos != currentBlock)
             {
                 currentBlock = blockPos;
@@ -53,6 +67,7 @@ public class BlockSelector : MonoBehaviour
         {
             hasBlock = false;
             line.enabled = false;
+            CurrentBlock = BlockType.Air;
         }
     }
 

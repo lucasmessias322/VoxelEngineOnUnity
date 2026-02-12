@@ -16,7 +16,7 @@ public class SelectedBlockUI : MonoBehaviour
     {
         BlockType block = blockSelector.CurrentBlock;
 
-        if (block == BlockType.Air)
+        if (block == BlockType.Air )
         {
             blockText.text = "";
             return;

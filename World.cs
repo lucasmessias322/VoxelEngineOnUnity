@@ -683,80 +683,81 @@ public class World : MonoBehaviour
             RequestChunkRebuild(new Vector2Int(chunkCoord.x, chunkCoord.y + 1));
     }
 
-    // ADICIONE ESSA FUNÇÃO NA SUA CLASSE World
-    public BlockType GetBlockAt(Vector3Int worldPos)
+   public BlockType GetBlockAt(Vector3Int worldPos)
     {
-        // 1) limites Y
-        if (worldPos.y < 0)
-            return BlockType.Air;         // fora da área válida abaixo do mundo
+        // 1) Limites verticais (Y)
+        if (worldPos.y < 0) return BlockType.Air;
+        if (worldPos.y <= 2) return BlockType.Bedrock;
+        if (worldPos.y >= Chunk.SizeY) return BlockType.Air;
 
-        // MeshGenerator trata y <= 2 como bedrock; manter consistência evita permitir quebra.
-        if (worldPos.y <= 2)
-            return BlockType.Bedrock;     // camada inquebrável do fundo
-
-        if (worldPos.y >= Chunk.SizeY)
-            return BlockType.Air;         // fora do range vertical acima
-
-        // 2) overrides (edits feitos pelo jogador / sistema)
+        // 2) Overrides (Blocos colocados/quebrados pelo jogador)
+        // Checamos isso antes das árvores para que o player possa remover troncos
         if (blockOverrides != null && blockOverrides.TryGetValue(worldPos, out BlockType overridden))
         {
             return overridden;
         }
 
-        // 3) gerar height usando mesmas layers de world (warp + noise)
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
 
-        // Compute surface height via helper
-        int h = GetSurfaceHeight(worldX, worldZ);
-        // --- DETECTAR ÁRVORES (TRONCO / COPA) ---
+        // 3) LÓGICA DE ÁRVORES (Onde estava o problema)
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldX / Chunk.SizeX),
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
-        // gerar árvores determinísticas do chunk
+        // Criamos o array de árvores para o chunk
         NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord);
+        BlockType treeBlockFound = BlockType.Air;
 
-        for (int i = 0; i < trees.Length; i++)
-        {
-            var t = trees[i];
-
-            int baseY = GetSurfaceHeight(t.worldX, t.worldZ);
-            int trunkTop = baseY + t.trunkHeight;
-
-            // TRONCO
-            if (worldPos.x == t.worldX &&
-                worldPos.z == t.worldZ &&
-                worldPos.y > baseY &&
-                worldPos.y <= trunkTop)
+        try {
+            for (int i = 0; i < trees.Length; i++)
             {
-                trees.Dispose();
-                return BlockType.Log;
-            }
+                var t = trees[i];
 
-            // COPA
-            int canopyStartY = trunkTop - t.canopyHeight + 1;
-            int canopyEndY = trunkTop + 1;
+                // --- CORREÇÃO CRÍTICA ---
+                // Verifica se o bloco na base da árvore é GRAMA. 
+                // Se não for grama (ex: areia), a árvore não existe no mundo real/visual.
+                if (GetSurfaceBlockType(t.worldX, t.worldZ) != BlockType.Grass) 
+                    continue;
 
-            if (worldPos.y >= canopyStartY && worldPos.y <= canopyEndY)
-            {
-                int dx = worldPos.x - t.worldX;
-                int dz = worldPos.z - t.worldZ;
+                int baseY = GetSurfaceHeight(t.worldX, t.worldZ);
+                int trunkTop = baseY + t.trunkHeight;
 
-                if (dx * dx + dz * dz <= t.canopyRadius * t.canopyRadius)
+                // Verificar se a posição consultada é o TRONCO
+                if (worldPos.x == t.worldX && worldPos.z == t.worldZ && worldPos.y > baseY && worldPos.y <= trunkTop)
                 {
-                    trees.Dispose();
-                    return BlockType.Leaves;
+                    treeBlockFound = BlockType.Log;
+                    break;
+                }
+
+                // Verificar se a posição consultada é a COPA (Folhas)
+                int canopyStartY = trunkTop - t.canopyHeight + 1;
+                int canopyEndY = trunkTop + 1;
+
+                if (worldPos.y >= canopyStartY && worldPos.y <= canopyEndY)
+                {
+                    int dx = worldPos.x - t.worldX;
+                    int dz = worldPos.z - t.worldZ;
+                    if (dx * dx + dz * dz <= t.canopyRadius * t.canopyRadius)
+                    {
+                        treeBlockFound = BlockType.Leaves;
+                        break;
+                    }
                 }
             }
+        } finally {
+            // Garante que a memória NativeArray seja liberada mesmo se houver erro
+            trees.Dispose();
         }
 
-        trees.Dispose();
+        // Se encontrou parte de uma árvore válida, retorna o bloco dela
+        if (treeBlockFound != BlockType.Air) return treeBlockFound;
 
-
-        // 4) cavernas (aplica somente até certa profundidade)
+        // 4) Cavernas
         bool isCave = false;
+        int h = GetSurfaceHeight(worldX, worldZ);
+
         if (caveLayers != null && caveLayers.Length > 0)
         {
             int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
@@ -769,62 +770,42 @@ public class World : MonoBehaviour
                     var layer = caveLayers[i];
                     if (!layer.enabled) continue;
 
-                    float nx = worldX + layer.offset.x;
-                    float ny = worldPos.y;
-                    float nz = worldZ + layer.offset.y;
-
-                    float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
-                    if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                        sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-
+                    float sample = MyNoise.OctavePerlin3D(worldX + layer.offset.x, (float)worldPos.y, worldZ + layer.offset.y, layer);
                     totalCave += sample * layer.amplitude;
                     sumCaveAmp += math.max(1e-5f, layer.amplitude);
                 }
                 if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
 
-                // small surface bias (imita seu código de geração)
-                float maxPossibleY = math.max(1f, (float)math.max(1, h));
-                float relativeHeight = (float)worldPos.y / maxPossibleY;
-                float surfaceBias = 0.001f * relativeHeight;
+                float surfaceBias = 0.001f * ((float)worldPos.y / math.max(1f, (float)h));
                 if (worldPos.y < 5) surfaceBias -= 0.08f;
 
-                float adjustedThreshold = caveThreshold - surfaceBias;
-                if (totalCave > adjustedThreshold) isCave = true;
+                if (totalCave > (caveThreshold - surfaceBias)) isCave = true;
             }
         }
 
-        // 5) decidir tipo final
-        if (isCave)
-        {
-            return BlockType.Air;
-        }
+        if (isCave) return BlockType.Air;
 
+        // 5) Terreno Natural (Grama, Terra, Pedra, Areia, Água)
         if (worldPos.y > h)
         {
-            // acima do terreno: se abaixo do mar -> água
-            if (worldPos.y <= seaLevel)
-                return BlockType.Water;
-            return BlockType.Air;
+            return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
         }
         else
         {
-            // abaixo ou igual à superfície
             bool isBeachArea = (h <= seaLevel + 2);
-            if (worldPos.y == h)
-            {
-                return isBeachArea ? BlockType.Sand : BlockType.Grass;
-            }
-            else if (worldPos.y > h - 4)
-            {
-                return isBeachArea ? BlockType.Sand : BlockType.Dirt;
-            }
-            else
-            {
-                return BlockType.Stone;
-            }
+            if (worldPos.y == h) return isBeachArea ? BlockType.Sand : BlockType.Grass;
+            if (worldPos.y > h - 4) return isBeachArea ? BlockType.Sand : BlockType.Dirt;
+            return BlockType.Stone;
         }
     }
 
+    // Certifique-se de que esta função auxiliar esteja assim:
+    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
+    {
+        int h = GetSurfaceHeight(worldX, worldZ);
+        if (h <= seaLevel + 2) return BlockType.Sand;
+        return BlockType.Grass;
+    }
     // helper local (replika do Job) - calcula altura da superfície para um (x,z)
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
@@ -848,6 +829,7 @@ public class World : MonoBehaviour
                 // Centre em [-1,1] e aplique amplitude (força da distorção)
                 warpX += (sampleX * 2f - 1f) * layer.amplitude;
                 warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
+                sumWarpAmp += layer.amplitude;   // <<-- faltando
             }
         }
         if (sumWarpAmp > 0f)
@@ -967,14 +949,14 @@ public class World : MonoBehaviour
         return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
     }
 
-    // NOVO: retorna APENAS o bloco da superfície (sem árvores, sem overrides)
-    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
-    {
-        int h = GetSurfaceHeight(worldX, worldZ);
-        if (h <= 0 || h >= Chunk.SizeY) return BlockType.Air;
+    // // NOVO: retorna APENAS o bloco da superfície (sem árvores, sem overrides)
+    // private BlockType GetSurfaceBlockType(int worldX, int worldZ)
+    // {
+    //     int h = GetSurfaceHeight(worldX, worldZ);
+    //     if (h <= 0 || h >= Chunk.SizeY) return BlockType.Air;
 
-        bool isBeachArea = (h <= seaLevel + 2);
-        return isBeachArea ? BlockType.Sand : BlockType.Grass;
-    }
+    //     bool isBeachArea = (h <= seaLevel + 2);
+    //     return isBeachArea ? BlockType.Sand : BlockType.Grass;
+    // }
 
 }
