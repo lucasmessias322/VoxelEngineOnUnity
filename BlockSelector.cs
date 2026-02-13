@@ -30,9 +30,8 @@ public class BlockSelector : MonoBehaviour
         UpdateSelection();
     }
 
-    void UpdateSelection()
+   void UpdateSelection()
     {
-
         Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
         if (Physics.Raycast(ray, out RaycastHit hit, reach))
@@ -41,10 +40,21 @@ public class BlockSelector : MonoBehaviour
             Vector3 point = hit.point - hit.normal * 0.01f;
 
             Vector3Int blockPos = Vector3Int.FloorToInt(point);
-            CurrentBlock = World.Instance.GetBlockAt(blockPos);
+            var blockType = World.Instance.GetBlockAt(blockPos); // Use a local var for the type, but don't shadow the property
+
             if (!hasBlock || blockPos != currentBlock)
             {
                 currentBlock = blockPos;
+
+                if (blockType == BlockType.Air)
+                {
+                    line.enabled = false;
+                    hasBlock = false;
+                    return;
+                }
+                
+                CurrentBlock = blockType; // Only set if not air
+                
                 DrawCube(blockPos);
                 hasBlock = true;
             }
@@ -53,10 +63,9 @@ public class BlockSelector : MonoBehaviour
         {
             hasBlock = false;
             line.enabled = false;
-            CurrentBlock = BlockType.Air;
+            // Removed: CurrentBlock = BlockType.Air; (prevents setting to air)
         }
     }
-
 
 
     void DrawCube(Vector3Int pos)

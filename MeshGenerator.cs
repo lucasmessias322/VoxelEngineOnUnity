@@ -741,7 +741,16 @@ public static class MeshGenerator
                         }
                     }
                     // --- END PATCH ---
-
+                    bool hasContent = false;
+                    for (int ty = 0; ty <= maxY && !hasContent; ty++)
+                    {
+                        int idx = x + ty * voxelSizeX + z * voxelPlaneSize;
+                        if (solids[idx] || blockTypes[idx] == BlockType.Water)
+                        {
+                            hasContent = true;
+                        }
+                    }
+                    if (!hasContent) continue; // nenhuma face será gerada nesta coluna
 
                     for (int y = 0; y <= maxY; y++)
                     {
@@ -885,12 +894,9 @@ public static class MeshGenerator
 
                                     byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
 
-                                    // opcional: correção gama leve para parecer mais natural
-                                    float lf = (float)avg / 15f;
-                                    lf = math.pow(lf, 1.1f); // ajustar 1.0..1.3 conforme gosto
-                                    byte final = (byte)math.clamp((int)math.round(lf * 15f), 0, 15);
 
-                                    vertexLights.Add(final);
+
+                                    vertexLights.Add(avg);
                                 }
 
 

@@ -52,6 +52,11 @@ public class Chunk : MonoBehaviour
         int total = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
         chunkBlocks = new NativeArray<BlockType>(total, Allocator.Persistent);
         chunkLight = new NativeArray<byte>(total, Allocator.Persistent);
+
+        // ← ADICIONE ESTA LINHA
+        voxelData = new NativeArray<byte>(total, Allocator.Persistent);
+
+        hasVoxelData = false; // ainda útil para saber se já tem dados válidos
     }
     private void OnDestroy()
     {
@@ -263,11 +268,7 @@ public class Chunk : MonoBehaviour
             colliderMesh = null;
         }
 
-        // Limpar voxels
-        if (voxelData.IsCreated)
-        {
-            voxelData.Dispose();
-        }
+        // Opcional: apenas marque que não tem dados válidos
         hasVoxelData = false;
     }
 
