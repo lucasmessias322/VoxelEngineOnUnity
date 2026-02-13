@@ -193,7 +193,7 @@ public static class MeshGenerator
                 voxelSizeZ,
                 voxelPlaneSize
             );
-
+            int heightStride = voxelSizeX;
             TreePlacement.ApplyTreeInstancesToVoxels(
                 blockTypes,
                 solids,
@@ -206,7 +206,9 @@ public static class MeshGenerator
                 SizeY,            // 256 normalmente
                 voxelSizeX,
                 voxelSizeZ,
-                voxelPlaneSize
+                voxelPlaneSize,
+                heightCache,  // NOVO: passe heightCache
+                heightStride  // NOVO: passe stride
             );
 
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)

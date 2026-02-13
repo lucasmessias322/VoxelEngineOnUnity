@@ -25,14 +25,14 @@ public struct WarpLayer
 [Serializable]
 public struct TreeSettings
 {
-    public int minHeight;
-    public int maxHeight;
-
-    public int canopyRadius;
-    public int canopyHeight;
-
-    public int minSpacing; // distância mínima entre árvores (em blocos)
-    public float density;  // 0..1 probabilidade por célula
+    public int minHeight;      // Altura mínima do tronco (ex.: 4)
+    public int maxHeight;      // Altura máxima do tronco (ex.: 6)
+    public int canopyRadius;   // Raio da copa (ex.: 2)
+    public int canopyHeight;   // Altura da copa (ex.: 3)
+    public int minSpacing;     // Tamanho do grid para spacing (ex.: 4, como Minecraft)
+    public float density;      // Probabilidade base (0-1, ex.: 0.1 para florestas)
+    public float noiseScale;   // Escala do Perlin (ex.: 0.05f para variações suaves)
+    public int seed;           // Seed global para noise
 }
 
 public class World : MonoBehaviour
@@ -471,7 +471,7 @@ public class World : MonoBehaviour
         }
 
         // --- BUILD tree instances FOR THIS CHUNK ---
-        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord);
+        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
 
         // calcular margin baseado nas configurações (maior altura possível + canopy)
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
@@ -591,7 +591,8 @@ public class World : MonoBehaviour
         }
 
         // Rebuild tree instances for this chunk
-        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord);
+
+        NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
         int borderSize = treeSettings.canopyRadius + 2;  // ex: 5 para radius=3
         int maxTreeRadius = treeSettings.canopyRadius;
@@ -732,7 +733,7 @@ public class World : MonoBehaviour
             }
         }
 
-        NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord);
+        NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord, treeSettings);
         BlockType treeBlockFound = BlockType.Air;
 
         try
@@ -1014,71 +1015,78 @@ public class World : MonoBehaviour
         return GetHeightFromNoise(totalNoise, sumAmp);
     }
 
-    // Constrói as instâncias de árvore para um chunk (determinístico)
-    private NativeArray<MeshGenerator.TreeInstance> BuildTreeInstancesForChunk(Vector2Int coord)
+    private NativeArray<MeshGenerator.TreeInstance> BuildTreeInstancesForChunk(Vector2Int coord, TreeSettings settings)
     {
-        int cellSize = math.max(1, treeSettings.minSpacing);
+        int cellSize = Mathf.Max(1, settings.minSpacing);  // Grid size para evitar árvores coladas (como Minecraft)
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
         int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
         int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
 
-        List<MeshGenerator.TreeInstance> tmp = new List<MeshGenerator.TreeInstance>();
-
-        // EXPANDIDO: margem para copas overhang
-        int searchMargin = treeSettings.canopyRadius + treeSettings.minSpacing;
+        // Margem para overhang (copa saindo do chunk), como no seu código
+        int searchMargin = settings.canopyRadius + settings.minSpacing;
         int cellX0 = Mathf.FloorToInt((float)(chunkMinX - searchMargin) / cellSize);
         int cellX1 = Mathf.FloorToInt((float)(chunkMaxX + searchMargin) / cellSize);
         int cellZ0 = Mathf.FloorToInt((float)(chunkMinZ - searchMargin) / cellSize);
         int cellZ1 = Mathf.FloorToInt((float)(chunkMaxZ + searchMargin) / cellSize);
 
-        float freq = 1f / math.max(1, cellSize * 3);
+        // Frequência para Perlin (ajuste para variações maiores/menores)
+        float freq = settings.noiseScale;  // Ex.: 0.05f para clusters naturais
+
+        List<MeshGenerator.TreeInstance> tmp = new List<MeshGenerator.TreeInstance>();
 
         for (int cx = cellX0; cx <= cellX1; cx++)
         {
             for (int cz = cellZ0; cz <= cellZ1; cz++)
             {
-                float sample = Mathf.PerlinNoise((cx * 12.9898f + seed) * freq, (cz * 78.233f + seed) * freq);
-                if (sample > treeSettings.density) continue;
+                // Perlin Noise para densidade (similar ao Minecraft: valor 0-1 decide spawn)
+                // Use constantes para hash (como no seu código) para determinismo
+                float noiseX = (cx * 12.9898f + settings.seed) * freq;
+                float noiseZ = (cz * 78.233f + settings.seed) * freq;
+                float sample = Mathf.PerlinNoise(noiseX, noiseZ);  // 0-1
 
-                int worldX = cx * cellSize + (cellSize / 2);
-                int worldZ = cz * cellSize + (cellSize / 2);
+                // Spawn se sample < density (inverta se quiser > para áreas mais densas)
+                if (sample > settings.density) continue;  // Ajuste: quanto maior sample, menos spawn (para raridade)
 
+                // Posição central na célula (com offset random para variação, como Minecraft)
+                int worldX = cx * cellSize + Mathf.RoundToInt(Mathf.PerlinNoise(noiseX + 1f, noiseZ + 1f) * (cellSize - 1));
+                int worldZ = cz * cellSize + Mathf.RoundToInt(Mathf.PerlinNoise(noiseX + 2f, noiseZ + 2f) * (cellSize - 1));
 
+                // Verifique se dentro do chunk expandido
+                if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
+                    worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
 
-                int h = GetSurfaceHeight(worldX, worldZ);
-                if (h <= 0 || h >= Chunk.SizeY) continue;
+                // Encontre altura da superfície (use sua função GetSurfaceHeight)
+                int surfaceY = GetSurfaceHeight(worldX, worldZ);
+                if (surfaceY <= 0 || surfaceY >= Chunk.SizeY) continue;
 
-                if (GetSurfaceBlockType(worldX, worldZ) != BlockType.Grass) continue;
+                // Condições Minecraft-like: só em Grass/Dirt, não em água/cliffs
+                BlockType groundType = GetSurfaceBlockType(worldX, worldZ);
+                if (groundType != BlockType.Grass && groundType != BlockType.Dirt) continue;
+                if (IsCliff(worldX, worldZ, CliffTreshold)) continue;  // Sua função existente
 
+                // Variação de altura do tronco com outra Perlin (como no seu código)
+                float heightNoise = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + settings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + settings.seed * 0.001f);
+                int trunkH = settings.minHeight + Mathf.RoundToInt(heightNoise * (settings.maxHeight - settings.minHeight + 1));
 
-                float th = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + seed * 0.001f, (worldZ + 0.1f) * 0.243f + seed * 0.001f);
-                int trunkH = treeSettings.minHeight + (int)(th * (treeSettings.maxHeight - treeSettings.minHeight + 0.0001f));
-                trunkH = math.clamp(trunkH, treeSettings.minHeight, treeSettings.maxHeight);
-
+                // Adicione a instância
                 tmp.Add(new MeshGenerator.TreeInstance
                 {
                     worldX = worldX,
                     worldZ = worldZ,
                     trunkHeight = trunkH,
-                    canopyRadius = treeSettings.canopyRadius,
-                    canopyHeight = treeSettings.canopyHeight
+                    canopyRadius = settings.canopyRadius,
+                    canopyHeight = settings.canopyHeight
                 });
             }
-
         }
 
-        if (tmp.Count == 0)
-        {
-            return new NativeArray<MeshGenerator.TreeInstance>(0, Allocator.Persistent);
-        }
-
+        // Converta para NativeArray (para jobs/Burst)
         var arr = new NativeArray<MeshGenerator.TreeInstance>(tmp.Count, Allocator.Persistent);
         for (int i = 0; i < tmp.Count; i++) arr[i] = tmp[i];
         return arr;
     }
 
-    // helper local (replika do Job)
 
     private int GetHeightFromNoise(float noise, float sumAmp)
     {

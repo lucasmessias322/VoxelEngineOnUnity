@@ -22,7 +22,9 @@ public static class TreePlacement
      int chunkSizeY,     // geralmente 256
      int voxelSizeX,
      int voxelSizeZ,
-     int voxelPlaneSize
+     int voxelPlaneSize,
+     NativeArray<int> heightCache,  // NOVO
+    int heightStride               // NOVO
  )
     {
         if (treeInstances.Length == 0)
@@ -47,17 +49,8 @@ public static class TreePlacement
             int iz = localZ + border;
 
             // Encontra a superfície (do topo para baixo)
-            int surfaceY = -1;
-            for (int y = chunkSizeY - 1; y >= 0; y--)
-            {
-                int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
-                BlockType bt = blockTypes[idx];
-                if (bt != BlockType.Air && bt != BlockType.Water)
-                {
-                    surfaceY = y;
-                    break;
-                }
-            }
+            int cacheIdx = ix + iz * heightStride;
+            int surfaceY = heightCache[cacheIdx];
 
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
@@ -81,6 +74,20 @@ public static class TreePlacement
             // PRE-CHECK: evitar árvores sobre/na água e perto de entradas de caverna
             // ---------------------------
             bool skipTree = false;
+
+
+            for (int dy = 1; dy <= t.trunkHeight; dy++)
+            {
+                int ty = surfaceY + dy;
+                if (ty >= chunkSizeY) break;
+                int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
+                if (blockTypes[tidx] == BlockType.Water)
+                {
+                    skipTree = true;
+                    break;
+                }
+            }
+            if (skipTree) continue;
 
             // 1) Se houver água no volume do tronco + copa -> pular árvore
             int maxCheckY = math.min(chunkSizeY - 1, surfaceY + t.trunkHeight + canopyH);
