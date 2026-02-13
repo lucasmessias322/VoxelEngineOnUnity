@@ -9,7 +9,8 @@ public class Chunk : MonoBehaviour
     public const int SizeX = 16;
     public const int SizeY = 384;
     public const int SizeZ = 16;
-
+    public NativeArray<byte> voxelData; // ou BlockType se preferir enum
+    public bool hasVoxelData = false;
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
     private Mesh mesh; // reuso
@@ -27,7 +28,8 @@ public class Chunk : MonoBehaviour
     }
 
     public ChunkState state;
-
+    public NativeArray<BlockType> chunkBlocks;
+    public NativeArray<byte> chunkLight; // combined light (max skylight, blocklight)
     private void Awake()
     {
         meshFilter = GetComponent<MeshFilter>();
@@ -45,9 +47,43 @@ public class Chunk : MonoBehaviour
         }
         meshCollider.sharedMesh = null; // sem colisão até gerar mesh
         meshCollider.convex = false; // deve ser não-convexo para terrenos
-        // opcionais: ajustar meshCollider.cookingOptions se necessário
-    }
+                                     // opcionais: ajustar meshCollider.cookingOptions se necessário
 
+        int total = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
+        chunkBlocks = new NativeArray<BlockType>(total, Allocator.Persistent);
+        chunkLight = new NativeArray<byte>(total, Allocator.Persistent);
+    }
+    private void OnDestroy()
+    {
+        if (chunkBlocks.IsCreated) chunkBlocks.Dispose();
+        if (chunkLight.IsCreated) chunkLight.Dispose();
+        // Segurança extra para pool
+        if (voxelData.IsCreated) voxelData.Dispose();
+
+    }
+    // NOVO: Método para copiar de temp arrays (chame após job complete em World)
+    public void CopyVoxelData(NativeArray<BlockType> tempBlocks, NativeArray<byte> tempLight, int border)
+    {
+        int voxelSizeX = Chunk.SizeX + 2 * border;
+        int plane = voxelSizeX * Chunk.SizeY;
+
+        for (int x = 0; x < Chunk.SizeX; x++)
+        {
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    int tempX = x + border;
+                    int tempZ = z + border;
+                    int tempIdx = tempX + y * voxelSizeX + tempZ * plane;
+                    int localIdx = x + y * Chunk.SizeX + z * Chunk.SizeX * Chunk.SizeY;
+
+                    chunkBlocks[localIdx] = tempBlocks[tempIdx];
+                    chunkLight[localIdx] = tempLight[tempIdx];
+                }
+            }
+        }
+    }
     public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)
     {
         materials = mats;
@@ -227,9 +263,12 @@ public class Chunk : MonoBehaviour
             colliderMesh = null;
         }
 
-        // opcional: limpar mesh de render se quiser liberar memória (cuidado com instâncias compartilhadas)
-        // mesh.Clear(false);
-        // meshFilter.sharedMesh = mesh;
+        // Limpar voxels
+        if (voxelData.IsCreated)
+        {
+            voxelData.Dispose();
+        }
+        hasVoxelData = false;
     }
 
     public int generation;

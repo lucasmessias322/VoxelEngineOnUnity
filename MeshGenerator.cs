@@ -60,6 +60,8 @@ public static class MeshGenerator
         int borderSize,        // NOVO: tamanho do border
         int maxTreeRadius,
         int CliffTreshold,
+    // === NOVO: saída de voxels ===
+    NativeArray<byte> voxelOutput,
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -118,7 +120,9 @@ public static class MeshGenerator
             treeMargin = treeMargin,       // NEW
             border = borderSize,              // NOVO
             maxTreeRadius = maxTreeRadius,    // NOVO
-            CliffTreshold = CliffTreshold
+            CliffTreshold = CliffTreshold,
+            // === NOVO ===
+            voxelOutput = voxelOutput
         };
 
         handle = job.Schedule();
@@ -160,6 +164,9 @@ public static class MeshGenerator
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
+
+        // === NOVO ===
+        [WriteOnly] public NativeArray<byte> voxelOutput;
         public void Execute()
         {
             // Passo 1: Gerar heightCache (flattened)
@@ -204,6 +211,24 @@ public static class MeshGenerator
 
             // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
+
+            // === NOVO: copiar para voxelOutput COM CAST PARA BYTE ===
+            if (voxelOutput.IsCreated && voxelOutput.Length == SizeX * SizeY * SizeZ)
+            {
+                int dstIdx = 0;
+                for (int y = 0; y < SizeY; y++)
+                {
+                    for (int z = 0; z < SizeZ; z++)
+                    {
+                        int srcZOffset = (z + border) * voxelPlaneSize;
+                        for (int x = 0; x < SizeX; x++)
+                        {
+                            int srcIdx = (x + border) + y * voxelSizeX + srcZOffset;
+                            voxelOutput[dstIdx++] = (byte)blockTypes[srcIdx];
+                        }
+                    }
+                }
+            }
 
 
             // depois:
@@ -572,24 +597,25 @@ public static class MeshGenerator
                             float c110 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz0 * coarsePlaneSize];
                             float c111 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz1 * coarsePlaneSize];
 
-                            float c00 = math.lerp(c000, c100, fracX);
-                            float c01 = math.lerp(c001, c101, fracX);
-                            float c10 = math.lerp(c010, c110, fracX);
-                            float c11 = math.lerp(c011, c111, fracX);
 
-                            float c0 = math.lerp(c00, c10, fracY);
-                            float c1 = math.lerp(c01, c11, fracY);
+                            float cX0Z0 = math.lerp(c000, c100, fracX);
+                            float cX0Z1 = math.lerp(c001, c101, fracX);
+                            float cX1Z0 = math.lerp(c010, c110, fracX);
+                            float cX1Z1 = math.lerp(c011, c111, fracX);
 
-                            float interpolatedCave = math.lerp(c0, c1, fracZ);
+                            float cZ0 = math.lerp(cX0Z0, cX1Z0, fracZ);
+                            float cZ1 = math.lerp(cX0Z1, cX1Z1, fracZ);
 
-                            float maxPossibleY = math.max(1f, h);
+                            float interpolatedCave = math.lerp(cZ0, cZ1, fracY);
 
+                            // Bias de superfície
                             int surfH = heightCache[cacheIdx];
                             float relativeHeight = (float)y / math.max(1f, (float)surfH);
                             float surfaceBias = 0.001f * relativeHeight;
                             if (y < 5) surfaceBias -= 0.08f;
 
                             float adjustedThreshold = caveThreshold - surfaceBias;
+
                             if (interpolatedCave > adjustedThreshold)
                             {
                                 blockTypes[voxelIdx] = BlockType.Air;
