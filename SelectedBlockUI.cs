@@ -16,11 +16,11 @@ public class SelectedBlockUI : MonoBehaviour
     {
         BlockType block = blockSelector.CurrentBlock;
 
-        if (block == BlockType.Air )
-        {
-            blockText.text = "";
-            return;
-        }
+        // if (block == BlockType.Air )
+        // {
+        //     blockText.text = "";
+        //     return;
+        // }
 
         blockText.text = block.ToString();
     }

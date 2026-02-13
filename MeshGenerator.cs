@@ -583,7 +583,9 @@ public static class MeshGenerator
                             float interpolatedCave = math.lerp(c0, c1, fracZ);
 
                             float maxPossibleY = math.max(1f, h);
-                            float relativeHeight = (float)y / maxPossibleY;
+
+                            int surfH = heightCache[cacheIdx];
+                            float relativeHeight = (float)y / math.max(1f, (float)surfH);
                             float surfaceBias = 0.001f * relativeHeight;
                             if (y < 5) surfaceBias -= 0.08f;
 

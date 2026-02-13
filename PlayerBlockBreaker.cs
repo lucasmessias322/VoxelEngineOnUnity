@@ -25,7 +25,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 BlockType current = World.Instance.GetBlockAt(sel);
 
                 // 🔒 não quebrável
-                if (current == BlockType.Bedrock)
+                if (current == BlockType.Bedrock || current == BlockType.Air || current == BlockType.Water)
                 {
                     Debug.Log("Tentou quebrar Bedrock 😈");
                     return;

@@ -682,16 +682,14 @@ public class World : MonoBehaviour
         if (localZ == Chunk.SizeZ - 1 && activeChunks.ContainsKey(new Vector2Int(chunkCoord.x, chunkCoord.y + 1)))
             RequestChunkRebuild(new Vector2Int(chunkCoord.x, chunkCoord.y + 1));
     }
-
-   public BlockType GetBlockAt(Vector3Int worldPos)
+    public BlockType GetBlockAt(Vector3Int worldPos)
     {
         // 1) Limites verticais (Y)
         if (worldPos.y < 0) return BlockType.Air;
         if (worldPos.y <= 2) return BlockType.Bedrock;
         if (worldPos.y >= Chunk.SizeY) return BlockType.Air;
 
-        // 2) Overrides (Blocos colocados/quebrados pelo jogador)
-        // Checamos isso antes das árvores para que o player possa remover troncos
+        // 2) Overrides (blocos colocados/quebrados pelo jogador) — tem prioridade máxima
         if (blockOverrides != null && blockOverrides.TryGetValue(worldPos, out BlockType overridden))
         {
             return overridden;
@@ -700,38 +698,37 @@ public class World : MonoBehaviour
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
 
-        // 3) LÓGICA DE ÁRVORES (Onde estava o problema)
+        // 3) Lógica de árvores (deve vir antes do terreno/cavernas)
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldX / Chunk.SizeX),
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
-        // Criamos o array de árvores para o chunk
         NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord);
         BlockType treeBlockFound = BlockType.Air;
 
-        try {
+        try
+        {
             for (int i = 0; i < trees.Length; i++)
             {
                 var t = trees[i];
 
-                // --- CORREÇÃO CRÍTICA ---
-                // Verifica se o bloco na base da árvore é GRAMA. 
-                // Se não for grama (ex: areia), a árvore não existe no mundo real/visual.
-                if (GetSurfaceBlockType(t.worldX, t.worldZ) != BlockType.Grass) 
+                // Só considera árvores plantadas em grama
+                if (GetSurfaceBlockType(t.worldX, t.worldZ) != BlockType.Grass)
                     continue;
 
                 int baseY = GetSurfaceHeight(t.worldX, t.worldZ);
                 int trunkTop = baseY + t.trunkHeight;
 
-                // Verificar se a posição consultada é o TRONCO
-                if (worldPos.x == t.worldX && worldPos.z == t.worldZ && worldPos.y > baseY && worldPos.y <= trunkTop)
+                // Tronco
+                if (worldPos.x == t.worldX && worldPos.z == t.worldZ &&
+                    worldPos.y > baseY && worldPos.y <= trunkTop)
                 {
                     treeBlockFound = BlockType.Log;
                     break;
                 }
 
-                // Verificar se a posição consultada é a COPA (Folhas)
+                // Folhas (copa)
                 int canopyStartY = trunkTop - t.canopyHeight + 1;
                 int canopyEndY = trunkTop + 1;
 
@@ -746,67 +743,170 @@ public class World : MonoBehaviour
                     }
                 }
             }
-        } finally {
-            // Garante que a memória NativeArray seja liberada mesmo se houver erro
+        }
+        finally
+        {
             trees.Dispose();
         }
 
-        // Se encontrou parte de uma árvore válida, retorna o bloco dela
-        if (treeBlockFound != BlockType.Air) return treeBlockFound;
+        if (treeBlockFound != BlockType.Air)
+            return treeBlockFound;
 
-        // 4) Cavernas
+        // 4) Cavernas — AGORA ALINHADO COM O JOB DO MESHGENERATOR
         bool isCave = false;
-        int h = GetSurfaceHeight(worldX, worldZ);
+        int surfaceHeight = GetSurfaceHeight(worldX, worldZ);
 
         if (caveLayers != null && caveLayers.Length > 0)
         {
             int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
             if (worldPos.y <= maxCaveY)
             {
-                float totalCave = 0f;
-                float sumCaveAmp = 0f;
-                for (int i = 0; i < caveLayers.Length; i++)
-                {
-                    var layer = caveLayers[i];
-                    if (!layer.enabled) continue;
+                // === Calcula o mesmo grid coarse que o job usa ===
 
-                    float sample = MyNoise.OctavePerlin3D(worldX + layer.offset.x, (float)worldPos.y, worldZ + layer.offset.y, layer);
-                    totalCave += sample * layer.amplitude;
-                    sumCaveAmp += math.max(1e-5f, layer.amplitude);
-                }
-                if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
+                // Precisamos do border usado no job para alinhar minWorld
+                int border = treeSettings.canopyRadius + 2;  // mesmo valor usado no RequestChunk / RequestChunkRebuild
 
-                float surfaceBias = 0.001f * ((float)worldPos.y / math.max(1f, (float)h));
+                int chunkMinX = chunkCoord.x * Chunk.SizeX;
+                int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
+
+                int minWorldX = chunkMinX - border;
+                int minWorldZ = chunkMinZ - border;
+                int minWorldY = 0;
+
+                int stride = math.max(1, caveStride);
+
+                // Origem do grid coarse (igual ao job)
+                int gridOriginX = minWorldX - stride;
+                int gridOriginY = minWorldY - stride;
+                int gridOriginZ = minWorldZ - stride;
+
+                // Índices coarse inferiores
+                int coarseLowX = Mathf.FloorToInt((float)(worldX - gridOriginX) / stride);
+                int coarseLowY = Mathf.FloorToInt((float)(worldPos.y - gridOriginY) / stride);
+                int coarseLowZ = Mathf.FloorToInt((float)(worldZ - gridOriginZ) / stride);
+
+                // Posições world dos 8 cantos do cubo coarse
+                int lowWX = gridOriginX + coarseLowX * stride;
+                int highWX = lowWX + stride;
+
+                int lowWY = gridOriginY + coarseLowY * stride;
+                int highWY = lowWY + stride;
+
+                int lowWZ = gridOriginZ + coarseLowZ * stride;
+                int highWZ = lowWZ + stride;
+
+                // Amostra nos 8 pontos (usando a mesma função de noise)
+                float c000 = ComputeCaveNoise(lowWX, lowWY, lowWZ);
+                float c100 = ComputeCaveNoise(highWX, lowWY, lowWZ);
+                float c010 = ComputeCaveNoise(lowWX, highWY, lowWZ);
+                float c110 = ComputeCaveNoise(highWX, highWY, lowWZ);
+                float c001 = ComputeCaveNoise(lowWX, lowWY, highWZ);
+                float c101 = ComputeCaveNoise(highWX, lowWY, highWZ);
+                float c011 = ComputeCaveNoise(lowWX, highWY, highWZ);
+                float c111 = ComputeCaveNoise(highWX, highWY, highWZ);
+
+                // Interpolação trilinear (exatamente como no job)
+                float fx = (float)(worldX - lowWX) / stride;
+                float fy = (float)(worldPos.y - lowWY) / stride;
+                float fz = (float)(worldZ - lowWZ) / stride;
+
+                float x00 = Mathf.Lerp(c000, c100, fx);
+                float x10 = Mathf.Lerp(c010, c110, fx);
+                float x01 = Mathf.Lerp(c001, c101, fx);
+                float x11 = Mathf.Lerp(c011, c111, fx);
+
+                float y0 = Mathf.Lerp(x00, x10, fz);
+                float y1 = Mathf.Lerp(x01, x11, fz);
+
+                float interpolatedCave = Mathf.Lerp(y0, y1, fy);
+
+                // Surface bias — alinhado com o job (usando surfaceHeight)
+                float surfaceBias = 0.001f * ((float)worldPos.y / math.max(1f, (float)surfaceHeight));
                 if (worldPos.y < 5) surfaceBias -= 0.08f;
 
-                if (totalCave > (caveThreshold - surfaceBias)) isCave = true;
+                float adjustedThreshold = caveThreshold - surfaceBias;
+
+                if (interpolatedCave > adjustedThreshold)
+                    isCave = true;
             }
         }
 
-        if (isCave) return BlockType.Air;
+        if (isCave)
+            return BlockType.Air;
 
-        // 5) Terreno Natural (Grama, Terra, Pedra, Areia, Água)
-        if (worldPos.y > h)
+        // 5) Terreno natural (superfície, subsolo, água)
+        if (worldPos.y > surfaceHeight)
         {
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
         }
         else
         {
-            bool isBeachArea = (h <= seaLevel + 2);
-            if (worldPos.y == h) return isBeachArea ? BlockType.Sand : BlockType.Grass;
-            if (worldPos.y > h - 4) return isBeachArea ? BlockType.Sand : BlockType.Dirt;
-            return BlockType.Stone;
+            // 🔥 NOVO: replicando PopulateTerrainColumns para 100% de sincronização
+            bool isBeachArea = (surfaceHeight <= seaLevel + 2);
+            bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
+            int mountainStoneHeight = baseHeight + 70; // ajuste como quiser (mesmo valor do MeshGenerator)
+            bool isHighMountain = surfaceHeight >= mountainStoneHeight;
+
+            if (worldPos.y == surfaceHeight)
+            {
+                if (isHighMountain)
+                {
+                    return BlockType.Stone; // ⛰️ topo de montanha alta
+                }
+                else if (isCliff)
+                {
+                    return BlockType.Stone;
+                }
+                else
+                {
+                    return isBeachArea ? BlockType.Sand : BlockType.Grass;
+                }
+            }
+            else if (worldPos.y > surfaceHeight - 4)
+            {
+                if (isCliff)
+                {
+                    return BlockType.Stone; // 👈 cliff wall
+                }
+                else
+                {
+                    return isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                }
+            }
+            else if (worldPos.y <= 2)
+            {
+                return BlockType.Bedrock;
+            }
+            else if (worldPos.y > surfaceHeight - 50)
+            {
+                return BlockType.Stone;
+            }
+            else
+            {
+                return BlockType.Deepslate;
+            }
         }
     }
 
-    // Certifique-se de que esta função auxiliar esteja assim:
-    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
+    // Função auxiliar (já existia, mas mantida aqui para completude)
+    private float ComputeCaveNoise(int wx, int wy, int wz)
     {
-        int h = GetSurfaceHeight(worldX, worldZ);
-        if (h <= seaLevel + 2) return BlockType.Sand;
-        return BlockType.Grass;
+        float totalCave = 0f;
+        float sumCaveAmp = 0f;
+
+        for (int i = 0; i < caveLayers.Length; i++)
+        {
+            var layer = caveLayers[i];
+            if (!layer.enabled) continue;
+
+            float sample = MyNoise.OctavePerlin3D(wx + layer.offset.x, (float)wy, wz + layer.offset.y, layer);
+            totalCave += sample * layer.amplitude;
+            sumCaveAmp += math.max(1e-5f, layer.amplitude);
+        }
+
+        return (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
     }
-    // helper local (replika do Job) - calcula altura da superfície para um (x,z)
+
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
         // Domain warping
@@ -823,10 +923,12 @@ public class World : MonoBehaviour
                 float baseNx = worldX + layer.offset.x;
                 float baseNz = worldZ + layer.offset.y;
 
+
                 float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);  // [0,1]
                 float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);  // [0,1]
 
                 // Centre em [-1,1] e aplique amplitude (força da distorção)
+                // dentro do loop de warpLayers:
                 warpX += (sampleX * 2f - 1f) * layer.amplitude;
                 warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
                 sumWarpAmp += layer.amplitude;   // <<-- faltando
@@ -842,30 +944,34 @@ public class World : MonoBehaviour
 
         float totalNoise = 0f;
         float sumAmp = 0f;  // Inicialize corretamente (já está)
+        bool hasActiveLayers = false;
         if (noiseLayers != null)
         {
+
             for (int i = 0; i < noiseLayers.Length; i++)
             {
                 var layer = noiseLayers[i];
                 if (!layer.enabled) continue;
 
+                hasActiveLayers = true;
+
                 float nx = (worldX + warpX) + layer.offset.x;
                 float nz = (worldZ + warpZ) + layer.offset.y;
 
                 float sample = MyNoise.OctavePerlin(nx, nz, layer);
+
                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                {
                     sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                }
 
                 totalNoise += sample * layer.amplitude;
                 sumAmp += math.max(1e-5f, layer.amplitude);
             }
         }
-        // Remove the normalization:
-        // if (sumAmp > 0f) totalNoise /= sumAmp;  // DELETE THIS
 
-        // Fallback if no layers (update similarly, without normalization)
         // Fallback se não houver layers ativas ou sumAmp == 0 (já está ok)
-        if (sumAmp <= 0f)  // Adicione essa checagem para robustez
+        if (!hasActiveLayers || sumAmp <= 0f)
         {
             float nx = (worldX + warpX) * 0.05f + offsetX;
             float nz = (worldZ + warpZ) * 0.05f + offsetZ;
@@ -906,7 +1012,7 @@ public class World : MonoBehaviour
                 int worldX = cx * cellSize + (cellSize / 2);
                 int worldZ = cz * cellSize + (cellSize / 2);
 
-                // REMOVIDO: sem skip de bounds do chunk - agora inclui overhang
+
 
                 int h = GetSurfaceHeight(worldX, worldZ);
                 if (h <= 0 || h >= Chunk.SizeY) continue;
@@ -941,22 +1047,53 @@ public class World : MonoBehaviour
     }
 
     // helper local (replika do Job)
-    // Updated GetHeightFromNoise (now takes sumAmp for centering):
-    // Updated GetHeightFromNoise (now takes sumAmp for centering):
+
     private int GetHeightFromNoise(float noise, float sumAmp)
     {
         float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
         return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
     }
+    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
+    {
+        int h = GetSurfaceHeight(worldX, worldZ);
+        bool isBeachArea = (h <= seaLevel + 2);
+        bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
+        int mountainStoneHeight = baseHeight + 70;
+        bool isHighMountain = h >= mountainStoneHeight;
 
-    // // NOVO: retorna APENAS o bloco da superfície (sem árvores, sem overrides)
-    // private BlockType GetSurfaceBlockType(int worldX, int worldZ)
-    // {
-    //     int h = GetSurfaceHeight(worldX, worldZ);
-    //     if (h <= 0 || h >= Chunk.SizeY) return BlockType.Air;
+        if (isHighMountain)
+        {
+            return BlockType.Stone; // ⛰️ topo de montanha alta
+        }
+        else if (isCliff)
+        {
+            return BlockType.Stone;
+        }
+        else
+        {
+            return isBeachArea ? BlockType.Sand : BlockType.Grass;
+        }
+    }
 
-    //     bool isBeachArea = (h <= seaLevel + 2);
-    //     return isBeachArea ? BlockType.Sand : BlockType.Grass;
-    // }
+    // 🔥 NOVO: função IsCliff replicando a do MeshGenerator (calcula alturas vizinhas manualmente)
+    private bool IsCliff(int worldX, int worldZ, int threshold = 2)
+    {
+        int h = GetSurfaceHeight(worldX, worldZ);
+
+        int hN = GetSurfaceHeight(worldX, worldZ + 1);
+        int hS = GetSurfaceHeight(worldX, worldZ - 1);
+        int hE = GetSurfaceHeight(worldX + 1, worldZ);
+        int hW = GetSurfaceHeight(worldX - 1, worldZ);
+
+        int maxDiff = 0;
+        maxDiff = math.max(maxDiff, math.abs(h - hN));
+        maxDiff = math.max(maxDiff, math.abs(h - hS));
+        maxDiff = math.max(maxDiff, math.abs(h - hE));
+        maxDiff = math.max(maxDiff, math.abs(h - hW));
+
+        return maxDiff >= threshold;
+    }
+
+
 
 }
