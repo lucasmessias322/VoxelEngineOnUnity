@@ -420,8 +420,11 @@ public class World : MonoBehaviour
         chunk.generation = expectedGen;
 
         // NOVO: alocar voxelData
-        chunk.voxelData = new NativeArray<byte>(Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ, Allocator.Persistent);
-        chunk.hasVoxelData = false;
+        if (!chunk.voxelData.IsCreated)
+        {
+            chunk.voxelData = new NativeArray<byte>(Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ, Allocator.Persistent);
+            chunk.hasVoxelData = false;
+        }
 
         activeChunks.Add(coord, chunk);
 

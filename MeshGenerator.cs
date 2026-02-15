@@ -32,7 +32,109 @@ public static class MeshGenerator
         public int z;
         public int type; // enum BlockType como int
     }
+    // =============================================
+    // NOVO: Job paralelo para gerar o heightmap
+    // =============================================
+    [BurstCompile]
+    private struct HeightJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
+        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
 
+        public Vector2Int coord;
+        public int border;
+        public float offsetX;
+        public float offsetZ;
+        public int baseHeight;
+
+        [WriteOnly] public NativeArray<int> heightCache;
+        public int heightStride;   // SizeX + 2 * border
+
+        public void Execute(int index)
+        {
+            int lx = index % heightStride;           // 0 → heightSizeX-1
+            int lz = index / heightStride;
+
+            int realLx = lx - border;                // -border → SizeX + border
+            int realLz = lz - border;
+
+            int worldX = coord.x * SizeX + realLx;
+            int worldZ = coord.y * SizeZ + realLz;
+
+            // === Domain Warping ===
+            float warpX = 0f;
+            float warpZ = 0f;
+            float sumWarpAmp = 0f;
+
+            for (int i = 0; i < warpLayers.Length; i++)
+            {
+                var layer = warpLayers[i];
+                if (!layer.enabled) continue;
+
+                float baseNx = worldX + layer.offset.x;
+                float baseNz = worldZ + layer.offset.y;
+
+                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
+                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
+
+                warpX += (sampleX * 2f - 1f) * layer.amplitude;
+                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
+                sumWarpAmp += layer.amplitude;
+            }
+
+            if (sumWarpAmp > 0f)
+            {
+                warpX /= sumWarpAmp;
+                warpZ /= sumWarpAmp;
+            }
+            warpX = (warpX - 0.5f) * 2f;
+            warpZ = (warpZ - 0.5f) * 2f;
+
+            // === Noise layers ===
+            float totalNoise = 0f;
+            float sumAmp = 0f;
+            bool hasActiveLayers = false;
+
+            for (int i = 0; i < noiseLayers.Length; i++)
+            {
+                var layer = noiseLayers[i];
+                if (!layer.enabled) continue;
+
+                hasActiveLayers = true;
+
+                float nx = (worldX + warpX) + layer.offset.x;
+                float nz = (worldZ + warpZ) + layer.offset.y;
+
+                float sample = MyNoise.OctavePerlin(nx, nz, layer);
+
+                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                {
+                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                }
+
+                totalNoise += sample * layer.amplitude;
+                sumAmp += math.max(1e-5f, layer.amplitude);
+            }
+
+            if (!hasActiveLayers || sumAmp <= 0f)
+            {
+                float nx = (worldX + warpX) * 0.05f + offsetX;
+                float nz = (worldZ + warpZ) * 0.05f + offsetZ;
+                totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+                sumAmp = 1f;
+            }
+
+            // Altura final
+            int h = GetHeightFromNoise(totalNoise, sumAmp, baseHeight);
+            heightCache[index] = h;
+        }
+
+        private static int GetHeightFromNoise(float noise, float sumAmp, int baseHeight)
+        {
+            float centered = noise - sumAmp * 0.5f;
+            return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
+        }
+    }
     public static void ScheduleMeshJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
@@ -169,8 +271,29 @@ public static class MeshGenerator
         [WriteOnly] public NativeArray<byte> voxelOutput;
         public void Execute()
         {
-            // Passo 1: Gerar heightCache (flattened)
-            NativeArray<int> heightCache = GenerateHeightCache();
+            int heightSize = SizeX + 2 * border;
+            int totalHeightPoints = heightSize * heightSize;
+
+            NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.Temp);
+
+            var heightJob = new HeightJob
+            {
+                noiseLayers = noiseLayers,
+                warpLayers = warpLayers,
+                coord = coord,
+                border = border,
+                offsetX = offsetX,
+                offsetZ = offsetZ,
+                baseHeight = baseHeight,
+                heightCache = heightCache,
+                heightStride = heightSize
+            };
+
+            // Executa sequencialmente dentro do mesmo Job (sem agendamento)
+            for (int i = 0; i < totalHeightPoints; i++)
+            {
+                heightJob.Execute(i);
+            }
 
             // Passo 2: Popular voxels (blockTypes e solids, flattened)
             int voxelSizeX = SizeX + 2 * border;
@@ -194,6 +317,8 @@ public static class MeshGenerator
                 voxelPlaneSize
             );
             int heightStride = voxelSizeX;
+
+
             TreePlacement.ApplyTreeInstancesToVoxels(
                 blockTypes,
                 solids,
@@ -275,99 +400,6 @@ public static class MeshGenerator
                     solids[idx] = mapping.isSolid;
                 }
             }
-        }
-
-        private NativeArray<int> GenerateHeightCache()
-        {
-            int heightSizeX = SizeX + 2 * border;
-            int heightSizeZ = SizeZ + 2 * border;
-            NativeArray<int> heightCache = new NativeArray<int>(heightSizeX * heightSizeZ, Allocator.Temp);
-            int heightStride = heightSizeX;
-
-            int baseWorldX = coord.x * SizeX;
-            int baseWorldZ = coord.y * SizeZ;
-
-            for (int lx = -border; lx < SizeX + border; lx++)
-            {
-                for (int lz = -border; lz < SizeZ + border; lz++)
-                {
-                    int cacheIdx = (lx + border) + (lz + border) * heightStride;
-                    int worldX = baseWorldX + lx;
-                    int worldZ = baseWorldZ + lz;
-
-                    // === Domain Warping (exatamente igual ao World.cs) ===
-                    float warpX = 0f;
-                    float warpZ = 0f;
-                    float sumWarpAmp = 0f;
-
-                    for (int i = 0; i < warpLayers.Length; i++)
-                    {
-                        var layer = warpLayers[i];
-                        if (!layer.enabled) continue;
-
-                        float baseNx = worldX + layer.offset.x;
-                        float baseNz = worldZ + layer.offset.y;
-
-                        float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);  // [0,1]
-                        float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);  // [0,1]
-
-                        // Centre em [-1,1] e aplique amplitude (força da distorção)
-                        // dentro do loop de warpLayers:
-                        warpX += (sampleX * 2f - 1f) * layer.amplitude;
-                        warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
-                        sumWarpAmp += layer.amplitude;   // <<-- faltando
-
-                    }
-                    if (sumWarpAmp > 0f)
-                    {
-                        warpX /= sumWarpAmp;
-                        warpZ /= sumWarpAmp;
-                    }
-                    warpX = (warpX - 0.5f) * 2f;
-                    warpZ = (warpZ - 0.5f) * 2f;
-
-                    // === Noise layers (exatamente igual ao World.cs) ===
-                    float totalNoise = 0f;
-                    float sumAmp = 0f;
-
-                    bool hasActiveLayers = false;
-                    for (int i = 0; i < noiseLayers.Length; i++)
-                    {
-                        var layer = noiseLayers[i];
-                        if (!layer.enabled) continue;
-
-                        hasActiveLayers = true;
-
-                        float nx = (worldX + warpX) + layer.offset.x;
-                        float nz = (worldZ + warpZ) + layer.offset.y;
-
-                        float sample = MyNoise.OctavePerlin(nx, nz, layer);
-
-                        if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                        {
-                            sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-                        }
-
-                        totalNoise += sample * layer.amplitude;
-                        sumAmp += math.max(1e-5f, layer.amplitude);
-                    }
-
-                    // Fallback caso não haja layers ativas (exatamente como no World.cs)
-                    if (!hasActiveLayers || sumAmp <= 0f)
-                    {
-                        float nx = (worldX + warpX) * 0.05f + offsetX;
-                        float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-                        totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-                        sumAmp = 1f;
-                    }
-
-                    // === Conversão para altura (idêntica ao World.cs) ===
-                    int h = GetHeightFromNoise(totalNoise, sumAmp);
-                    heightCache[cacheIdx] = h;
-                }
-            }
-
-            return heightCache;
         }
 
         // Updated GetHeightFromNoise (now takes sumAmp for centering):
@@ -599,25 +631,22 @@ public static class MeshGenerator
                             float c110 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz0 * coarsePlaneSize];
                             float c111 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz1 * coarsePlaneSize];
 
+                            float c00 = math.lerp(c000, c100, fracX);
+                            float c01 = math.lerp(c001, c101, fracX);
+                            float c10 = math.lerp(c010, c110, fracX);
+                            float c11 = math.lerp(c011, c111, fracX);
 
-                            float cX0Z0 = math.lerp(c000, c100, fracX);
-                            float cX0Z1 = math.lerp(c001, c101, fracX);
-                            float cX1Z0 = math.lerp(c010, c110, fracX);
-                            float cX1Z1 = math.lerp(c011, c111, fracX);
+                            float c0 = math.lerp(c00, c10, fracY);
+                            float c1 = math.lerp(c01, c11, fracY);
 
-                            float cZ0 = math.lerp(cX0Z0, cX1Z0, fracZ);
-                            float cZ1 = math.lerp(cX0Z1, cX1Z1, fracZ);
+                            float interpolatedCave = math.lerp(c0, c1, fracZ);
 
-                            float interpolatedCave = math.lerp(cZ0, cZ1, fracY);
-
-                            // Bias de superfície
-                            int surfH = heightCache[cacheIdx];
-                            float relativeHeight = (float)y / math.max(1f, (float)surfH);
+                            float maxPossibleY = math.max(1f, h);
+                            float relativeHeight = (float)y / maxPossibleY;
                             float surfaceBias = 0.001f * relativeHeight;
                             if (y < 5) surfaceBias -= 0.08f;
 
                             float adjustedThreshold = caveThreshold - surfaceBias;
-
                             if (interpolatedCave > adjustedThreshold)
                             {
                                 blockTypes[voxelIdx] = BlockType.Air;
@@ -631,7 +660,6 @@ public static class MeshGenerator
             }
 
         }
-
         private void FillWaterAboveTerrain(
             NativeArray<int> heightCache,
             NativeArray<BlockType> blockTypes,

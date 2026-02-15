@@ -194,7 +194,7 @@ public class Chunk : MonoBehaviour
 
             mesh.colors = cols;
         }
-        mesh.RecalculateBounds();
+
 
         // === Atualizar MeshCollider com somente triângulos opacos ===
         // Reutiliza colliderMesh se possível, para reduzir alocações
@@ -220,7 +220,7 @@ public class Chunk : MonoBehaviour
             colliderTris.AddRange(transparentTris);  // Inclui transparentes (ex.: folhas, vidro)
 
             colliderMesh.SetIndices(colliderTris.ToArray(), MeshTopology.Triangles, 0, false);
-            colliderMesh.RecalculateBounds();
+            // colliderMesh.RecalculateBounds();
 
             // Atribua ao collider
             meshCollider.sharedMesh = colliderMesh;
