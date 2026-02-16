@@ -103,6 +103,7 @@ public class Chunk : MonoBehaviour
      NativeArray<int> transparentTris, // 👈 NOVO
      NativeArray<int> waterTris,
      NativeArray<Vector2> uvs,
+      NativeArray<Vector2> uv2,   // NOVO
      NativeArray<Vector3> normals,
      NativeArray<byte> vertexLights,
      NativeArray<byte> tintFlags
@@ -114,6 +115,7 @@ public class Chunk : MonoBehaviour
 
         mesh.SetVertices(vertices);
         mesh.SetUVs(0, uvs);
+        mesh.SetUVs(1, uv2);   // <-- ESSENCIAL para o shader funcionar
 
         if (normals.Length > 0)
             mesh.SetNormals(normals);

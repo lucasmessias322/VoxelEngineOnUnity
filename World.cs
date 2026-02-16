@@ -95,6 +95,7 @@ public class World : MonoBehaviour
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles; // NOVO
         public NativeList<Vector2> uvs;
+        public NativeList<Vector2> uv2;   // NOVO: segundo canal UV (tile base)
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
         public NativeArray<MeshGenerator.BlockEdit> edits;
@@ -295,6 +296,7 @@ public class World : MonoBehaviour
                         pm.transparentTriangles.AsArray(),
                         pm.waterTriangles.AsArray(),
                         pm.uvs.AsArray(),
+                            pm.uv2.AsArray(),   // NOVO
                         pm.normals.AsArray(),
                         pm.lightValues.AsArray(),
                         pm.tintFlags.AsArray()
@@ -313,6 +315,7 @@ public class World : MonoBehaviour
                 pm.transparentTriangles.Dispose();
                 pm.waterTriangles.Dispose();
                 pm.uvs.Dispose();
+                pm.uv2.Dispose();   // NOVO
                 pm.normals.Dispose();
                 pm.lightValues.Dispose();
                 pm.tintFlags.Dispose();
@@ -515,6 +518,7 @@ public class World : MonoBehaviour
             out NativeList<int> waterTriangles,
 
             out NativeList<Vector2> uvs,
+            out NativeList<Vector2> uv2,   // NOVO
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
             out NativeList<byte> tintFlags
@@ -529,6 +533,7 @@ public class World : MonoBehaviour
             waterTriangles = waterTriangles,
 
             uvs = uvs,
+            uv2 = uv2,   // NOVO
             normals = normals,
             lightValues = vertexLights,  // Novo
             edits = nativeEdits, // store to dispose later
@@ -632,6 +637,7 @@ public class World : MonoBehaviour
             out NativeList<int> waterTriangles,
 
             out NativeList<Vector2> uvs,
+            out NativeList<Vector2> uv2,   // NOVO
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
             out NativeList<byte> tintFlags // novo out
@@ -645,6 +651,7 @@ public class World : MonoBehaviour
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             uvs = uvs,
+            uv2 = uv2,   // NOVO
             normals = normals,
             lightValues = vertexLights,
             edits = nativeEdits,

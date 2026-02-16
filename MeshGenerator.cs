@@ -170,9 +170,11 @@ public static class MeshGenerator
         out NativeList<int> transparentTriangles,
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
+        out NativeList<Vector2> uv2,
         out NativeList<Vector3> normals,
         out NativeList<byte> vertexLights,  // Novo: adicione isso
         out NativeList<byte> tintFlags
+
     )
     {
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
@@ -189,7 +191,9 @@ public static class MeshGenerator
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
         tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
 
-
+        // UVs
+        uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
+        uv2 = new NativeList<Vector2>(4096, Allocator.Persistent); // NOVO: canal 1
         var job = new ChunkMeshJob
         {
             coord = coord,
@@ -214,6 +218,7 @@ public static class MeshGenerator
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             uvs = uvs,
+            uv2 = uv2, // <- passe para o job
             normals = normals,
             vertexLights = vertexLights,
             tintFlags = tintFlags, // Novo: atribua ao job
@@ -224,7 +229,9 @@ public static class MeshGenerator
             maxTreeRadius = maxTreeRadius,    // NOVO
             CliffTreshold = CliffTreshold,
             // === NOVO ===
-            voxelOutput = voxelOutput
+            voxelOutput = voxelOutput,
+
+
         };
 
         handle = job.Schedule();
@@ -263,6 +270,7 @@ public static class MeshGenerator
         public NativeList<int> transparentTriangles;
 
         public NativeList<Vector2> uvs;
+        public NativeList<Vector2> uv2; // UV channel 1: tile base (uMin, vMin) normalizado
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
@@ -402,12 +410,6 @@ public static class MeshGenerator
             }
         }
 
-        // Updated GetHeightFromNoise (now takes sumAmp for centering):
-        private int GetHeightFromNoise(float noise, float sumAmp)
-        {
-            float centered = noise - sumAmp * 0.5f;  // Center around sumAmp/2 for ± variation
-            return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
-        }
         private void PopulateTerrainColumns(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
 
@@ -688,352 +690,508 @@ public static class MeshGenerator
             }
         }
 
-        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light)
+        //     private void GenerateMesh(
+        //   NativeArray<int> heightCache,
+        //   NativeArray<BlockType> blockTypes,
+        //   NativeArray<bool> solids,
+        //   NativeArray<byte> light)
+        //     {
+        //         int voxelSizeX = SizeX + 2 * border;
+        //         int voxelSizeZ = SizeZ + 2 * border;
+        //         int voxelPlaneSize = voxelSizeX * SizeY;
+
+        //         int maxMask = math.max(voxelSizeX * SizeY,
+        //                         math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
+
+        //         NativeArray<int> mask = new NativeArray<int>(maxMask, Allocator.Temp);
+
+        //         for (int axis = 0; axis < 3; axis++)
+        //         {
+        //             for (int side = 0; side < 2; side++)
+        //             {
+        //                 int normalSign = side == 0 ? 1 : -1;
+
+        //                 int u = (axis + 1) % 3;
+        //                 int v = (axis + 2) % 3;
+
+        //                 int sizeU = (u == 0 ? voxelSizeX : u == 1 ? SizeY : voxelSizeZ);
+        //                 int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
+        //                 // int sizeD não é necessário para o loop, usado implicitamente
+
+        //                 int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
+
+        //                 // Define o intervalo de N (profundidade) restrito ao chunk ativo
+        //                 int minN = (axis == 1) ? 0 : border;
+        //                 int maxN = minN + chunkSize;
+
+        //                 Vector3 normal = new Vector3(
+        //                     axis == 0 ? normalSign : 0,
+        //                     axis == 1 ? normalSign : 0,
+        //                     axis == 2 ? normalSign : 0
+        //                 );
+
+        //                 BlockFace faceType =
+        //                     axis == 1
+        //                     ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom)
+        //                     : BlockFace.Side;
+
+        //                 for (int n = minN; n < maxN; n++)
+        //                 {
+        //                     // ================= BUILD MASK =================
+        //                     for (int j = 0; j < sizeV; j++)
+        //                     {
+        //                         for (int i = 0; i < sizeU; i++)
+        //                         {
+        //                             int x = (u == 0 ? i : v == 0 ? j : n);
+        //                             int y = (u == 1 ? i : v == 1 ? j : n);
+        //                             int z = (u == 2 ? i : v == 2 ? j : n);
+
+        //                             // --- FIX 1: Ignorar voxels que são apenas dados de borda (padding) ---
+        //                             // Nós não queremos gerar malha para eles, eles servem apenas de vizinhos.
+        //                             bool isCurrentActive =
+        //                                 x >= border && x < border + SizeX &&
+        //                                 z >= border && z < border + SizeZ;
+        //                             // y sempre é ativo pois não tem border vertical no seu setup atual
+
+        //                             if (!isCurrentActive)
+        //                             {
+        //                                 mask[i + j * sizeU] = 0;
+        //                                 continue;
+        //                             }
+        //                             // --------------------------------------------------------------------
+
+        //                             int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+        //                             BlockType current = blockTypes[idx];
+
+        //                             if (current == BlockType.Air)
+        //                             {
+        //                                 mask[i + j * sizeU] = 0;
+        //                                 continue;
+        //                             }
+
+        //                             int dx = axis == 0 ? normalSign : 0;
+        //                             int dy = axis == 1 ? normalSign : 0;
+        //                             int dz = axis == 2 ? normalSign : 0;
+
+        //                             int nx = x + dx;
+        //                             int ny = y + dy;
+        //                             int nz = z + dz;
+
+        //                             // --- FIX 2: Ler corretamente o vizinho na área de borda ---
+        //                             // Antes verificava se estava fora do interior (SizeX), agora verifica se
+        //                             // está fora do ARRAY DE DADOS (voxelSizeX).
+        //                             bool outsideData =
+        //                                 nx < 0 || nx >= voxelSizeX ||
+        //                                 nz < 0 || nz >= voxelSizeZ ||
+        //                                 ny < 0 || ny >= SizeY;
+
+        //                             BlockType neighbor;
+
+        //                             if (outsideData)
+        //                             {
+        //                                 // Se saiu totalmente do array (ex: topo do mundo ou erro de logica), trata como Ar ou Current
+        //                                 // Para bordas de chunk, isso quase nunca acontece pois temos o padding.
+        //                                 neighbor = BlockType.Air;
+        //                             }
+        //                             else
+        //                             {
+        //                                 // Lê o dado do vizinho, MESMO que seja um voxel de borda (ghost)
+        //                                 neighbor = blockTypes[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+        //                             }
+
+        //                             BlockTextureMapping curMap = blockMappings[(int)current];
+        //                             BlockTextureMapping nbMap = blockMappings[(int)neighbor];
+
+        //                             bool neighborSolid = true;
+
+        //                             if (curMap.isTransparent && nbMap.isTransparent)
+        //                                 neighborSolid = true;
+        //                             else if (curMap.isEmpty && nbMap.isEmpty)
+        //                                 neighborSolid = true;
+        //                             else if (!curMap.isEmpty && nbMap.isEmpty)
+        //                                 neighborSolid = false;
+        //                             else
+        //                                 neighborSolid = nbMap.isSolid && !nbMap.isTransparent;
+
+        //                             mask[i + j * sizeU] = (!neighborSolid) ? (int)current : 0;
+        //                         }
+        //                     }
+
+        //                     // ================= GREEDY =================
+        //                     for (int j = 0; j < sizeV; j++)
+        //                     {
+        //                         int i = 0;
+        //                         while (i < sizeU)
+        //                         {
+        //                             int type = mask[i + j * sizeU];
+        //                             if (type == 0)
+        //                             {
+        //                                 i++;
+        //                                 continue;
+        //                             }
+
+        //                             int w = 1;
+        //                             while (i + w < sizeU &&
+        //                                     mask[i + w + j * sizeU] == type)
+        //                                 w++;
+
+        //                             int h = 1;
+        //                             while (j + h < sizeV)
+        //                             {
+        //                                 bool can = true;
+        //                                 for (int k = 0; k < w; k++)
+        //                                 {
+        //                                     if (mask[i + k + (j + h) * sizeU] != type)
+        //                                     {
+        //                                         can = false;
+        //                                         break;
+        //                                     }
+        //                                 }
+        //                                 if (!can) break;
+        //                                 h++;
+        //                             }
+
+        //                             BlockType bt = (BlockType)type;
+        //                             int vIndex = vertices.Length;
+
+        //                             for (int l = 0; l < 4; l++)
+        //                             {
+        //                                 int du = (l == 1 || l == 2) ? w : 0;
+        //                                 int dv = (l == 2 || l == 3) ? h : 0;
+
+        //                                 float posU = i + du;
+        //                                 float posV = j + dv;
+        //                                 float posD = n + (normalSign > 0 ? 1f : 0f);
+
+        //                                 // Ajustar posição subtraindo a borda para voltar ao espaço local correto
+        //                                 float px = (u == 0 ? posU : v == 0 ? posV : posD) - border;
+        //                                 float py = (u == 1 ? posU : v == 1 ? posV : posD);
+        //                                 float pz = (u == 2 ? posU : v == 2 ? posV : posD) - border;
+
+        //                                 Vector3 vert = new Vector3(px, py, pz);
+
+        //                                 if (bt == BlockType.Water)
+        //                                 {
+        //                                     if (axis == 1 && normalSign > 0)
+        //                                         vert.y -= 0.15f;
+        //                                 }
+
+        //                                 vertices.Add(vert);
+
+        //                                 int sampleY = math.clamp((int)py, 0, SizeY - 1);
+        //                                 int sx = (int)math.floor(px + border);
+        //                                 int sz = (int)math.floor(pz + border);
+
+        //                                 int sum = 0;
+        //                                 int count = 0;
+
+        //                                 void Sample(int sx0, int sy0, int sz0)
+        //                                 {
+        //                                     if (sx0 >= 0 && sx0 < voxelSizeX &&
+        //                                         sy0 >= 0 && sy0 < SizeY &&
+        //                                         sz0 >= 0 && sz0 < voxelSizeZ)
+        //                                     {
+        //                                         sum += light[sx0 + sy0 * voxelSizeX + sz0 * voxelPlaneSize];
+        //                                         count++;
+        //                                     }
+        //                                 }
+
+        //                                 Sample(sx, sampleY, sz);
+        //                                 Sample(sx - 1, sampleY, sz);
+        //                                 Sample(sx, sampleY, sz - 1);
+        //                                 Sample(sx - 1, sampleY, sz - 1);
+
+        //                                 vertexLights.Add(count > 0 ? (byte)(sum / count) : (byte)0);
+        //                             }
+
+        //                             bool tint =
+        //                                 (bt == BlockType.Leaves) ||
+        //                                 (bt == BlockType.Grass && axis == 1 && normalSign > 0);
+
+        //                             byte tintByte = tint ? (byte)1 : (byte)0;
+        //                             tintFlags.Add(tintByte);
+        //                             tintFlags.Add(tintByte);
+        //                             tintFlags.Add(tintByte);
+        //                             tintFlags.Add(tintByte);
+
+        //                             BlockTextureMapping m = blockMappings[(int)bt];
+        //                             Vector2Int tile =
+        //                                 faceType == BlockFace.Top ? m.top :
+        //                                 faceType == BlockFace.Bottom ? m.bottom :
+        //                                 m.side;
+
+        //                             float tileW = 1f / atlasTilesX;
+        //                             float tileH = 1f / atlasTilesY;
+        //                             float padU = tileW * 0.01f;
+        //                             float padV = tileH * 0.01f;
+
+        //                             float uMin = tile.x * tileW + padU;
+        //                             float vMin = tile.y * tileH + padV;
+
+        //                             // for (int l = 0; l < 4; l++)
+        //                             // {
+        //                             //     int du = (l == 1 || l == 2) ? w : 0;
+        //                             //     int dv = (l == 2 || l == 3) ? h : 0;
+
+        //                             //     float uvU = i + du;
+        //                             //     float uvV = j + dv;
+
+        //                             //     // UVs precisam escalar com o tamanho do greedy mesh (w, h) se for tiled, 
+        //                             //     // mas para Atlas geralmente usamos as coordenadas do vertice ou UV tileada.
+        //                             //     // Aqui mantendo sua logica original:
+        //                             //     uvs.Add(new Vector2(uvU, uvV));
+        //                             //     uv2.Add(new Vector2(uMin, vMin));
+        //                             //     normals.Add(normal);
+        //                             // }
+
+        //                             for (int l = 0; l < 4; l++)
+        //                             {
+        //                                 int du = (l == 1 || l == 2) ? w : 0;
+        //                                 int dv = (l == 2 || l == 3) ? h : 0;
+
+        //                                 float rawU = i + du;
+        //                                 float rawV = j + dv;
+
+        //                                 // --- CORREÇÃO DE ROTAÇÃO DE UV ---
+        //                                 Vector2 finalUV;
+
+        //                                 if (axis == 0)
+        //                                 {
+        //                                     // Eixo X (Faces laterais Leste/Oeste)
+        //                                     // O algoritmo definiu u=Y (rawU) e v=Z (rawV).
+        //                                     // Precisamos inverter para (Z, Y) para que Y seja a altura (V da textura).
+        //                                     finalUV = new Vector2(rawV, rawU);
+        //                                 }
+        //                                 else if (axis == 1)
+        //                                 {
+        //                                     // Eixo Y (Topo/Baixo)
+        //                                     // O algoritmo definiu u=Z (rawU) e v=X (rawV).
+        //                                     // Geralmente queremos (X, Z). Invertemos.
+        //                                     finalUV = new Vector2(rawV, rawU);
+        //                                 }
+        //                                 else // axis == 2
+        //                                 {
+        //                                     // Eixo Z (Faces laterais Norte/Sul)
+        //                                     // O algoritmo definiu u=X (rawU) e v=Y (rawV).
+        //                                     // X é horizontal e Y é vertical. Está correto, mantém (X, Y).
+        //                                     finalUV = new Vector2(rawU, rawV);
+        //                                 }
+
+        //                                 uvs.Add(finalUV);
+
+        //                                 // O Resto continua igual
+        //                                 uv2.Add(new Vector2(uMin, vMin));
+        //                                 normals.Add(normal);
+        //                             }
+
+        //                             NativeList<int> tris =
+        //                                 (bt == BlockType.Water) ? waterTriangles :
+        //                                 blockMappings[(int)bt].isTransparent ? transparentTriangles :
+        //                                 opaqueTriangles;
+
+        //                             if (normalSign > 0)
+        //                             {
+        //                                 tris.Add(vIndex + 0);
+        //                                 tris.Add(vIndex + 1);
+        //                                 tris.Add(vIndex + 2);
+        //                                 tris.Add(vIndex + 0);
+        //                                 tris.Add(vIndex + 2);
+        //                                 tris.Add(vIndex + 3);
+        //                             }
+        //                             else
+        //                             {
+        //                                 tris.Add(vIndex + 0);
+        //                                 tris.Add(vIndex + 3);
+        //                                 tris.Add(vIndex + 2);
+        //                                 tris.Add(vIndex + 0);
+        //                                 tris.Add(vIndex + 2);
+        //                                 tris.Add(vIndex + 1);
+        //                             }
+
+        //                             for (int y0 = 0; y0 < h; y0++)
+        //                                 for (int x0 = 0; x0 < w; x0++)
+        //                                     mask[i + x0 + (j + y0) * sizeU] = 0;
+
+        //                             i += w;
+        //                         }
+        //                     }
+        //                 }
+        //             }
+        //         }
+
+        //         mask.Dispose();
+        //     }
+
+
+
+
+        private void GenerateMesh(
+            NativeArray<int> heightCache,
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            NativeArray<byte> light)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
 
-            NativeArray<Vector3Int> faceChecks = new NativeArray<Vector3Int>(6, Allocator.Temp);
-            faceChecks[0] = new Vector3Int(0, 0, 1);
-            faceChecks[1] = new Vector3Int(0, 0, -1);
-            faceChecks[2] = new Vector3Int(0, 1, 0);
-            faceChecks[3] = new Vector3Int(0, -1, 0);
-            faceChecks[4] = new Vector3Int(1, 0, 0);
-            faceChecks[5] = new Vector3Int(-1, 0, 0);
+            // A máscara armazena o BlockType e o nível de luz empacotados
+            int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
+            NativeArray<int> mask = new NativeArray<int>(maxMask, Allocator.Temp);
 
-            NativeArray<Vector3> faceVerts = new NativeArray<Vector3>(24, Allocator.Temp);
-            // Frente (dir 0)
-            faceVerts[0] = new Vector3(0, 0, 1);
-            faceVerts[1] = new Vector3(1, 0, 1);
-            faceVerts[2] = new Vector3(1, 1, 1);
-            faceVerts[3] = new Vector3(0, 1, 1);
-            // Trás (dir 1)
-            faceVerts[4] = new Vector3(1, 0, 0);
-            faceVerts[5] = new Vector3(0, 0, 0);
-            faceVerts[6] = new Vector3(0, 1, 0);
-            faceVerts[7] = new Vector3(1, 1, 0);
-            // Cima (dir 2)
-            faceVerts[8] = new Vector3(0, 1, 1);
-            faceVerts[9] = new Vector3(1, 1, 1);
-            faceVerts[10] = new Vector3(1, 1, 0);
-            faceVerts[11] = new Vector3(0, 1, 0);
-            // Baixo (dir 3)
-            faceVerts[12] = new Vector3(0, 0, 0);
-            faceVerts[13] = new Vector3(1, 0, 0);
-            faceVerts[14] = new Vector3(1, 0, 1);
-            faceVerts[15] = new Vector3(0, 0, 1);
-            // Direita (dir 4)
-            faceVerts[16] = new Vector3(1, 0, 1);
-            faceVerts[17] = new Vector3(1, 0, 0);
-            faceVerts[18] = new Vector3(1, 1, 0);
-            faceVerts[19] = new Vector3(1, 1, 1);
-            // Esquerda (dir 5)
-            faceVerts[20] = new Vector3(0, 0, 0);
-            faceVerts[21] = new Vector3(0, 0, 1);
-            faceVerts[22] = new Vector3(0, 1, 1);
-            faceVerts[23] = new Vector3(0, 1, 0);
-
-            for (int x = border; x < border + SizeX; x++)
+            for (int axis = 0; axis < 3; axis++)
             {
-                for (int z = border; z < border + SizeZ; z++)
+                for (int side = 0; side < 2; side++)
                 {
-                    int cacheIdx = (x - border) + (z - border) * heightStride;
-                    int h = heightCache[cacheIdx];
+                    int normalSign = side == 0 ? 1 : -1;
+                    int u = (axis + 1) % 3;
+                    int v = (axis + 2) % 3;
 
-                    // margem extra para árvores (tronco + folhas) - dinâmico
-                    int TREE_MARGIN = math.max(1, treeMargin);
+                    int sizeU = (u == 0 ? voxelSizeX : u == 1 ? SizeY : voxelSizeZ);
+                    int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
+                    int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
 
-                    // agora o mesh cobre terreno + água + árvores
-                    int maxY = math.min(
-                        SizeY - 1,
-                        math.max(h + TREE_MARGIN, (int)seaLevel)
-                    );
+                    int minN = (axis == 1) ? 0 : border;
+                    int maxN = minN + chunkSize;
 
-                    // --- START PATCH ---
-                    // compute world coords for this column
-                    int worldX = coord.x * SizeX + (x - border);
-                    int worldZ = coord.y * SizeZ + (z - border);
+                    Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
+                    BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
 
-                    // ensure we include any manual edits placed by the player that may be above 'h'
-                    if (blockEdits.Length > 0)
+                    for (int n = minN; n < maxN; n++)
                     {
-                        for (int ei = 0; ei < blockEdits.Length; ei++)
+                        // --- CONSTRUÇÃO DA MÁSCARA ---
+                        for (int j = 0; j < sizeV; j++)
                         {
-                            var e = blockEdits[ei];
-                            if (e.x == worldX && e.z == worldZ)
+                            for (int i = 0; i < sizeU; i++)
                             {
-                                // clamp e.y just in case (defensive)
-                                int editY = math.clamp(e.y, 0, SizeY - 1);
-                                if (editY > maxY) maxY = editY;
+                                int x = (u == 0 ? i : v == 0 ? j : n);
+                                int y = (u == 1 ? i : v == 1 ? j : n);
+                                int z = (u == 2 ? i : v == 2 ? j : n);
+
+                                bool isCurrentActive = x >= border && x < border + SizeX && z >= border && z < border + SizeZ;
+                                if (!isCurrentActive) { mask[i + j * sizeU] = 0; continue; }
+
+                                int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                                BlockType current = blockTypes[idx];
+                                if (current == BlockType.Air) { mask[i + j * sizeU] = 0; continue; }
+
+                                int nx = x + (axis == 0 ? normalSign : 0);
+                                int ny = y + (axis == 1 ? normalSign : 0);
+                                int nz = z + (axis == 2 ? normalSign : 0);
+
+                                bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
+
+                                BlockType neighbor = outside ? BlockType.Air : blockTypes[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+                                byte faceLight = outside ? (byte)15 : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+
+                                bool isVisible = false;
+                                if (!blockMappings[(int)current].isSolid) isVisible = false;
+                                else if (blockMappings[(int)neighbor].isEmpty) isVisible = true;
+                                else if (blockMappings[(int)neighbor].isTransparent && !blockMappings[(int)current].isTransparent) isVisible = true;
+                                else isVisible = !blockMappings[(int)neighbor].isSolid;
+
+                                if (isVisible)
+                                {
+                                    // Empacota ID do Bloco (12 bits) + Luz (4 bits)
+                                    mask[i + j * sizeU] = (int)current | ((int)faceLight << 12);
+                                }
+                                else mask[i + j * sizeU] = 0;
                             }
                         }
-                    }
-                    // --- END PATCH ---
-                    bool hasContent = false;
-                    for (int ty = 0; ty <= maxY && !hasContent; ty++)
-                    {
-                        int idx = x + ty * voxelSizeX + z * voxelPlaneSize;
-                        if (solids[idx] || blockTypes[idx] == BlockType.Water)
+
+                        // --- ALGORITMO GREEDY MESH ---
+                        for (int j = 0; j < sizeV; j++)
                         {
-                            hasContent = true;
-                        }
-                    }
-                    if (!hasContent) continue; // nenhuma face será gerada nesta coluna
-
-                    for (int y = 0; y <= maxY; y++)
-                    {
-                        int internalX = x;
-                        int internalZ = z;
-                        int voxelIdx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
-
-                        if (!solids[voxelIdx] && blockTypes[voxelIdx] != BlockType.Water) continue;
-
-                        for (int dir = 0; dir < 6; dir++)
-                        {
-                            if (!generateSides && (dir == 4 || dir == 5)) continue;
-
-                            Vector3Int check = faceChecks[dir];
-                            int nx = internalX + check.x;
-                            int ny = y + check.y;
-                            int nz = internalZ + check.z;
-
-                            bool neighborSolid = true;
-
-
-                            // }
-                            // --- substituir a lógica de neighborSolid ---
-                            if (nx >= 0 && nx < voxelSizeX && ny >= 0 && ny < SizeY && nz >= 0 && nz < voxelSizeZ)
+                            int i = 0;
+                            while (i < sizeU)
                             {
-                                int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
-                                BlockType nbType = blockTypes[nIdx];
-                                BlockTextureMapping nbMap = blockMappings[(int)nbType];
-                                BlockType curType = blockTypes[voxelIdx];
-                                BlockTextureMapping curMap = blockMappings[(int)curType];
+                                int packedData = mask[i + j * sizeU];
+                                if (packedData == 0) { i++; continue; }
 
-                                // Se ambos são "empty" (água/ar) trate como vizinho sólido para evitar faces internas.
-                                if (curMap.isEmpty && nbMap.isEmpty)
-                                {
-                                    neighborSolid = true;
-                                }
-                                else if (curMap.isEmpty && !nbMap.isEmpty)
-                                {
-                                    neighborSolid = nbMap.isSolid && !nbMap.isTransparent;
-                                }
-                                else if (!curMap.isEmpty && nbMap.isEmpty)
-                                {
-                                    neighborSolid = false;
-                                }
-                                else
-                                {
-                                    // ----- A MUDANÇA IMPORTANTE: blocos transparentes NÃO ocultam -----
-                                    neighborSolid = nbMap.isSolid && !nbMap.isTransparent;
-                                }
-                            }
+                                int w = 1;
+                                while (i + w < sizeU && mask[i + w + j * sizeU] == packedData) w++;
 
+                                int h = 1;
+                                while (j + h < sizeV)
+                                {
+                                    bool canGrow = true;
+                                    for (int k = 0; k < w; k++)
+                                    {
+                                        if (mask[i + k + (j + h) * sizeU] != packedData) { canGrow = false; break; }
+                                    }
+                                    if (!canGrow) break;
+                                    h++;
+                                }
 
-                            if (!neighborSolid)
-                            {
-                                BlockType currentType = blockTypes[voxelIdx];
+                                BlockType bt = (BlockType)(packedData & 0xFFF);
+                                byte finalLight = (byte)(packedData >> 12);
                                 int vIndex = vertices.Length;
 
-                                float waterOffset = 0.15f;
-
-                                for (int i = 0; i < 4; i++)
+                                // Adiciona os 4 vértices da face
+                                for (int l = 0; l < 4; l++)
                                 {
-                                    Vector3 vertPos = new Vector3(x - border, y, z - border) + faceVerts[dir * 4 + i];
+                                    int du = (l == 1 || l == 2) ? w : 0;
+                                    int dv = (l == 2 || l == 3) ? h : 0;
 
-                                    if (currentType == BlockType.Water)
-                                    {
-                                        if (dir == 2)
-                                        {
-                                            vertPos.y -= waterOffset;
-                                        }
-                                        else if (dir != 3)
-                                        {
-                                            if (faceVerts[dir * 4 + i].y >= 1f)
-                                            {
-                                                vertPos.y -= waterOffset;
-                                            }
-                                        }
-                                    }
+                                    float rawU = i + du;
+                                    float rawV = j + dv;
+                                    float posD = n + (normalSign > 0 ? 1f : 0f);
 
-                                    vertices.Add(vertPos);
+                                    float px = (u == 0 ? rawU : v == 0 ? rawV : posD) - border;
+                                    float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
+                                    float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
+
+                                    if (bt == BlockType.Water && axis == 1 && normalSign > 0) py -= 0.15f;
+
+                                    vertices.Add(new Vector3(px, py, pz));
+                                    vertexLights.Add(finalLight);
+                                    normals.Add(normal);
+
+                                    // --- CORREÇÃO DE ROTAÇÃO UV ---
+                                    Vector2 uvCoord;
+                                    if (axis == 0) uvCoord = new Vector2(rawV, rawU);      // Lateral X (Z, Y)
+                                    else if (axis == 1) uvCoord = new Vector2(rawV, rawU); // Topo/Baixo (X, Z)
+                                    else uvCoord = new Vector2(rawU, rawV);                // Lateral Z (X, Y)
+                                    uvs.Add(uvCoord);
+
+                                    // Tinting e Atlas UV2
+                                    bool tint = (bt == BlockType.Leaves) || (bt == BlockType.Grass && axis == 1 && normalSign > 0);
+                                    tintFlags.Add(tint ? (byte)1 : (byte)0);
+
+                                    BlockTextureMapping m = blockMappings[(int)bt];
+                                    Vector2Int tile = faceType == BlockFace.Top ? m.top : faceType == BlockFace.Bottom ? m.bottom : m.side;
+                                    uv2.Add(new Vector2(tile.x * (1f / atlasTilesX) + 0.00f, tile.y * (1f / atlasTilesY) + 0.00f));
                                 }
 
-                                // // --- AMOSTRAGEM SUAVE POR VÉRTICE (USANDO BASE Y POR FACE) ---
-                                // // Para cada um dos 4 vértices da face, calcule média dos 4 voxels que tocam esse canto
-                                for (int vi = 0; vi < 4; vi++)
+                                // Triângulos
+                                NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles : blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
+                                if (normalSign > 0)
                                 {
-                                    Vector3 lv = faceVerts[dir * 4 + vi];                // 0..1 coords
-                                                                                         // posição do vértice no espaço de voxels local (inteiro)
-                                    float vxf = (x - border) + lv.x;
-                                    float vyf = y + lv.y;
-                                    float vzf = (z - border) + lv.z;
-
-                                    // escolha baseY dependendo da face (top/mid/bottom) para evitar sampling incorreto em cavernas
-                                    int sampleBaseY;
-                                    if (dir == 2) sampleBaseY = y + 1;   // top face -> amostra acima
-                                    else if (dir == 3) sampleBaseY = y - 1; // bottom face -> amostra abaixo
-                                    else sampleBaseY = y; // sides -> amostra no mesmo nível
-
-                                    int sampleY = math.clamp(sampleBaseY, 0, SizeY - 1);
-
-                                    int sx0 = (int)math.floor(vxf);
-                                    int sz0 = (int)math.floor(vzf);
-
-                                    // offsets em X e Z: {0, -1}
-                                    int s00x = sx0;
-                                    int s00z = sz0;
-                                    int s10x = sx0 - 1;
-                                    int s10z = sz0;
-                                    int s01x = sx0;
-                                    int s01z = sz0 - 1;
-                                    int s11x = sx0 - 1;
-                                    int s11z = sz0 - 1;
-
-                                    // converta para índices internos (com border)
-                                    int ix0 = s00x + border;
-                                    int iz0 = s00z + border;
-                                    int ix1 = s10x + border;
-                                    int iz1 = s10z + border;
-                                    int ix2 = s01x + border;
-                                    int iz2 = s01z + border;
-                                    int ix3 = s11x + border;
-                                    int iz3 = s11z + border;
-
-                                    int plane = voxelSizeX * SizeY;
-                                    int sum = 0;
-                                    int count = 0;
-
-                                    void SampleAdd(int sx, int sy, int sz)
-                                    {
-                                        if (sx >= 0 && sx < voxelSizeX && sy >= 0 && sy < SizeY && sz >= 0 && sz < voxelSizeZ)
-                                        {
-                                            int sIdx = sx + sy * voxelSizeX + sz * plane;
-                                            sum += light[sIdx];
-                                            count++;
-                                        }
-                                    }
-
-                                    SampleAdd(ix0, sampleY, iz0);
-                                    SampleAdd(ix1, sampleY, iz1);
-                                    SampleAdd(ix2, sampleY, iz2);
-                                    SampleAdd(ix3, sampleY, iz3);
-
-                                    byte avg = (count > 0) ? (byte)(sum / count) : (byte)0;
-
-
-
-                                    vertexLights.Add(avg);
-                                }
-
-
-
-
-
-                                // --- FIM AMOSTRAGEM SUAVE ---
-
-
-                                // ---Definir flags de tintura---
-
-                                bool shouldTint = false;
-
-                                if (currentType == BlockType.Leaves)
-                                {
-                                    shouldTint = true;
-                                }
-                                else if (currentType == BlockType.Grass)
-                                {
-                                    shouldTint = (dir == 2);  // apenas topo da grama
-                                }
-
-                                byte tintFlag = shouldTint ? (byte)1 : (byte)0;
-
-                                tintFlags.Add(tintFlag);
-                                tintFlags.Add(tintFlag);
-                                tintFlags.Add(tintFlag);
-                                tintFlags.Add(tintFlag);
-
-
-                                // UVs
-                                BlockFace face = (dir == 2) ? BlockFace.Top : (dir == 3) ? BlockFace.Bottom : BlockFace.Side;
-                                BlockTextureMapping m = blockMappings[(int)currentType];
-                                Vector2Int tileCoord;
-                                switch (face)
-                                {
-                                    case BlockFace.Top: tileCoord = m.top; break;
-                                    case BlockFace.Bottom: tileCoord = m.bottom; break;
-                                    default: tileCoord = m.side; break;
-                                }
-
-                                float tileW = 1f / atlasTilesX;
-                                float tileH = 1f / atlasTilesY;
-                                float padU = tileW * 0.01f;
-                                float padV = tileH * 0.01f;
-
-                                float uMin = tileCoord.x * tileW + padU;
-                                float vMin = tileCoord.y * tileH + padV;
-                                float uRange = tileW - 2f * padU;
-                                float vRange = tileH - 2f * padV;
-
-                                for (int i = 0; i < 4; i++)
-                                {
-                                    Vector3 lv = faceVerts[dir * 4 + i];
-                                    float pu = 0f, pv = 0f;
-                                    switch (dir)
-                                    {
-                                        case 0: pu = lv.x; pv = lv.y; break;
-                                        case 1: pu = 1f - lv.x; pv = lv.y; break;
-                                        case 2: pu = lv.x; pv = 1f - lv.z; break;
-                                        case 3: pu = lv.x; pv = lv.z; break;
-                                        case 4: pu = 1f - lv.z; pv = lv.y; break;
-                                        case 5: pu = lv.z; pv = lv.y; break;
-                                    }
-
-                                    float u = uMin + pu * uRange;
-                                    float v = vMin + pv * vRange;
-                                    uvs.Add(new Vector2(u, v));
-                                }
-
-                                // Normals
-                                Vector3 normal = new Vector3(faceChecks[dir].x, faceChecks[dir].y, faceChecks[dir].z);
-                                normals.Add(normal);
-                                normals.Add(normal);
-                                normals.Add(normal);
-                                normals.Add(normal);
-
-                                // Triangles
-                                NativeList<int> targetTris;
-                                if (currentType == BlockType.Water)
-                                {
-                                    targetTris = waterTriangles;
-                                }
-                                else if (blockMappings[(int)currentType].isTransparent)
-                                {
-                                    targetTris = transparentTriangles; // NOVO submesh para transparentes
+                                    tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
+                                    tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
                                 }
                                 else
                                 {
-                                    targetTris = opaqueTriangles;
+                                    tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                    tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
                                 }
 
-                                targetTris.Add(vIndex + 0);
-                                targetTris.Add(vIndex + 1);
-                                targetTris.Add(vIndex + 2);
-                                targetTris.Add(vIndex + 2);
-                                targetTris.Add(vIndex + 3);
-                                targetTris.Add(vIndex + 0);
+                                // Limpa a área processada na máscara
+                                for (int y0 = 0; y0 < h; y0++)
+                                    for (int x0 = 0; x0 < w; x0++)
+                                        mask[i + x0 + (j + y0) * sizeU] = 0;
+
+                                i += w;
                             }
                         }
                     }
                 }
             }
-
-            faceChecks.Dispose();
-            faceVerts.Dispose();
+            mask.Dispose();
         }
+
+
+
 
 
         private static int FloorDiv(int a, int b)
