@@ -66,29 +66,8 @@ public class Chunk : MonoBehaviour
         if (voxelData.IsCreated) voxelData.Dispose();
 
     }
-    // NOVO: Método para copiar de temp arrays (chame após job complete em World)
-    public void CopyVoxelData(NativeArray<BlockType> tempBlocks, NativeArray<byte> tempLight, int border)
-    {
-        int voxelSizeX = Chunk.SizeX + 2 * border;
-        int plane = voxelSizeX * Chunk.SizeY;
 
-        for (int x = 0; x < Chunk.SizeX; x++)
-        {
-            for (int z = 0; z < Chunk.SizeZ; z++)
-            {
-                for (int y = 0; y < Chunk.SizeY; y++)
-                {
-                    int tempX = x + border;
-                    int tempZ = z + border;
-                    int tempIdx = tempX + y * voxelSizeX + tempZ * plane;
-                    int localIdx = x + y * Chunk.SizeX + z * Chunk.SizeX * Chunk.SizeY;
 
-                    chunkBlocks[localIdx] = tempBlocks[tempIdx];
-                    chunkLight[localIdx] = tempLight[tempIdx];
-                }
-            }
-        }
-    }
     public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)
     {
         materials = mats;
@@ -96,156 +75,122 @@ public class Chunk : MonoBehaviour
             meshRenderer.sharedMaterials = mats;
     }
 
-
     public void ApplyMeshData(
-     NativeArray<Vector3> vertices,
-     NativeArray<int> opaqueTris,
-     NativeArray<int> transparentTris, // 👈 NOVO
-     NativeArray<int> waterTris,
-     NativeArray<Vector2> uvs,
-      NativeArray<Vector2> uv2,   // NOVO
-     NativeArray<Vector3> normals,
-     NativeArray<byte> vertexLights,
-     NativeArray<byte> tintFlags
- )
-
+        NativeList<Vector3> vertices,
+        NativeList<int> opaqueTris,
+        NativeList<int> transparentTris,
+        NativeList<int> waterTris,
+        NativeList<Vector2> uvs,
+        NativeList<Vector2> uv2,
+        NativeList<Vector3> normals,
+        NativeList<byte> vertexLights,
+        NativeList<byte> tintFlags
+    )
     {
-        // Render mesh (mesma lógica de antes)
-        mesh.Clear(false);
+        // 1. Limpar e Configurar Mesh de Renderização
+        mesh.Clear();
 
-        mesh.SetVertices(vertices);
-        mesh.SetUVs(0, uvs);
-        mesh.SetUVs(1, uv2);   // <-- ESSENCIAL para o shader funcionar
+        // Passar NativeArrays diretamente evita alocações de GC
+        mesh.SetVertices(vertices.AsArray());
+        mesh.SetUVs(0, uvs.AsArray());
+        mesh.SetUVs(1, uv2.AsArray());
+        mesh.SetNormals(normals.AsArray());
 
-        if (normals.Length > 0)
-            mesh.SetNormals(normals);
-        else
-            mesh.RecalculateNormals();
+        // 2. Cálculo de Cores OTIMIZADO (Sem alocações)
+        int vertexCount = vertices.Length;
+        /// var colors = new NativeArray<Color>(vertexCount, Allocator.Temp);
 
-        mesh.subMeshCount = 3;
+        Color grassTint = World.Instance.grassTintBase;
 
-        // 0 → opacos
-        mesh.SetIndices(opaqueTris, MeshTopology.Triangles, 0, false);
+        // for (int i = 0; i < vertexCount; i++)
+        // {
+        //     float raw = vertexLights[i] / 15f;
+        //     float l = Mathf.Lerp(0.15f, 1f, raw);
 
-        // 1 → transparentes (vidro, folhas)
-        mesh.SetIndices(transparentTris, MeshTopology.Triangles, 1, false);
+        //     // Simplificação do Shading
+        //     Vector3 n = normals[i];
+        //     float faceShade = (Mathf.Abs(n.y) > 0.5f) ? ((n.y > 0) ? 1.0f : 0.6f) : 0.5f;
+        //     l = Mathf.Clamp01(l * faceShade);
 
-        // 2 → água
-        mesh.SetIndices(waterTris, MeshTopology.Triangles, 2, false);
+        //     if (tintFlags[i] == 1)
+        //     {
+        //         Color tinted = grassTint * l;
+        //         tinted.r = Mathf.Max(tinted.r, grassTint.r * 0.15f);
+        //         tinted.g = Mathf.Max(tinted.g, grassTint.g * 0.15f);
+        //         tinted.b = Mathf.Max(tinted.b, grassTint.b * 0.15f);
+        //         tinted.a = 1f;
+        //         colors[i] = tinted;
+        //     }
+        //     else
+        //     {
+        //         colors[i] = new Color(l, l, l, 1f);
+        //     }
+        // }
+        // mesh.SetColors(colors);
+        // colors.Dispose(); // Libera memória Temp
 
+        var extraUV = new NativeList<Vector4>(vertexCount, Allocator.Temp);
 
-        // Aplicar vertex color a partir dos bytes (0..15) com Face Shading + TINTING
-        if (vertexLights.Length == vertices.Length)
+        for (int i = 0; i < vertexCount; i++)
         {
-            Color[] cols = new Color[vertices.Length];
-
-            const float ambientMin = .15f;
-            const float shadeTop = 1.00f;
-            const float shadeSide = 0.5f;
-            const float shadeBottom = 0.60f;
-
-            bool haveNormalsPerVertex = (normals.Length == vertices.Length);
-            bool haveTintFlags = (tintFlags.Length == vertices.Length);  // NOVO
-
-            for (int i = 0; i < vertices.Length; i++)
-            {
-                float raw = vertexLights[i] / 15f;
-                float l = Mathf.Lerp(ambientMin, 1f, raw);
-
-                float faceShade = 1f;
-                if (haveNormalsPerVertex)
-                {
-                    Vector3 n = normals[i];
-                    if (Mathf.Abs(n.y) > 0.5f)
-                        faceShade = (n.y > 0f) ? shadeTop : shadeBottom;
-                    else
-                        faceShade = shadeSide;
-                }
-                else
-                {
-                    faceShade = shadeSide;
-                }
-
-                l *= faceShade;
-                l = Mathf.Clamp01(l);
-
-                // NOVO: Tinting para topo de grama (vermelho)
-                // NOVO: Tinting para topo de grama (multiplicativo com iluminação)
-                if (haveTintFlags && tintFlags[i] == 1 && normals.Length > 0)
-                {
-                    // l já está em 0..1 (depois de aplicar faceShade e clamp)
-                    // Multiplicamos a cor base pela iluminação
-                    Color tinted = World.Instance.grassTintBase * l;
-
-                    // Opcional: evitar que fique muito escuro / sem vida
-                    // tinted = Color.Lerp(tinted, grassTintBase * 0.3f, 0.15f); // leve desaturação em sombra
-
-                    // Ou manter um mínimo de brilho/saturação
-                    tinted.r = Mathf.Max(tinted.r, World.Instance.grassTintBase.r * 0.15f);
-                    tinted.g = Mathf.Max(tinted.g, World.Instance.grassTintBase.g * 0.15f);
-                    tinted.b = Mathf.Max(tinted.b, World.Instance.grassTintBase.b * 0.15f);
-
-                    cols[i] = tinted;
-                }
-                else
-                {
-                    // cinza normal (iluminação padrão)
-                    cols[i] = new Color(l, l, l, 1f);
-                }
-            }
-
-            mesh.colors = cols;
+            float raw = vertexLights[i] / 15f; // normalizado 0..1
+            float tint = tintFlags[i];         // 0 ou 1
+            extraUV.Add(new Vector4(raw, tint, 0f, 0f)); // guardamos em UV channel 2
         }
 
+        // passar para o mesh no canal UV 2 (terceiro UV)
+        mesh.SetUVs(2, extraUV.AsArray());
+        extraUV.Dispose();
 
-        // === Atualizar MeshCollider com somente triângulos opacos ===
-        // Reutiliza colliderMesh se possível, para reduzir alocações
-        if (opaqueTris.Length > 0 || transparentTris.Length > 0)  // Só se houver triângulos sólidos
+        // 3. Submeshes
+        mesh.subMeshCount = 3;
+        mesh.SetIndices(opaqueTris.AsArray(), MeshTopology.Triangles, 0, false);
+        mesh.SetIndices(transparentTris.AsArray(), MeshTopology.Triangles, 1, false);
+        mesh.SetIndices(waterTris.AsArray(), MeshTopology.Triangles, 2, false);
+
+        mesh.RecalculateBounds();
+        mesh.UploadMeshData(false);
+
+        // 4. Collider OTIMIZADO (A CORREÇÃO DO ERRO ESTÁ AQUI)
+        int solidCount = opaqueTris.Length + transparentTris.Length;
+
+        if (solidCount > 0)
         {
-            if (colliderMesh == null)
+            if (colliderMesh == null) colliderMesh = new Mesh();
+            else colliderMesh.Clear();
+
+            colliderMesh.SetVertices(vertices.AsArray());
+
+            // Aloca array combinado
+            var colliderIndices = new NativeArray<int>(solidCount, Allocator.Temp);
+
+            // --- CORREÇÃO: Verificações de tamanho antes de copiar ---
+
+            // Copia Opacos
+            if (opaqueTris.Length > 0)
             {
-                colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-                colliderMesh.name = $"ColliderMesh_{gameObject.name}";
+                NativeArray<int>.Copy(opaqueTris.AsArray(), 0, colliderIndices, 0, opaqueTris.Length);
             }
-            else
+
+            // Copia Transparentes (Só executa se houver triângulos transparentes)
+            if (transparentTris.Length > 0)
             {
-                colliderMesh.Clear(false);
+                // O índice de destino é exatamente onde os opacos terminaram
+                NativeArray<int>.Copy(transparentTris.AsArray(), 0, colliderIndices, opaqueTris.Length, transparentTris.Length);
             }
 
-            // Use os mesmos vértices da mesh de render
-            colliderMesh.SetVertices(vertices);
+            colliderMesh.SetIndices(colliderIndices, MeshTopology.Triangles, 0, false);
+            colliderIndices.Dispose(); // Libera memória
 
-            // Combine opacos + transparentes em um único submesh para colisão
-            // (Não precisamos de submeshes no collider; só geometria simples)
-            var colliderTris = new List<int>(opaqueTris.Length + transparentTris.Length);
-            colliderTris.AddRange(opaqueTris);
-            colliderTris.AddRange(transparentTris);  // Inclui transparentes (ex.: folhas, vidro)
-
-            colliderMesh.SetIndices(colliderTris.ToArray(), MeshTopology.Triangles, 0, false);
-            // colliderMesh.RecalculateBounds();
-
-            // Atribua ao collider
+            meshCollider.sharedMesh = null;
             meshCollider.sharedMesh = colliderMesh;
             meshCollider.enabled = true;
         }
         else
         {
-            // Sem triângulos sólidos -> sem colisão
-            if (meshCollider != null)
-            {
-                meshCollider.sharedMesh = null;
-                meshCollider.enabled = false;
-            }
-            if (colliderMesh != null)
-            {
-                Destroy(colliderMesh);
-                colliderMesh = null;
-            }
+            meshCollider.enabled = false;
         }
-        // Observação: não chamamos mesh.UploadMeshData(true) porque precisamos que o mesh seja legível
-        // (leitura necessária caso queira criar collider a partir dos vértices).
     }
-
 
     public Vector2Int coord;
     public void SetCoord(Vector2Int c)

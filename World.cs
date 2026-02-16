@@ -93,17 +93,16 @@ public class World : MonoBehaviour
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
-        public NativeList<int> transparentTriangles; // NOVO
+        public NativeList<int> transparentTriangles;
         public NativeList<Vector2> uvs;
-        public NativeList<Vector2> uv2;   // NOVO: segundo canal UV (tile base)
+        public NativeList<Vector2> uv2;           // Segundo canal para o Atlas
         public NativeList<Vector3> normals;
-        public NativeList<byte> lightValues; // novo: luz por vértice (0..15)
+        public NativeList<byte> lightValues;      // Luz processada
+        public NativeList<byte> tintFlags;        // Flags de bioma/grama
         public NativeArray<MeshGenerator.BlockEdit> edits;
-        public NativeArray<MeshGenerator.TreeInstance> trees; // NEW: árvores aplicadas no job
+        public NativeArray<MeshGenerator.TreeInstance> trees;
         public Vector2Int coord;
         public int expectedGen;
-        public NativeList<byte> tintFlags;
-        // NOVO: referência ao chunk para marcar hasVoxelData quando complete
         public Chunk chunk;
     }
 
@@ -116,6 +115,8 @@ public class World : MonoBehaviour
     // No topo da classe Chunk (ou em [Header("Grass Tint")]
     [Header("Grass Tint Settings")]
     public Color grassTintBase = new Color(0.8f, 0.4f, 0.4f);  // cor desejada quando bem iluminado
+
+
     void Awake()
     {
         if (Instance != null && Instance != this)
@@ -276,57 +277,79 @@ public class World : MonoBehaviour
         }
 
     }
+
+
+    // Adicione esta variável no topo
+    public float frameTimeBudgetMS = 3f; // Tenta usar apenas 3ms por frame para gerar chunks
+
     private void Update()
     {
         UpdateChunks();
 
-        int applied = 0;
-        for (int i = pendingMeshes.Count - 1; i >= 0 && applied < maxMeshAppliesPerFrame; i--)
+        // Inicia um cronômetro para medir quanto tempo estamos gastando neste frame
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+
+        for (int i = pendingMeshes.Count - 1; i >= 0; i--)
         {
             var pm = pendingMeshes[i];
+
+            // Se o job terminou
             if (pm.handle.IsCompleted)
             {
                 pm.handle.Complete();
 
-                if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
+                // Verificação de segurança se o chunk ainda é relevante
+                if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk))
                 {
-                    activeChunk.ApplyMeshData(
-                        pm.vertices.AsArray(),
-                        pm.opaqueTriangles.AsArray(),
-                        pm.transparentTriangles.AsArray(),
-                        pm.waterTriangles.AsArray(),
-                        pm.uvs.AsArray(),
-                            pm.uv2.AsArray(),   // NOVO
-                        pm.normals.AsArray(),
-                        pm.lightValues.AsArray(),
-                        pm.tintFlags.AsArray()
-                    );
+                    // Se o chunk foi resetado ou mudou de geração enquanto processava, ignora
+                    if (activeChunk.generation == pm.expectedGen)
+                    {
+                        activeChunk.ApplyMeshData(
+                            pm.vertices,
+                            pm.opaqueTriangles,
+                            pm.transparentTriangles,
+                            pm.waterTriangles,
+                            pm.uvs,
+                            pm.uv2,
+                            pm.normals,
+                            pm.lightValues,
+                            pm.tintFlags
+                        );
 
-                    // NOVO: marcar que os voxels foram preenchidos
-                    activeChunk.hasVoxelData = true;
-
-                    activeChunk.gameObject.SetActive(true);
-                    applied++;
+                        activeChunk.hasVoxelData = true;
+                        activeChunk.gameObject.SetActive(true);
+                    }
                 }
 
-                // Dispose NativeLists
-                pm.vertices.Dispose();
-                pm.opaqueTriangles.Dispose();
-                pm.transparentTriangles.Dispose();
-                pm.waterTriangles.Dispose();
-                pm.uvs.Dispose();
-                pm.uv2.Dispose();   // NOVO
-                pm.normals.Dispose();
-                pm.lightValues.Dispose();
-                pm.tintFlags.Dispose();
-
-                // Dispose edits & trees
-                if (pm.edits.IsCreated) pm.edits.Dispose();
-                if (pm.trees.IsCreated) pm.trees.Dispose();
-
+                // Limpa a memória nativa
+                DisposePendingMesh(pm);
                 pendingMeshes.RemoveAt(i);
+
+                // --- A MÁGICA ACONTECE AQUI ---
+                // Se já gastamos mais de 3ms processando chunks neste frame, PARAR.
+                // O restante fica para o próximo frame. Isso mantém o FPS liso.
+                if (stopwatch.Elapsed.TotalMilliseconds > frameTimeBudgetMS)
+                {
+                    break;
+                }
             }
         }
+        stopwatch.Stop();
+    }
+
+    private void DisposePendingMesh(PendingMesh pm)
+    {
+        if (pm.vertices.IsCreated) pm.vertices.Dispose();
+        if (pm.opaqueTriangles.IsCreated) pm.opaqueTriangles.Dispose();
+        if (pm.transparentTriangles.IsCreated) pm.transparentTriangles.Dispose();
+        if (pm.waterTriangles.IsCreated) pm.waterTriangles.Dispose();
+        if (pm.uvs.IsCreated) pm.uvs.Dispose();
+        if (pm.uv2.IsCreated) pm.uv2.Dispose();
+        if (pm.normals.IsCreated) pm.normals.Dispose();
+        if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
+        if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
+        if (pm.edits.IsCreated) pm.edits.Dispose();
+        if (pm.trees.IsCreated) pm.trees.Dispose();
     }
     private void UpdateChunks()
     {
