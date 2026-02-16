@@ -820,11 +820,23 @@ public static class MeshGenerator
                                     else uvCoord = new Vector2(rawU, rawV);                // Lateral Z (X, Y)
                                     uvs.Add(uvCoord);
 
-                                    // Tinting e Atlas UV2
-                                    bool tint = (bt == BlockType.Leaves) || (bt == BlockType.Grass && axis == 1 && normalSign > 0);
+
+                                    // --- TINTING CUSTOMIZÁVEL POR FACE (agora vem do BlockTextureMapping) ---
+                                    BlockTextureMapping m = blockMappings[(int)bt];
+
+                                    // Calcula tint baseado nas flags do mapping
+                                    bool tint = false;
+
+                                    if (faceType == BlockFace.Top)
+                                        tint = m.tintTop;           // fallback pro antigo
+                                    else if (faceType == BlockFace.Bottom)
+                                        tint = m.tintBottom;
+                                    else // Side
+                                        tint = m.tintSide;
+
                                     tintFlags.Add(tint ? (byte)1 : (byte)0);
 
-                                    BlockTextureMapping m = blockMappings[(int)bt];
+
                                     Vector2Int tile = faceType == BlockFace.Top ? m.top : faceType == BlockFace.Bottom ? m.bottom : m.side;
                                     uv2.Add(new Vector2(tile.x * (1f / atlasTilesX) + 0.001f, tile.y * (1f / atlasTilesY) + 0.001f));
                                 }
@@ -856,84 +868,6 @@ public static class MeshGenerator
             mask.Dispose();
         }
 
-
-        private void AddFace(int i, int j, int w, int h, int n, int axis, int side, BlockType type, byte lightVal, BlockFace face)
-        {
-            int vIndex = vertices.Length;
-            var mapping = blockMappings[(int)type];
-
-            // Configuração de orientação baseada no eixo
-            Vector3 du = Vector3.zero;
-            Vector3 dv = Vector3.zero;
-            Vector3 pos = Vector3.zero;
-
-            if (axis == 0)
-            { // X
-                du = new Vector3(0, 0, 1); dv = new Vector3(0, 1, 0);
-                pos = new Vector3(n + (side > 0 ? 1 : 0), j, i);
-            }
-            else if (axis == 1)
-            { // Y
-                du = new Vector3(1, 0, 0); dv = new Vector3(0, 0, 1);
-                pos = new Vector3(i, n + (side > 0 ? 1 : 0), j);
-            }
-            else
-            { // Z
-                du = new Vector3(1, 0, 0); dv = new Vector3(0, 1, 0);
-                pos = new Vector3(i, j, n + (side > 0 ? 1 : 0));
-            }
-
-            // Ajuste para coordenadas de render (remover border)
-            pos.x -= border; pos.z -= border;
-
-            // Vértices
-            vertices.Add(pos);
-            vertices.Add(pos + du * w);
-            vertices.Add(pos + du * w + dv * h);
-            vertices.Add(pos + dv * h);
-
-            // UVs usando Vector2Int do seu mapping
-            Vector2Int tileCoord = (face == BlockFace.Top) ? mapping.top : (face == BlockFace.Bottom ? mapping.bottom : mapping.side);
-
-            float uvSizeX = 1f / atlasTilesX;
-            float uvSizeY = 1f / atlasTilesY;
-            float u0 = tileCoord.x * uvSizeX;
-            float v0 = tileCoord.y * uvSizeY;
-
-            uvs.Add(new Vector2(u0, v0));
-            uvs.Add(new Vector2(u0 + uvSizeX * w, v0));
-            uvs.Add(new Vector2(u0 + uvSizeX * w, v0 + uvSizeY * h));
-            uvs.Add(new Vector2(u0, v0 + uvSizeY * h));
-
-            // UV2 e Tinting
-            Vector2 uvBaseNorm = new Vector2(u0, v0);
-            byte tint = (byte)(mapping.isBiomeTinted ? 1 : 0);
-            Vector3 normal = new Vector3(axis == 0 ? side : 0, axis == 1 ? side : 0, axis == 2 ? side : 0);
-
-            for (int k = 0; k < 4; k++)
-            {
-                uv2.Add(uvBaseNorm);
-                normals.Add(normal);
-                vertexLights.Add(lightVal);
-                tintFlags.Add(tint);
-            }
-
-            // Triângulos baseados no tipo (Água, Transparente ou Opaco)
-            NativeList<int> targetTris = opaqueTriangles;
-            if (type == BlockType.Water) targetTris = waterTriangles;
-            else if (mapping.isTransparent) targetTris = transparentTriangles;
-
-            if (side > 0)
-            {
-                targetTris.Add(vIndex); targetTris.Add(vIndex + 1); targetTris.Add(vIndex + 2);
-                targetTris.Add(vIndex); targetTris.Add(vIndex + 2); targetTris.Add(vIndex + 3);
-            }
-            else
-            {
-                targetTris.Add(vIndex); targetTris.Add(vIndex + 2); targetTris.Add(vIndex + 1);
-                targetTris.Add(vIndex); targetTris.Add(vIndex + 3); targetTris.Add(vIndex + 2);
-            }
-        }
 
 
         private static int FloorDiv(int a, int b)

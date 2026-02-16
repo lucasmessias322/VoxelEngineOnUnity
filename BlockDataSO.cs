@@ -92,5 +92,14 @@ public struct BlockTextureMapping
     public byte lightOpacity;
     // NOVO: quanto este bloco emite (0..15). Ex.: Glowstone = 15, Torch = 14
     public byte lightEmission;
-    public bool isBiomeTinted;
+
+    [Header("🌿 Biome Tinting - Customizável por face")]
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintTop;
+
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintBottom;
+
+    [Tooltip("Aplica cor do bioma nas laterais?")]
+    public bool tintSide;
 }
