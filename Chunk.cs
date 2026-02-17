@@ -20,6 +20,11 @@ public class Chunk : MonoBehaviour
     private MeshCollider meshCollider;
 
     [SerializeField] private Material[] materials;  // MODIFICAÇÃO: Nova
+                                                    // Controle de Job ativo para este chunk
+    public Unity.Jobs.JobHandle currentJob;
+    public bool jobScheduled;
+
+
     public enum ChunkState
     {
         Requested,   // job agendado
@@ -60,6 +65,11 @@ public class Chunk : MonoBehaviour
     }
     private void OnDestroy()
     {
+        if (jobScheduled)
+        {
+            currentJob.Complete();
+        }
+
         if (chunkBlocks.IsCreated) chunkBlocks.Dispose();
         if (chunkLight.IsCreated) chunkLight.Dispose();
         // Segurança extra para pool
@@ -75,125 +85,6 @@ public class Chunk : MonoBehaviour
             meshRenderer.sharedMaterials = mats;
     }
 
-    // public void ApplyMeshData(
-    //     NativeList<Vector3> vertices,
-    //     NativeList<int> opaqueTris,
-    //     NativeList<int> transparentTris,
-    //     NativeList<int> waterTris,
-    //     NativeList<Vector2> uvs,
-    //     NativeList<Vector2> uv2,
-    //     NativeList<Vector3> normals,
-    //     NativeList<byte> vertexLights,
-    //     NativeList<byte> tintFlags
-    // )
-    // {
-    //     // 1. Limpar e Configurar Mesh de Renderização
-    //     mesh.Clear();
-
-    //     // Passar NativeArrays diretamente evita alocações de GC
-    //     mesh.SetVertices(vertices.AsArray());
-    //     mesh.SetUVs(0, uvs.AsArray());
-    //     mesh.SetUVs(1, uv2.AsArray());
-    //     mesh.SetNormals(normals.AsArray());
-
-    //     // 2. Cálculo de Cores OTIMIZADO (Sem alocações)
-    //     int vertexCount = vertices.Length;
-    //     /// var colors = new NativeArray<Color>(vertexCount, Allocator.Temp);
-
-
-
-    //     // for (int i = 0; i < vertexCount; i++)
-    //     // {
-    //     //     float raw = vertexLights[i] / 15f;
-    //     //     float l = Mathf.Lerp(0.15f, 1f, raw);
-
-    //     //     // Simplificação do Shading
-    //     //     Vector3 n = normals[i];
-    //     //     float faceShade = (Mathf.Abs(n.y) > 0.5f) ? ((n.y > 0) ? 1.0f : 0.6f) : 0.5f;
-    //     //     l = Mathf.Clamp01(l * faceShade);
-
-    //     //     if (tintFlags[i] == 1)
-    //     //     {
-    //     //         Color tinted = grassTint * l;
-    //     //         tinted.r = Mathf.Max(tinted.r, grassTint.r * 0.15f);
-    //     //         tinted.g = Mathf.Max(tinted.g, grassTint.g * 0.15f);
-    //     //         tinted.b = Mathf.Max(tinted.b, grassTint.b * 0.15f);
-    //     //         tinted.a = 1f;
-    //     //         colors[i] = tinted;
-    //     //     }
-    //     //     else
-    //     //     {
-    //     //         colors[i] = new Color(l, l, l, 1f);
-    //     //     }
-    //     // }
-    //     // mesh.SetColors(colors);
-    //     // colors.Dispose(); // Libera memória Temp
-
-    //     var extraUV = new NativeList<Vector4>(vertexCount, Allocator.Temp);
-
-    //     for (int i = 0; i < vertexCount; i++)
-    //     {
-    //         float raw = vertexLights[i] / 15f; // normalizado 0..1
-    //         float tint = tintFlags[i];         // 0 ou 1
-    //         extraUV.Add(new Vector4(raw, tint, 0f, 0f)); // guardamos em UV channel 2
-    //     }
-
-    //     // passar para o mesh no canal UV 2 (terceiro UV)
-    //     mesh.SetUVs(2, extraUV.AsArray());
-    //     extraUV.Dispose();
-
-    //     // 3. Submeshes
-    //     mesh.subMeshCount = 3;
-    //     mesh.SetIndices(opaqueTris.AsArray(), MeshTopology.Triangles, 0, false);
-    //     mesh.SetIndices(transparentTris.AsArray(), MeshTopology.Triangles, 1, false);
-    //     mesh.SetIndices(waterTris.AsArray(), MeshTopology.Triangles, 2, false);
-
-    //     mesh.RecalculateBounds();
-    //     mesh.UploadMeshData(false);
-
-    //     // 4. Collider OTIMIZADO (A CORREÇÃO DO ERRO ESTÁ AQUI)
-    //     int solidCount = opaqueTris.Length + transparentTris.Length;
-
-    //     if (solidCount > 0)
-    //     {
-    //         if (colliderMesh == null) colliderMesh = new Mesh();
-    //         else colliderMesh.Clear();
-
-    //         colliderMesh.SetVertices(vertices.AsArray());
-
-    //         // Aloca array combinado
-    //         var colliderIndices = new NativeArray<int>(solidCount, Allocator.Temp);
-
-    //         // --- CORREÇÃO: Verificações de tamanho antes de copiar ---
-
-    //         // Copia Opacos
-    //         if (opaqueTris.Length > 0)
-    //         {
-    //             NativeArray<int>.Copy(opaqueTris.AsArray(), 0, colliderIndices, 0, opaqueTris.Length);
-    //         }
-
-    //         // Copia Transparentes (Só executa se houver triângulos transparentes)
-    //         if (transparentTris.Length > 0)
-    //         {
-    //             // O índice de destino é exatamente onde os opacos terminaram
-    //             NativeArray<int>.Copy(transparentTris.AsArray(), 0, colliderIndices, opaqueTris.Length, transparentTris.Length);
-    //         }
-
-    //         colliderMesh.SetIndices(colliderIndices, MeshTopology.Triangles, 0, false);
-    //         colliderIndices.Dispose(); // Libera memória
-
-    //         meshCollider.sharedMesh = null;
-    //         meshCollider.sharedMesh = colliderMesh;
-    //         meshCollider.enabled = true;
-    //     }
-    //     else
-    //     {
-    //         meshCollider.enabled = false;
-    //     }
-    // }
-
-
-    // Em Chunk.cs
 
     public void ApplyMeshData(
         NativeList<Vector3> vertices,
@@ -301,7 +192,13 @@ public class Chunk : MonoBehaviour
         gameObject.name = $"Chunk_{c.x}_{c.y}";
     }
     public void ResetChunk()
-    {
+    {// Se existir job rodando, finalize antes de reutilizar
+        if (jobScheduled)
+        {
+            currentJob.Complete();
+            jobScheduled = false;
+        }
+
         gameObject.SetActive(false);
         generation = 0;
 
@@ -319,6 +216,8 @@ public class Chunk : MonoBehaviour
 
         // Opcional: apenas marque que não tem dados válidos
         hasVoxelData = false;
+
+
     }
 
     public int generation;

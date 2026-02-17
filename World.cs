@@ -306,6 +306,11 @@ public class World : MonoBehaviour
             // Se completou, finalize o job IMEDIATAMENTE para liberar a thread worker,
             // mas não necessariamente aplique o mesh ainda se o tempo acabou.
             pm.handle.Complete();
+            if (pm.chunk != null)
+            {
+                pm.chunk.jobScheduled = false;
+            }
+
 
             // Checagem de segurança do chunk
             if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk))
@@ -593,6 +598,11 @@ public class World : MonoBehaviour
         // NOVO: calcular borderSize e maxTreeRadius
         int borderSize = treeSettings.canopyRadius + 2;  // ex: 5 para radius=3
         int maxTreeRadius = treeSettings.canopyRadius;
+        if (chunk.jobScheduled)
+        {
+            chunk.currentJob.Complete();
+            chunk.jobScheduled = false;
+        }
 
         MeshGenerator.ScheduleMeshJob(
             coord,
@@ -634,6 +644,8 @@ public class World : MonoBehaviour
 
         pendingMeshes.Add(new PendingMesh
         {
+            chunk = chunk,
+
             handle = handle,
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
@@ -650,11 +662,18 @@ public class World : MonoBehaviour
             expectedGen = expectedGen,
             tintFlags = tintFlags
         });
+
+        chunk.currentJob = handle;
+        chunk.jobScheduled = true;
+
     }
 
     // --- NEW: Request rebuild for an *active* chunk (usado quando editamos um bloco) ---
     private void RequestChunkRebuild(Vector2Int coord)
     {
+        if (IsChunkJobPending(coord))
+            return;
+
         if (!activeChunks.TryGetValue(coord, out Chunk chunk)) return;
 
         int expectedGen = nextChunkGeneration++;
@@ -713,6 +732,12 @@ public class World : MonoBehaviour
         int borderSize = treeSettings.canopyRadius + 2;  // ex: 5 para radius=3
         int maxTreeRadius = treeSettings.canopyRadius;
 
+        if (chunk.jobScheduled)
+        {
+            chunk.currentJob.Complete();
+            chunk.jobScheduled = false;
+        }
+
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -769,6 +794,18 @@ public class World : MonoBehaviour
             tintFlags = tintFlags,
             chunk = chunk // NOVO: referência para marcar hasVoxelData
         });
+
+        chunk.currentJob = handle;
+        chunk.jobScheduled = true;
+
+    }
+    private bool IsChunkJobPending(Vector2Int coord)
+    {
+        for (int i = 0; i < pendingMeshes.Count; i++)
+            if (pendingMeshes[i].coord == coord)
+                return true;
+
+        return false;
     }
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
