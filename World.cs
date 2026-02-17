@@ -112,9 +112,9 @@ public class World : MonoBehaviour
 
     public int CliffTreshold = 2; // diferença de altura para considerar um cliff
 
-    // No topo da classe Chunk (ou em [Header("Grass Tint")]
-    [Header("Grass Tint Settings")]
-    public Color grassTintBase = new Color(0.8f, 0.4f, 0.4f);  // cor desejada quando bem iluminado
+
+    // Adicione esta variável no topo
+    public float frameTimeBudgetMS = 4f; // Tenta usar apenas 3ms por frame para gerar chunks
 
 
     void Awake()
@@ -279,30 +279,42 @@ public class World : MonoBehaviour
     }
 
 
-    // Adicione esta variável no topo
-    public float frameTimeBudgetMS = 3f; // Tenta usar apenas 3ms por frame para gerar chunks
+
 
     private void Update()
     {
         UpdateChunks();
 
-        // Inicia um cronômetro para medir quanto tempo estamos gastando neste frame
+
+
+        ProcessChunkQueue();
+    }
+
+    private void ProcessChunkQueue()
+    {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+        // Iteramos ao contrário para poder remover com segurança, 
+        // MAS só processamos se tivermos tempo.
         for (int i = pendingMeshes.Count - 1; i >= 0; i--)
         {
             var pm = pendingMeshes[i];
 
-            // Se o job terminou
-            if (pm.handle.IsCompleted)
-            {
-                pm.handle.Complete();
+            // Se o job NÃO completou, apenas continue
+            if (!pm.handle.IsCompleted) continue;
 
-                // Verificação de segurança se o chunk ainda é relevante
-                if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk))
+            // Se completou, finalize o job IMEDIATAMENTE para liberar a thread worker,
+            // mas não necessariamente aplique o mesh ainda se o tempo acabou.
+            pm.handle.Complete();
+
+            // Checagem de segurança do chunk
+            if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk))
+            {
+                if (activeChunk.generation == pm.expectedGen)
                 {
-                    // Se o chunk foi resetado ou mudou de geração enquanto processava, ignora
-                    if (activeChunk.generation == pm.expectedGen)
+                    // AQUI É O GARGALO: Aplicar Mesh e Collider custa caro na CPU principal.
+                    // Verificamos o orçamento ANTES de aplicar.
+                    if (stopwatch.Elapsed.TotalMilliseconds < frameTimeBudgetMS)
                     {
                         activeChunk.ApplyMeshData(
                             pm.vertices,
@@ -319,21 +331,23 @@ public class World : MonoBehaviour
                         activeChunk.hasVoxelData = true;
                         activeChunk.gameObject.SetActive(true);
                     }
-                }
-
-                // Limpa a memória nativa
-                DisposePendingMesh(pm);
-                pendingMeshes.RemoveAt(i);
-
-                // --- A MÁGICA ACONTECE AQUI ---
-                // Se já gastamos mais de 3ms processando chunks neste frame, PARAR.
-                // O restante fica para o próximo frame. Isso mantém o FPS liso.
-                if (stopwatch.Elapsed.TotalMilliseconds > frameTimeBudgetMS)
-                {
-                    break;
+                    else
+                    {
+                        // Se o tempo acabou, NÃO remova da lista 'pendingMeshes'.
+                        // O handle já está completo, então no próximo frame ele cairá aqui
+                        // e entrará no if (stopwatch...) se tiver tempo.
+                        // Paramos o loop por hoje.
+                        break;
+                    }
                 }
             }
+
+            // Se chegamos aqui, ou aplicamos o mesh ou o chunk foi descartado/inválido.
+            // Podemos limpar a memória e remover da lista.
+            DisposePendingMesh(pm);
+            pendingMeshes.RemoveAt(i);
         }
+
         stopwatch.Stop();
     }
 
@@ -351,78 +365,149 @@ public class World : MonoBehaviour
         if (pm.edits.IsCreated) pm.edits.Dispose();
         if (pm.trees.IsCreated) pm.trees.Dispose();
     }
+
+    // ===================================================================================
+    // VARIÁVEIS DE OTIMIZAÇÃO (Adicione isso junto com as outras variáveis da classe)
+    // ===================================================================================
+    private Vector2Int _lastChunkCoord = new Vector2Int(-99999, -99999); // Rastreia onde o player estava
+    private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>(); // Cache para evitar alocação
+    private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>(); // Cache para evitar alocação
+
+    // ===================================================================================
+    // MÉTODO UPDATECHUNKS OTIMIZADO
+    // ===================================================================================
     private void UpdateChunks()
     {
-        Vector2Int playerChunk = new Vector2Int(
+        // 1. Calcular coordenada atual do chunk do jogador
+        Vector2Int currentChunkCoord = new Vector2Int(
             Mathf.FloorToInt(player.position.x / Chunk.SizeX),
             Mathf.FloorToInt(player.position.z / Chunk.SizeZ)
         );
 
-        HashSet<Vector2Int> needed = new HashSet<Vector2Int>();
-
-        for (int x = -renderDistance; x <= renderDistance; x++)
+        // 2. Só recalcula a lista se o jogador mudou de chunk (Cruzou a borda)
+        // Isso economiza MUITA CPU pois não roda a lógica de distâncias a cada frame
+        if (currentChunkCoord != _lastChunkCoord)
         {
-            for (int z = -renderDistance; z <= renderDistance; z++)
+            _lastChunkCoord = currentChunkCoord;
+
+            // Limpa e reutiliza o HashSet (Zero Garbage Collection)
+            _tempNeededCoords.Clear();
+
+            // Identifica todos os chunks que deveriam existir
+            for (int x = -renderDistance; x <= renderDistance; x++)
             {
-                Vector2Int coord = new Vector2Int(playerChunk.x + x, playerChunk.y + z);
-                needed.Add(coord);
+                for (int z = -renderDistance; z <= renderDistance; z++)
+                {
+                    _tempNeededCoords.Add(new Vector2Int(currentChunkCoord.x + x, currentChunkCoord.y + z));
+                }
+            }
+
+            // A. REMOVER CHUNKS DISTANTES (Active -> Pool)
+            _tempToRemove.Clear();
+            foreach (var kv in activeChunks)
+            {
+                // Se o chunk ativo não está na lista de necessários, marca para remover
+                if (!_tempNeededCoords.Contains(kv.Key))
+                {
+                    _tempToRemove.Add(kv.Key);
+                }
+            }
+
+            // Efetiva a remoção
+            for (int i = 0; i < _tempToRemove.Count; i++)
+            {
+                Vector2Int coord = _tempToRemove[i];
+                if (activeChunks.TryGetValue(coord, out Chunk chunk))
+                {
+                    chunk.ResetChunk();
+                    chunkPool.Enqueue(chunk);
+                    activeChunks.Remove(coord);
+                }
+            }
+
+            // B. LIMPAR PENDENTES DESNECESSÁRIOS
+            // Se o player correu rápido demais e saiu da area de um chunk que ainda nem nasceu
+            for (int i = pendingChunks.Count - 1; i >= 0; i--)
+            {
+                if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
+                {
+                    pendingChunks.RemoveAt(i);
+                }
+            }
+
+            // C. ENCONTRAR NOVOS CHUNKS PARA GERAR
+            foreach (Vector2Int coord in _tempNeededCoords)
+            {
+                // Se não está ativo...
+                if (!activeChunks.ContainsKey(coord))
+                {
+                    // ...E não está pendente (evitar duplicatas com checagem rápida)
+                    bool alreadyPending = false;
+                    // Loop for indexado é mais rápido que LINQ ou Exists
+                    for (int i = 0; i < pendingChunks.Count; i++)
+                    {
+                        if (pendingChunks[i].coord == coord)
+                        {
+                            alreadyPending = true;
+                            break;
+                        }
+                    }
+
+                    if (!alreadyPending)
+                    {
+                        // Adiciona na fila com a distância calculada
+                        float dx = coord.x - currentChunkCoord.x;
+                        float dz = coord.y - currentChunkCoord.y;
+                        float distSq = dx * dx + dz * dz;
+                        pendingChunks.Add((coord, distSq));
+                    }
+                }
+            }
+
+            // D. REORDENAR A FILA
+            // Recalcula distâncias relativas ao novo centro para garantir que 
+            // os chunks mais próximos sejam gerados primeiro
+            for (int i = 0; i < pendingChunks.Count; i++)
+            {
+                var item = pendingChunks[i];
+                float dx = item.coord.x - currentChunkCoord.x;
+                float dz = item.coord.y - currentChunkCoord.y;
+                // Atualiza a tupla com a nova distância
+                pendingChunks[i] = (item.coord, dx * dx + dz * dz);
+            }
+
+            // Ordena: Menor distância primeiro
+            pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+        }
+
+        // 3. PROCESSAR A FILA DE CRIAÇÃO (Frame a Frame)
+        // Isso roda todo frame, independente se o player moveu ou não,
+        // para ir consumindo a lista de pendentes suavemente.
+        if (pendingChunks.Count > 0)
+        {
+            int processed = 0;
+
+            // Verifica também se o sistema de Jobs não está congestionado
+            // Se tiver muito mesh pra aplicar, segura a geração de novos chunks
+            bool jobsCongested = pendingMeshes.Count > maxChunksPerFrame * 2;
+
+            if (!jobsCongested)
+            {
+                while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
+                {
+                    var item = pendingChunks[0];
+                    pendingChunks.RemoveAt(0); // Remove o primeiro (mais próximo)
+
+                    // Verificação final de segurança
+                    if (!activeChunks.ContainsKey(item.coord))
+                    {
+                        RequestChunk(item.coord);
+                        processed++;
+                    }
+                }
             }
         }
-
-        // Adicionar novos chunks missing à pending list
-        foreach (var coord in needed)
-        {
-            if (!activeChunks.ContainsKey(coord) && !pendingChunks.Exists(p => p.coord == coord))
-            {
-                float dx = coord.x - playerChunk.x;
-                float dz = coord.y - playerChunk.y;
-                float distSq = dx * dx + dz * dz;
-                pendingChunks.Add((coord, distSq));
-            }
-        }
-
-        // Remover da pending chunks que não são mais needed ou já active (limpeza)
-        pendingChunks.RemoveAll(p => !needed.Contains(p.coord) || activeChunks.ContainsKey(p.coord));
-
-        // NEW: Update distSq for all remaining pending chunks based on CURRENT player position
-        // This ensures priorities adapt as the player moves
-        for (int i = 0; i < pendingChunks.Count; i++)
-        {
-            var item = pendingChunks[i];
-            float dx = item.coord.x - playerChunk.x;  // Recalculate based on current playerChunk
-            float dz = item.coord.y - playerChunk.y;
-            float newDistSq = dx * dx + dz * dz;
-            pendingChunks[i] = (item.coord, newDistSq);
-        }
-
-        // Ordenar pending por distSq (menor primeiro = mais próximos)
-        pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
-
-        // Processar até maxChunksPerFrame
-        int processed = Math.Min(maxChunksPerFrame, pendingChunks.Count);
-        for (int i = 0; i < processed; i++)
-        {
-            var coord = pendingChunks[i].coord;
-            RequestChunk(coord);
-        }
-
-        // Remover os processados da lista
-        pendingChunks.RemoveRange(0, processed);
-
-        // Remover chunks que não são mais needed
-        List<Vector2Int> toRemove = new List<Vector2Int>();
-        foreach (var kv in activeChunks)
-        {
-            if (!needed.Contains(kv.Key))
-            {
-                kv.Value.ResetChunk();
-                chunkPool.Enqueue(kv.Value);
-                toRemove.Add(kv.Key);
-            }
-        }
-        foreach (var r in toRemove) activeChunks.Remove(r);
     }
-
     private void RequestChunk(Vector2Int coord)
     {
         Chunk chunk = (chunkPool.Count > 0) ? chunkPool.Dequeue() :
