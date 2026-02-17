@@ -16,6 +16,24 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     void Update()
     {
+        for (int i = 1; i <= 9; i++)
+        {
+            if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + (i - 1))))
+            {
+                if (i == 1) placeBlockType = BlockType.Stone;
+                else if (i == 2) placeBlockType = BlockType.Dirt;
+                else if (i == 3) placeBlockType = BlockType.Grass;
+                else if (i == 4) placeBlockType = BlockType.oak_planks;
+                else if (i == 5) placeBlockType = BlockType.Log;
+                else if (i == 6) placeBlockType = BlockType.glowstone;
+                else if (i == 7) placeBlockType = BlockType.glass;
+                else if (i == 8) placeBlockType = BlockType.Snow;
+                else if (i == 9) placeBlockType = BlockType.Leaves;
+
+
+                Debug.Log($"Selected block type for placing: {placeBlockType}");
+            }
+        }
         if (Input.GetMouseButtonDown(0)) // clique esquerdo -> quebrar
         {
             Vector3Int sel = selector.GetSelectedBlock();
