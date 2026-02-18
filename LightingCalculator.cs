@@ -135,8 +135,8 @@ public static class LightingCalculator
         byte op = (nti >= 0 && nti < mapCount) ? opacity[nti] : (byte)15;
         if (op >= 15) return;
 
-        // byte cost = (op < 1) ? (byte)1 : op;
-        byte cost = 1;
+         byte cost = (op < 1) ? (byte)1 : op;
+        //byte cost = 1;
         byte candidate = (byte)math.max(0, curLight - cost);
 
         if (candidate > skylight[nIdx])
@@ -152,8 +152,8 @@ public static class LightingCalculator
         byte op = (nti >= 0 && nti < mapCount) ? opacity[nti] : (byte)15;
         if (op >= 15) return;
 
-        // byte cost = (op < 1) ? (byte)1 : op;
-        byte cost = 1;
+        byte cost = (op < 1) ? (byte)1 : op;
+       // byte cost = 1;
         byte candidate = (byte)math.max(0, curLight - cost);
 
         if (candidate >= blocklight[nIdx])
