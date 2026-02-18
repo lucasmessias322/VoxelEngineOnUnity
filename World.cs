@@ -104,6 +104,7 @@ public class World : MonoBehaviour
         public Vector2Int coord;
         public int expectedGen;
         public Chunk chunk;
+        public NativeList<byte> vertexAO;
     }
 
     [Header("Tree Settings")]
@@ -330,7 +331,8 @@ public class World : MonoBehaviour
                             pm.uv2,
                             pm.normals,
                             pm.lightValues,
-                            pm.tintFlags
+                            pm.tintFlags,
+                            pm.vertexAO
                         );
 
                         activeChunk.hasVoxelData = true;
@@ -639,7 +641,8 @@ public class World : MonoBehaviour
             out NativeList<Vector2> uv2,   // NOVO
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
-            out NativeList<byte> tintFlags
+            out NativeList<byte> tintFlags,
+            out NativeList<byte> vertexAO
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -660,7 +663,8 @@ public class World : MonoBehaviour
             trees = nativeTrees,  // store trees to dispose later
             coord = coord,
             expectedGen = expectedGen,
-            tintFlags = tintFlags
+            tintFlags = tintFlags,
+            vertexAO = vertexAO
         });
 
         chunk.currentJob = handle;
@@ -773,7 +777,8 @@ public class World : MonoBehaviour
             out NativeList<Vector2> uv2,   // NOVO
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights, // novo out
-            out NativeList<byte> tintFlags // novo out
+            out NativeList<byte> tintFlags, // novo out
+            out NativeList<byte> vertexAO // novo out
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -792,6 +797,7 @@ public class World : MonoBehaviour
             coord = coord,
             expectedGen = expectedGen,
             tintFlags = tintFlags,
+            vertexAO = vertexAO,
             chunk = chunk // NOVO: referência para marcar hasVoxelData
         });
 

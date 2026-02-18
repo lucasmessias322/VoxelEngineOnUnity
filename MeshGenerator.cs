@@ -72,7 +72,10 @@ public static class MeshGenerator
         out NativeList<Vector2> uv2,
         out NativeList<Vector3> normals,
         out NativeList<byte> vertexLights,  // Novo: adicione isso
-        out NativeList<byte> tintFlags
+        out NativeList<byte> tintFlags,
+        out NativeList<byte> vertexAO
+
+
 
     )
     {
@@ -89,7 +92,7 @@ public static class MeshGenerator
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
         tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-
+        vertexAO = new NativeList<byte>(4096 * 4, Allocator.Persistent);   // ← NOVO
         // UVs
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         uv2 = new NativeList<Vector2>(4096, Allocator.Persistent); // NOVO: canal 1
@@ -121,6 +124,7 @@ public static class MeshGenerator
             normals = normals,
             vertexLights = vertexLights,
             tintFlags = tintFlags, // Novo: atribua ao job
+            vertexAO = vertexAO,   // ← NOVO
             blockEdits = blockEdits,       // EDIT: atribui edits ao job
             treeInstances = treeInstances, // NEW
             treeMargin = treeMargin,       // NEW
@@ -173,7 +177,7 @@ public static class MeshGenerator
         public NativeList<Vector3> normals;
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
-
+        public NativeList<byte> vertexAO;   // ← NOVO
         // === NOVO ===
         [WriteOnly] public NativeArray<byte> voxelOutput;
         public void Execute()
@@ -661,8 +665,6 @@ public static class MeshGenerator
         }
 
 
-
-
         private void GenerateMesh(
             NativeArray<int> heightCache,
             NativeArray<BlockType> blockTypes,
@@ -673,7 +675,8 @@ public static class MeshGenerator
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
 
-            // A máscara armazena o BlockType e o nível de luz empacotados
+            // Máscara agora guarda: BlockType (12 bits) | Light (4 bits) | AO (8 bits)
+            // Total 24 bits usados de um int (32 bits), então cabe tranquilo.
             int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
             NativeArray<int> mask = new NativeArray<int>(maxMask, Allocator.Temp);
 
@@ -682,6 +685,7 @@ public static class MeshGenerator
                 for (int side = 0; side < 2; side++)
                 {
                     int normalSign = side == 0 ? 1 : -1;
+
                     int u = (axis + 1) % 3;
                     int v = (axis + 2) % 3;
 
@@ -695,9 +699,13 @@ public static class MeshGenerator
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
                     BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
 
+                    // Pré-cálculo dos Steps para usar dentro do loop da máscara
+                    Vector3Int stepU = new Vector3Int(u == 0 ? 1 : 0, u == 1 ? 1 : 0, u == 2 ? 1 : 0);
+                    Vector3Int stepV = new Vector3Int(v == 0 ? 1 : 0, v == 1 ? 1 : 0, v == 2 ? 1 : 0);
+
                     for (int n = minN; n < maxN; n++)
                     {
-                        // --- CONSTRUÇÃO DA MÁSCARA ---
+                        // 1. Preenchimento da Máscara COM CÁLCULO DE AO
                         for (int j = 0; j < sizeV; j++)
                         {
                             for (int i = 0; i < sizeU; i++)
@@ -711,6 +719,7 @@ public static class MeshGenerator
 
                                 int idx = x + y * voxelSizeX + z * voxelPlaneSize;
                                 BlockType current = blockTypes[idx];
+
                                 if (current == BlockType.Air) { mask[i + j * sizeU] = 0; continue; }
 
                                 int nx = x + (axis == 0 ? normalSign : 0);
@@ -719,33 +728,68 @@ public static class MeshGenerator
 
                                 bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
 
-                                BlockType neighbor = outside ? BlockType.Air : blockTypes[nx + ny * voxelSizeX + nz * voxelPlaneSize];
-                                byte faceLight = outside ? (byte)15 : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
-
                                 bool isVisible = false;
-                                if (!blockMappings[(int)current].isSolid) isVisible = false;
-                                else if (blockMappings[(int)neighbor].isEmpty) isVisible = true;
-                                else if (blockMappings[(int)neighbor].isTransparent && !blockMappings[(int)current].isTransparent) isVisible = true;
-                                else isVisible = !blockMappings[(int)neighbor].isSolid;
+                                if (!blockMappings[(int)current].isSolid)
+                                    isVisible = false;
+                                else if (outside)
+                                    isVisible = true;
+                                else
+                                {
+                                    int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
+                                    BlockType neighbor = blockTypes[nIdx];
+                                    if (blockMappings[(int)neighbor].isEmpty) isVisible = true;
+                                    else if (blockMappings[(int)neighbor].isTransparent && !blockMappings[(int)current].isTransparent) isVisible = true;
+                                    else isVisible = !blockMappings[(int)neighbor].isSolid;
+                                }
 
                                 if (isVisible)
                                 {
-                                    // Empacota ID do Bloco (12 bits) + Luz (4 bits)
-                                    mask[i + j * sizeU] = (int)current | ((int)faceLight << 12);
+                                    byte faceLight = outside ? (byte)15 : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+
+                                    // --- MUDANÇA: Calcular AO AGORA e salvar na máscara ---
+
+                                    int aoPlaneN = n + normalSign;
+                                    int ax = (u == 0 ? i : v == 0 ? j : aoPlaneN);
+                                    int ay = (u == 1 ? i : v == 1 ? j : aoPlaneN);
+                                    int az = (u == 2 ? i : v == 2 ? j : aoPlaneN);
+                                    Vector3Int aoBase = new Vector3Int(ax, ay, az);
+
+                                    // Calcula AO dos 4 cantos desta face específica (1x1)
+                                    // Ordem: 0=BL, 1=BR, 2=TR, 3=TL (relativo ao plano UV)
+                                    byte ao0 = GetVertexAO(aoBase, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao1 = GetVertexAO(aoBase, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao2 = GetVertexAO(aoBase, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao3 = GetVertexAO(aoBase, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+                                    // Empacota os 4 AOs em 8 bits (2 bits cada, já que valor vai de 0 a 3)
+                                    int packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
+
+                                    // A máscara agora contém TUDO que precisa ser igual para mesclar
+                                    mask[i + j * sizeU] = (int)current | ((int)faceLight << 12) | (packedAO << 16);
                                 }
-                                else mask[i + j * sizeU] = 0;
+                                else
+                                {
+                                    mask[i + j * sizeU] = 0;
+                                }
                             }
                         }
 
-                        // --- ALGORITMO GREEDY MESH ---
+                        // 2. Greedy Meshing Loop
                         for (int j = 0; j < sizeV; j++)
                         {
                             int i = 0;
                             while (i < sizeU)
                             {
                                 int packedData = mask[i + j * sizeU];
-                                if (packedData == 0) { i++; continue; }
+                                if (packedData == 0)
+                                {
+                                    i++;
+                                    continue;
+                                }
 
+                                // Calcula largura (w)
+                                // O loop verifica se "mask[...] == packedData". 
+                                // Como packedData agora inclui o AO, ele SÓ vai crescer se o AO for IDÊNTICO.
                                 int w = 1;
                                 while (i + w < sizeU && mask[i + w + j * sizeU] == packedData) w++;
 
@@ -755,17 +799,32 @@ public static class MeshGenerator
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
                                     {
-                                        if (mask[i + k + (j + h) * sizeU] != packedData) { canGrow = false; break; }
+                                        if (mask[i + k + (j + h) * sizeU] != packedData)
+                                        {
+                                            canGrow = false;
+                                            break;
+                                        }
                                     }
                                     if (!canGrow) break;
                                     h++;
                                 }
 
+                                // --- Extração de dados ---
                                 BlockType bt = (BlockType)(packedData & 0xFFF);
-                                byte finalLight = (byte)(packedData >> 12);
+                                byte finalLight = (byte)((packedData >> 12) & 0xF);
+
+                                // --- MUDANÇA: Desempacotar o AO ---
+                                int aoPackedData = (packedData >> 16) & 0xFF;
+                                byte ao0 = (byte)(aoPackedData & 3);
+                                byte ao1 = (byte)((aoPackedData >> 2) & 3);
+                                byte ao2 = (byte)((aoPackedData >> 4) & 3);
+                                byte ao3 = (byte)((aoPackedData >> 6) & 3);
+
+                                // Não precisamos mais recalcular GetVertexAO aqui, pois já temos o valor correto
+                                // para todo o bloco greedymeshed (já que todos são iguais)
+
                                 int vIndex = vertices.Length;
 
-                                // Adiciona os 4 vértices da face
                                 for (int l = 0; l < 4; l++)
                                 {
                                     int du = (l == 1 || l == 2) ? w : 0;
@@ -785,36 +844,38 @@ public static class MeshGenerator
                                     vertexLights.Add(finalLight);
                                     normals.Add(normal);
 
-                                    // --- CORREÇÃO DE ROTAÇÃO UV ---
-                                    Vector2 uvCoord;
-                                    if (axis == 0) uvCoord = new Vector2(rawV, rawU);      // Lateral X (Z, Y)
-                                    else if (axis == 1) uvCoord = new Vector2(rawV, rawU); // Topo/Baixo (X, Z)
-                                    else uvCoord = new Vector2(rawU, rawV);                // Lateral Z (X, Y)
+                                    // Aplica o AO
+                                    if (l == 0) vertexAO.Add(ao0);
+                                    else if (l == 1) vertexAO.Add(ao1);
+                                    else if (l == 2) vertexAO.Add(ao2);
+                                    else vertexAO.Add(ao3);
+
+                                    // UVs
+                                    Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
+                                                      axis == 1 ? new Vector2(rawV, rawU) :
+                                                                  new Vector2(rawU, rawV);
                                     uvs.Add(uvCoord);
 
-
-                                    // --- TINTING CUSTOMIZÁVEL POR FACE (agora vem do BlockTextureMapping) ---
+                                    // Tint e Texture setup (mantido igual)
                                     BlockTextureMapping m = blockMappings[(int)bt];
-
-                                    // Calcula tint baseado nas flags do mapping
-                                    bool tint = false;
-
-                                    if (faceType == BlockFace.Top)
-                                        tint = m.tintTop;           // fallback pro antigo
-                                    else if (faceType == BlockFace.Bottom)
-                                        tint = m.tintBottom;
-                                    else // Side
-                                        tint = m.tintSide;
-
+                                    bool tint = faceType == BlockFace.Top ? m.tintTop :
+                                                faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
                                     tintFlags.Add(tint ? (byte)1 : (byte)0);
 
+                                    Vector2Int tile = faceType == BlockFace.Top ? m.top :
+                                                      faceType == BlockFace.Bottom ? m.bottom : m.side;
 
-                                    Vector2Int tile = faceType == BlockFace.Top ? m.top : faceType == BlockFace.Bottom ? m.bottom : m.side;
-                                    uv2.Add(new Vector2(tile.x * (1f / atlasTilesX) + 0.001f, tile.y * (1f / atlasTilesY) + 0.001f));
+                                    // Ajuste de UV para greedy mesh (tiling da textura)
+                                    // Se quiser que a textura estique, deixe assim. 
+                                    // Se quiser que repita, precisa multiplicar pelo w/h.
+                                    uv2.Add(new Vector2(tile.x * (1f / atlasTilesX) + 0.001f,
+                                                        tile.y * (1f / atlasTilesY) + 0.001f));
                                 }
 
-                                // Triângulos
-                                NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles : blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
+                                // Triângulos (mantido igual)
+                                NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles :
+                                                       blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
+
                                 if (normalSign > 0)
                                 {
                                     tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
@@ -826,7 +887,7 @@ public static class MeshGenerator
                                     tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
                                 }
 
-                                // Limpa a área processada na máscara
+                                // Limpar máscara
                                 for (int y0 = 0; y0 < h; y0++)
                                     for (int x0 = 0; x0 < w; x0++)
                                         mask[i + x0 + (j + y0) * sizeU] = 0;
@@ -840,6 +901,37 @@ public static class MeshGenerator
             mask.Dispose();
         }
 
+
+        // =========================================================================================
+        // FUNÇÃO DE AO CORRIGIDA
+        // =========================================================================================
+        private bool IsOccluder(int x, int y, int z, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            // Se sair do array (incluindo borders), consideramos oclusor para evitar buracos de luz nas bordas do mapa
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false; // Retornar FALSE aqui deixa as bordas claras. Retornar TRUE deixa bordas escuras.
+                              // Como você tem BORDER, false é melhor pois a borda real já está em 'solids'.
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            return solids[idx];
+        }
+
+        private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2,
+                                 NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            // Verifica os 3 blocos vizinhos ao canto (side1, side2, corner)
+            bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool c = IsOccluder(pos.x + d1.x + d2.x, pos.y + d1.y + d2.y, pos.z + d1.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            // Lógica clássica de Voxel:
+            // Se os dois lados (s1 e s2) estão bloqueados, o canto está totalmente ocluso.
+            // Isso também previne artefatos de anisotropia.
+            if (s1 && s2) return 0;
+
+            // Cálculo do nível de AO (0 a 3, onde 3 é claro e 0 é escuro)
+            return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
+        }
 
 
         private static int FloorDiv(int a, int b)

@@ -95,7 +95,8 @@ public class Chunk : MonoBehaviour
         NativeList<Vector2> uv2,
         NativeList<Vector3> normals,
         NativeList<byte> vertexLights,
-        NativeList<byte> tintFlags
+        NativeList<byte> tintFlags,
+        NativeList<byte> vertexAO
     )
     {
         // FLAGS MÁGICAS: Dizem ao Unity para confiar em nós e não verificar nada.
@@ -120,7 +121,8 @@ public class Chunk : MonoBehaviour
         {
             float raw = vertexLights[i] / 15f;
             float tint = tintFlags[i];
-            extraUV.Add(new Vector4(raw, tint, 0f, 0f));
+            float ao = vertexAO[i] / 3f;
+            extraUV.Add(new Vector4(raw, tint, ao, 0f));
         }
         mesh.SetUVs(2, extraUV.AsArray());
         extraUV.Dispose();
