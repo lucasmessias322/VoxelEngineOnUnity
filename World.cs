@@ -110,6 +110,7 @@ public class World : MonoBehaviour
         public int expectedGen;
         public Chunk chunk;
         public NativeList<byte> vertexAO;
+        public NativeList<Vector4> extraUVs;
     }
 
     [Header("Tree Settings")]
@@ -290,9 +291,8 @@ public class World : MonoBehaviour
                             pm.uvs,
                             pm.uv2,
                             pm.normals,
-                            pm.lightValues,
-                            pm.tintFlags,
-                            pm.vertexAO
+
+                            pm.extraUVs
                         );
 
                         activeChunk.hasVoxelData = true;
@@ -547,8 +547,8 @@ public class World : MonoBehaviour
             caveStride,
             maxCaveDepthMultiplier,
             caveRarityScale,       // NOVO
-caveRarityThreshold,   // NOVO
-caveMaskSmoothness,    // NOVO
+            caveRarityThreshold,   // NOVO
+            caveMaskSmoothness,    // NOVO
             nativeEdits,
             nativeTrees,
             treeMargin,
@@ -564,9 +564,11 @@ caveMaskSmoothness,    // NOVO
             out NativeList<Vector2> uvs,
             out NativeList<Vector2> uv2,
             out NativeList<Vector3> normals,
+
             out NativeList<byte> vertexLights,
             out NativeList<byte> tintFlags,
-            out NativeList<byte> vertexAO
+            out NativeList<byte> vertexAO,
+             out NativeList<Vector4> extraUVs
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -586,7 +588,8 @@ caveMaskSmoothness,    // NOVO
             coord = coord,
             expectedGen = expectedGen,
             tintFlags = tintFlags,
-            vertexAO = vertexAO
+            vertexAO = vertexAO,
+            extraUVs = extraUVs
         });
 
         chunk.currentJob = handle;
@@ -691,7 +694,8 @@ caveMaskSmoothness,    // NOVO
             out NativeList<Vector3> normals,
             out NativeList<byte> vertexLights,
             out NativeList<byte> tintFlags,
-            out NativeList<byte> vertexAO
+            out NativeList<byte> vertexAO,
+                out NativeList<Vector4> extraUVs
         );
 
         pendingMeshes.Add(new PendingMesh
@@ -711,7 +715,8 @@ caveMaskSmoothness,    // NOVO
             expectedGen = expectedGen,
             tintFlags = tintFlags,
             vertexAO = vertexAO,
-            chunk = chunk
+            chunk = chunk,
+            extraUVs = extraUVs
         });
 
         chunk.currentJob = handle;

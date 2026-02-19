@@ -76,7 +76,8 @@ float caveMaskSmoothness,  // NOVO
         out NativeList<Vector3> normals,
         out NativeList<byte> vertexLights,  // Novo: adicione isso
         out NativeList<byte> tintFlags,
-        out NativeList<byte> vertexAO
+        out NativeList<byte> vertexAO,
+        out NativeList<Vector4> extraUVs
 
 
 
@@ -87,18 +88,20 @@ float caveMaskSmoothness,  // NOVO
         NativeArray<NoiseLayer> nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
         NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
 
-        vertices = new NativeList<Vector3>(4096, Allocator.Persistent);
-        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
-        normals = new NativeList<Vector3>(4096, Allocator.Persistent);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);  // Novo: aloque aqui (4 verts por face)
-        tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.Persistent);   // ← NOVO
+        vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
+        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+
+        normals = new NativeList<Vector3>(4096, Allocator.TempJob);
+        // Aloque a nova lista para o Vector4
+        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
+        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);  // Novo: aloque aqui (4 verts por face)
+        tintFlags = new NativeList<byte>(4096 * 4, Allocator.TempJob);
+        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);   // ← NOVO
         // UVs
-        uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
-        uv2 = new NativeList<Vector2>(4096, Allocator.Persistent); // NOVO: canal 1
+        uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
+        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob); // NOVO: canal 1
         var job = new ChunkMeshJob
         {
             coord = coord,
@@ -128,6 +131,7 @@ float caveMaskSmoothness,  // NOVO
             uvs = uvs,
             uv2 = uv2, // <- passe para o job
             normals = normals,
+            extraUVs = extraUVs,
             vertexLights = vertexLights,
             tintFlags = tintFlags, // Novo: atribua ao job
             vertexAO = vertexAO,   // ← NOVO
@@ -184,12 +188,15 @@ float caveMaskSmoothness,  // NOVO
         public NativeList<Vector2> uvs;
         public NativeList<Vector2> uv2; // UV channel 1: tile base (uMin, vMin) normalizado
         public NativeList<Vector3> normals;
+        public NativeList<Vector4> extraUVs;
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
         public NativeList<byte> vertexAO;   // ← NOVO
         [WriteOnly] public NativeArray<byte> voxelOutput;
         public void Execute()
         {
+            float invAtlasTilesX = 1f / atlasTilesX;
+            float invAtlasTilesY = 1f / atlasTilesY;
             int heightSize = SizeX + 2 * border;
             int totalHeightPoints = heightSize * heightSize;
 
@@ -282,7 +289,7 @@ float caveMaskSmoothness,  // NOVO
             LightingCalculator.CalculateLighting(blockTypes, solids, light, blockMappings, voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY);
 
             // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
-            GenerateMesh(heightCache, blockTypes, solids, light);
+            GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
 
             // Limpeza
             light.Dispose();
@@ -473,36 +480,26 @@ float caveMaskSmoothness,  // NOVO
 
         }
 
-
-        private bool IsCliff(
-            NativeArray<int> heightCache,
-            int x,
-            int z,
-            int heightStride,
-            int threshold = 2
-        )
+        private bool IsCliff(NativeArray<int> heightCache, int x, int z, int heightStride, int threshold = 2)
         {
-            // 🔒 proteção de borda
             if (x <= 0 || z <= 0 || x >= heightStride - 1 || z >= heightCache.Length / heightStride - 1)
                 return false;
 
-            int h = heightCache[x + z * heightStride];
+            int centerIdx = x + z * heightStride;
+            int h = heightCache[centerIdx];
 
-            int hN = heightCache[x + (z + 1) * heightStride];
-            int hS = heightCache[x + (z - 1) * heightStride];
-            int hE = heightCache[(x + 1) + z * heightStride];
-            int hW = heightCache[(x - 1) + z * heightStride];
+            // Usa centerIdx para evitar multiplicar tudo de novo
+            int hN = heightCache[centerIdx + heightStride];
+            int hS = heightCache[centerIdx - heightStride];
+            int hE = heightCache[centerIdx + 1];
+            int hW = heightCache[centerIdx - 1];
 
-            int maxDiff = 0;
-            maxDiff = math.max(maxDiff, math.abs(h - hN));
-            maxDiff = math.max(maxDiff, math.abs(h - hS));
+            int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
             maxDiff = math.max(maxDiff, math.abs(h - hE));
             maxDiff = math.max(maxDiff, math.abs(h - hW));
 
             return maxDiff >= threshold;
         }
-
-
         private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -619,6 +616,10 @@ float caveMaskSmoothness,  // NOVO
 
                         for (int y = 0; y <= maxCaveY; y++)
                         {
+                            // ==========================================
+                            // CORREÇÃO: Protege os primeiros 20 blocos (Bedrock)
+                            // ==========================================
+                            if (y <= 20) continue;
                             int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
                             if (!solids[voxelIdx]) continue;
 
@@ -712,7 +713,7 @@ float caveMaskSmoothness,  // NOVO
             NativeArray<int> heightCache,
             NativeArray<BlockType> blockTypes,
             NativeArray<bool> solids,
-            NativeArray<byte> light)
+            NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -883,36 +884,70 @@ float caveMaskSmoothness,  // NOVO
 
                                     if (bt == BlockType.Water && axis == 1 && normalSign > 0) py -= 0.15f;
 
+                                    // vertices.Add(new Vector3(px, py, pz));
+                                    // // vertexLights.Add(finalLight);
+
+                                    // normals.Add(normal);
+
+                                    // // Aplica o AO
+                                    // if (l == 0) vertexAO.Add(ao0);
+                                    // else if (l == 1) vertexAO.Add(ao1);
+                                    // else if (l == 2) vertexAO.Add(ao2);
+                                    // else vertexAO.Add(ao3);
+
+                                    // // UVs
+                                    // Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
+                                    //                   axis == 1 ? new Vector2(rawV, rawU) :
+                                    //                               new Vector2(rawU, rawV);
+                                    // uvs.Add(uvCoord);
+
+                                    // // Tint e Texture setup (mantido igual)
+                                    // BlockTextureMapping m = blockMappings[(int)bt];
+                                    // bool tint = faceType == BlockFace.Top ? m.tintTop :
+                                    //             faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
+                                    // tintFlags.Add(tint ? (byte)1 : (byte)0);
+
+                                    // Vector2Int tile = faceType == BlockFace.Top ? m.top :
+                                    //                   faceType == BlockFace.Bottom ? m.bottom : m.side;
+
+                                    // // Ajuste de UV para greedy mesh (tiling da textura)
+                                    // uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                     vertices.Add(new Vector3(px, py, pz));
-                                    vertexLights.Add(finalLight);
                                     normals.Add(normal);
 
-                                    // Aplica o AO
-                                    if (l == 0) vertexAO.Add(ao0);
-                                    else if (l == 1) vertexAO.Add(ao1);
-                                    else if (l == 2) vertexAO.Add(ao2);
-                                    else vertexAO.Add(ao3);
-
-                                    // UVs
+                                    // UVs normais
                                     Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
                                                       axis == 1 ? new Vector2(rawV, rawU) :
                                                                   new Vector2(rawU, rawV);
                                     uvs.Add(uvCoord);
 
-                                    // Tint e Texture setup (mantido igual)
+                                    // Descobrindo o Tint da face
                                     BlockTextureMapping m = blockMappings[(int)bt];
                                     bool tint = faceType == BlockFace.Top ? m.tintTop :
                                                 faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
-                                    tintFlags.Add(tint ? (byte)1 : (byte)0);
+
+                                    // ================================================================
+                                    // A MÁGICA AQUI: Processamento Matemático dentro do Burst Compiler!
+                                    // ================================================================
+
+                                    // 1. Pega o AO correto baseado no vértice atual (l)
+                                    byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
+
+                                    // 2. Faz as divisões e conversões (O Burst resolve isso em milissegundos)
+                                    float rawLight = finalLight / 15f;
+                                    float floatTint = tint ? 1f : 0f;
+                                    float floatAO = currentAO / 3f;
+
+                                    // 3. Salva tudo empacotado no Vector4!
+                                    extraUVs.Add(new Vector4(rawLight, floatTint, floatAO, 0f));
+
+                                    // ================================================================
 
                                     Vector2Int tile = faceType == BlockFace.Top ? m.top :
                                                       faceType == BlockFace.Bottom ? m.bottom : m.side;
 
                                     // Ajuste de UV para greedy mesh (tiling da textura)
-                                    // Se quiser que a textura estique, deixe assim. 
-                                    // Se quiser que repita, precisa multiplicar pelo w/h.
-                                    uv2.Add(new Vector2(tile.x * (1f / atlasTilesX) + 0.001f,
-                                                        tile.y * (1f / atlasTilesY) + 0.001f));
+                                    uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                 }
 
                                 // Triângulos (mantido igual)
