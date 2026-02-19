@@ -3,16 +3,7 @@ using UnityEngine;
 using Unity.Burst;
 using Unity.Mathematics;
 using System;
-public enum NoiseLayerType : byte
-{
-    Generic = 0,
-    Continentalness,
-    Peaks,
-    Valleys,
-    Erosion,
-    Temperature,
-    Humidity
-}
+
 
 [Serializable]
 public struct NoiseLayer
@@ -29,12 +20,7 @@ public struct NoiseLayer
     public float exponent;
     public float verticalScale;
     public float ridgeFactor;
-    public bool is3D;  // Novo: true para usar 3D noise (para superfície e caves)
-    public float densityThreshold;  // Novo: threshold para density field (e.g., 0.0 para mais sólido)
-    public float verticalGradient;  // Novo: subtrai y * this para fade com altura (e.g., 0.01f para ilhas flutuantes)
 
-    // novo campo
-    public NoiseLayerType layerType;
 }
 
 /// <summary>

@@ -56,6 +56,15 @@ public class World : MonoBehaviour
     public int caveStride = 4;
     public int maxCaveDepthMultiplier = 1;
 
+    [Header("Cave Rarity Mask")]
+    [Tooltip("Controla o tamanho dos 'bolsões' onde as cavernas podem existir. Valores altos (ex: 200-500) separam mais os sistemas de cavernas.")]
+    public float caveRarityScale = 300f;
+    [Range(-1f, 1f)]
+    [Tooltip("Quanto MAIOR o valor, mais RARAS são as cavernas. Valores negativos geram muitas cavernas.")]
+    public float caveRarityThreshold = 0.3f;
+    public float caveMaskSmoothness = 5f; // Suaviza a transição para não cortar as cavernas retas
+
+
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
     public int baseHeight = 64;
@@ -110,9 +119,6 @@ public class World : MonoBehaviour
 
     public float frameTimeBudgetMS = 4f;
     // Em World.cs (Adicione estas variáveis)
-    private Queue<Chunk> colliderUpdateQueue = new Queue<Chunk>();
-    [Header("Optimization")]
-    public int maxCollidersPerFrame = 1; // Mantenha em 1 para suavidade máxima
     void Awake()
     {
         if (Instance != null && Instance != this)
@@ -540,6 +546,9 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
+            caveRarityScale,       // NOVO
+caveRarityThreshold,   // NOVO
+caveMaskSmoothness,    // NOVO
             nativeEdits,
             nativeTrees,
             treeMargin,
@@ -662,6 +671,9 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
+            caveRarityScale,       // NOVO
+            caveRarityThreshold,   // NOVO
+            caveMaskSmoothness,    // NOVO
             nativeEdits,
             nativeTrees,
             treeMargin,
@@ -1033,7 +1045,6 @@ public class World : MonoBehaviour
             }
         }
     }
-
     private float ComputeCaveNoise(int wx, int wy, int wz)
     {
         float totalCave = 0f;
@@ -1041,6 +1052,7 @@ public class World : MonoBehaviour
 
         for (int i = 0; i < caveLayers.Length; i++)
         {
+            // ... (seu código de loop atual continua igual aqui dentro)
             var layer = caveLayers[i];
             if (!layer.enabled) continue;
 
@@ -1048,18 +1060,37 @@ public class World : MonoBehaviour
             float ny = (float)wy;
             float nz = wz + layer.offset.y;
 
-            float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+            float n1 = MyNoise.OctavePerlin3D(nx, ny, nz, layer) * 2f - 1f;
+            float n2 = MyNoise.OctavePerlin3D(nx + 128.5f, ny + 256.1f, nz + 64.3f, layer) * 2f - 1f;
+
+            float tubeDistSq = (n1 * n1) + (n2 * n2);
+            float tubeCave = Mathf.Max(0f, 1f - (tubeDistSq * 5f));
+
+            float cheeseCave = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
             if (layer.redistributionModifier != 1f || layer.exponent != 1f)
             {
-                sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                cheeseCave = MyNoise.Redistribution(cheeseCave, layer.redistributionModifier, layer.exponent);
             }
-            totalCave += sample * layer.amplitude;
+
+            float finalSample = Mathf.Max(tubeCave, cheeseCave * 0.45f);
+
+            totalCave += finalSample * layer.amplitude;
             sumCaveAmp += math.max(1e-5f, layer.amplitude);
         }
 
-        return (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
-    }
+        float baseCaveResult = (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
 
+        // === NOVA LÓGICA DA MÁSCARA AQUI ===
+        float maskNx = (wx + offsetX) / caveRarityScale;
+        float maskNy = wy / caveRarityScale;
+        float maskNz = (wz + offsetZ) / caveRarityScale;
+
+        // cnoise retorna valores entre aproximadamente -1 e 1
+        float maskVal = noise.cnoise(new float3(maskNx, maskNy, maskNz));
+        float maskWeight = Mathf.Clamp01((maskVal - caveRarityThreshold) * caveMaskSmoothness);
+
+        return baseCaveResult * maskWeight;
+    }
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
         float warpX = 0f;

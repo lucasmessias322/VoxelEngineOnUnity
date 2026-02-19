@@ -53,7 +53,10 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
-        // EDIT: receber NativeArray<BlockEdit> com edits locais (pode ter Length==0)
+        float caveRarityScale,     // NOVO
+float caveRarityThreshold, // NOVO
+float caveMaskSmoothness,  // NOVO
+                           // EDIT: receber NativeArray<BlockEdit> com edits locais (pode ter Length==0)
         NativeArray<BlockEdit> blockEdits,
         // NEW: árvores e margem dinâmica
         NativeArray<TreeInstance> treeInstances,
@@ -115,6 +118,9 @@ public static class MeshGenerator
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
+            caveRarityScale = caveRarityScale,         // NOVO
+            caveRarityThreshold = caveRarityThreshold, // NOVO
+            caveMaskSmoothness = caveMaskSmoothness,   // NOVO
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
@@ -164,6 +170,9 @@ public static class MeshGenerator
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
+        public float caveRarityScale;       // NOVO
+        public float caveRarityThreshold;   // NOVO
+        public float caveMaskSmoothness;    // NOVO
 
         public int CliffTreshold;
 
@@ -178,7 +187,6 @@ public static class MeshGenerator
         public NativeList<byte> vertexLights; // 0..15 por vértice
         public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
         public NativeList<byte> vertexAO;   // ← NOVO
-        // === NOVO ===
         [WriteOnly] public NativeArray<byte> voxelOutput;
         public void Execute()
         {
@@ -446,13 +454,10 @@ public static class MeshGenerator
                             {
                                 bt = BlockType.Bedrock;
                             }
-                            else if (y > h - 50)
-                            {
-                                bt = BlockType.Stone;
-                            }
+
                             else
                             {
-                                bt = BlockType.Deepslate;
+                                bt = BlockType.Stone;
                             }
                             blockTypes[voxelIdx] = bt;
                             solids[voxelIdx] = blockMappings[(int)bt].isSolid;
@@ -539,6 +544,7 @@ public static class MeshGenerator
                             float totalCave = 0f;
                             float sumCaveAmp = 0f;
 
+
                             for (int i = 0; i < caveLayers.Length; i++)
                             {
                                 var layer = caveLayers[i];
@@ -548,19 +554,53 @@ public static class MeshGenerator
                                 float ny = worldY;
                                 float nz = worldZ + layer.offset.y;
 
-                                float sample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+                                // 1. Amostramos o ruído base e convertemos de (0 a 1) para (-1 a 1)
+                                float n1 = MyNoise.OctavePerlin3D(nx, ny, nz, layer) * 2f - 1f;
+
+                                // 2. Amostramos um segundo ruído com um grande deslocamento para criar o cruzamento
+                                // Usamos offsets arbitrários para desalinhar completamente a segunda camada
+                                float n2 = MyNoise.OctavePerlin3D(nx + 128.5f, ny + 256.1f, nz + 64.3f, layer) * 2f - 1f;
+
+                                // 3. O "centro" do túnel é onde ambos n1 e n2 são próximos de 0.
+                                // Usamos a distância ao quadrado para performance.
+                                float tubeDistSq = (n1 * n1) + (n2 * n2);
+
+                                // 4. Invertemos o valor para que o centro do túnel resulte num valor alto (próximo a 1).
+                                // O multiplicador '5f' controla a grossura da parede (maior = túnel mais estreito).
+                                float tubeCave = math.max(0f, 1f - (tubeDistSq * 5f));
+
+                                // 5. Opcional: Mantemos as "bolhas" originais de forma suave para criar salões ("Cheese Caves")
+                                float cheeseCave = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
                                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                                 {
-                                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                                    cheeseCave = MyNoise.Redistribution(cheeseCave, layer.redistributionModifier, layer.exponent);
                                 }
-                                totalCave += sample * layer.amplitude;
+
+                                // Misturamos os túneis com os salões grandes
+                                float finalSample = math.max(tubeCave, cheeseCave * 0.45f); // 0.45 atenua as bolhas para os túneis brilharem mais
+
+                                totalCave += finalSample * layer.amplitude;
                                 sumCaveAmp += math.max(1e-5f, layer.amplitude);
                             }
 
                             if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
+                            // === NOVA LÓGICA DA MÁSCARA AQUI ===
+                            float maskNx = (worldX + offsetX) / caveRarityScale;
+                            float maskNy = worldY / caveRarityScale;
+                            float maskNz = (worldZ + offsetZ) / caveRarityScale;
+
+                            float maskVal = noise.cnoise(new float3(maskNx, maskNy, maskNz));
+
+                            // math.saturate é o equivalente Burst do Mathf.Clamp01
+                            float maskWeight = math.saturate((maskVal - caveRarityThreshold) * caveMaskSmoothness);
+
+                            totalCave *= maskWeight;
+                            // ===================================
 
                             int coarseIdx = cx + cy * coarseStrideX + cz * coarsePlaneSize;
                             coarseCaveNoise[coarseIdx] = totalCave;
+
+
                         }
                     }
                 }
@@ -636,6 +676,9 @@ public static class MeshGenerator
             }
 
         }
+
+
+
         private void FillWaterAboveTerrain(
             NativeArray<int> heightCache,
             NativeArray<BlockType> blockTypes,
