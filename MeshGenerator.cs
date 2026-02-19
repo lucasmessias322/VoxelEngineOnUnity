@@ -772,18 +772,32 @@ float caveMaskSmoothness,  // NOVO
 
                                 bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
 
+
                                 bool isVisible = false;
                                 if (!blockMappings[(int)current].isSolid)
+                                {
                                     isVisible = false;
+                                }
                                 else if (outside)
+                                {
                                     isVisible = true;
+                                }
                                 else
                                 {
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
-                                    if (blockMappings[(int)neighbor].isEmpty) isVisible = true;
-                                    else if (blockMappings[(int)neighbor].isTransparent && !blockMappings[(int)current].isTransparent) isVisible = true;
-                                    else isVisible = !blockMappings[(int)neighbor].isSolid;
+                                    if (blockMappings[(int)neighbor].isEmpty)
+                                    {
+                                        isVisible = true;
+                                    }
+                                    else
+                                    {
+                                        // NOVA LÓGICA: Renderiza a face se o vizinho NÃO for opaco (i.e., se for vazio, transparente ou não-sólido).
+                                        // Isso permite renderizar faces internas entre blocos transparentes (mesmo do mesmo tipo),
+                                        // acumulando a transparência/tint por camada, como no Minecraft para vidros e folhas em "fancy graphics".
+                                        bool neighborOpaque = blockMappings[(int)neighbor].isSolid && !blockMappings[(int)neighbor].isTransparent;
+                                        isVisible = !neighborOpaque;
+                                    }
                                 }
 
                                 if (isVisible)
