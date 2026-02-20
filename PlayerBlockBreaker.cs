@@ -2,14 +2,24 @@
 using UnityEngine;
 
 [RequireComponent(typeof(BlockSelector))]
+[RequireComponent(typeof(AudioSource))]
 public class PlayerBlockBreaker : MonoBehaviour
 {
     public BlockSelector selector;
     public Camera cam;
     [Header("Place settings")]
     public BlockType placeBlockType = BlockType.Stone; // tipo a ser colocado (ajuste no Inspector)
+
+    private AudioSource audioSource;
+    public AudioClip placeBlockClip;
+    public AudioClip breakBlockClip;
+
+
+
+
     void Awake()
     {
+        audioSource = GetComponent<AudioSource>();
         if (selector == null) selector = GetComponent<BlockSelector>();
         if (cam == null && selector != null) cam = selector.cam;
     }
@@ -34,6 +44,17 @@ public class PlayerBlockBreaker : MonoBehaviour
                 Debug.Log($"Selected block type for placing: {placeBlockType}");
             }
         }
+
+
+        HandleBreakBlock();
+        HandlePlaceBlock();
+
+
+
+    }
+
+    void HandleBreakBlock()
+    {
         if (Input.GetMouseButtonDown(0)) // clique esquerdo -> quebrar
         {
             Vector3Int sel = selector.GetSelectedBlock();
@@ -53,60 +74,61 @@ public class PlayerBlockBreaker : MonoBehaviour
                 Debug.Log($"Break request at {sel} -> success");
 
                 Debug.Log($"Break request at {sel} -> queued");
+
+                audioSource.PlayOneShot(breakBlockClip);
             }
         }
-
-        // Colocar bloco (botão direito) - replace no seu PlayerBlockBreaker
-        if (Input.GetMouseButtonDown(1))
-        {
-            Ray ray = new Ray(cam.transform.position, cam.transform.forward);
-
-            if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
-            {
-                // bloco atingido (mesma lógica do selector)
-                Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point - hit.normal * 0.01f);
-
-                // conversão segura da normal -> inteiro (-1,0,1)
-                Vector3Int normalInt = new Vector3Int(
-                    Mathf.RoundToInt(hit.normal.x),
-                    Mathf.RoundToInt(hit.normal.y),
-                    Mathf.RoundToInt(hit.normal.z)
-                );
-
-                Vector3Int placePos = targetBlock + normalInt;
-
-                Debug.Log($"[Place] hit.point={hit.point} normal={hit.normal} target={targetBlock} normalInt={normalInt} placePos={placePos}");
-
-                // proteção Y
-                if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
-                {
-                    Debug.Log("[Place] posição inválida Y");
-                    return;
-                }
-
-
-                Vector3 playerPos = World.Instance.player.position;
-                Vector3Int playerBlock = Vector3Int.FloorToInt(playerPos);
-                if (placePos == playerBlock + Vector3Int.up)
-                {
-                    Debug.Log("[Place] impedido: na cabeça do jogador");
-                    return;
-                }
-
-                // Inside the if (Input.GetMouseButtonDown(1)) block, replace the existing check:
-                BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-                if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
-                {
-                    Debug.Log($"[Place] local já ocupado por {blockAtPlacePos}");
-                    return;
-                }
-
-                // Proceed to place
-                World.Instance.SetBlockAt(placePos, placeBlockType);
-                Debug.Log($"[Place] requested {placeBlockType} at {placePos}");
-            }
-        }
-
-
     }
+void HandlePlaceBlock()
+{
+    if (Input.GetMouseButtonDown(1))
+    {
+        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+
+        if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
+        {
+            // 🔹 Cálculo mais robusto do bloco atingido
+            Vector3Int normalInt = new Vector3Int(
+                Mathf.RoundToInt(hit.normal.x),
+                Mathf.RoundToInt(hit.normal.y),
+                Mathf.RoundToInt(hit.normal.z)
+            );
+
+            Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point) - normalInt;
+            Vector3Int placePos = targetBlock + normalInt;
+
+            // 🔹 Proteção Y
+            if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
+                return;
+
+            // 🔹 Verifica se já existe bloco sólido
+            BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
+            if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
+                return;
+
+            // ================================
+            // 🔥 VERIFICAÇÃO PROFISSIONAL
+            // ================================
+
+            Vector3 blockCenter = placePos + Vector3.one * 0.5f;
+            Vector3 halfExtents = Vector3.one * 0.5f;
+
+            Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
+
+            foreach (var col in hits)
+            {
+                if (col.transform == transform)
+                {
+                    // Está colidindo com o player
+                    return;
+                }
+            }
+
+            // ================================
+
+            World.Instance.SetBlockAt(placePos, placeBlockType);
+            audioSource.PlayOneShot(placeBlockClip);
+        }
+    }
+}
 }

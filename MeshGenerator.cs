@@ -1,5 +1,3 @@
-
-
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -24,7 +22,7 @@ public static class MeshGenerator
         public int canopyHeight;
     }
 
-    // EDIT: struct para representar uma edição (posição world + tipo do bloco)
+    // struct para representar uma edição (posição world + tipo do bloco)
     public struct BlockEdit
     {
         public int x;
@@ -33,17 +31,13 @@ public static class MeshGenerator
         public int type; // enum BlockType como int
     }
 
-
     public static void ScheduleMeshJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
         WarpLayer[] warpLayersArr,
-
         NoiseLayer[] caveLayersArr,
-
         BlockTextureMapping[] blockMappingsArr,
         int baseHeight,
-
         float globalOffsetX,
         float globalOffsetZ,
         int atlasTilesX,
@@ -53,19 +47,16 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
-        float caveRarityScale,     // NOVO
-float caveRarityThreshold, // NOVO
-float caveMaskSmoothness,  // NOVO
-                           // EDIT: receber NativeArray<BlockEdit> com edits locais (pode ter Length==0)
+        float caveRarityScale,
+        float caveRarityThreshold,
+        float caveMaskSmoothness,
         NativeArray<BlockEdit> blockEdits,
-        // NEW: árvores e margem dinâmica
         NativeArray<TreeInstance> treeInstances,
         int treeMargin,
-        int borderSize,        // NOVO: tamanho do border
+        int borderSize,
         int maxTreeRadius,
         int CliffTreshold,
-    // === NOVO: saída de voxels ===
-    NativeArray<byte> voxelOutput,
+        NativeArray<byte> voxelOutput,
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -74,198 +65,204 @@ float caveMaskSmoothness,  // NOVO
         out NativeList<Vector2> uvs,
         out NativeList<Vector2> uv2,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,  // Novo: adicione isso
+        out NativeList<byte> vertexLights,
         out NativeList<byte> tintFlags,
         out NativeList<byte> vertexAO,
         out NativeList<Vector4> extraUVs
-
-
-
     )
     {
+        // 1. Alocações Iniciais de Configuração
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         NativeArray<NoiseLayer> nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
         NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
 
+        // 2. Alocações das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-
         normals = new NativeList<Vector3>(4096, Allocator.TempJob);
-        // Aloque a nova lista para o Vector4
         extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);  // Novo: aloque aqui (4 verts por face)
+        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);
         tintFlags = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);   // ← NOVO
-        // UVs
+        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);
         uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
-        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob); // NOVO: canal 1
-        var job = new ChunkMeshJob
+        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
+
+        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
+        int heightSize = SizeX + 2 * borderSize;
+        int totalHeightPoints = heightSize * heightSize;
+        int voxelSizeX = SizeX + 2 * borderSize;
+        int voxelSizeZ = SizeZ + 2 * borderSize;
+        int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
+
+        NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
+        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
+        NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
+        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+
+        // ==========================================
+        // JOB 1: Geração de Dados (Terreno)
+        // ==========================================
+        var dataJob = new ChunkDataJob
         {
             coord = coord,
             noiseLayers = nativeNoiseLayers,
             warpLayers = nativeWarpLayers,
-
             caveLayers = nativeCaveLayers,
             blockMappings = nativeBlockMappings,
-            baseHeight = baseHeight,
+            blockEdits = blockEdits,
+            treeInstances = treeInstances,
 
+            baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
-            atlasTilesX = atlasTilesX,
-            atlasTilesY = atlasTilesY,
-            generateSides = generateSides,
             seaLevel = seaLevel,
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
-            caveRarityScale = caveRarityScale,         // NOVO
-            caveRarityThreshold = caveRarityThreshold, // NOVO
-            caveMaskSmoothness = caveMaskSmoothness,   // NOVO
+            caveRarityScale = caveRarityScale,
+            caveRarityThreshold = caveRarityThreshold,
+            caveMaskSmoothness = caveMaskSmoothness,
+            treeMargin = treeMargin,
+            border = borderSize,
+            maxTreeRadius = maxTreeRadius,
+            CliffTreshold = CliffTreshold,
+
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            voxelOutput = voxelOutput
+        };
+        JobHandle dataHandle = dataJob.Schedule(); // Inicia sem dependências
+
+        // ==========================================
+        // JOB 2: Iluminação
+        // ==========================================
+        var lightJob = new ChunkLightingJob
+        {
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            blockMappings = nativeBlockMappings,
+
+            voxelSizeX = voxelSizeX,
+            voxelSizeZ = voxelSizeZ,
+            totalVoxels = totalVoxels,
+            voxelPlaneSize = voxelSizeX * SizeY,
+            SizeY = SizeY
+        };
+        // Só arranca quando o DataJob terminar
+        JobHandle lightHandle = lightJob.Schedule(dataHandle);
+
+        // ==========================================
+        // JOB 3: Geração da Malha (Mesh)
+        // ==========================================
+        var meshJob = new ChunkMeshJob
+        {
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            heightCache = heightCache,
+            blockMappings = nativeBlockMappings,
+
+            border = borderSize,
+            atlasTilesX = atlasTilesX,
+            atlasTilesY = atlasTilesY,
+            generateSides = generateSides,
+
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             uvs = uvs,
-            uv2 = uv2, // <- passe para o job
+            uv2 = uv2,
             normals = normals,
             extraUVs = extraUVs,
             vertexLights = vertexLights,
-            tintFlags = tintFlags, // Novo: atribua ao job
-            vertexAO = vertexAO,   // ← NOVO
-            blockEdits = blockEdits,       // EDIT: atribui edits ao job
-            treeInstances = treeInstances, // NEW
-            treeMargin = treeMargin,       // NEW
-            border = borderSize,              // NOVO
-            maxTreeRadius = maxTreeRadius,    // NOVO
-            CliffTreshold = CliffTreshold,
-            // === NOVO ===
-            voxelOutput = voxelOutput,
-
-
+            tintFlags = tintFlags,
+            vertexAO = vertexAO
         };
-
-        handle = job.Schedule();
+        // Só arranca quando o LightJob terminar. Retornamos o Handle final.
+        handle = meshJob.Schedule(lightHandle);
     }
 
+    // =========================================================================
+    // JOB 1: CHUNK DATA JOB (Gera Terreno, Cavernas, Água, Árvores)
+    // =========================================================================
     [BurstCompile]
-    private struct ChunkMeshJob : IJob
+    private struct ChunkDataJob : IJob
     {
         public Vector2Int coord;
-        [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
-        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
-        [ReadOnly] public NativeArray<NoiseLayer> caveLayers;       // ← movido para cá
-        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-        [ReadOnly] public NativeArray<BlockEdit> blockEdits; // EDIT: lista de edits aplicáveis ao chunk
-        [ReadOnly] public NativeArray<TreeInstance> treeInstances; // NEW
-        public int treeMargin; // NEW
-        public int border;                    // NOVO
-        public int maxTreeRadius;             // NOVO
-        public int baseHeight;
 
+        // DeallocateOnJobCompletion limpa estes arrays mal este Job termina, 
+        // porque não são precisos nos Jobs de Luz ou Malha.
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<WarpLayer> warpLayers;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> caveLayers;
+
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+        [ReadOnly] public NativeArray<BlockEdit> blockEdits;
+        [ReadOnly] public NativeArray<TreeInstance> treeInstances;
+
+        public int treeMargin;
+        public int border;
+        public int maxTreeRadius;
+        public int baseHeight;
         public float offsetX;
         public float offsetZ;
-        public int atlasTilesX;
-        public int atlasTilesY;
-        public bool generateSides;
         public float seaLevel;
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
-        public float caveRarityScale;       // NOVO
-        public float caveRarityThreshold;   // NOVO
-        public float caveMaskSmoothness;    // NOVO
-
+        public float caveRarityScale;
+        public float caveRarityThreshold;
+        public float caveMaskSmoothness;
         public int CliffTreshold;
 
-        public NativeList<Vector3> vertices;
-        public NativeList<int> opaqueTriangles;
-        public NativeList<int> waterTriangles;
-        public NativeList<int> transparentTriangles;
-
-        public NativeList<Vector2> uvs;
-        public NativeList<Vector2> uv2; // UV channel 1: tile base (uMin, vMin) normalizado
-        public NativeList<Vector3> normals;
-        public NativeList<Vector4> extraUVs;
-        public NativeList<byte> vertexLights; // 0..15 por vértice
-        public NativeList<byte> tintFlags;  // NOVO: (WriteOnly implícito via Add)
-        public NativeList<byte> vertexAO;   // ← NOVO
+        // Arrays de output para os próximos Jobs
+        public NativeArray<int> heightCache;
+        public NativeArray<BlockType> blockTypes;
+        public NativeArray<bool> solids;
         [WriteOnly] public NativeArray<byte> voxelOutput;
+
         public void Execute()
         {
-            float invAtlasTilesX = 1f / atlasTilesX;
-            float invAtlasTilesY = 1f / atlasTilesY;
             int heightSize = SizeX + 2 * border;
             int totalHeightPoints = heightSize * heightSize;
-
-            NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.Temp);
-
-            // --- LOOP DO HEIGHTMAP OTIMIZADO ---
-            // Agora chamamos a função GetSurfaceHeight diretamente no loop
             int heightStride = heightSize;
 
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+
+            // 1. Heightmap
             for (int i = 0; i < totalHeightPoints; i++)
             {
                 int lx = i % heightStride;
                 int lz = i / heightStride;
-
                 int realLx = lx - border;
                 int realLz = lz - border;
-
                 int worldX = coord.x * SizeX + realLx;
                 int worldZ = coord.y * SizeZ + realLz;
-
-                // Chama a nova função criada abaixo
                 heightCache[i] = GetSurfaceHeight(worldX, worldZ);
             }
 
-            // Passo 2: Popular voxels (blockTypes e solids, flattened)
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-
-            NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.Temp);
-            NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.Temp);
-
+            // 2. Popular voxels (terreno, cavernas, água)
             PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
-
             GenerateCaves(heightCache, blockTypes, solids);
+            FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            FillWaterAboveTerrain(
-                heightCache,
-                blockTypes,
-                solids,
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize
-            );
-
-
-
+            // 3. Árvores e Edições
             TreePlacement.ApplyTreeInstancesToVoxels(
-                blockTypes,
-                solids,
-                blockMappings,
-                treeInstances,
-                coord,
-                border,           // o mesmo border que você usa
-                SizeX,            // 16 normalmente
-                SizeZ,            // 16 normalmente
-                SizeY,            // 256 normalmente
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize,
-                heightCache,  // NOVO: passe heightCache
-                heightStride  // NOVO: passe stride
+                blockTypes, solids, blockMappings, treeInstances, coord, border,
+                SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
             );
 
-            // EDIT: aplicar edits vindos do World (substitui blocos na posição world)
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            // === NOVO: copiar para voxelOutput COM CAST PARA BYTE ===
+            // 4. Copiar para voxelOutput COM CAST PARA BYTE
             if (voxelOutput.IsCreated && voxelOutput.Length == SizeX * SizeY * SizeZ)
             {
                 int dstIdx = 0;
@@ -282,26 +279,8 @@ float caveMaskSmoothness,  // NOVO
                     }
                 }
             }
-
-
-            // depois:
-            NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.Temp);
-            LightingCalculator.CalculateLighting(blockTypes, solids, light, blockMappings, voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY);
-
-            // Passo 3: Gerar mesh (ao adicionar vértices guardamos o valor de luz por vértice)
-            GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
-
-            // Limpeza
-            light.Dispose();
-            heightCache.Dispose();
-            blockTypes.Dispose();
-            solids.Dispose();
         }
 
-
-        // ==========================================
-        //  NOVA FUNÇÃO PARA CALCULAR ALTURA
-        // ==========================================
         private int GetSurfaceHeight(int worldX, int worldZ)
         {
             // === Domain Warping ===
@@ -367,10 +346,10 @@ float caveMaskSmoothness,  // NOVO
                 sumAmp = 1f;
             }
 
-            // Cálculo final
             float centered = totalNoise - sumAmp * 0.5f;
             return math.clamp(baseHeight + (int)math.floor(centered), 1, SizeY - 1);
         }
+
         private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
             if (blockEdits.Length == 0) return;
@@ -382,7 +361,7 @@ float caveMaskSmoothness,  // NOVO
             for (int i = 0; i < blockEdits.Length; i++)
             {
                 var e = blockEdits[i];
-                int localX = e.x - baseWorldX; // 0..15 expected
+                int localX = e.x - baseWorldX;
                 int localZ = e.z - baseWorldZ;
                 int y = e.y;
 
@@ -394,7 +373,6 @@ float caveMaskSmoothness,  // NOVO
                     int idx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
                     BlockType bt = (BlockType)math.clamp(e.type, 0, 255);
                     blockTypes[idx] = bt;
-                    // atualizar solid flag a partir do mapping
                     BlockTextureMapping mapping = blockMappings[(int)bt];
                     solids[idx] = mapping.isSolid;
                 }
@@ -403,11 +381,9 @@ float caveMaskSmoothness,  // NOVO
 
         private void PopulateTerrainColumns(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
-
             int voxelPlaneSize = voxelSizeX * SizeY;
             int heightStride = voxelSizeX;
 
-            // Preencher sólidos iniciais e ar acima
             for (int lx = -border; lx < SizeX + border; lx++)
             {
                 for (int lz = -border; lz < SizeZ + border; lz++)
@@ -418,13 +394,9 @@ float caveMaskSmoothness,  // NOVO
                     int h = heightCache[cacheIdx];
                     bool isBeachArea = (h <= seaLevel + 2);
 
-                    // 🔥 NOVO: detectar cliff
                     bool isCliff = IsCliff(heightCache, cacheX, cacheZ, heightStride, CliffTreshold);
-                    int mountainStoneHeight = baseHeight + 70; // ajuste como quiser
+                    int mountainStoneHeight = baseHeight + 70;
                     bool isHighMountain = h >= mountainStoneHeight;
-
-
-
 
                     for (int y = 0; y < SizeY; y++)
                     {
@@ -435,33 +407,19 @@ float caveMaskSmoothness,  // NOVO
                             BlockType bt;
                             if (y == h)
                             {
-                                if (isHighMountain)
-                                {
-                                    bt = BlockType.Stone; // ⛰️ topo de montanha alta
-                                }
-                                else if (isCliff)
-                                {
-                                    bt = BlockType.Stone;
-                                }
-                                else
-                                {
-                                    bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
-                                }
-
+                                if (isHighMountain) bt = BlockType.Stone;
+                                else if (isCliff) bt = BlockType.Stone;
+                                else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
                             }
                             else if (y > h - 4)
                             {
-                                if (isCliff)
-                                    bt = BlockType.Stone;        // 👈 cliff wall
-                                else
-                                    bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                                if (isCliff) bt = BlockType.Stone;
+                                else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
                             }
-
                             else if (y <= 2)
                             {
                                 bt = BlockType.Bedrock;
                             }
-
                             else
                             {
                                 bt = BlockType.Stone;
@@ -477,7 +435,6 @@ float caveMaskSmoothness,  // NOVO
                     }
                 }
             }
-
         }
 
         private bool IsCliff(NativeArray<int> heightCache, int x, int z, int heightStride, int threshold = 2)
@@ -488,7 +445,6 @@ float caveMaskSmoothness,  // NOVO
             int centerIdx = x + z * heightStride;
             int h = heightCache[centerIdx];
 
-            // Usa centerIdx para evitar multiplicar tudo de novo
             int hN = heightCache[centerIdx + heightStride];
             int hS = heightCache[centerIdx - heightStride];
             int hE = heightCache[centerIdx + 1];
@@ -500,6 +456,7 @@ float caveMaskSmoothness,  // NOVO
 
             return maxDiff >= threshold;
         }
+
         private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -509,6 +466,7 @@ float caveMaskSmoothness,  // NOVO
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
+
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
                 int stride = math.max(1, caveStride);
@@ -541,7 +499,6 @@ float caveMaskSmoothness,  // NOVO
                             float totalCave = 0f;
                             float sumCaveAmp = 0f;
 
-
                             for (int i = 0; i < caveLayers.Length; i++)
                             {
                                 var layer = caveLayers[i];
@@ -551,58 +508,42 @@ float caveMaskSmoothness,  // NOVO
                                 float ny = worldY;
                                 float nz = worldZ + layer.offset.y;
 
-                                // 1. Amostramos o ruído base e convertemos de (0 a 1) para (-1 a 1)
                                 float n1 = MyNoise.OctavePerlin3D(nx, ny, nz, layer) * 2f - 1f;
-
-                                // 2. Amostramos um segundo ruído com um grande deslocamento para criar o cruzamento
-                                // Usamos offsets arbitrários para desalinhar completamente a segunda camada
                                 float n2 = MyNoise.OctavePerlin3D(nx + 128.5f, ny + 256.1f, nz + 64.3f, layer) * 2f - 1f;
 
-                                // 3. O "centro" do túnel é onde ambos n1 e n2 são próximos de 0.
-                                // Usamos a distância ao quadrado para performance.
                                 float tubeDistSq = (n1 * n1) + (n2 * n2);
-
-                                // 4. Invertemos o valor para que o centro do túnel resulte num valor alto (próximo a 1).
-                                // O multiplicador '5f' controla a grossura da parede (maior = túnel mais estreito).
                                 float tubeCave = math.max(0f, 1f - (tubeDistSq * 5f));
 
-                                // 5. Opcional: Mantemos as "bolhas" originais de forma suave para criar salões ("Cheese Caves")
                                 float cheeseCave = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
                                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                                 {
                                     cheeseCave = MyNoise.Redistribution(cheeseCave, layer.redistributionModifier, layer.exponent);
                                 }
 
-                                // Misturamos os túneis com os salões grandes
-                                float finalSample = math.max(tubeCave, cheeseCave * 0.45f); // 0.45 atenua as bolhas para os túneis brilharem mais
+                                float finalSample = math.max(tubeCave, cheeseCave * 0.45f);
 
                                 totalCave += finalSample * layer.amplitude;
                                 sumCaveAmp += math.max(1e-5f, layer.amplitude);
                             }
 
                             if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
-                            // === NOVA LÓGICA DA MÁSCARA AQUI ===
+
                             float maskNx = (worldX + offsetX) / caveRarityScale;
                             float maskNy = worldY / caveRarityScale;
                             float maskNz = (worldZ + offsetZ) / caveRarityScale;
 
                             float maskVal = noise.cnoise(new float3(maskNx, maskNy, maskNz));
-
-                            // math.saturate é o equivalente Burst do Mathf.Clamp01
                             float maskWeight = math.saturate((maskVal - caveRarityThreshold) * caveMaskSmoothness);
 
                             totalCave *= maskWeight;
-                            // ===================================
 
                             int coarseIdx = cx + cy * coarseStrideX + cz * coarsePlaneSize;
                             coarseCaveNoise[coarseIdx] = totalCave;
-
-
                         }
                     }
                 }
 
-                // Interpolação para voxels
+                // Interpolação
                 for (int lx = -border; lx < SizeX + border; lx++)
                 {
                     for (int lz = -border; lz < SizeZ + border; lz++)
@@ -616,10 +557,8 @@ float caveMaskSmoothness,  // NOVO
 
                         for (int y = 0; y <= maxCaveY; y++)
                         {
-                            // ==========================================
-                            // CORREÇÃO: Protege os primeiros 20 blocos (Bedrock)
-                            // ==========================================
-                            if (y <= 20) continue;
+                            if (y <= 20) continue; // Protege o Bedrock
+
                             int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
                             if (!solids[voxelIdx]) continue;
 
@@ -672,21 +611,11 @@ float caveMaskSmoothness,  // NOVO
                         }
                     }
                 }
-
                 coarseCaveNoise.Dispose();
             }
-
         }
 
-
-
-        private void FillWaterAboveTerrain(
-            NativeArray<int> heightCache,
-            NativeArray<BlockType> blockTypes,
-            NativeArray<bool> solids,
-            int voxelSizeX,
-            int voxelSizeZ,
-            int voxelPlaneSize)
+        private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             int heightStride = SizeX + 2 * border;
             for (int lx = -border; lx < SizeX + border; lx++)
@@ -708,19 +637,87 @@ float caveMaskSmoothness,  // NOVO
             }
         }
 
+        private static int FloorDiv(int a, int b)
+        {
+            int q = a / b;
+            int r = a % b;
+            if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
+            return q;
+        }
+    }
 
-        private void GenerateMesh(
-            NativeArray<int> heightCache,
-            NativeArray<BlockType> blockTypes,
-            NativeArray<bool> solids,
-            NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
+    // =========================================================================
+    // JOB 2: CHUNK LIGHTING JOB (Calcula apenas a Iluminação)
+    // =========================================================================
+    [BurstCompile]
+    private struct ChunkLightingJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<bool> solids;
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+
+        public NativeArray<byte> light;
+
+        public int voxelSizeX;
+        public int voxelSizeZ;
+        public int totalVoxels;
+        public int voxelPlaneSize;
+        public int SizeY;
+
+        public void Execute()
+        {
+            LightingCalculator.CalculateLighting(
+                blockTypes, solids, light, blockMappings,
+                voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY
+            );
+        }
+    }
+
+    // =========================================================================
+    // JOB 3: CHUNK MESH JOB (Greedy Meshing e Arrays Visuais)
+    // =========================================================================
+    [BurstCompile]
+    private struct ChunkMeshJob : IJob
+    {
+        // DeallocateOnJobCompletion limpa todos estes arrays no fim da malha! 
+        // Previne memory leaks e não precisas de Dispose() manual.
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<int> heightCache;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockType> blockTypes;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<bool> solids;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<byte> light;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+
+        public int border;
+        public int atlasTilesX;
+        public int atlasTilesY;
+        public bool generateSides;
+
+        public NativeList<Vector3> vertices;
+        public NativeList<int> opaqueTriangles;
+        public NativeList<int> waterTriangles;
+        public NativeList<int> transparentTriangles;
+        public NativeList<Vector2> uvs;
+        public NativeList<Vector2> uv2;
+        public NativeList<Vector3> normals;
+        public NativeList<Vector4> extraUVs;
+        public NativeList<byte> vertexLights;
+        public NativeList<byte> tintFlags;
+        public NativeList<byte> vertexAO;
+
+        public void Execute()
+        {
+            float invAtlasTilesX = 1f / atlasTilesX;
+            float invAtlasTilesY = 1f / atlasTilesY;
+
+            GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+        }
+
+        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
 
-            // Máscara agora guarda: BlockType (12 bits) | Light (4 bits) | AO (8 bits)
-            // Total 24 bits usados de um int (32 bits), então cabe tranquilo.
             int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
             NativeArray<int> mask = new NativeArray<int>(maxMask, Allocator.Temp);
 
@@ -743,13 +740,11 @@ float caveMaskSmoothness,  // NOVO
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
                     BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
 
-                    // Pré-cálculo dos Steps para usar dentro do loop da máscara
                     Vector3Int stepU = new Vector3Int(u == 0 ? 1 : 0, u == 1 ? 1 : 0, u == 2 ? 1 : 0);
                     Vector3Int stepV = new Vector3Int(v == 0 ? 1 : 0, v == 1 ? 1 : 0, v == 2 ? 1 : 0);
 
                     for (int n = minN; n < maxN; n++)
                     {
-                        // 1. Preenchimento da Máscara COM CÁLCULO DE AO
                         for (int j = 0; j < sizeV; j++)
                         {
                             for (int i = 0; i < sizeU; i++)
@@ -772,7 +767,6 @@ float caveMaskSmoothness,  // NOVO
 
                                 bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
 
-
                                 bool isVisible = false;
                                 if (!blockMappings[(int)current].isSolid)
                                 {
@@ -792,9 +786,6 @@ float caveMaskSmoothness,  // NOVO
                                     }
                                     else
                                     {
-                                        // NOVA LÓGICA: Renderiza a face se o vizinho NÃO for opaco (i.e., se for vazio, transparente ou não-sólido).
-                                        // Isso permite renderizar faces internas entre blocos transparentes (mesmo do mesmo tipo),
-                                        // acumulando a transparência/tint por camada, como no Minecraft para vidros e folhas em "fancy graphics".
                                         bool neighborOpaque = blockMappings[(int)neighbor].isSolid && !blockMappings[(int)neighbor].isTransparent;
                                         isVisible = !neighborOpaque;
                                     }
@@ -804,25 +795,18 @@ float caveMaskSmoothness,  // NOVO
                                 {
                                     byte faceLight = outside ? (byte)15 : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
 
-                                    // --- MUDANÇA: Calcular AO AGORA e salvar na máscara ---
-
                                     int aoPlaneN = n + normalSign;
                                     int ax = (u == 0 ? i : v == 0 ? j : aoPlaneN);
                                     int ay = (u == 1 ? i : v == 1 ? j : aoPlaneN);
                                     int az = (u == 2 ? i : v == 2 ? j : aoPlaneN);
                                     Vector3Int aoBase = new Vector3Int(ax, ay, az);
 
-                                    // Calcula AO dos 4 cantos desta face específica (1x1)
-                                    // Ordem: 0=BL, 1=BR, 2=TR, 3=TL (relativo ao plano UV)
                                     byte ao0 = GetVertexAO(aoBase, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                     byte ao1 = GetVertexAO(aoBase, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                     byte ao2 = GetVertexAO(aoBase, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                     byte ao3 = GetVertexAO(aoBase, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-                                    // Empacota os 4 AOs em 8 bits (2 bits cada, já que valor vai de 0 a 3)
                                     int packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
-
-                                    // A máscara agora contém TUDO que precisa ser igual para mesclar
                                     mask[i + j * sizeU] = (int)current | ((int)faceLight << 12) | (packedAO << 16);
                                 }
                                 else
@@ -832,7 +816,6 @@ float caveMaskSmoothness,  // NOVO
                             }
                         }
 
-                        // 2. Greedy Meshing Loop
                         for (int j = 0; j < sizeV; j++)
                         {
                             int i = 0;
@@ -845,9 +828,6 @@ float caveMaskSmoothness,  // NOVO
                                     continue;
                                 }
 
-                                // Calcula largura (w)
-                                // O loop verifica se "mask[...] == packedData". 
-                                // Como packedData agora inclui o AO, ele SÓ vai crescer se o AO for IDÊNTICO.
                                 int w = 1;
                                 while (i + w < sizeU && mask[i + w + j * sizeU] == packedData) w++;
 
@@ -867,19 +847,14 @@ float caveMaskSmoothness,  // NOVO
                                     h++;
                                 }
 
-                                // --- Extração de dados ---
                                 BlockType bt = (BlockType)(packedData & 0xFFF);
                                 byte finalLight = (byte)((packedData >> 12) & 0xF);
 
-                                // --- MUDANÇA: Desempacotar o AO ---
                                 int aoPackedData = (packedData >> 16) & 0xFF;
                                 byte ao0 = (byte)(aoPackedData & 3);
                                 byte ao1 = (byte)((aoPackedData >> 2) & 3);
                                 byte ao2 = (byte)((aoPackedData >> 4) & 3);
                                 byte ao3 = (byte)((aoPackedData >> 6) & 3);
-
-                                // Não precisamos mais recalcular GetVertexAO aqui, pois já temos o valor correto
-                                // para todo o bloco greedymeshed (já que todos são iguais)
 
                                 int vIndex = vertices.Length;
 
@@ -898,73 +873,32 @@ float caveMaskSmoothness,  // NOVO
 
                                     if (bt == BlockType.Water && axis == 1 && normalSign > 0) py -= 0.15f;
 
-                                    // vertices.Add(new Vector3(px, py, pz));
-                                    // // vertexLights.Add(finalLight);
-
-                                    // normals.Add(normal);
-
-                                    // // Aplica o AO
-                                    // if (l == 0) vertexAO.Add(ao0);
-                                    // else if (l == 1) vertexAO.Add(ao1);
-                                    // else if (l == 2) vertexAO.Add(ao2);
-                                    // else vertexAO.Add(ao3);
-
-                                    // // UVs
-                                    // Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
-                                    //                   axis == 1 ? new Vector2(rawV, rawU) :
-                                    //                               new Vector2(rawU, rawV);
-                                    // uvs.Add(uvCoord);
-
-                                    // // Tint e Texture setup (mantido igual)
-                                    // BlockTextureMapping m = blockMappings[(int)bt];
-                                    // bool tint = faceType == BlockFace.Top ? m.tintTop :
-                                    //             faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
-                                    // tintFlags.Add(tint ? (byte)1 : (byte)0);
-
-                                    // Vector2Int tile = faceType == BlockFace.Top ? m.top :
-                                    //                   faceType == BlockFace.Bottom ? m.bottom : m.side;
-
-                                    // // Ajuste de UV para greedy mesh (tiling da textura)
-                                    // uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                     vertices.Add(new Vector3(px, py, pz));
                                     normals.Add(normal);
 
-                                    // UVs normais
                                     Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
                                                       axis == 1 ? new Vector2(rawV, rawU) :
                                                                   new Vector2(rawU, rawV);
                                     uvs.Add(uvCoord);
 
-                                    // Descobrindo o Tint da face
                                     BlockTextureMapping m = blockMappings[(int)bt];
                                     bool tint = faceType == BlockFace.Top ? m.tintTop :
                                                 faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
 
-                                    // ================================================================
-                                    // A MÁGICA AQUI: Processamento Matemático dentro do Burst Compiler!
-                                    // ================================================================
-
-                                    // 1. Pega o AO correto baseado no vértice atual (l)
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
 
-                                    // 2. Faz as divisões e conversões (O Burst resolve isso em milissegundos)
                                     float rawLight = finalLight / 15f;
                                     float floatTint = tint ? 1f : 0f;
                                     float floatAO = currentAO / 3f;
 
-                                    // 3. Salva tudo empacotado no Vector4!
                                     extraUVs.Add(new Vector4(rawLight, floatTint, floatAO, 0f));
-
-                                    // ================================================================
 
                                     Vector2Int tile = faceType == BlockFace.Top ? m.top :
                                                       faceType == BlockFace.Bottom ? m.bottom : m.side;
 
-                                    // Ajuste de UV para greedy mesh (tiling da textura)
                                     uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                 }
 
-                                // Triângulos (mantido igual)
                                 NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles :
                                                        blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
 
@@ -979,7 +913,6 @@ float caveMaskSmoothness,  // NOVO
                                     tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
                                 }
 
-                                // Limpar máscara
                                 for (int y0 = 0; y0 < h; y0++)
                                     for (int x0 = 0; x0 < w; x0++)
                                         mask[i + x0 + (j + y0) * sizeU] = 0;
@@ -993,45 +926,23 @@ float caveMaskSmoothness,  // NOVO
             mask.Dispose();
         }
 
-
-        // =========================================================================================
-        // FUNÇÃO DE AO CORRIGIDA
-        // =========================================================================================
         private bool IsOccluder(int x, int y, int z, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            // Se sair do array (incluindo borders), consideramos oclusor para evitar buracos de luz nas bordas do mapa
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
-                return false; // Retornar FALSE aqui deixa as bordas claras. Retornar TRUE deixa bordas escuras.
-                              // Como você tem BORDER, false é melhor pois a borda real já está em 'solids'.
+                return false;
 
             int idx = x + y * voxelSizeX + z * voxelPlaneSize;
             return solids[idx];
         }
 
-        private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2,
-                                 NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            // Verifica os 3 blocos vizinhos ao canto (side1, side2, corner)
             bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
             bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
             bool c = IsOccluder(pos.x + d1.x + d2.x, pos.y + d1.y + d2.y, pos.z + d1.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            // Lógica clássica de Voxel:
-            // Se os dois lados (s1 e s2) estão bloqueados, o canto está totalmente ocluso.
-            // Isso também previne artefatos de anisotropia.
             if (s1 && s2) return 0;
-
-            // Cálculo do nível de AO (0 a 3, onde 3 é claro e 0 é escuro)
             return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
-        }
-
-
-        private static int FloorDiv(int a, int b)
-        {
-            int q = a / b;
-            int r = a % b;
-            if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
-            return q;
         }
     }
 

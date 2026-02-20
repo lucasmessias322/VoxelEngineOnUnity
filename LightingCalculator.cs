@@ -17,6 +17,7 @@ public static class LightingCalculator
         int SizeY = 256
     )
     {
+        
         // 1. Preparação de tabelas de consulta (Lookup Tables)
         int mapCount = blockMappings.Length;
         NativeArray<byte> opacity = new NativeArray<byte>(mapCount, Allocator.Temp);

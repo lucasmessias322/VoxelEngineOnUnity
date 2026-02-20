@@ -19,6 +19,10 @@ public class BlockDataSO : ScriptableObject
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
 
+    
+    
+
+
     /// <summary>
     /// Inicializa o array de mapeamentos.
     /// </summary>
