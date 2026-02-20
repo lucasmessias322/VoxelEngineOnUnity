@@ -33,6 +33,27 @@ public struct TreeSettings
     public int seed;
 }
 
+
+public static class LightUtils
+{
+    // Junta as duas luzes (0-15) em um único byte
+    public static byte PackLight(byte skyLight, byte blockLight)
+    {
+        return (byte)((skyLight << 4) | (blockLight & 0x0F));
+    }
+
+    // Extrai apenas a luz do céu (bits 4 a 7)
+    public static byte GetSkyLight(byte packedLight)
+    {
+        return (byte)((packedLight >> 4) & 0x0F);
+    }
+
+    // Extrai apenas a luz dos blocos (bits 0 a 3)
+    public static byte GetBlockLight(byte packedLight)
+    {
+        return (byte)(packedLight & 0x0F);
+    }
+}
 public class World : MonoBehaviour
 {
     public static World Instance { get; private set; }
@@ -111,6 +132,8 @@ public class World : MonoBehaviour
         public Chunk chunk;
         public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
+
+        public NativeArray<byte> meshLightData; // <--- ADICIONE ISTO
     }
 
     [Header("Tree Settings")]
@@ -119,6 +142,12 @@ public class World : MonoBehaviour
     public int CliffTreshold = 2;
 
     public float frameTimeBudgetMS = 4f;
+
+    private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
+    private readonly Vector3Int[] sixDirections = new Vector3Int[]
+    {
+        Vector3Int.up, Vector3Int.down, Vector3Int.left, Vector3Int.right, Vector3Int.forward, Vector3Int.back
+    };
     // Em World.cs (Adicione estas variáveis)
     void Awake()
     {
@@ -325,6 +354,7 @@ public class World : MonoBehaviour
         if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
         if (pm.edits.IsCreated) pm.edits.Dispose();
         if (pm.trees.IsCreated) pm.trees.Dispose();
+        if (pm.meshLightData.IsCreated) pm.meshLightData.Dispose();
     }
 
     // ===================================================================================
@@ -524,6 +554,29 @@ public class World : MonoBehaviour
         int borderSize = treeSettings.canopyRadius + 2;
         int maxTreeRadius = treeSettings.canopyRadius;
 
+
+        // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
+        int voxelSizeX = Chunk.SizeX + 2; // +2 porque o border agora é sempre 1
+        int voxelSizeZ = Chunk.SizeZ + 2;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+
+        NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+
+        for (int y = 0; y < Chunk.SizeY; y++)
+        {
+            for (int z = -1; z <= Chunk.SizeZ; z++)
+            {
+                for (int x = -1; x <= Chunk.SizeX; x++)
+                {
+                    Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
+                    globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
+
+                    int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
+                    chunkLightData[idx] = l;
+                }
+            }
+        }
+
         if (chunk.jobScheduled)
         {
             chunk.currentJob.Complete();
@@ -531,45 +584,45 @@ public class World : MonoBehaviour
         }
 
         MeshGenerator.ScheduleMeshJob(
-            coord,
-            noiseLayers,
-            warpLayers,
-            caveLayers,
-            blockData.mappings,
-            baseHeight,
-            offsetX,
-            offsetZ,
-            atlasTilesX,
-            atlasTilesY,
-            true,
-            seaLevel,
-            caveThreshold,
-            caveStride,
-            maxCaveDepthMultiplier,
-            caveRarityScale,       // NOVO
-            caveRarityThreshold,   // NOVO
-            caveMaskSmoothness,    // NOVO
-            nativeEdits,
-            nativeTrees,
-            treeMargin,
-            borderSize,
-            maxTreeRadius,
-            CliffTreshold,
-            chunk.voxelData, // NOTA: Idealmente aqui você passaria GetPaddedVoxelData(coord.x, coord.y)
-            out JobHandle handle,
-            out NativeList<Vector3> vertices,
-            out NativeList<int> opaqueTriangles,
-            out NativeList<int> transparentTriangles,
-            out NativeList<int> waterTriangles,
-            out NativeList<Vector2> uvs,
-            out NativeList<Vector2> uv2,
-            out NativeList<Vector3> normals,
-
-            out NativeList<byte> vertexLights,
-            out NativeList<byte> tintFlags,
-            out NativeList<byte> vertexAO,
+             coord,
+             noiseLayers,
+             warpLayers,
+             caveLayers,
+             blockData.mappings,
+             baseHeight,
+             offsetX,
+             offsetZ,
+             atlasTilesX,
+             atlasTilesY,
+             true,
+             seaLevel,
+             caveThreshold,
+             caveStride,
+             maxCaveDepthMultiplier,
+             caveRarityScale,
+             caveRarityThreshold,
+             caveMaskSmoothness,
+             nativeEdits,
+             nativeTrees,
+             treeMargin,
+             // int borderSize FOI REMOVIDO DAQUI 
+             maxTreeRadius,
+             CliffTreshold,
+             chunk.voxelData,
+             chunkLightData, // <--- ADICIONAMOS A LUZ AQUI
+             out JobHandle handle,
+             out NativeList<Vector3> vertices,
+             out NativeList<int> opaqueTriangles,
+             out NativeList<int> transparentTriangles,
+             out NativeList<int> waterTriangles,
+             out NativeList<Vector2> uvs,
+             out NativeList<Vector2> uv2,
+             out NativeList<Vector3> normals,
+             out NativeList<byte> vertexLights,
+             out NativeList<byte> tintFlags,
+             out NativeList<byte> vertexAO,
              out NativeList<Vector4> extraUVs
-        );
+         );
 
         pendingMeshes.Add(new PendingMesh
         {
@@ -589,9 +642,9 @@ public class World : MonoBehaviour
             expectedGen = expectedGen,
             tintFlags = tintFlags,
             vertexAO = vertexAO,
-            extraUVs = extraUVs
+            extraUVs = extraUVs,
+            meshLightData = chunkLightData // <--- GUARDE AQUI PARA O DISPOSE OCORRER NO FINAL
         });
-
         chunk.currentJob = handle;
         chunk.jobScheduled = true;
     }
@@ -652,12 +705,34 @@ public class World : MonoBehaviour
         int borderSize = treeSettings.canopyRadius + 2;
         int maxTreeRadius = treeSettings.canopyRadius;
 
+        // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
+        int voxelSizeX = Chunk.SizeX + 2; // +2 porque o border agora é sempre 1
+        int voxelSizeZ = Chunk.SizeZ + 2;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+
+        NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+
+        for (int y = 0; y < Chunk.SizeY; y++)
+        {
+            for (int z = -1; z <= Chunk.SizeZ; z++)
+            {
+                for (int x = -1; x <= Chunk.SizeX; x++)
+                {
+                    Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
+                    globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
+
+                    int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
+                    chunkLightData[idx] = l;
+                }
+            }
+        }
         if (chunk.jobScheduled)
         {
             chunk.currentJob.Complete();
             chunk.jobScheduled = false;
         }
 
+        // Chamar o gerador (Note a remoção do borderSize e a adição do chunkLightData)
         MeshGenerator.ScheduleMeshJob(
             coord,
             noiseLayers,
@@ -674,16 +749,17 @@ public class World : MonoBehaviour
             caveThreshold,
             caveStride,
             maxCaveDepthMultiplier,
-            caveRarityScale,       // NOVO
-            caveRarityThreshold,   // NOVO
-            caveMaskSmoothness,    // NOVO
+            caveRarityScale,
+            caveRarityThreshold,
+            caveMaskSmoothness,
             nativeEdits,
             nativeTrees,
             treeMargin,
-            borderSize,
+            // int borderSize FOI REMOVIDO DAQUI 
             maxTreeRadius,
             CliffTreshold,
-            chunk.voxelData, // NOTA: Aqui também, ideal usar GetPaddedVoxelData no futuro
+            chunk.voxelData,
+            chunkLightData, // <--- ADICIONAMOS A LUZ AQUI
             out JobHandle handle,
             out NativeList<Vector3> vertices,
             out NativeList<int> opaqueTriangles,
@@ -695,16 +771,17 @@ public class World : MonoBehaviour
             out NativeList<byte> vertexLights,
             out NativeList<byte> tintFlags,
             out NativeList<byte> vertexAO,
-                out NativeList<Vector4> extraUVs
+            out NativeList<Vector4> extraUVs
         );
 
         pendingMeshes.Add(new PendingMesh
         {
+            chunk = chunk,
             handle = handle,
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
-            waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
+            waterTriangles = waterTriangles,
             uvs = uvs,
             uv2 = uv2,
             normals = normals,
@@ -715,8 +792,8 @@ public class World : MonoBehaviour
             expectedGen = expectedGen,
             tintFlags = tintFlags,
             vertexAO = vertexAO,
-            chunk = chunk,
-            extraUVs = extraUVs
+            extraUVs = extraUVs,
+            meshLightData = chunkLightData // <--- GUARDE AQUI PARA O DISPOSE OCORRER NO FINAL
         });
 
         chunk.currentJob = handle;
@@ -736,57 +813,113 @@ public class World : MonoBehaviour
     // LÓGICA DE MODIFICAÇÃO DE BLOCOS (CORRIGIDA PARA VIZINHOS)
     // ===================================================================================
 
+    // public void SetBlockAt(Vector3Int worldPos, BlockType type)
+    // {
+    //     BlockType current = GetBlockAt(worldPos);
+
+    //     if (current == BlockType.Bedrock)
+    //     {
+    //         Debug.Log("Attempt to modify Bedrock ignored: " + worldPos);
+    //         return;
+    //     }
+
+    //     blockOverrides[worldPos] = type;
+
+    //     Vector2Int chunkCoord = new Vector2Int(
+    //         Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
+    //         Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
+    //     );
+
+    //     if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && chunk.hasVoxelData)
+    //     {
+    //         int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
+    //         int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+    //         int ly = worldPos.y;
+
+    //         if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
+    //         {
+    //             int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
+    //             chunk.voxelData[idx] = (byte)type;
+    //         }
+    //     }
+
+    //     // 1. Reconstrói o chunk atual
+    //     if (activeChunks.ContainsKey(chunkCoord))
+    //         RequestChunkRebuild(chunkCoord);
+
+    //     // 2. Verifica as bordas e pede atualização dos vizinhos se necessário
+    //     int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
+    //     int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+
+    //     // Borda Esquerda (localX == 0) -> Atualiza Vizinho da Esquerda (X - 1)
+    //     if (localX == 0) RequestNeighborUpdate(chunkCoord.x - 1, chunkCoord.y);
+
+    //     // Borda Direita (localX == 15) -> Atualiza Vizinho da Direita (X + 1)
+    //     if (localX == Chunk.SizeX - 1) RequestNeighborUpdate(chunkCoord.x + 1, chunkCoord.y);
+
+    //     // Borda Trás (localZ == 0) -> Atualiza Vizinho de Trás (Z - 1)
+    //     if (localZ == 0) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y - 1);
+
+    //     // Borda Frente (localZ == 15) -> Atualiza Vizinho da Frente (Z + 1)
+    //     if (localZ == Chunk.SizeZ - 1) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y + 1);
+    // }
+
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
+        // 1. Obtém o bloco atual para não fazer trabalho desnecessário e checar restrições
         BlockType current = GetBlockAt(worldPos);
-
         if (current == BlockType.Bedrock)
         {
-            Debug.Log("Attempt to modify Bedrock ignored: " + worldPos);
+            Debug.Log("Tentativa de modificar Bedrock ignorada: " + worldPos);
             return;
         }
 
+        if (current == type) return; // Nenhuma mudança ocorreu
+
+        // 2. Registo da edição física do bloco no dicionário
         blockOverrides[worldPos] = type;
 
+        // 3. Determina quais chunks precisam ser reconstruídos apenas por causa da mudança geométrica
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
             Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
         );
 
-        if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && chunk.hasVoxelData)
-        {
-            int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
-            int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
-            int ly = worldPos.y;
+        HashSet<Vector2Int> chunksToRebuild = new HashSet<Vector2Int>();
+        chunksToRebuild.Add(chunkCoord);
 
-            if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
-            {
-                int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
-                chunk.voxelData[idx] = (byte)type;
-            }
+        // Verifica se a mudança foi nas beiradas para atualizar as faces dos chunks vizinhos
+        int localX = worldPos.x - (chunkCoord.x * Chunk.SizeX);
+        int localZ = worldPos.z - (chunkCoord.y * Chunk.SizeZ);
+
+        if (localX == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.left);
+        if (localX == Chunk.SizeX - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right);
+        if (localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.down);
+        if (localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.up);
+
+        // 4. Tratar iluminação dinâmica (Caminho B)
+        byte newEmission = GetBlockEmission(type);
+        byte oldEmission = GetBlockEmission(current);
+
+        if (newEmission > 0)
+        {
+            // O jogador colocou um bloco luminoso novo ou mais forte (Propaga a luz)
+            PropagateLightGlobal(worldPos, newEmission);
+        }
+        else if (oldEmission > 0 || globalLightMap.ContainsKey(worldPos))
+        {
+            // O jogador quebrou uma luz OU colocou um bloco sólido onde antes passava luz (Apaga/Recalcula)
+            RemoveLightGlobal(worldPos);
         }
 
-        // 1. Reconstrói o chunk atual
-        if (activeChunks.ContainsKey(chunkCoord))
-            RequestChunkRebuild(chunkCoord);
-
-        // 2. Verifica as bordas e pede atualização dos vizinhos se necessário
-        int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
-        int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
-
-        // Borda Esquerda (localX == 0) -> Atualiza Vizinho da Esquerda (X - 1)
-        if (localX == 0) RequestNeighborUpdate(chunkCoord.x - 1, chunkCoord.y);
-
-        // Borda Direita (localX == 15) -> Atualiza Vizinho da Direita (X + 1)
-        if (localX == Chunk.SizeX - 1) RequestNeighborUpdate(chunkCoord.x + 1, chunkCoord.y);
-
-        // Borda Trás (localZ == 0) -> Atualiza Vizinho de Trás (Z - 1)
-        if (localZ == 0) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y - 1);
-
-        // Borda Frente (localZ == 15) -> Atualiza Vizinho da Frente (Z + 1)
-        if (localZ == Chunk.SizeZ - 1) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y + 1);
+        // 5. Garantir que os chunks afetados geometricamente sejam reconstruídos
+        // (Nota: Propagate e Remove já chamam RequestChunkRebuild internamente para a luz, 
+        // mas este loop garante que a geometria vizinha não fique com "buracos" visuais).
+        foreach (Vector2Int coord in chunksToRebuild)
+        {
+            RequestChunkRebuild(coord);
+        }
     }
-
     private void RequestNeighborUpdate(int cx, int cz)
     {
         Vector2Int coord = new Vector2Int(cx, cz);
@@ -1278,4 +1411,151 @@ public class World : MonoBehaviour
         if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
         return q;
     }
+
+
+    // ===================================================================================
+    // SISTEMA DE ILUMINAÇÃO GLOBAL (BFS Desacoplado)
+    // ===================================================================================
+
+    public byte GetBlockOpacity(BlockType type)
+    {
+        if (blockData != null && blockData.mappings != null)
+        {
+            int t = (int)type;
+            if (t >= 0 && t < blockData.mappings.Length) return blockData.mappings[t].lightOpacity;
+        }
+        return 15;
+    }
+
+    public byte GetBlockEmission(BlockType type)
+    {
+        if (blockData != null && blockData.mappings != null)
+        {
+            int t = (int)type;
+            if (t >= 0 && t < blockData.mappings.Length) return blockData.mappings[t].lightEmission;
+        }
+        return 0;
+    }
+
+    public void PropagateLightGlobal(Vector3Int startWorldPos, byte lightEmission)
+    {
+        Queue<Vector3Int> lightQueue = new Queue<Vector3Int>();
+        lightQueue.Enqueue(startWorldPos);
+
+        globalLightMap[startWorldPos] = lightEmission;
+        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+
+        while (lightQueue.Count > 0)
+        {
+            Vector3Int node = lightQueue.Dequeue();
+            globalLightMap.TryGetValue(node, out byte currentLight);
+
+            Vector2Int chunkCoord = new Vector2Int(
+                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
+            );
+            dirtiedChunks.Add(chunkCoord);
+
+            foreach (Vector3Int dir in sixDirections)
+            {
+                Vector3Int neighborPos = node + dir;
+
+                // Limite vertical básico (SizeY)
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+
+                // Aqui lê-se o bloco diretamente
+                // (Nota: Certifique-se que o seu método GetBlockAt existe e retorna o bloco correto do mundo)
+                BlockType neighborBlock = GetBlockAt(neighborPos);
+                byte opacity = GetBlockOpacity(neighborBlock);
+
+                if (opacity >= 15) continue; // Bloqueado por parede sólida
+
+                globalLightMap.TryGetValue(neighborPos, out byte neighborLight);
+                byte cost = (opacity < 1) ? (byte)1 : opacity;
+                byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
+
+                if (candidateLight > neighborLight)
+                {
+                    globalLightMap[neighborPos] = candidateLight;
+                    lightQueue.Enqueue(neighborPos);
+                }
+            }
+        }
+
+        // Reconstrói todos os chunks afetados pela luz
+        foreach (Vector2Int coord in dirtiedChunks)
+        {
+            RequestChunkRebuild(coord);
+        }
+    }
+
+    public void RemoveLightGlobal(Vector3Int startWorldPos)
+    {
+        if (!globalLightMap.TryGetValue(startWorldPos, out byte oldLight)) return;
+
+        Queue<(Vector3Int pos, byte lightLevel)> darkQueue = new Queue<(Vector3Int, byte)>();
+        Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
+        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+
+        darkQueue.Enqueue((startWorldPos, oldLight));
+        globalLightMap[startWorldPos] = 0;
+
+        // Passo 1: Apagar luz recursivamente até encontrar fontes de luz mais fortes
+        while (darkQueue.Count > 0)
+        {
+            var node = darkQueue.Dequeue();
+            Vector2Int chunkCoord = new Vector2Int(Mathf.FloorToInt((float)node.pos.x / Chunk.SizeX), Mathf.FloorToInt((float)node.pos.z / Chunk.SizeZ));
+            dirtiedChunks.Add(chunkCoord);
+
+            foreach (Vector3Int dir in sixDirections)
+            {
+                Vector3Int neighborPos = node.pos + dir;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+
+                if (globalLightMap.TryGetValue(neighborPos, out byte neighborLight) && neighborLight > 0)
+                {
+                    if (neighborLight < node.lightLevel)
+                    {
+                        globalLightMap[neighborPos] = 0;
+                        darkQueue.Enqueue((neighborPos, neighborLight));
+                    }
+                    else if (neighborLight >= node.lightLevel)
+                    {
+                        refillQueue.Enqueue(neighborPos); // Guardar para preencher o vazio
+                    }
+                }
+            }
+        }
+
+        // Passo 2: Re-propagar luz das bordas que sobreviveram
+        while (refillQueue.Count > 0)
+        {
+            Vector3Int node = refillQueue.Dequeue();
+            if (globalLightMap.TryGetValue(node, out byte currentLight))
+            {
+                foreach (Vector3Int dir in sixDirections)
+                {
+                    Vector3Int neighborPos = node + dir;
+                    if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+
+                    BlockType neighborBlock = GetBlockAt(neighborPos);
+                    byte opacity = GetBlockOpacity(neighborBlock);
+                    if (opacity >= 15) continue;
+
+                    globalLightMap.TryGetValue(neighborPos, out byte neighborLight);
+                    byte cost = (opacity < 1) ? (byte)1 : opacity;
+                    byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
+
+                    if (candidateLight > neighborLight)
+                    {
+                        globalLightMap[neighborPos] = candidateLight;
+                        refillQueue.Enqueue(neighborPos);
+                    }
+                }
+            }
+        }
+
+        foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
+    }
+
 }

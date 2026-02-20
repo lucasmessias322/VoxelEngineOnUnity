@@ -1,3 +1,4 @@
+
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -53,10 +54,10 @@ public static class MeshGenerator
         NativeArray<BlockEdit> blockEdits,
         NativeArray<TreeInstance> treeInstances,
         int treeMargin,
-        int borderSize,
         int maxTreeRadius,
         int CliffTreshold,
         NativeArray<byte> voxelOutput,
+        NativeArray<byte> lightData, // <--- NOVA INJEÇÃO DE DEPENDÊNCIA DE LUZ
         out JobHandle handle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -71,13 +72,16 @@ public static class MeshGenerator
         out NativeList<Vector4> extraUVs
     )
     {
-        // 1. Alocações Iniciais de Configuração
+        // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
+        int borderSize = 1;
+
+        // 2. Alocações Iniciais de Configuração
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         NativeArray<NoiseLayer> nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
         NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
 
-        // 2. Alocações das Listas de Mesh (Output)
+        // 3. Alocações das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
@@ -90,7 +94,7 @@ public static class MeshGenerator
         uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
 
-        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
+        // 4. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -100,7 +104,9 @@ public static class MeshGenerator
         NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
         NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
         NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
-        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+
+
+
 
         // ==========================================
         // JOB 1: Geração de Dados (Terreno)
@@ -137,33 +143,19 @@ public static class MeshGenerator
         };
         JobHandle dataHandle = dataJob.Schedule(); // Inicia sem dependências
 
-        // ==========================================
-        // JOB 2: Iluminação
-        // ==========================================
-        var lightJob = new ChunkLightingJob
-        {
-            blockTypes = blockTypes,
-            solids = solids,
-            light = light,
-            blockMappings = nativeBlockMappings,
 
-            voxelSizeX = voxelSizeX,
-            voxelSizeZ = voxelSizeZ,
-            totalVoxels = totalVoxels,
-            voxelPlaneSize = voxelSizeX * SizeY,
-            SizeY = SizeY
-        };
-        // Só arranca quando o DataJob terminar
-        JobHandle lightHandle = lightJob.Schedule(dataHandle);
+
+
+
 
         // ==========================================
-        // JOB 3: Geração da Malha (Mesh)
+        // JOB 2: Geração da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
             blockTypes = blockTypes,
             solids = solids,
-            light = light,
+            light = lightData, // Usa a luz previamente calculada e passada por parâmetro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
 
@@ -184,8 +176,8 @@ public static class MeshGenerator
             tintFlags = tintFlags,
             vertexAO = vertexAO
         };
-        // Só arranca quando o LightJob terminar. Retornamos o Handle final.
-        handle = meshJob.Schedule(lightHandle);
+        // O MeshJob agora espera o DataJob terminar diretamente (Iluminação removida da fila)
+        handle = meshJob.Schedule(dataHandle);
     }
 
     // =========================================================================
@@ -196,8 +188,6 @@ public static class MeshGenerator
     {
         public Vector2Int coord;
 
-        // DeallocateOnJobCompletion limpa estes arrays mal este Job termina, 
-        // porque não são precisos nos Jobs de Luz ou Malha.
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<WarpLayer> warpLayers;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> caveLayers;
@@ -221,7 +211,6 @@ public static class MeshGenerator
         public float caveMaskSmoothness;
         public int CliffTreshold;
 
-        // Arrays de output para os próximos Jobs
         public NativeArray<int> heightCache;
         public NativeArray<BlockType> blockTypes;
         public NativeArray<bool> solids;
@@ -647,45 +636,20 @@ public static class MeshGenerator
     }
 
     // =========================================================================
-    // JOB 2: CHUNK LIGHTING JOB (Calcula apenas a Iluminação)
-    // =========================================================================
-    [BurstCompile]
-    private struct ChunkLightingJob : IJob
-    {
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
-        [ReadOnly] public NativeArray<bool> solids;
-        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-
-        public NativeArray<byte> light;
-
-        public int voxelSizeX;
-        public int voxelSizeZ;
-        public int totalVoxels;
-        public int voxelPlaneSize;
-        public int SizeY;
-
-        public void Execute()
-        {
-            LightingCalculator.CalculateLighting(
-                blockTypes, solids, light, blockMappings,
-                voxelSizeX, voxelSizeZ, totalVoxels, voxelPlaneSize, SizeY
-            );
-        }
-    }
-
-    // =========================================================================
-    // JOB 3: CHUNK MESH JOB (Greedy Meshing e Arrays Visuais)
+    // JOB 2: CHUNK MESH JOB (Greedy Meshing e Arrays Visuais)
     // =========================================================================
     [BurstCompile]
     private struct ChunkMeshJob : IJob
     {
-        // DeallocateOnJobCompletion limpa todos estes arrays no fim da malha! 
-        // Previne memory leaks e não precisas de Dispose() manual.
+        // DeallocateOnJobCompletion limpa todos estes arrays criados no Schedule.
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<int> heightCache;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockType> blockTypes;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<bool> solids;
-        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<byte> light;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+
+        // O lightData não tem [DeallocateOnJobCompletion] aqui porque ele é injetado de fora.
+        // O World.cs (ou quem chamar ScheduleMeshJob) deve ser responsável por limpar este array.
+        [ReadOnly] public NativeArray<byte> light;
 
         public int border;
         public int atlasTilesX;
@@ -945,6 +909,9 @@ public static class MeshGenerator
             return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
         }
     }
+
+
+
 
 }
 

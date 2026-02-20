@@ -10,6 +10,7 @@ public class Chunk : MonoBehaviour
     public const int SizeY = 384;
     public const int SizeZ = 16;
     public NativeArray<byte> voxelData; // ou BlockType se preferir enum
+    
     public bool hasVoxelData = false;
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
