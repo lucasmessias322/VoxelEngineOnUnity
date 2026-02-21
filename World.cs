@@ -551,7 +551,7 @@ public class World : MonoBehaviour
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = treeSettings.canopyRadius + 2;
+        int borderSize = 1;
         int maxTreeRadius = treeSettings.canopyRadius;
 
 
@@ -560,6 +560,23 @@ public class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
 
+        // NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+
+        // for (int y = 0; y < Chunk.SizeY; y++)
+        // {
+        //     for (int z = -1; z <= Chunk.SizeZ; z++)
+        //     {
+        //         for (int x = -1; x <= Chunk.SizeX; x++)
+        //         {
+        //             Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
+        //             globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
+
+        //             int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
+        //             chunkLightData[idx] = l;
+        //         }
+        //     }
+        // }
+        // Dentro do RequestChunk no World.cs:
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
         for (int y = 0; y < Chunk.SizeY; y++)
@@ -569,10 +586,14 @@ public class World : MonoBehaviour
                 for (int x = -1; x <= Chunk.SizeX; x++)
                 {
                     Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
-                    globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
+
+                    // Pega o byte empacotado do mapa global (se não existir, retorna 0)
+                    globalLightMap.TryGetValue(wp, out byte packedLight);
 
                     int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
-                    chunkLightData[idx] = l;
+
+                    // Joga direto no array! O byte já tem as duas luzes.
+                    chunkLightData[idx] = packedLight;
                 }
             }
         }
@@ -605,7 +626,7 @@ public class World : MonoBehaviour
              nativeEdits,
              nativeTrees,
              treeMargin,
-             // int borderSize FOI REMOVIDO DAQUI 
+            borderSize,
              maxTreeRadius,
              CliffTreshold,
              chunk.voxelData,
@@ -702,7 +723,7 @@ public class World : MonoBehaviour
 
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = treeSettings.canopyRadius + 2;
+        int borderSize = 1;
         int maxTreeRadius = treeSettings.canopyRadius;
 
         // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
@@ -755,7 +776,7 @@ public class World : MonoBehaviour
             nativeEdits,
             nativeTrees,
             treeMargin,
-            // int borderSize FOI REMOVIDO DAQUI 
+           borderSize,
             maxTreeRadius,
             CliffTreshold,
             chunk.voxelData,
@@ -809,60 +830,6 @@ public class World : MonoBehaviour
         return false;
     }
 
-    // ===================================================================================
-    // LÓGICA DE MODIFICAÇÃO DE BLOCOS (CORRIGIDA PARA VIZINHOS)
-    // ===================================================================================
-
-    // public void SetBlockAt(Vector3Int worldPos, BlockType type)
-    // {
-    //     BlockType current = GetBlockAt(worldPos);
-
-    //     if (current == BlockType.Bedrock)
-    //     {
-    //         Debug.Log("Attempt to modify Bedrock ignored: " + worldPos);
-    //         return;
-    //     }
-
-    //     blockOverrides[worldPos] = type;
-
-    //     Vector2Int chunkCoord = new Vector2Int(
-    //         Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
-    //         Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
-    //     );
-
-    //     if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && chunk.hasVoxelData)
-    //     {
-    //         int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
-    //         int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
-    //         int ly = worldPos.y;
-
-    //         if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
-    //         {
-    //             int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
-    //             chunk.voxelData[idx] = (byte)type;
-    //         }
-    //     }
-
-    //     // 1. Reconstrói o chunk atual
-    //     if (activeChunks.ContainsKey(chunkCoord))
-    //         RequestChunkRebuild(chunkCoord);
-
-    //     // 2. Verifica as bordas e pede atualização dos vizinhos se necessário
-    //     int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
-    //     int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
-
-    //     // Borda Esquerda (localX == 0) -> Atualiza Vizinho da Esquerda (X - 1)
-    //     if (localX == 0) RequestNeighborUpdate(chunkCoord.x - 1, chunkCoord.y);
-
-    //     // Borda Direita (localX == 15) -> Atualiza Vizinho da Direita (X + 1)
-    //     if (localX == Chunk.SizeX - 1) RequestNeighborUpdate(chunkCoord.x + 1, chunkCoord.y);
-
-    //     // Borda Trás (localZ == 0) -> Atualiza Vizinho de Trás (Z - 1)
-    //     if (localZ == 0) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y - 1);
-
-    //     // Borda Frente (localZ == 15) -> Atualiza Vizinho da Frente (Z + 1)
-    //     if (localZ == Chunk.SizeZ - 1) RequestNeighborUpdate(chunkCoord.x, chunkCoord.y + 1);
-    // }
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
@@ -1557,5 +1524,7 @@ public class World : MonoBehaviour
 
         foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
     }
+
+    
 
 }

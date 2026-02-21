@@ -1,4 +1,3 @@
-
 using System;
 using System.Collections.Generic;
 using UnityEngine;
@@ -54,6 +53,7 @@ public static class MeshGenerator
         NativeArray<BlockEdit> blockEdits,
         NativeArray<TreeInstance> treeInstances,
         int treeMargin,
+        int borderSize,
         int maxTreeRadius,
         int CliffTreshold,
         NativeArray<byte> voxelOutput,
@@ -73,7 +73,7 @@ public static class MeshGenerator
     )
     {
         // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
-        int borderSize = 1;
+
 
         // 2. Alocações Iniciais de Configuração
         NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
@@ -99,14 +99,13 @@ public static class MeshGenerator
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
         int voxelSizeZ = SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * SizeY;
         int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
 
         NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
         NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
         NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
-
-
-
+        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
 
         // ==========================================
         // JOB 1: Geração de Dados (Terreno)
@@ -143,10 +142,22 @@ public static class MeshGenerator
         };
         JobHandle dataHandle = dataJob.Schedule(); // Inicia sem dependências
 
-
-
-
-
+        var lightJob = new ChunkLightingJob
+        {
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light, // Output calculado
+            blockLightData = lightData, // Injeta block light do global
+            blockMappings = nativeBlockMappings,
+            voxelSizeX = voxelSizeX,
+            voxelSizeZ = voxelSizeZ,
+            totalVoxels = totalVoxels,
+            voxelPlaneSize = voxelPlaneSize,
+            SizeX = SizeX,
+            SizeY = SizeY,
+            SizeZ = SizeZ
+        };
+        JobHandle lightHandle = lightJob.Schedule(dataHandle);
 
         // ==========================================
         // JOB 2: Geração da Malha (Mesh)
@@ -155,7 +166,7 @@ public static class MeshGenerator
         {
             blockTypes = blockTypes,
             solids = solids,
-            light = lightData, // Usa a luz previamente calculada e passada por parâmetro
+            light = light, // Usa a luz previamente calculada e passada por parâmetro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
 
@@ -177,7 +188,7 @@ public static class MeshGenerator
             vertexAO = vertexAO
         };
         // O MeshJob agora espera o DataJob terminar diretamente (Iluminação removida da fila)
-        handle = meshJob.Schedule(dataHandle);
+        handle = meshJob.Schedule(lightHandle);
     }
 
     // =========================================================================
@@ -646,10 +657,7 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockType> blockTypes;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-
-        // O lightData não tem [DeallocateOnJobCompletion] aqui porque ele é injetado de fora.
-        // O World.cs (ou quem chamar ScheduleMeshJob) deve ser responsável por limpar este array.
-        [ReadOnly] public NativeArray<byte> light;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<byte> light;
 
         public int border;
         public int atlasTilesX;
@@ -757,7 +765,8 @@ public static class MeshGenerator
 
                                 if (isVisible)
                                 {
-                                    byte faceLight = outside ? (byte)15 : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+                                    byte packed = outside ? LightUtils.PackLight(15, 0) : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+                                    byte faceLight = (byte)math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
 
                                     int aoPlaneN = n + normalSign;
                                     int ax = (u == 0 ? i : v == 0 ? j : aoPlaneN);
@@ -910,6 +919,62 @@ public static class MeshGenerator
         }
     }
 
+
+
+    [BurstCompile]
+    private struct ChunkLightingJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<bool> solids;
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+        [ReadOnly] public NativeArray<byte> blockLightData;
+
+        public NativeArray<byte> light;
+
+        public int voxelSizeX;
+        public int voxelSizeZ;
+        public int totalVoxels;
+        public int voxelPlaneSize;
+        public int SizeX;
+        public int SizeY;
+        public int SizeZ;
+
+        public void Execute()
+        {
+            for (int lx = 0; lx < voxelSizeX; lx++)
+            {
+                for (int lz = 0; lz < voxelSizeZ; lz++)
+                {
+
+                    byte currentSky = 15;
+                    for (int y = SizeY - 1; y >= 0; y--)
+                    {
+                        int idx = lx + y * voxelSizeX + lz * voxelPlaneSize;
+                        byte opacity = blockMappings[(int)blockTypes[idx]].lightOpacity;
+
+                        if (opacity >= 15)
+                        {
+                            currentSky = 0;
+                        }
+                        else if (opacity > 0)
+                        {
+                            currentSky = (byte)math.max(0, (int)currentSky - (int)opacity);
+                        }
+
+                        // LÊ A LUZ DO BLOCO DIRETAMENTE DO MESMO ÍNDICE
+                        byte blockL = 0;
+                        if (blockLightData.IsCreated && idx < blockLightData.Length)
+                        {
+                            blockL = blockLightData[idx];
+                        }
+
+                        // Empacota (0-15 de sky, 0-15 de block) no mesmo byte!
+                        light[idx] = LightUtils.PackLight(currentSky, blockL);
+                    }
+                }
+            }
+        }
+    }
 
 
 
