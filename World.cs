@@ -887,15 +887,7 @@ public class World : MonoBehaviour
             RequestChunkRebuild(coord);
         }
     }
-    private void RequestNeighborUpdate(int cx, int cz)
-    {
-        Vector2Int coord = new Vector2Int(cx, cz);
-        // Usa activeChunks e o método de rebuild existente
-        if (activeChunks.ContainsKey(coord))
-        {
-            RequestChunkRebuild(coord);
-        }
-    }
+
 
     // ===================================================================================
     // HELPER PARA DADOS DE VIZINHOS (PADDED DATA)
@@ -1525,6 +1517,6 @@ public class World : MonoBehaviour
         foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
     }
 
-    
+
 
 }

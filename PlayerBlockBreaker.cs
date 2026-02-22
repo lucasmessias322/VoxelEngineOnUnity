@@ -79,56 +79,59 @@ public class PlayerBlockBreaker : MonoBehaviour
             }
         }
     }
-void HandlePlaceBlock()
-{
-    if (Input.GetMouseButtonDown(1))
+    void HandlePlaceBlock()
     {
-        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
-
-        if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
+        if (Input.GetMouseButtonDown(1))
         {
-            // 🔹 Cálculo mais robusto do bloco atingido
-            Vector3Int normalInt = new Vector3Int(
-                Mathf.RoundToInt(hit.normal.x),
-                Mathf.RoundToInt(hit.normal.y),
-                Mathf.RoundToInt(hit.normal.z)
-            );
+            Ray ray = new Ray(cam.transform.position, cam.transform.forward);
 
-            Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point) - normalInt;
-            Vector3Int placePos = targetBlock + normalInt;
-
-            // 🔹 Proteção Y
-            if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
-                return;
-
-            // 🔹 Verifica se já existe bloco sólido
-            BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-            if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
-                return;
-
-            // ================================
-            // 🔥 VERIFICAÇÃO PROFISSIONAL
-            // ================================
-
-            Vector3 blockCenter = placePos + Vector3.one * 0.5f;
-            Vector3 halfExtents = Vector3.one * 0.5f;
-
-            Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
-
-            foreach (var col in hits)
+            if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
             {
-                if (col.transform == transform)
-                {
-                    // Está colidindo com o player
+                // 🔹 Cálculo mais robusto do bloco atingido
+                // conversão segura da normal -> inteiro (-1,0,1)
+                Vector3Int normalInt = new Vector3Int(
+                    Mathf.RoundToInt(hit.normal.x),
+                    Mathf.RoundToInt(hit.normal.y),
+                    Mathf.RoundToInt(hit.normal.z)
+                );
+
+
+
+                Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point - hit.normal * 0.01f);
+                Vector3Int placePos = targetBlock + normalInt;
+
+                // 🔹 Proteção Y
+                if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
                     return;
+
+                // 🔹 Verifica se já existe bloco sólido
+                BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
+                if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
+                    return;
+
+                // ================================
+                // 🔥 VERIFICAÇÃO PROFISSIONAL
+                // ================================
+
+                Vector3 blockCenter = placePos + Vector3.one * 0.5f;
+                Vector3 halfExtents = Vector3.one * 0.5f;
+
+                Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
+
+                foreach (var col in hits)
+                {
+                    if (col.transform == transform)
+                    {
+                        // Está colidindo com o player
+                        return;
+                    }
                 }
+
+                // ================================
+
+                World.Instance.SetBlockAt(placePos, placeBlockType);
+                audioSource.PlayOneShot(placeBlockClip);
             }
-
-            // ================================
-
-            World.Instance.SetBlockAt(placePos, placeBlockType);
-            audioSource.PlayOneShot(placeBlockClip);
         }
     }
-}
 }

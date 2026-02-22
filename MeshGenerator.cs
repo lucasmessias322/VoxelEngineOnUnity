@@ -457,6 +457,8 @@ public static class MeshGenerator
             return maxDiff >= threshold;
         }
 
+
+
         private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -466,7 +468,6 @@ public static class MeshGenerator
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
-
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
                 int stride = math.max(1, caveStride);
@@ -499,6 +500,7 @@ public static class MeshGenerator
                             float totalCave = 0f;
                             float sumCaveAmp = 0f;
 
+
                             for (int i = 0; i < caveLayers.Length; i++)
                             {
                                 var layer = caveLayers[i];
@@ -528,22 +530,13 @@ public static class MeshGenerator
 
                             if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
 
-                            float maskNx = (worldX + offsetX) / caveRarityScale;
-                            float maskNy = worldY / caveRarityScale;
-                            float maskNz = (worldZ + offsetZ) / caveRarityScale;
-
-                            float maskVal = noise.cnoise(new float3(maskNx, maskNy, maskNz));
-                            float maskWeight = math.saturate((maskVal - caveRarityThreshold) * caveMaskSmoothness);
-
-                            totalCave *= maskWeight;
-
                             int coarseIdx = cx + cy * coarseStrideX + cz * coarsePlaneSize;
                             coarseCaveNoise[coarseIdx] = totalCave;
                         }
                     }
                 }
 
-                // Interpolação
+                // Interpolação para voxels
                 for (int lx = -border; lx < SizeX + border; lx++)
                 {
                     for (int lz = -border; lz < SizeZ + border; lz++)
@@ -557,8 +550,7 @@ public static class MeshGenerator
 
                         for (int y = 0; y <= maxCaveY; y++)
                         {
-                            if (y <= 20) continue; // Protege o Bedrock
-
+                            if (y <= 100) continue; // Protege o Bedrock
                             int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
                             if (!solids[voxelIdx]) continue;
 
@@ -611,9 +603,12 @@ public static class MeshGenerator
                         }
                     }
                 }
+
                 coarseCaveNoise.Dispose();
             }
+
         }
+
 
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
@@ -740,11 +735,8 @@ public static class MeshGenerator
                                 bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
 
                                 bool isVisible = false;
-                                if (!blockMappings[(int)current].isSolid)
-                                {
-                                    isVisible = false;
-                                }
-                                else if (outside)
+
+                                if (outside)
                                 {
                                     isVisible = true;
                                 }
@@ -752,7 +744,19 @@ public static class MeshGenerator
                                 {
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
-                                    if (blockMappings[(int)neighbor].isEmpty)
+
+                                    // MODIFICAÇÃO AQUI: Lógica do Minecraft para líquidos
+                                    if (current == BlockType.Water && neighbor == BlockType.Water)
+                                    {
+                                        // Água não desenha face contra outra água
+                                        isVisible = false;
+                                    }
+                                    else if (current != BlockType.Water && !blockMappings[(int)current].isSolid)
+                                    {
+                                        // Mantém a regra original para outros blocos não sólidos (ex: mato, flores)
+                                        isVisible = false;
+                                    }
+                                    else if (blockMappings[(int)neighbor].isEmpty)
                                     {
                                         isVisible = true;
                                     }
@@ -762,6 +766,15 @@ public static class MeshGenerator
                                         isVisible = !neighborOpaque;
                                     }
                                 }
+
+                                // === ADICIONE ESTE BLOCO AQUI ===
+                            // Se generateSides for falso (chunks internos), corta implacavelmente 
+                            // qualquer face que aponte para fora dos limites do chunk, incluindo a água!
+                            // if (!generateSides)
+                            // {
+                            //     if (axis == 0 && (nx < border || nx >= border + SizeX)) isVisible = false;
+                            //     if (axis == 2 && (nz < border || nz >= border + SizeZ)) isVisible = false;
+                            // }
 
                                 if (isVisible)
                                 {
@@ -919,8 +932,6 @@ public static class MeshGenerator
         }
     }
 
-
-
     [BurstCompile]
     private struct ChunkLightingJob : IJob
     {
@@ -934,18 +945,22 @@ public static class MeshGenerator
         public int voxelSizeX;
         public int voxelSizeZ;
         public int totalVoxels;
-        public int voxelPlaneSize;
+        public int voxelPlaneSize; // Assumindo que seja voxelSizeX * SizeY
         public int SizeX;
         public int SizeY;
         public int SizeZ;
 
         public void Execute()
         {
+            // 1. Criamos um mapa temporário para a Skylight e uma fila para a propagação
+            NativeArray<byte> skyMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
+            NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
+
+            // 2. PASSO 1: Raio de Sol Vertical (Luz Direta)
             for (int lx = 0; lx < voxelSizeX; lx++)
             {
                 for (int lz = 0; lz < voxelSizeZ; lz++)
                 {
-
                     byte currentSky = 15;
                     for (int y = SizeY - 1; y >= 0; y--)
                     {
@@ -961,22 +976,85 @@ public static class MeshGenerator
                             currentSky = (byte)math.max(0, (int)currentSky - (int)opacity);
                         }
 
-                        // LÊ A LUZ DO BLOCO DIRETAMENTE DO MESMO ÍNDICE
-                        byte blockL = 0;
-                        if (blockLightData.IsCreated && idx < blockLightData.Length)
-                        {
-                            blockL = blockLightData[idx];
-                        }
+                        skyMap[idx] = currentSky;
 
-                        // Empacota (0-15 de sky, 0-15 de block) no mesmo byte!
-                        light[idx] = LightUtils.PackLight(currentSky, blockL);
+                        // Enfileira os nós que receberam luz para o passo de suavização
+                        if (currentSky > 0)
+                        {
+                            lightQueue.Enqueue(idx);
+                        }
                     }
                 }
             }
+
+            // 3. PASSO 2: Suavização / Propagação (Flood Fill BFS)
+            // Offsets 1D para os 6 vizinhos: +X, -X, +Y, -Y, +Z, -Z
+            NativeArray<int> neighborOffsets = new NativeArray<int>(6, Allocator.Temp);
+            neighborOffsets[0] = 1;                  // Direita (+X)
+            neighborOffsets[1] = -1;                 // Esquerda (-X)
+            neighborOffsets[2] = voxelSizeX;         // Cima (+Y)
+            neighborOffsets[3] = -voxelSizeX;        // Baixo (-Y)
+            neighborOffsets[4] = voxelPlaneSize;     // Frente (+Z)
+            neighborOffsets[5] = -voxelPlaneSize;    // Trás (-Z)
+
+            while (lightQueue.TryDequeue(out int currentIndex))
+            {
+                byte currentLight = skyMap[currentIndex];
+
+                // Se a luz já é muito fraca, não pode propagar
+                if (currentLight <= 1) continue;
+
+                // Decodificando 1D para 3D para evitar propagar para fora do Chunk atual
+                int z = currentIndex / voxelPlaneSize;
+                int rem = currentIndex % voxelPlaneSize;
+                int y = rem / voxelSizeX;
+                int x = rem % voxelSizeX;
+
+                for (int i = 0; i < 6; i++)
+                {
+                    // Checagem de limites do chunk (para não acessar memória indevida)
+                    if (x == 0 && i == 1) continue;
+                    if (x == voxelSizeX - 1 && i == 0) continue;
+                    if (y == 0 && i == 3) continue;
+                    if (y == SizeY - 1 && i == 2) continue;
+                    if (z == 0 && i == 5) continue;
+                    if (z == voxelSizeZ - 1 && i == 4) continue;
+
+                    int neighborIndex = currentIndex + neighborOffsets[i];
+                    byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
+
+                    // A luz perde 1 de intensidade ao se mover para o lado/cima/baixo + a opacidade do bloco
+                    int lightLoss = 1 + opacity;
+                    byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+                    // Se a luz que chega no vizinho é maior que a luz que ele já tem, atualizamos e enfileiramos
+                    if (propagatedLight > skyMap[neighborIndex])
+                    {
+                        skyMap[neighborIndex] = propagatedLight;
+                        lightQueue.Enqueue(neighborIndex);
+                    }
+                }
+            }
+
+            // 4. PASSO 3: Mesclar Skylight suavizada com BlockLight
+            for (int i = 0; i < totalVoxels; i++)
+            {
+                byte blockL = 0;
+                if (blockLightData.IsCreated && i < blockLightData.Length)
+                {
+                    blockL = blockLightData[i];
+                }
+
+                // Empacota (0-15 de sky, 0-15 de block) no mesmo byte!
+                light[i] = LightUtils.PackLight(skyMap[i], blockL);
+            }
+
+            // 5. Cleanup dos Allocator.Temp
+            skyMap.Dispose();
+            lightQueue.Dispose();
+            neighborOffsets.Dispose();
         }
     }
-
-
 
 }
 
