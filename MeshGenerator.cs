@@ -31,7 +31,7 @@ public static class MeshGenerator
         public int type; // enum BlockType como int
     }
 
-    public static void ScheduleMeshJob(
+    public static void ScheduleDataJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
         WarpLayer[] warpLayersArr,
@@ -40,9 +40,6 @@ public static class MeshGenerator
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
-        int atlasTilesX,
-        int atlasTilesY,
-        bool generateSides,
         float seaLevel,
         float caveThreshold,
         int caveStride,
@@ -58,43 +55,26 @@ public static class MeshGenerator
         int CliffTreshold,
         NativeArray<byte> voxelOutput,
         NativeArray<byte> lightData, // <--- NOVA INJEÇÃO DE DEPENDÊNCIA DE LUZ
-        out JobHandle handle,
-        out NativeList<Vector3> vertices,
-        out NativeList<int> opaqueTriangles,
-        out NativeList<int> transparentTriangles,
-        out NativeList<int> waterTriangles,
-        out NativeList<Vector2> uvs,
-        out NativeList<Vector2> uv2,
-        out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,
-        out NativeList<byte> tintFlags,
-        out NativeList<byte> vertexAO,
-        out NativeList<Vector4> extraUVs
+        out JobHandle dataHandle,
+        out NativeArray<int> heightCache,
+        out NativeArray<BlockType> blockTypes,
+        out NativeArray<bool> solids,
+        out NativeArray<byte> light,
+        out NativeArray<NoiseLayer> nativeNoiseLayers,
+        out NativeArray<WarpLayer> nativeWarpLayers,
+        out NativeArray<NoiseLayer> nativeCaveLayers,
+        out NativeArray<BlockTextureMapping> nativeBlockMappings
     )
     {
         // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
 
-
         // 2. Alocações Iniciais de Configuração
-        NativeArray<NoiseLayer> nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
-        NativeArray<WarpLayer> nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
-        NativeArray<NoiseLayer> nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
-        NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
+        nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
+        nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
+        nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
+        nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
 
-        // 3. Alocações das Listas de Mesh (Output)
-        vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
-        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        normals = new NativeList<Vector3>(4096, Allocator.TempJob);
-        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        tintFlags = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
-        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
-
-        // 4. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
+        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -102,15 +82,15 @@ public static class MeshGenerator
         int voxelPlaneSize = voxelSizeX * SizeY;
         int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
 
-        NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
-        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
-        NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
-        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+        heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
+        blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
+        solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
+        light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
 
         // ==========================================
         // JOB 1: Geração de Dados (Terreno)
         // ==========================================
-        var dataJob = new ChunkDataJob
+        var chunkDataJob = new ChunkDataJob
         {
             coord = coord,
             noiseLayers = nativeNoiseLayers,
@@ -140,7 +120,7 @@ public static class MeshGenerator
             solids = solids,
             voxelOutput = voxelOutput
         };
-        JobHandle dataHandle = dataJob.Schedule(); // Inicia sem dependências
+        JobHandle chunkDataHandle = chunkDataJob.Schedule(); // Inicia sem dependências
 
         var lightJob = new ChunkLightingJob
         {
@@ -157,7 +137,45 @@ public static class MeshGenerator
             SizeY = SizeY,
             SizeZ = SizeZ
         };
-        JobHandle lightHandle = lightJob.Schedule(dataHandle);
+        dataHandle = lightJob.Schedule(chunkDataHandle);
+    }
+
+    public static void ScheduleMeshJob(
+        NativeArray<int> heightCache,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<byte> light,
+        NativeArray<BlockTextureMapping> nativeBlockMappings,
+        int atlasTilesX,
+        int atlasTilesY,
+        bool generateSides,
+        int borderSize,
+        out JobHandle meshHandle,
+        out NativeList<Vector3> vertices,
+        out NativeList<int> opaqueTriangles,
+        out NativeList<int> transparentTriangles,
+        out NativeList<int> waterTriangles,
+        out NativeList<Vector2> uvs,
+        out NativeList<Vector2> uv2,
+        out NativeList<Vector3> normals,
+        out NativeList<byte> vertexLights,
+        out NativeList<byte> tintFlags,
+        out NativeList<byte> vertexAO,
+        out NativeList<Vector4> extraUVs
+    )
+    {
+        // 1. Alocações das Listas de Mesh (Output)
+        vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
+        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        normals = new NativeList<Vector3>(4096, Allocator.TempJob);
+        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
+        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);
+        tintFlags = new NativeList<byte>(4096 * 4, Allocator.TempJob);
+        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);
+        uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
+        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
 
         // ==========================================
         // JOB 2: Geração da Malha (Mesh)
@@ -187,8 +205,8 @@ public static class MeshGenerator
             tintFlags = tintFlags,
             vertexAO = vertexAO
         };
-        // O MeshJob agora espera o DataJob terminar diretamente (Iluminação removida da fila)
-        handle = meshJob.Schedule(lightHandle);
+        // O MeshJob agora é agendado independentemente, assumindo que os dados intermediários já estão prontos
+        meshHandle = meshJob.Schedule();
     }
 
     // =========================================================================
@@ -768,13 +786,13 @@ public static class MeshGenerator
                                 }
 
                                 // === ADICIONE ESTE BLOCO AQUI ===
-                            // Se generateSides for falso (chunks internos), corta implacavelmente 
-                            // qualquer face que aponte para fora dos limites do chunk, incluindo a água!
-                            // if (!generateSides)
-                            // {
-                            //     if (axis == 0 && (nx < border || nx >= border + SizeX)) isVisible = false;
-                            //     if (axis == 2 && (nz < border || nz >= border + SizeZ)) isVisible = false;
-                            // }
+                                // Se generateSides for falso (chunks internos), corta implacavelmente 
+                                // qualquer face que aponte para fora dos limites do chunk, incluindo a água!
+                                // if (!generateSides)
+                                // {
+                                //     if (axis == 0 && (nx < border || nx >= border + SizeX)) isVisible = false;
+                                //     if (axis == 2 && (nz < border || nz >= border + SizeZ)) isVisible = false;
+                                // }
 
                                 if (isVisible)
                                 {

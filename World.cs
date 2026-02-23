@@ -112,7 +112,6 @@ public class World : MonoBehaviour
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
 
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
-
     private struct PendingMesh
     {
         public JobHandle handle;
@@ -125,17 +124,36 @@ public class World : MonoBehaviour
         public NativeList<Vector3> normals;
         public NativeList<byte> lightValues;
         public NativeList<byte> tintFlags;
-        public NativeArray<MeshGenerator.BlockEdit> edits;
-        public NativeArray<MeshGenerator.TreeInstance> trees;
         public Vector2Int coord;
         public int expectedGen;
         public Chunk chunk;
         public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
 
-        public NativeArray<byte> meshLightData; // <--- ADICIONE ISTO
+        // REMOVIDOS: edits, trees, meshLightData
+    }
+    private struct PendingData
+    {
+        public JobHandle handle;
+        public NativeArray<int> heightCache;
+        public NativeArray<BlockType> blockTypes;
+        public NativeArray<bool> solids;
+        public NativeArray<byte> light;
+        public NativeArray<NoiseLayer> nativeNoiseLayers;
+        public NativeArray<WarpLayer> nativeWarpLayers;
+        public NativeArray<NoiseLayer> nativeCaveLayers;
+        public NativeArray<BlockTextureMapping> nativeBlockMappings;
+
+        public Chunk chunk;
+        public Vector2Int coord;
+        public int expectedGen;
+        public NativeArray<byte> chunkLightData;
+        public NativeArray<MeshGenerator.BlockEdit> edits;
+        public NativeArray<MeshGenerator.TreeInstance> trees;
     }
 
+    // Adicione esta nova lista junto com pendingMeshes
+    private List<PendingData> pendingDataJobs = new List<PendingData>();
     [Header("Tree Settings")]
     public TreeSettings treeSettings;
 
@@ -294,6 +312,81 @@ public class World : MonoBehaviour
     {
         var stopwatch = System.Diagnostics.Stopwatch.StartNew();
 
+        // 1. ESTÁGIO DE DADOS: Pega os dados concluídos e inicia a geração da Malha
+        for (int i = pendingDataJobs.Count - 1; i >= 0; i--)
+        {
+            var pd = pendingDataJobs[i];
+            if (!pd.handle.IsCompleted) continue;
+
+            pd.handle.Complete();
+
+            // Libera arrays que foram usados APENAS no DataJob
+            if (pd.edits.IsCreated) pd.edits.Dispose();
+            if (pd.trees.IsCreated) pd.trees.Dispose();
+            if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
+
+            // Só continua a gerar a malha se o chunk ainda for válido / não foi reciclado
+            if (activeChunks.TryGetValue(pd.coord, out Chunk activeChunk) && activeChunk.generation == pd.expectedGen)
+            {
+                MeshGenerator.ScheduleMeshJob(
+                    pd.heightCache,
+                    pd.blockTypes,
+                    pd.solids,
+                    pd.light,
+                    pd.nativeBlockMappings,
+                    atlasTilesX,
+                    atlasTilesY,
+                    true, // generateSides
+                    1,    // borderSize
+                    out JobHandle meshHandle,
+                    out NativeList<Vector3> vertices,
+                    out NativeList<int> opaqueTriangles,
+                    out NativeList<int> transparentTriangles,
+                    out NativeList<int> waterTriangles,
+                    out NativeList<Vector2> uvs,
+                    out NativeList<Vector2> uv2,
+                    out NativeList<Vector3> normals,
+                    out NativeList<byte> vertexLights,
+                    out NativeList<byte> tintFlags,
+                    out NativeList<byte> vertexAO,
+                    out NativeList<Vector4> extraUVs
+                );
+
+                pendingMeshes.Add(new PendingMesh
+                {
+                    handle = meshHandle,
+                    vertices = vertices,
+                    opaqueTriangles = opaqueTriangles,
+                    transparentTriangles = transparentTriangles,
+                    waterTriangles = waterTriangles,
+                    uvs = uvs,
+                    uv2 = uv2,
+                    normals = normals,
+                    lightValues = vertexLights,
+                    tintFlags = tintFlags,
+                    vertexAO = vertexAO,
+                    extraUVs = extraUVs,
+                    chunk = pd.chunk,
+                    coord = pd.coord,
+                    expectedGen = pd.expectedGen
+                });
+
+                pd.chunk.currentJob = meshHandle;
+            }
+            else
+            {
+                // Se o chunk foi descartado, precisamos destruir a memória que seria enviada para o MeshJob
+                if (pd.heightCache.IsCreated) pd.heightCache.Dispose();
+                if (pd.blockTypes.IsCreated) pd.blockTypes.Dispose();
+                if (pd.solids.IsCreated) pd.solids.Dispose();
+                if (pd.light.IsCreated) pd.light.Dispose();
+                if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
+            }
+
+            pendingDataJobs.RemoveAt(i);
+        }
+
+        // 2. ESTÁGIO DA MALHA: Aplica na Unity as malhas finalizadas
         for (int i = pendingMeshes.Count - 1; i >= 0; i--)
         {
             var pm = pendingMeshes[i];
@@ -306,31 +399,27 @@ public class World : MonoBehaviour
                 pm.chunk.jobScheduled = false;
             }
 
-            if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk))
+            if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
             {
-                if (activeChunk.generation == pm.expectedGen)
+                if (stopwatch.Elapsed.TotalMilliseconds < frameTimeBudgetMS)
                 {
-                    if (stopwatch.Elapsed.TotalMilliseconds < frameTimeBudgetMS)
-                    {
-                        activeChunk.ApplyMeshData(
-                            pm.vertices,
-                            pm.opaqueTriangles,
-                            pm.transparentTriangles,
-                            pm.waterTriangles,
-                            pm.uvs,
-                            pm.uv2,
-                            pm.normals,
+                    activeChunk.ApplyMeshData(
+                        pm.vertices,
+                        pm.opaqueTriangles,
+                        pm.transparentTriangles,
+                        pm.waterTriangles,
+                        pm.uvs,
+                        pm.uv2,
+                        pm.normals,
+                        pm.extraUVs
+                    );
 
-                            pm.extraUVs
-                        );
-
-                        activeChunk.hasVoxelData = true;
-                        activeChunk.gameObject.SetActive(true);
-                    }
-                    else
-                    {
-                        break;
-                    }
+                    activeChunk.hasVoxelData = true;
+                    activeChunk.gameObject.SetActive(true);
+                }
+                else
+                {
+                    break; // Corta para o próximo frame
                 }
             }
 
@@ -340,7 +429,6 @@ public class World : MonoBehaviour
 
         stopwatch.Stop();
     }
-
     private void DisposePendingMesh(PendingMesh pm)
     {
         if (pm.vertices.IsCreated) pm.vertices.Dispose();
@@ -352,9 +440,8 @@ public class World : MonoBehaviour
         if (pm.normals.IsCreated) pm.normals.Dispose();
         if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
         if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
-        if (pm.edits.IsCreated) pm.edits.Dispose();
-        if (pm.trees.IsCreated) pm.trees.Dispose();
-        if (pm.meshLightData.IsCreated) pm.meshLightData.Dispose();
+        if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
+        if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
     }
 
     // ===================================================================================
@@ -459,7 +546,7 @@ public class World : MonoBehaviour
         if (pendingChunks.Count > 0)
         {
             int processed = 0;
-            bool jobsCongested = pendingMeshes.Count > maxChunksPerFrame * 2;
+            bool jobsCongested = (pendingMeshes.Count + pendingDataJobs.Count) > maxChunksPerFrame * 2;
 
             if (!jobsCongested)
             {
@@ -604,69 +691,64 @@ public class World : MonoBehaviour
             chunk.jobScheduled = false;
         }
 
-        MeshGenerator.ScheduleMeshJob(
-             coord,
-             noiseLayers,
-             warpLayers,
-             caveLayers,
-             blockData.mappings,
-             baseHeight,
-             offsetX,
-             offsetZ,
-             atlasTilesX,
-             atlasTilesY,
-             true,
-             seaLevel,
-             caveThreshold,
-             caveStride,
-             maxCaveDepthMultiplier,
-             caveRarityScale,
-             caveRarityThreshold,
-             caveMaskSmoothness,
-             nativeEdits,
-             nativeTrees,
-             treeMargin,
-            borderSize,
-             maxTreeRadius,
-             CliffTreshold,
-             chunk.voxelData,
-             chunkLightData, // <--- ADICIONAMOS A LUZ AQUI
-             out JobHandle handle,
-             out NativeList<Vector3> vertices,
-             out NativeList<int> opaqueTriangles,
-             out NativeList<int> transparentTriangles,
-             out NativeList<int> waterTriangles,
-             out NativeList<Vector2> uvs,
-             out NativeList<Vector2> uv2,
-             out NativeList<Vector3> normals,
-             out NativeList<byte> vertexLights,
-             out NativeList<byte> tintFlags,
-             out NativeList<byte> vertexAO,
-             out NativeList<Vector4> extraUVs
-         );
+        // Adicione esta variável local caso não exista aí no final
 
-        pendingMeshes.Add(new PendingMesh
+
+        MeshGenerator.ScheduleDataJob(
+            coord,
+            noiseLayers,
+            warpLayers,
+            caveLayers,
+            blockData.mappings,
+            baseHeight,
+            offsetX,
+            offsetZ,
+            seaLevel,
+            caveThreshold,
+            caveStride,
+            maxCaveDepthMultiplier,
+            caveRarityScale,
+            caveRarityThreshold,
+            caveMaskSmoothness,
+            nativeEdits,
+            nativeTrees,
+            treeMargin,
+            borderSize,
+            treeSettings.canopyRadius, // maxTreeRadius
+            CliffTreshold,
+            chunk.voxelData,
+            chunkLightData,
+            out JobHandle dataHandle,
+            out NativeArray<int> heightCache,
+            out NativeArray<BlockType> blockTypes,
+            out NativeArray<bool> solids,
+            out NativeArray<byte> light,
+            out NativeArray<NoiseLayer> nativeNoiseLayers,
+            out NativeArray<WarpLayer> nativeWarpLayers,
+            out NativeArray<NoiseLayer> nativeCaveLayers,
+            out NativeArray<BlockTextureMapping> nativeBlockMappings
+        );
+
+        pendingDataJobs.Add(new PendingData
         {
+            handle = dataHandle,
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            nativeNoiseLayers = nativeNoiseLayers,
+            nativeWarpLayers = nativeWarpLayers,
+            nativeCaveLayers = nativeCaveLayers,
+            nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
-            handle = handle,
-            vertices = vertices,
-            opaqueTriangles = opaqueTriangles,
-            transparentTriangles = transparentTriangles,
-            waterTriangles = waterTriangles,
-            uvs = uvs,
-            uv2 = uv2,
-            normals = normals,
-            lightValues = vertexLights,
-            edits = nativeEdits,
-            trees = nativeTrees,
             coord = coord,
             expectedGen = expectedGen,
-            tintFlags = tintFlags,
-            vertexAO = vertexAO,
-            extraUVs = extraUVs,
-            meshLightData = chunkLightData // <--- GUARDE AQUI PARA O DISPOSE OCORRER NO FINAL
+            chunkLightData = chunkLightData,
+            edits = nativeEdits,
+            trees = nativeTrees
         });
-        chunk.currentJob = handle;
+
+        chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
     }
 
@@ -753,71 +835,61 @@ public class World : MonoBehaviour
             chunk.jobScheduled = false;
         }
 
-        // Chamar o gerador (Note a remoção do borderSize e a adição do chunkLightData)
-        MeshGenerator.ScheduleMeshJob(
-            coord,
-            noiseLayers,
-            warpLayers,
-            caveLayers,
-            blockData.mappings,
-            baseHeight,
-            offsetX,
-            offsetZ,
-            atlasTilesX,
-            atlasTilesY,
-            true,
-            seaLevel,
-            caveThreshold,
-            caveStride,
-            maxCaveDepthMultiplier,
-            caveRarityScale,
-            caveRarityThreshold,
-            caveMaskSmoothness,
-            nativeEdits,
-            nativeTrees,
-            treeMargin,
-           borderSize,
-            maxTreeRadius,
-            CliffTreshold,
-            chunk.voxelData,
-            chunkLightData, // <--- ADICIONAMOS A LUZ AQUI
-            out JobHandle handle,
-            out NativeList<Vector3> vertices,
-            out NativeList<int> opaqueTriangles,
-            out NativeList<int> transparentTriangles,
-            out NativeList<int> waterTriangles,
-            out NativeList<Vector2> uvs,
-            out NativeList<Vector2> uv2,
-            out NativeList<Vector3> normals,
-            out NativeList<byte> vertexLights,
-            out NativeList<byte> tintFlags,
-            out NativeList<byte> vertexAO,
-            out NativeList<Vector4> extraUVs
-        );
+        MeshGenerator.ScheduleDataJob(
+              coord,
+              noiseLayers,
+              warpLayers,
+              caveLayers,
+              blockData.mappings,
+              baseHeight,
+              offsetX,
+              offsetZ,
+              seaLevel,
+              caveThreshold,
+              caveStride,
+              maxCaveDepthMultiplier,
+              caveRarityScale,
+              caveRarityThreshold,
+              caveMaskSmoothness,
+              nativeEdits,
+              nativeTrees,
+              treeMargin,
+              borderSize,
+              treeSettings.canopyRadius, // maxTreeRadius
+              CliffTreshold,
+              chunk.voxelData,
+              chunkLightData,
+              out JobHandle dataHandle,
+              out NativeArray<int> heightCache,
+              out NativeArray<BlockType> blockTypes,
+              out NativeArray<bool> solids,
+              out NativeArray<byte> light,
+              out NativeArray<NoiseLayer> nativeNoiseLayers,
+              out NativeArray<WarpLayer> nativeWarpLayers,
+              out NativeArray<NoiseLayer> nativeCaveLayers,
+              out NativeArray<BlockTextureMapping> nativeBlockMappings
+          );
 
-        pendingMeshes.Add(new PendingMesh
+        pendingDataJobs.Add(new PendingData
         {
+            handle = dataHandle,
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            nativeNoiseLayers = nativeNoiseLayers,
+            nativeWarpLayers = nativeWarpLayers,
+            nativeCaveLayers = nativeCaveLayers,
+            nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
-            handle = handle,
-            vertices = vertices,
-            opaqueTriangles = opaqueTriangles,
-            transparentTriangles = transparentTriangles,
-            waterTriangles = waterTriangles,
-            uvs = uvs,
-            uv2 = uv2,
-            normals = normals,
-            lightValues = vertexLights,
-            edits = nativeEdits,
-            trees = nativeTrees,
             coord = coord,
             expectedGen = expectedGen,
-            tintFlags = tintFlags,
-            vertexAO = vertexAO,
-            extraUVs = extraUVs,
-            meshLightData = chunkLightData // <--- GUARDE AQUI PARA O DISPOSE OCORRER NO FINAL
+            chunkLightData = chunkLightData,
+            edits = nativeEdits,
+            trees = nativeTrees
         });
 
-        chunk.currentJob = handle;
+        chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
     }
 
