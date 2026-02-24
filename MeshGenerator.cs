@@ -528,19 +528,15 @@ public static class MeshGenerator
                                 float ny = worldY;
                                 float nz = worldZ + layer.offset.y;
 
-                                float n1 = MyNoise.OctavePerlin3D(nx, ny, nz, layer) * 2f - 1f;
-                                float n2 = MyNoise.OctavePerlin3D(nx + 128.5f, ny + 256.1f, nz + 64.3f, layer) * 2f - 1f;
+                                // Usa o nosso novo Worley/Cellular Noise que já cria os formatos de túnel nativamente
+                                float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
 
-                                float tubeDistSq = (n1 * n1) + (n2 * n2);
-                                float tubeCave = math.max(0f, 1f - (tubeDistSq * 5f));
-
-                                float cheeseCave = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+                                // Mantemos o suporte ao Redistribution Modifier para que você
+                                // possa controlar o tamanho/formato dos túneis no seu ScriptableObject/Inspector!
                                 if (layer.redistributionModifier != 1f || layer.exponent != 1f)
                                 {
-                                    cheeseCave = MyNoise.Redistribution(cheeseCave, layer.redistributionModifier, layer.exponent);
+                                    finalSample = MyNoise.Redistribution(finalSample, layer.redistributionModifier, layer.exponent);
                                 }
-
-                                float finalSample = math.max(tubeCave, cheeseCave * 0.45f);
 
                                 totalCave += finalSample * layer.amplitude;
                                 sumCaveAmp += math.max(1e-5f, layer.amplitude);
@@ -568,7 +564,7 @@ public static class MeshGenerator
 
                         for (int y = 0; y <= maxCaveY; y++)
                         {
-                            if (y <= 100) continue; // Protege o Bedrock
+                            if (y <= 10) continue; // Protege o Bedrock
                             int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
                             if (!solids[voxelIdx]) continue;
 

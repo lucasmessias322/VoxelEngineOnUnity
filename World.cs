@@ -166,6 +166,8 @@ public class World : MonoBehaviour
     {
         Vector3Int.up, Vector3Int.down, Vector3Int.left, Vector3Int.right, Vector3Int.forward, Vector3Int.back
     };
+
+    public int Border = 1;
     // Em World.cs (Adicione estas variáveis)
     void Awake()
     {
@@ -324,7 +326,7 @@ public class World : MonoBehaviour
             if (pd.edits.IsCreated) pd.edits.Dispose();
             if (pd.trees.IsCreated) pd.trees.Dispose();
             if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
-
+            int borderSize = treeSettings.canopyRadius + Border;
             // Só continua a gerar a malha se o chunk ainda for válido / não foi reciclado
             if (activeChunks.TryGetValue(pd.coord, out Chunk activeChunk) && activeChunk.generation == pd.expectedGen)
             {
@@ -337,7 +339,7 @@ public class World : MonoBehaviour
                     atlasTilesX,
                     atlasTilesY,
                     true, // generateSides
-                    1,    // borderSize
+                    borderSize,    // borderSize
                     out JobHandle meshHandle,
                     out NativeList<Vector3> vertices,
                     out NativeList<int> opaqueTriangles,
@@ -638,7 +640,7 @@ public class World : MonoBehaviour
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = 1;
+        int borderSize = treeSettings.canopyRadius + Border;
         int maxTreeRadius = treeSettings.canopyRadius;
 
 
@@ -805,7 +807,7 @@ public class World : MonoBehaviour
 
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = 1;
+         int borderSize = treeSettings.canopyRadius + Border;
         int maxTreeRadius = treeSettings.canopyRadius;
 
         // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
