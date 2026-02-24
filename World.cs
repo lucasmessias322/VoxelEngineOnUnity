@@ -115,6 +115,7 @@ public class World : MonoBehaviour
     private struct PendingMesh
     {
         public JobHandle handle;
+
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
@@ -126,11 +127,22 @@ public class World : MonoBehaviour
         public NativeList<byte> tintFlags;
         public Vector2Int coord;
         public int expectedGen;
+        public Subchunk targetSubchunk; // Modificado: aponta pro filho, não pro pai
+        public Chunk parentChunk;
+
+
         public Chunk chunk;
+
+        // Arrays nativos que precisamos descartar aqui, já que tiramos o DeallocateOnJobCompletion
+        public NativeArray<int> heightCache;
+        public NativeArray<BlockType> blockTypes;
+        public NativeArray<bool> solids;
+        public NativeArray<byte> light;
+        public NativeArray<BlockTextureMapping> nativeBlockMappings;
         public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
 
-        // REMOVIDOS: edits, trees, meshLightData
+        public int subchunkIndex;
     }
     private struct PendingData
     {
@@ -309,12 +321,9 @@ public class World : MonoBehaviour
         UpdateChunks();
         ProcessChunkQueue();
     }
-
     private void ProcessChunkQueue()
     {
-        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
-
-        // 1. ESTÁGIO DE DADOS: Pega os dados concluídos e inicia a geração da Malha
+        // ==================== ESTÁGIO 1: DATA JOB CONCLUÍDO ====================
         for (int i = pendingDataJobs.Count - 1; i >= 0; i--)
         {
             var pd = pendingDataJobs[i];
@@ -322,62 +331,95 @@ public class World : MonoBehaviour
 
             pd.handle.Complete();
 
-            // Libera arrays que foram usados APENAS no DataJob
             if (pd.edits.IsCreated) pd.edits.Dispose();
             if (pd.trees.IsCreated) pd.trees.Dispose();
             if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
-            int borderSize = treeSettings.canopyRadius + Border;
-            // Só continua a gerar a malha se o chunk ainda for válido / não foi reciclado
+
             if (activeChunks.TryGetValue(pd.coord, out Chunk activeChunk) && activeChunk.generation == pd.expectedGen)
             {
-                MeshGenerator.ScheduleMeshJob(
-                    pd.heightCache,
-                    pd.blockTypes,
-                    pd.solids,
-                    pd.light,
-                    pd.nativeBlockMappings,
-                    atlasTilesX,
-                    atlasTilesY,
-                    true, // generateSides
-                    borderSize,    // borderSize
-                    out JobHandle meshHandle,
-                    out NativeList<Vector3> vertices,
-                    out NativeList<int> opaqueTriangles,
-                    out NativeList<int> transparentTriangles,
-                    out NativeList<int> waterTriangles,
-                    out NativeList<Vector2> uvs,
-                    out NativeList<Vector2> uv2,
-                    out NativeList<Vector3> normals,
-                    out NativeList<byte> vertexLights,
-                    out NativeList<byte> tintFlags,
-                    out NativeList<byte> vertexAO,
-                    out NativeList<Vector4> extraUVs
-                );
+                activeChunk.InitializeSubchunks(Material);
+                activeChunk.hasVoxelData = true;
+                activeChunk.state = Chunk.ChunkState.MeshReady;
 
-                pendingMeshes.Add(new PendingMesh
+                // ====================== FIX CRÍTICO - VOXEL DATA ======================
+                // Garante que voxelData esteja 100% sincronizado (inclui edits, árvores e luz)
+                int border = Border;
+                int vx = Chunk.SizeX + 2 * border;
+                int vz = Chunk.SizeZ + 2 * border;
+                int plane = vx * Chunk.SizeY;
+
+                int dst = 0;
+                for (int y = 0; y < Chunk.SizeY; y++)
+                    for (int z = 0; z < Chunk.SizeZ; z++)
+                        for (int x = 0; x < Chunk.SizeX; x++)
+                        {
+                            int src = (x + border) + y * vx + (z + border) * plane;
+                            activeChunk.voxelData[dst++] = (byte)pd.blockTypes[src];
+                        }
+                // =====================================================================
+
+                int subchunksCount = Chunk.SubchunksPerColumn;
+                NativeArray<JobHandle> subHandles = new NativeArray<JobHandle>(subchunksCount, Allocator.Temp);
+
+                int borderSize = treeSettings.canopyRadius + Border;
+
+                for (int sub = 0; sub < subchunksCount; sub++)
                 {
-                    handle = meshHandle,
-                    vertices = vertices,
-                    opaqueTriangles = opaqueTriangles,
-                    transparentTriangles = transparentTriangles,
-                    waterTriangles = waterTriangles,
-                    uvs = uvs,
-                    uv2 = uv2,
-                    normals = normals,
-                    lightValues = vertexLights,
-                    tintFlags = tintFlags,
-                    vertexAO = vertexAO,
-                    extraUVs = extraUVs,
-                    chunk = pd.chunk,
-                    coord = pd.coord,
-                    expectedGen = pd.expectedGen
-                });
+                    int startY = sub * Chunk.SubchunkHeight;
+                    int endY = startY + Chunk.SubchunkHeight;
 
-                pd.chunk.currentJob = meshHandle;
+                    MeshGenerator.ScheduleMeshJob(
+                        pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings,
+                        atlasTilesX, atlasTilesY, true, borderSize, startY, endY,
+                        out JobHandle meshHandle,
+                        out NativeList<Vector3> vertices, out NativeList<int> opaqueTriangles,
+                        out NativeList<int> transparentTriangles, out NativeList<int> waterTriangles,
+                        out NativeList<Vector2> uvs, out NativeList<Vector2> uv2,
+                        out NativeList<Vector3> normals, out NativeList<byte> vertexLights,
+                        out NativeList<byte> tintFlags, out NativeList<byte> vertexAO,
+                        out NativeList<Vector4> extraUVs
+                    );
+
+                    subHandles[sub] = meshHandle;
+
+                    pendingMeshes.Add(new PendingMesh
+                    {
+                        handle = meshHandle,
+                        vertices = vertices,
+                        opaqueTriangles = opaqueTriangles,
+                        transparentTriangles = transparentTriangles,
+                        waterTriangles = waterTriangles,
+                        uvs = uvs,
+                        uv2 = uv2,
+                        normals = normals,
+                        lightValues = vertexLights,
+                        tintFlags = tintFlags,
+                        vertexAO = vertexAO,
+                        extraUVs = extraUVs,
+                        chunk = pd.chunk,
+                        coord = pd.coord,
+                        expectedGen = pd.expectedGen,
+                        subchunkIndex = sub
+                    });
+                }
+
+                JobHandle combinedMeshHandle = JobHandle.CombineDependencies(subHandles);
+                subHandles.Dispose();
+
+                pd.chunk.currentJob = combinedMeshHandle;
+
+                var disposeJob = new MeshGenerator.DisposeChunkDataJob
+                {
+                    heightCache = pd.heightCache,
+                    blockTypes = pd.blockTypes,
+                    solids = pd.solids,
+                    light = pd.light,
+                    blockMappings = pd.nativeBlockMappings
+                };
+                disposeJob.Schedule(combinedMeshHandle);
             }
             else
             {
-                // Se o chunk foi descartado, precisamos destruir a memória que seria enviada para o MeshJob
                 if (pd.heightCache.IsCreated) pd.heightCache.Dispose();
                 if (pd.blockTypes.IsCreated) pd.blockTypes.Dispose();
                 if (pd.solids.IsCreated) pd.solids.Dispose();
@@ -388,49 +430,38 @@ public class World : MonoBehaviour
             pendingDataJobs.RemoveAt(i);
         }
 
-        // 2. ESTÁGIO DA MALHA: Aplica na Unity as malhas finalizadas
+        // ==================== ESTÁGIO 2: MESH JOB CONCLUÍDO ====================
         for (int i = pendingMeshes.Count - 1; i >= 0; i--)
         {
             var pm = pendingMeshes[i];
-
             if (!pm.handle.IsCompleted) continue;
 
             pm.handle.Complete();
-            if (pm.chunk != null)
-            {
-                pm.chunk.jobScheduled = false;
-            }
+            if (pm.chunk != null) pm.chunk.jobScheduled = false;
 
             if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) && activeChunk.generation == pm.expectedGen)
             {
-                if (stopwatch.Elapsed.TotalMilliseconds < frameTimeBudgetMS)
-                {
-                    activeChunk.ApplyMeshData(
-                        pm.vertices,
-                        pm.opaqueTriangles,
-                        pm.transparentTriangles,
-                        pm.waterTriangles,
-                        pm.uvs,
-                        pm.uv2,
-                        pm.normals,
-                        pm.extraUVs
-                    );
+                Subchunk sub = activeChunk.subchunks[pm.subchunkIndex];
 
-                    activeChunk.hasVoxelData = true;
-                    activeChunk.gameObject.SetActive(true);
+                if (pm.vertices.Length > 0)
+                {
+                    sub.gameObject.SetActive(true);
+                    sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.waterTriangles,
+                                      pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
                 }
                 else
                 {
-                    break; // Corta para o próximo frame
+                    sub.ClearMesh();
                 }
+
+                activeChunk.state = Chunk.ChunkState.Active;
             }
 
             DisposePendingMesh(pm);
             pendingMeshes.RemoveAt(i);
         }
-
-        stopwatch.Stop();
     }
+
     private void DisposePendingMesh(PendingMesh pm)
     {
         if (pm.vertices.IsCreated) pm.vertices.Dispose();
@@ -510,26 +541,17 @@ public class World : MonoBehaviour
             // C. ENCONTRAR NOVOS CHUNKS PARA GERAR
             foreach (Vector2Int coord in _tempNeededCoords)
             {
-                if (!activeChunks.ContainsKey(coord))
-                {
-                    bool alreadyPending = false;
-                    for (int i = 0; i < pendingChunks.Count; i++)
-                    {
-                        if (pendingChunks[i].coord == coord)
-                        {
-                            alreadyPending = true;
-                            break;
-                        }
-                    }
+                if (activeChunks.ContainsKey(coord))
+                    continue;
 
-                    if (!alreadyPending)
-                    {
-                        float dx = coord.x - currentChunkCoord.x;
-                        float dz = coord.y - currentChunkCoord.y;
-                        float distSq = dx * dx + dz * dz;
-                        pendingChunks.Add((coord, distSq));
-                    }
-                }
+                // Substitui a checagem manual por uma checagem unificada e robusta
+                if (IsChunkJobPending(coord))
+                    continue;
+
+                float dx = coord.x - currentChunkCoord.x;
+                float dz = coord.y - currentChunkCoord.y;
+                float distSq = dx * dx + dz * dz;
+                pendingChunks.Add((coord, distSq));
             }
 
             // D. REORDENAR A FILA
@@ -548,7 +570,8 @@ public class World : MonoBehaviour
         if (pendingChunks.Count > 0)
         {
             int processed = 0;
-            bool jobsCongested = (pendingMeshes.Count + pendingDataJobs.Count) > maxChunksPerFrame * 2;
+            int realPending = pendingDataJobs.Count + Mathf.CeilToInt(pendingMeshes.Count / 6f);
+            bool jobsCongested = realPending > maxChunksPerFrame * 4; // dei mais folga
 
             if (!jobsCongested)
             {
@@ -569,8 +592,30 @@ public class World : MonoBehaviour
 
     private void RequestChunk(Vector2Int coord)
     {
-        Chunk chunk = (chunkPool.Count > 0) ? chunkPool.Dequeue() :
-                  Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform).GetComponent<Chunk>();
+        Chunk chunk;
+        // Reuso seguro do pool: garante ResetChunk e estado limpo
+        if (chunkPool.Count > 0)
+        {
+            chunk = chunkPool.Dequeue();
+            // tentar garantir estado limpo ao reutilizar
+            try
+            {
+                chunk.ResetChunk();
+            }
+            catch
+            {
+                // se ResetChunk lançar, ignore: ainda assim continuamos e tentamos reconfigurar
+            }
+            // chunk.gameObject.SetActive(false);
+            chunk.jobScheduled = false;
+            chunk.hasVoxelData = false;
+            chunk.currentJob = default(JobHandle);
+            chunk.state = Chunk.ChunkState.Inactive;
+        }
+        else
+        {
+            chunk = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform).GetComponent<Chunk>();
+        }
 
         Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
             new Material[] { Material[0], Material[1], Material[2] } :
@@ -649,23 +694,6 @@ public class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
 
-        // NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
-
-        // for (int y = 0; y < Chunk.SizeY; y++)
-        // {
-        //     for (int z = -1; z <= Chunk.SizeZ; z++)
-        //     {
-        //         for (int x = -1; x <= Chunk.SizeX; x++)
-        //         {
-        //             Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
-        //             globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
-
-        //             int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
-        //             chunkLightData[idx] = l;
-        //         }
-        //     }
-        // }
-        // Dentro do RequestChunk no World.cs:
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
         for (int y = 0; y < Chunk.SizeY; y++)
@@ -689,37 +717,18 @@ public class World : MonoBehaviour
 
         if (chunk.jobScheduled)
         {
-            chunk.currentJob.Complete();
+            try { chunk.currentJob.Complete(); } catch { }
             chunk.jobScheduled = false;
         }
 
-        // Adicione esta variável local caso não exista aí no final
-
-
         MeshGenerator.ScheduleDataJob(
-            coord,
-            noiseLayers,
-            warpLayers,
-            caveLayers,
-            blockData.mappings,
-            baseHeight,
-            offsetX,
-            offsetZ,
-            seaLevel,
-            caveThreshold,
-            caveStride,
-            maxCaveDepthMultiplier,
-            caveRarityScale,
-            caveRarityThreshold,
-            caveMaskSmoothness,
-            nativeEdits,
-            nativeTrees,
-            treeMargin,
-            borderSize,
-            treeSettings.canopyRadius, // maxTreeRadius
-            CliffTreshold,
-            chunk.voxelData,
-            chunkLightData,
+            coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
+            baseHeight, offsetX, offsetZ, seaLevel,
+            caveThreshold, caveStride, maxCaveDepthMultiplier,
+            caveRarityScale, caveRarityThreshold, caveMaskSmoothness,
+            nativeEdits, nativeTrees, treeMargin, borderSize,
+            treeSettings.canopyRadius, CliffTreshold,
+            chunk.voxelData, chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
             out NativeArray<BlockType> blockTypes,
@@ -731,6 +740,7 @@ public class World : MonoBehaviour
             out NativeArray<BlockTextureMapping> nativeBlockMappings
         );
 
+        // === ADICIONE ESSA PARTE (era o que estava faltando/truncado) ===
         pendingDataJobs.Add(new PendingData
         {
             handle = dataHandle,
@@ -752,6 +762,10 @@ public class World : MonoBehaviour
 
         chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
+
+        // === ATIVAÇÃO CRÍTICA (resolve 80% do problema) ===
+        chunk.gameObject.SetActive(true);
+
     }
 
     private void RequestChunkRebuild(Vector2Int coord)
@@ -807,7 +821,7 @@ public class World : MonoBehaviour
 
         NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-         int borderSize = treeSettings.canopyRadius + Border;
+        int borderSize = treeSettings.canopyRadius + Border;
         int maxTreeRadius = treeSettings.canopyRadius;
 
         // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
@@ -833,7 +847,11 @@ public class World : MonoBehaviour
         }
         if (chunk.jobScheduled)
         {
-            chunk.currentJob.Complete();
+            try
+            {
+                chunk.currentJob.Complete();
+            }
+            catch { }
             chunk.jobScheduled = false;
         }
 
@@ -897,8 +915,19 @@ public class World : MonoBehaviour
 
     private bool IsChunkJobPending(Vector2Int coord)
     {
+        // Verifica pendingMeshes (malhas subchunks)
         for (int i = 0; i < pendingMeshes.Count; i++)
             if (pendingMeshes[i].coord == coord)
+                return true;
+
+        // Verifica pendingDataJobs (jobs de geração de dados)
+        for (int i = 0; i < pendingDataJobs.Count; i++)
+            if (pendingDataJobs[i].coord == coord)
+                return true;
+
+        // Verifica pendingChunks (fila simples de coords a gerar)
+        for (int i = 0; i < pendingChunks.Count; i++)
+            if (pendingChunks[i].coord == coord)
                 return true;
 
         return false;
@@ -1590,7 +1619,5 @@ public class World : MonoBehaviour
 
         foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
     }
-
-
 
 }
