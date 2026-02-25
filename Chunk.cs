@@ -16,9 +16,11 @@ public class Chunk : MonoBehaviour
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
     public Subchunk[] subchunks;
+    [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
+    [HideInInspector] public MeshRenderer[] subRenderers;
     private Mesh mesh; // reuso
 
     // Mesh usado exclusivamente para colisão (contém somente triângulos opacos)
@@ -85,23 +87,38 @@ public class Chunk : MonoBehaviour
 
     public void InitializeSubchunks(Material[] materials)
     {
-        // Verifica se é nulo OU se a Unity o carregou como um array vazio de tamanho 0
-        if (subchunks != null && subchunks.Length == SubchunksPerColumn)
-            return;
-
-        subchunks = new Subchunk[SubchunksPerColumn];
-        for (int i = 0; i < SubchunksPerColumn; i++)
+        // Cria os subchunks apenas na primeira vez (pooling)
+        if (subchunks == null || subchunks.Length != SubchunksPerColumn)
         {
-            GameObject subObj = new GameObject($"Subchunk_{i}");
-            subObj.transform.SetParent(this.transform);
-            subObj.transform.localPosition = Vector3.zero;
+            subchunks = new Subchunk[SubchunksPerColumn];
+            subRenderers = new MeshRenderer[SubchunksPerColumn];   // ← corrigido e ativado
 
-            Subchunk sc = subObj.AddComponent<Subchunk>();
-            sc.Initialize(materials, i);
-            subchunks[i] = sc;
+            for (int i = 0; i < SubchunksPerColumn; i++)
+            {
+                GameObject subObj = new GameObject($"Subchunk_{i}");
+                subObj.transform.SetParent(this.transform, false); // false = mantém posição world
+                subObj.transform.localPosition = Vector3.zero;
 
-            subObj.SetActive(true);
+                Subchunk sc = subObj.AddComponent<Subchunk>();
+                sc.Initialize(materials, i);
+
+                subchunks[i] = sc;
+                subRenderers[i] = sc.meshRenderer;   // cache correto agora
+
+                subObj.SetActive(true);
+            }
         }
+
+        // SEMPRE atualiza os bounds (CRÍTICO para pooling!)
+        UpdateWorldBounds();
+    }
+
+    public void UpdateWorldBounds()
+    {
+        worldBounds = new Bounds(
+            transform.position + new Vector3(8f, 192f, 8f),
+            new Vector3(16f, 384f, 16f)
+        );
     }
 
     public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)

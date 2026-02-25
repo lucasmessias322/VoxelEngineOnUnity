@@ -180,7 +180,19 @@ public class World : MonoBehaviour
     };
 
     public int Border = 1;
-    // Em World.cs (Adicione estas variáveis)
+
+    [Header("Frustum Culling")]
+    public bool enableFrustumCulling = true;
+    public Camera mainCamera;                     // arraste a câmera do player no Inspector
+
+    private Plane[] frustumPlanes = new Plane[6];
+    private Vector3 lastCamPos;
+    private Quaternion lastCamRot;
+    private float cullThresholdDistance = 0.35f;
+    private float cullThresholdAngle = 1.8f;
+    private bool forceCullThisFrame = true; // força no primeiro frame
+
+
     void Awake()
     {
         if (Instance != null && Instance != this)
@@ -193,6 +205,8 @@ public class World : MonoBehaviour
 
     private void Start()
     {
+        if (mainCamera == null)
+            mainCamera = Camera.main ?? FindObjectOfType<Camera>();
         if (blockData != null) blockData.InitializeDictionary();
 
         offsetX = seed * 17.123f;
@@ -448,6 +462,9 @@ public class World : MonoBehaviour
                     sub.gameObject.SetActive(true);
                     sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.waterTriangles,
                                       pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
+
+                    // === FIX PARA CHUNKS NOVOS/REUTILIZADOS FICAREM VISÍVEIS ===
+                    forceCullThisFrame = true;   // força o culling no próximo LateUpdate
                 }
                 else
                 {
@@ -477,6 +494,54 @@ public class World : MonoBehaviour
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
     }
 
+
+
+    private void LateUpdate()
+    {
+        if (!enableFrustumCulling) return;
+
+        bool cameraMoved = Vector3.SqrMagnitude(mainCamera.transform.position - lastCamPos) > cullThresholdDistance * cullThresholdDistance ||
+                           Quaternion.Angle(mainCamera.transform.rotation, lastCamRot) > cullThresholdAngle;
+
+        if (cameraMoved || forceCullThisFrame)
+        {
+            UpdateSubchunkFrustumCulling();
+            lastCamPos = mainCamera.transform.position;
+            lastCamRot = mainCamera.transform.rotation;
+            forceCullThisFrame = false;
+        }
+    }
+    // ==================== NOVO MÉTODO ====================
+    private void UpdateSubchunkFrustumCulling()
+    {
+        if (!enableFrustumCulling || mainCamera == null || activeChunks.Count == 0)
+            return;
+
+        // Calcula os 6 planos do frustum UMA única vez por frame
+        GeometryUtility.CalculateFrustumPlanes(mainCamera, frustumPlanes);
+
+        foreach (var chunk in activeChunks.Values)
+        {
+            if (chunk.subchunks == null) continue;
+
+            // Culling grosso do Chunk inteiro (muito rápido)
+
+
+            if (!GeometryUtility.TestPlanesAABB(frustumPlanes, chunk.worldBounds))
+            {
+                foreach (var sc in chunk.subchunks)
+                    if (sc != null) sc.SetVisible(false);
+                continue;
+            }
+
+            // Culling fino por Subchunk
+            foreach (var sub in chunk.subchunks)
+            {
+                if (sub != null)
+                    sub.UpdateVisibility(frustumPlanes);
+            }
+        }
+    }
     // ===================================================================================
     // VARIÁVEIS DE OTIMIZAÇÃO
     // ===================================================================================
@@ -627,6 +692,9 @@ public class World : MonoBehaviour
 
         Vector3 pos = new Vector3(coord.x * Chunk.SizeX, 0, coord.y * Chunk.SizeZ);
         chunk.transform.position = pos;
+
+        // === ADICIONE ESTA LINHA ===
+        chunk.UpdateWorldBounds();   // garante bounds atualizado imediatamente
 
         chunk.SetCoord(coord);
 
