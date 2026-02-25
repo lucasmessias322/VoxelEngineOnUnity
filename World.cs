@@ -104,9 +104,7 @@ public class World : MonoBehaviour
 
     private int nextChunkGeneration = 0;
 
-    // Adições para limitação
-    public int maxChunksPerFrame = 4;
-    public int maxMeshAppliesPerFrame = 2;
+
 
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
@@ -171,7 +169,16 @@ public class World : MonoBehaviour
 
     public int CliffTreshold = 2;
 
+
+    [Header("Performance Settings")]
+    // Adições para limitação
+    public int maxChunksPerFrame = 4;
+    public int maxMeshAppliesPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
+    private int maxDataCompletionsPerFrame = 2;
+    private int meshesAppliedThisFrame = 0;     // ← NOVA (contador por frame)
+
+    private float frameTimeAccumulator = 0f;
 
     private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
     private readonly Vector3Int[] sixDirections = new Vector3Int[]
@@ -332,8 +339,10 @@ public class World : MonoBehaviour
 
     private void Update()
     {
+        meshesAppliedThisFrame = 0;        // ← RESET OBRIGATÓRIO todo frame
         UpdateChunks();
         ProcessChunkQueue();
+
     }
     private void ProcessChunkQueue()
     {
@@ -448,7 +457,14 @@ public class World : MonoBehaviour
         for (int i = pendingMeshes.Count - 1; i >= 0; i--)
         {
             var pm = pendingMeshes[i];
-            if (!pm.handle.IsCompleted) continue;
+
+            if (!pm.handle.IsCompleted)
+                continue;
+
+            // ====================== LIMITE RÍGIDO ======================
+            if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame)
+                break;                     // Para de aplicar mais neste frame
+            // ===========================================================
 
             pm.handle.Complete();
             if (pm.chunk != null) pm.chunk.jobScheduled = false;
@@ -464,7 +480,7 @@ public class World : MonoBehaviour
                                       pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
 
                     // === FIX PARA CHUNKS NOVOS/REUTILIZADOS FICAREM VISÍVEIS ===
-                    forceCullThisFrame = true;   // força o culling no próximo LateUpdate
+                    forceCullThisFrame = true;
                 }
                 else
                 {
@@ -476,6 +492,8 @@ public class World : MonoBehaviour
 
             DisposePendingMesh(pm);
             pendingMeshes.RemoveAt(i);
+
+            meshesAppliedThisFrame++;   // ← Conta como 1 aplicação (mesmo se for ClearMesh)
         }
     }
 
@@ -511,6 +529,8 @@ public class World : MonoBehaviour
             forceCullThisFrame = false;
         }
     }
+
+
     // ==================== NOVO MÉTODO ====================
     private void UpdateSubchunkFrustumCulling()
     {
@@ -542,6 +562,8 @@ public class World : MonoBehaviour
             }
         }
     }
+
+
     // ===================================================================================
     // VARIÁVEIS DE OTIMIZAÇÃO
     // ===================================================================================
