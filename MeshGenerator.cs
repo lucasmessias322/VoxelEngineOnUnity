@@ -150,8 +150,6 @@ public static class MeshGenerator
         int atlasTilesY,
         bool generateSides,
         int borderSize,
-        int startY,
-    int endY,
         out JobHandle meshHandle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -184,8 +182,6 @@ public static class MeshGenerator
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
-            startY = startY,
-            endY = endY,
             blockTypes = blockTypes,
             solids = solids,
             light = light, // Usa a luz previamente calculada e passada por parâmetro
@@ -480,7 +476,7 @@ public static class MeshGenerator
         }
 
 
-        private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
+  private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -625,6 +621,7 @@ public static class MeshGenerator
             }
 
         }
+
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             int heightStride = SizeX + 2 * border;
@@ -663,20 +660,16 @@ public static class MeshGenerator
     private struct ChunkMeshJob : IJob
     {
         // DeallocateOnJobCompletion limpa todos estes arrays criados no Schedule.
-        [ReadOnly] public NativeArray<int> heightCache;
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
-        [ReadOnly] public NativeArray<bool> solids;
-        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-        [ReadOnly] public NativeArray<byte> light;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<int> heightCache;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockType> blockTypes;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<bool> solids;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<byte> light;
 
         public int border;
         public int atlasTilesX;
         public int atlasTilesY;
         public bool generateSides;
-
-        // LIMITES DO SUBCHUNK
-        public int startY;
-        public int endY;
 
         public NativeList<Vector3> vertices;
         public NativeList<int> opaqueTriangles;
@@ -720,15 +713,8 @@ public static class MeshGenerator
                     int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
                     int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
 
-                    // AQUI ACONTECE A MÁGICA DE RESTRIÇÃO PARA SUBCHUNKS (Limites de Y controlados)
-                    int minN = (axis == 1) ? startY : border;
-                    int maxN = (axis == 1) ? endY : border + chunkSize;
-
-                    int minU = (u == 1) ? startY : 0;
-                    int maxU = (u == 1) ? endY : sizeU;
-
-                    int minV = (v == 1) ? startY : 0;
-                    int maxV = (v == 1) ? endY : sizeV;
+                    int minN = (axis == 1) ? 0 : border;
+                    int maxN = minN + chunkSize;
 
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
                     BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
@@ -738,9 +724,9 @@ public static class MeshGenerator
 
                     for (int n = minN; n < maxN; n++)
                     {
-                        for (int j = minV; j < maxV; j++)
+                        for (int j = 0; j < sizeV; j++)
                         {
-                            for (int i = minU; i < maxU; i++)
+                            for (int i = 0; i < sizeU; i++)
                             {
                                 int x = (u == 0 ? i : v == 0 ? j : n);
                                 int y = (u == 1 ? i : v == 1 ? j : n);
@@ -771,12 +757,15 @@ public static class MeshGenerator
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
 
+                                    // MODIFICAÇÃO AQUI: Lógica do Minecraft para líquidos
                                     if (current == BlockType.Water && neighbor == BlockType.Water)
                                     {
+                                        // Água não desenha face contra outra água
                                         isVisible = false;
                                     }
                                     else if (current != BlockType.Water && !blockMappings[(int)current].isSolid)
                                     {
+                                        // Mantém a regra original para outros blocos não sólidos (ex: mato, flores)
                                         isVisible = false;
                                     }
                                     else if (blockMappings[(int)neighbor].isEmpty)
@@ -789,6 +778,15 @@ public static class MeshGenerator
                                         isVisible = !neighborOpaque;
                                     }
                                 }
+
+                                // === ADICIONE ESTE BLOCO AQUI ===
+                                // Se generateSides for falso (chunks internos), corta implacavelmente 
+                                // qualquer face que aponte para fora dos limites do chunk, incluindo a água!
+                                // if (!generateSides)
+                                // {
+                                //     if (axis == 0 && (nx < border || nx >= border + SizeX)) isVisible = false;
+                                //     if (axis == 2 && (nz < border || nz >= border + SizeZ)) isVisible = false;
+                                // }
 
                                 if (isVisible)
                                 {
@@ -816,11 +814,10 @@ public static class MeshGenerator
                             }
                         }
 
-                        // GREEDY MESHING
-                        for (int j = minV; j < maxV; j++)
+                        for (int j = 0; j < sizeV; j++)
                         {
-                            int i = minU;
-                            while (i < maxU)
+                            int i = 0;
+                            while (i < sizeU)
                             {
                                 int packedData = mask[i + j * sizeU];
                                 if (packedData == 0)
@@ -830,10 +827,10 @@ public static class MeshGenerator
                                 }
 
                                 int w = 1;
-                                while (i + w < maxU && mask[i + w + j * sizeU] == packedData) w++;
+                                while (i + w < sizeU && mask[i + w + j * sizeU] == packedData) w++;
 
                                 int h = 1;
-                                while (j + h < maxV)
+                                while (j + h < sizeV)
                                 {
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
@@ -1071,19 +1068,6 @@ public static class MeshGenerator
         }
     }
 
-
-    [BurstCompile]
-    public struct DisposeChunkDataJob : IJob
-    {
-        [DeallocateOnJobCompletion] public NativeArray<int> heightCache;
-        [DeallocateOnJobCompletion] public NativeArray<BlockType> blockTypes;
-        [DeallocateOnJobCompletion] public NativeArray<bool> solids;
-        [DeallocateOnJobCompletion] public NativeArray<byte> light;
-        [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
-
-        public void Execute() { }
-    }
-
 }
 
 public class MeshBuildResult
@@ -1108,4 +1092,3 @@ public class MeshBuildResult
         normals = n;
     }
 }
-
