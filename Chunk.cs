@@ -10,10 +10,17 @@ public class Chunk : MonoBehaviour
     public const int SizeY = 384;
     public const int SizeZ = 16;
     public NativeArray<byte> voxelData; // ou BlockType se preferir enum
-    
+                                        // NOVAS CONSTANTES PARA OS SUBCHUNKS
+    public const int SubchunkHeight = 64;
+    public const int SubchunksPerColumn = SizeY / SubchunkHeight; // Resulta em 6
+
+    [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
+    public Subchunk[] subchunks;
+    [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
+    [HideInInspector] public MeshRenderer[] subRenderers;
     private Mesh mesh; // reuso
 
     // Mesh usado exclusivamente para colisão (contém somente triângulos opacos)
@@ -30,7 +37,8 @@ public class Chunk : MonoBehaviour
     {
         Requested,   // job agendado
         MeshReady,   // resultado chegou
-        Active       // mesh aplicado
+        Active,       // mesh aplicado
+        Inactive
     }
 
     public ChunkState state;
@@ -66,11 +74,10 @@ public class Chunk : MonoBehaviour
     }
     private void OnDestroy()
     {
-        if (jobScheduled)
+        if (jobScheduled && currentJob.IsCompleted == false)
         {
             currentJob.Complete();
         }
-
         if (chunkBlocks.IsCreated) chunkBlocks.Dispose();
         if (chunkLight.IsCreated) chunkLight.Dispose();
         // Segurança extra para pool
@@ -78,102 +85,47 @@ public class Chunk : MonoBehaviour
 
     }
 
+    public void InitializeSubchunks(Material[] materials)
+    {
+        // Cria os subchunks apenas na primeira vez (pooling)
+        if (subchunks == null || subchunks.Length != SubchunksPerColumn)
+        {
+            subchunks = new Subchunk[SubchunksPerColumn];
+            subRenderers = new MeshRenderer[SubchunksPerColumn];   // ← corrigido e ativado
+
+            for (int i = 0; i < SubchunksPerColumn; i++)
+            {
+                GameObject subObj = new GameObject($"Subchunk_{i}");
+                subObj.transform.SetParent(this.transform, false); // false = mantém posição world
+                subObj.transform.localPosition = Vector3.zero;
+
+                Subchunk sc = subObj.AddComponent<Subchunk>();
+                sc.Initialize(materials, i);
+
+                subchunks[i] = sc;
+                subRenderers[i] = sc.meshRenderer;   // cache correto agora
+
+                subObj.SetActive(true);
+            }
+        }
+
+        // SEMPRE atualiza os bounds (CRÍTICO para pooling!)
+        UpdateWorldBounds();
+    }
+
+    public void UpdateWorldBounds()
+    {
+        worldBounds = new Bounds(
+            transform.position + new Vector3(8f, 192f, 8f),
+            new Vector3(16f, 384f, 16f)
+        );
+    }
 
     public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)
     {
         materials = mats;
         if (meshRenderer != null)
             meshRenderer.sharedMaterials = mats;
-    }
-
-
-    public void ApplyMeshData(
-        NativeList<Vector3> vertices,
-        NativeList<int> opaqueTris,
-        NativeList<int> transparentTris,
-        NativeList<int> waterTris,
-        NativeList<Vector2> uvs,
-        NativeList<Vector2> uv2,
-        NativeList<Vector3> normals,
-        NativeList<Vector4> extraUVs // <-- 1. SUBSTITUÍDO AQUI
-    )
-    {
-        // FLAGS MÁGICAS: Dizem ao Unity para confiar em nós e não verificar nada.
-        // Isso é muito mais rápido.
-        var meshFlags = UnityEngine.Rendering.MeshUpdateFlags.DontRecalculateBounds |
-                        UnityEngine.Rendering.MeshUpdateFlags.DontValidateIndices |
-                        UnityEngine.Rendering.MeshUpdateFlags.DontNotifyMeshUsers;
-
-        mesh.Clear();
-
-        // SetVertices aceita NativeArray diretamente
-        mesh.SetVertices(vertices.AsArray());
-
-        // Aplicar UVs
-        mesh.SetUVs(0, uvs.AsArray());
-        mesh.SetUVs(1, uv2.AsArray());
-
-
-        mesh.SetUVs(2, extraUVs.AsArray());
-
-
-        mesh.SetNormals(normals.AsArray());
-
-        // Triângulos
-        mesh.subMeshCount = 3;
-        mesh.SetIndices(opaqueTris.AsArray(), MeshTopology.Triangles, 0, false);
-        mesh.SetIndices(transparentTris.AsArray(), MeshTopology.Triangles, 1, false);
-        mesh.SetIndices(waterTris.AsArray(), MeshTopology.Triangles, 2, false);
-
-        // OTIMIZAÇÃO DE BOUNDS
-        // Em vez de RecalculateBounds() (que lê todos os vertices), setamos manualmente.
-        // O centro é (SizeX/2, SizeY/2, SizeZ/2).
-        mesh.bounds = new Bounds(
-            new Vector3(Chunk.SizeX / 2f, Chunk.SizeY / 2f, Chunk.SizeZ / 2f),
-            new Vector3(Chunk.SizeX, Chunk.SizeY, Chunk.SizeZ)
-        );
-
-        // Upload final para GPU (marcar como true libera a memória da CPU se não for ler depois,
-        // mas precisamos ler para o Collider, então false ou cuidado aqui).
-        mesh.UploadMeshData(false);
-
-        // --- COLLIDER ---
-        // Bake de collider é o maior vilão de lag.
-        UpdateCollider(vertices, opaqueTris, transparentTris);
-    }
-
-    private void UpdateCollider(NativeList<Vector3> vertices, NativeList<int> opaqueTris, NativeList<int> transparentTris)
-    {
-        int solidCount = opaqueTris.Length + transparentTris.Length;
-        if (solidCount > 0)
-        {
-            if (colliderMesh == null) colliderMesh = new Mesh();
-            else colliderMesh.Clear();
-
-            // Otimização: Se possível, use um mesh simplificado para física.
-            // Como estamos usando o mesh visual, usamos as mesmas flags para acelerar a cópia.
-
-            colliderMesh.SetVertices(vertices.AsArray());
-
-            // Combinar triângulos (Lógica mantida, mas verifique se Allocator.Temp é seguro aqui, geralmente sim)
-            var colliderIndices = new NativeArray<int>(solidCount, Allocator.Temp);
-            if (opaqueTris.Length > 0)
-                NativeArray<int>.Copy(opaqueTris.AsArray(), 0, colliderIndices, 0, opaqueTris.Length);
-            if (transparentTris.Length > 0)
-                NativeArray<int>.Copy(transparentTris.AsArray(), 0, colliderIndices, opaqueTris.Length, transparentTris.Length);
-
-            colliderMesh.SetIndices(colliderIndices, MeshTopology.Triangles, 0, false);
-            colliderIndices.Dispose();
-
-            // Baking acontece aqui na atribuição
-            // Como estamos controlando o budget no World.cs, isso deve ser seguro agora.
-            meshCollider.sharedMesh = colliderMesh;
-            meshCollider.enabled = true;
-        }
-        else
-        {
-            meshCollider.enabled = false;
-        }
     }
 
 
@@ -184,33 +136,36 @@ public class Chunk : MonoBehaviour
         gameObject.name = $"Chunk_{c.x}_{c.y}";
     }
     public void ResetChunk()
-    {// Se existir job rodando, finalize antes de reutilizar
-        if (jobScheduled)
-        {
+    {
+        if (jobScheduled && !currentJob.IsCompleted)
             currentJob.Complete();
-            jobScheduled = false;
-        }
 
-        gameObject.SetActive(false);
-        generation = 0;
+        jobScheduled = false;
+        state = ChunkState.Inactive;
+        generation = -1;
+        hasVoxelData = false;
 
-        // limpar collider
+        if (mesh != null) mesh.Clear();
         if (meshCollider != null)
         {
             meshCollider.sharedMesh = null;
             meshCollider.enabled = false;
         }
-        if (colliderMesh != null)
+        if (colliderMesh != null) colliderMesh.Clear();
+
+        if (subchunks != null)
         {
-            Destroy(colliderMesh);
-            colliderMesh = null;
+            foreach (var sc in subchunks)
+            {
+                if (sc != null)
+                {
+                    sc.ClearMesh();
+                    sc.gameObject.SetActive(false);
+                }
+            }
         }
 
-        // Opcional: apenas marque que não tem dados válidos
-        hasVoxelData = false;
-
-
+        gameObject.SetActive(false);
     }
-
     public int generation;
 }
