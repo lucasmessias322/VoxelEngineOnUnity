@@ -147,21 +147,14 @@ public class Subchunk : MonoBehaviour
     }
 
     // ==================== MÉTODO DE CULLING ====================
-    public void UpdateVisibility(Plane[] frustumPlanes)
-    {
-        if (!hasGeometry || meshRenderer == null) return;
 
-        // Bounds do MeshRenderer já é em world space (subchunk está em localPosition = 0)
-        meshRenderer.enabled = GeometryUtility.TestPlanesAABB(frustumPlanes, meshRenderer.bounds);
-    }
 
     public void SetVisible(bool visible)
     {
         if (meshRenderer == null) return;
-
-        // Só muda se for diferente (evita custo desnecessário do Unity)
-        if (meshRenderer.enabled != visible)
-            meshRenderer.enabled = visible;
+        bool shouldShow = visible && hasGeometry;
+        if (meshRenderer.enabled != shouldShow)
+            meshRenderer.enabled = shouldShow;
     }
 
     public void ClearMesh()

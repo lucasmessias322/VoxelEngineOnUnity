@@ -11,7 +11,7 @@ public class Chunk : MonoBehaviour
     public const int SizeZ = 16;
     public NativeArray<byte> voxelData; // ou BlockType se preferir enum
                                         // NOVAS CONSTANTES PARA OS SUBCHUNKS
-    public const int SubchunkHeight = 64;
+    public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = SizeY / SubchunkHeight; // Resulta em 6
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab

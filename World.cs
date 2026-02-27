@@ -190,14 +190,17 @@ public class World : MonoBehaviour
 
     [Header("Frustum Culling")]
     public bool enableFrustumCulling = true;
-    public Camera mainCamera;                     // arraste a câmera do player no Inspector
+    public Camera mainCamera;
 
-    private Plane[] frustumPlanes = new Plane[6];
-    private Vector3 lastCamPos;
-    private Quaternion lastCamRot;
-    private float cullThresholdDistance = 0.35f;
-    private float cullThresholdAngle = 1.8f;
-    private bool forceCullThisFrame = true; // força no primeiro frame
+    [Header("Vertical Render Distance + Full Visibility")]
+    [Tooltip("Quantos subchunks acima/abaixo do jogador serão renderizados")]
+    public int verticalSubchunkRenderDistance = 2;
+
+    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical). Útil para cavernas/túneis não sumirem nos chunks vizinhos.")]
+    public int horizontalFullVisibilityRadius = 2; // ← NOVO (padrão 2 = player + 1 chunk de distância em todas direções)
+
+
+    private HashSet<Vector2Int> chunksToRecull = new HashSet<Vector2Int>();
 
 
     void Awake()
@@ -320,21 +323,32 @@ public class World : MonoBehaviour
             }
         }
 
+        // for (int i = 0; i < poolSize; i++)
+        // {
+        //     GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
+        //     obj.SetActive(false);
+        //     Chunk chunk = obj.GetComponent<Chunk>();
+
+        //     Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
+        //         new Material[] { Material[0], Material[1], Material[2] } :
+        //         new Material[] { (Material.Length > 0 ? Material[0] : null),
+        //                    (Material.Length > 1 ? Material[1] : Material[0]),
+        //                    (Material.Length > 2 ? Material[2] : Material[0]) };
+
+        //     chunk.SetMaterials(matsForChunk);
+        //     chunkPool.Enqueue(chunk);
+        // }
+
         for (int i = 0; i < poolSize; i++)
         {
             GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
             obj.SetActive(false);
             Chunk chunk = obj.GetComponent<Chunk>();
-
-            Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
-                new Material[] { Material[0], Material[1], Material[2] } :
-                new Material[] { (Material.Length > 0 ? Material[0] : null),
-                           (Material.Length > 1 ? Material[1] : Material[0]),
-                           (Material.Length > 2 ? Material[2] : Material[0]) };
-
-            chunk.SetMaterials(matsForChunk);
+            chunk.SetMaterials(Material);
             chunkPool.Enqueue(chunk);
         }
+
+
     }
 
     private void Update()
@@ -479,8 +493,7 @@ public class World : MonoBehaviour
                     sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.waterTriangles,
                                       pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
 
-                    // === FIX PARA CHUNKS NOVOS/REUTILIZADOS FICAREM VISÍVEIS ===
-                    forceCullThisFrame = true;
+
                 }
                 else
                 {
@@ -488,6 +501,8 @@ public class World : MonoBehaviour
                 }
 
                 activeChunk.state = Chunk.ChunkState.Active;
+                chunksToRecull.Add(pm.coord);
+
             }
 
             DisposePendingMesh(pm);
@@ -517,52 +532,59 @@ public class World : MonoBehaviour
     private void LateUpdate()
     {
         if (!enableFrustumCulling) return;
+        UpdateVerticalSubchunkVisibility();
+        // bool cameraMoved = Vector3.SqrMagnitude(mainCamera.transform.position - lastCamPos) > cullThresholdDistance * cullThresholdDistance ||
+        //                    Quaternion.Angle(mainCamera.transform.rotation, lastCamRot) > cullThresholdAngle;
 
-        bool cameraMoved = Vector3.SqrMagnitude(mainCamera.transform.position - lastCamPos) > cullThresholdDistance * cullThresholdDistance ||
-                           Quaternion.Angle(mainCamera.transform.rotation, lastCamRot) > cullThresholdAngle;
-
-        if (cameraMoved || forceCullThisFrame)
-        {
-            UpdateSubchunkFrustumCulling();
-            lastCamPos = mainCamera.transform.position;
-            lastCamRot = mainCamera.transform.rotation;
-            forceCullThisFrame = false;
-        }
+        // if (cameraMoved || forceCullThisFrame)
+        // {
+        //     UpdateVerticalSubchunkVisibility();
+        //     lastCamPos = mainCamera.transform.position;
+        //     lastCamRot = mainCamera.transform.rotation;
+        //     forceCullThisFrame = false;
+        // }
     }
 
-
-    // ==================== NOVO MÉTODO ====================
-    private void UpdateSubchunkFrustumCulling()
+    private void UpdateVerticalSubchunkVisibility()
     {
-        if (!enableFrustumCulling || mainCamera == null || activeChunks.Count == 0)
-            return;
+        if (player == null) return;
 
-        // Calcula os 6 planos do frustum UMA única vez por frame
-        GeometryUtility.CalculateFrustumPlanes(mainCamera, frustumPlanes);
+        Vector2Int playerChunkCoord = new Vector2Int(
+            Mathf.FloorToInt(player.position.x / Chunk.SizeX),
+            Mathf.FloorToInt(player.position.z / Chunk.SizeZ)
+        );
 
-        foreach (var chunk in activeChunks.Values)
+        int playerSubchunkY = Mathf.FloorToInt(player.position.y / Chunk.SubchunkHeight);
+
+        foreach (var kvp in activeChunks)
         {
-            if (chunk.subchunks == null) continue;
+            Chunk chunk = kvp.Value;
+            if (chunk.state != Chunk.ChunkState.Active || chunk.subchunks == null) continue;
 
-            // Culling grosso do Chunk inteiro (muito rápido)
+            Vector2Int chunkCoord = kvp.Key;
 
+            // === EXATAMENTE OS 9 CHUNKS (3×3) ===
+            bool isOneOfTheNineChunks =
+                Mathf.Abs(chunkCoord.x - playerChunkCoord.x) <= 1 &&
+                Mathf.Abs(chunkCoord.y - playerChunkCoord.y) <= 1;
 
-            if (!GeometryUtility.TestPlanesAABB(frustumPlanes, chunk.worldBounds))
+            for (int subIdx = 0; subIdx < Chunk.SubchunksPerColumn; subIdx++)
             {
-                foreach (var sc in chunk.subchunks)
-                    if (sc != null) sc.SetVisible(false);
-                continue;
-            }
-
-            // Culling fino por Subchunk
-            foreach (var sub in chunk.subchunks)
-            {
-                if (sub != null)
-                    sub.UpdateVisibility(frustumPlanes);
+                if (isOneOfTheNineChunks)
+                {
+                    // NUNCA desativa nenhum subchunk nesses 9 chunks
+                    chunk.subchunks[subIdx].SetVisible(true);
+                }
+                else
+                {
+                    // Culling vertical normal só para chunks mais distantes
+                    int verticalDistance = Mathf.Abs(subIdx - playerSubchunkY);
+                    bool shouldBeVisible = verticalDistance <= verticalSubchunkRenderDistance;
+                    chunk.subchunks[subIdx].SetVisible(shouldBeVisible);
+                }
             }
         }
     }
-
 
     // ===================================================================================
     // VARIÁVEIS DE OTIMIZAÇÃO
@@ -1342,7 +1364,7 @@ public class World : MonoBehaviour
 
         for (int i = 0; i < caveLayers.Length; i++)
         {
-            // ... (seu código de loop atual continua igual aqui dentro)
+
             var layer = caveLayers[i];
             if (!layer.enabled) continue;
 
@@ -1350,19 +1372,17 @@ public class World : MonoBehaviour
             float ny = (float)wy;
             float nz = wz + layer.offset.y;
 
-            float n1 = MyNoise.OctavePerlin3D(nx, ny, nz, layer) * 2f - 1f;
-            float n2 = MyNoise.OctavePerlin3D(nx + 128.5f, ny + 256.1f, nz + 64.3f, layer) * 2f - 1f;
+            // Usa o nosso novo Worley/Cellular Noise que já cria os formatos de túnel nativamente
+            float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
 
-            float tubeDistSq = (n1 * n1) + (n2 * n2);
-            float tubeCave = Mathf.Max(0f, 1f - (tubeDistSq * 5f));
-
-            float cheeseCave = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
+            // Mantemos o suporte ao Redistribution Modifier para que você
+            // possa controlar o tamanho/formato dos túneis no seu ScriptableObject/Inspector!
             if (layer.redistributionModifier != 1f || layer.exponent != 1f)
             {
-                cheeseCave = MyNoise.Redistribution(cheeseCave, layer.redistributionModifier, layer.exponent);
+                finalSample = MyNoise.Redistribution(finalSample, layer.redistributionModifier, layer.exponent);
             }
 
-            float finalSample = Mathf.Max(tubeCave, cheeseCave * 0.45f);
+
 
             totalCave += finalSample * layer.amplitude;
             sumCaveAmp += math.max(1e-5f, layer.amplitude);
@@ -1370,16 +1390,9 @@ public class World : MonoBehaviour
 
         float baseCaveResult = (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
 
-        // === NOVA LÓGICA DA MÁSCARA AQUI ===
-        float maskNx = (wx + offsetX) / caveRarityScale;
-        float maskNy = wy / caveRarityScale;
-        float maskNz = (wz + offsetZ) / caveRarityScale;
 
-        // cnoise retorna valores entre aproximadamente -1 e 1
-        float maskVal = noise.cnoise(new float3(maskNx, maskNy, maskNz));
-        float maskWeight = Mathf.Clamp01((maskVal - caveRarityThreshold) * caveMaskSmoothness);
 
-        return baseCaveResult * maskWeight;
+        return baseCaveResult;
     }
     private int GetSurfaceHeight(int worldX, int worldZ)
     {

@@ -692,10 +692,37 @@ public static class MeshGenerator
 
         public void Execute()
         {
+            if (IsSubchunkEmpty())
+            {
+                return; // pula TODO o greedy meshing
+            }
             float invAtlasTilesX = 1f / atlasTilesX;
             float invAtlasTilesY = 1f / atlasTilesY;
 
             GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+        }
+
+        private bool IsSubchunkEmpty()
+        {
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+
+            for (int y = startY; y < endY; y++)
+            {
+                for (int z = border; z < border + SizeZ; z++)
+                {
+                    for (int x = border; x < border + SizeX; x++)
+                    {
+                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                        if (blockTypes[idx] != BlockType.Air)
+                        {
+                            return false; // tem bloco (terra, água, árvore, etc)
+                        }
+                    }
+                }
+            }
+            return true; // 100% ar → pula
         }
 
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
@@ -792,21 +819,32 @@ public static class MeshGenerator
 
                                 if (isVisible)
                                 {
-                                    byte packed = outside ? LightUtils.PackLight(15, 0) : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
-                                    byte faceLight = (byte)math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
+                                    byte packed = outside
+                                        ? LightUtils.PackLight(15, 0)
+                                        : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
 
+                                    byte faceLight = (byte)math.max(
+                                        (int)LightUtils.GetSkyLight(packed),
+                                        (int)LightUtils.GetBlockLight(packed)
+                                    );
+
+                                    // --- NOVO: CALCULANDO AO POR BLOCO 1x1 ---
                                     int aoPlaneN = n + normalSign;
-                                    int ax = (u == 0 ? i : v == 0 ? j : aoPlaneN);
-                                    int ay = (u == 1 ? i : v == 1 ? j : aoPlaneN);
-                                    int az = (u == 2 ? i : v == 2 ? j : aoPlaneN);
-                                    Vector3Int aoBase = new Vector3Int(ax, ay, az);
+                                    Vector3Int aoPos = new Vector3Int(
+                                        axis == 0 ? aoPlaneN : x,
+                                        axis == 1 ? aoPlaneN : y,
+                                        axis == 2 ? aoPlaneN : z
+                                    );
 
-                                    byte ao0 = GetVertexAO(aoBase, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao1 = GetVertexAO(aoBase, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao2 = GetVertexAO(aoBase, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao3 = GetVertexAO(aoBase, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao1 = GetVertexAO(aoPos, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao2 = GetVertexAO(aoPos, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    byte ao3 = GetVertexAO(aoPos, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
+                                    // Empacota os 4 valores de AO (2 bits cada = 8 bits totais)
                                     int packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
+
+                                    // Mask agora guarda: [8 bits AO] | [4 bits Luz] | [12 bits Bloco]
                                     mask[i + j * sizeU] = (int)current | ((int)faceLight << 12) | (packedAO << 16);
                                 }
                                 else
@@ -848,14 +886,16 @@ public static class MeshGenerator
                                     h++;
                                 }
 
+                                // Extrai os dados que foram empacotados
                                 BlockType bt = (BlockType)(packedData & 0xFFF);
                                 byte finalLight = (byte)((packedData >> 12) & 0xF);
+                                int packedAO = (packedData >> 16) & 0xFF;
 
-                                int aoPackedData = (packedData >> 16) & 0xFF;
-                                byte ao0 = (byte)(aoPackedData & 3);
-                                byte ao1 = (byte)((aoPackedData >> 2) & 3);
-                                byte ao2 = (byte)((aoPackedData >> 4) & 3);
-                                byte ao3 = (byte)((aoPackedData >> 6) & 3);
+                                // Desempacota o AO do quad gigante (ele será idêntico por toda a superfície mesclada)
+                                byte ao0 = (byte)(packedAO & 0x3);
+                                byte ao1 = (byte)((packedAO >> 2) & 0x3);
+                                byte ao2 = (byte)((packedAO >> 4) & 0x3);
+                                byte ao3 = (byte)((packedAO >> 6) & 0x3);
 
                                 int vIndex = vertices.Length;
 
@@ -899,19 +939,37 @@ public static class MeshGenerator
 
                                     uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                 }
-
                                 NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles :
                                                        blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
 
+                                // Flip da diagonal para evitar artefatos no AO
+                                bool flipTriangle = (ao0 + ao2) > (ao1 + ao3);
+
                                 if (normalSign > 0)
                                 {
-                                    tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
-                                    tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
+                                    if (flipTriangle)
+                                    {
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 3);
+                                        tris.Add(vIndex + 1); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
+                                    }
+                                    else
+                                    {
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
+                                    }
                                 }
                                 else
                                 {
-                                    tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
-                                    tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
+                                    if (flipTriangle)
+                                    {
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 1);
+                                        tris.Add(vIndex + 1); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                    }
+                                    else
+                                    {
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                        tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
+                                    }
                                 }
 
                                 for (int y0 = 0; y0 < h; y0++)
@@ -927,6 +985,13 @@ public static class MeshGenerator
             mask.Dispose();
         }
 
+        private Vector3Int GetAoBase(int uCoord, int vCoord, int aoN, int uAxis, int vAxis)
+        {
+            int ax = (uAxis == 0 ? uCoord : vAxis == 0 ? vCoord : aoN);
+            int ay = (uAxis == 1 ? uCoord : vAxis == 1 ? vCoord : aoN);
+            int az = (uAxis == 2 ? uCoord : vAxis == 2 ? vCoord : aoN);
+            return new Vector3Int(ax, ay, az);
+        }
         private bool IsOccluder(int x, int y, int z, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
