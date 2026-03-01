@@ -221,9 +221,9 @@ public static class MeshGenerator
     {
         public Vector2Int coord;
 
-        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
-        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<WarpLayer> warpLayers;
-        [DeallocateOnJobCompletion][ReadOnly] public NativeArray<NoiseLayer> caveLayers;
+        [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
+        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
+        [ReadOnly] public NativeArray<NoiseLayer> caveLayers;
 
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
