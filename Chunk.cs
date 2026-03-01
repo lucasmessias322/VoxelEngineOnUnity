@@ -2,8 +2,7 @@ using UnityEngine;
 using Unity.Collections;
 using System.Collections.Generic;
 
-[RequireComponent(typeof(MeshFilter))]
-[RequireComponent(typeof(MeshRenderer))]
+
 public class Chunk : MonoBehaviour
 {
     public const int SizeX = 16;
@@ -11,15 +10,14 @@ public class Chunk : MonoBehaviour
     public const int SizeZ = 16;
     public NativeArray<byte> voxelData; // ou BlockType se preferir enum
                                         // NOVAS CONSTANTES PARA OS SUBCHUNKS
-    public const int SubchunkHeight = 64;
+    public const int SubchunkHeight = 128;
     public const int SubchunksPerColumn = SizeY / SubchunkHeight; // Resulta em 6
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
     public Subchunk[] subchunks;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
-    private MeshFilter meshFilter;
-    private MeshRenderer meshRenderer;
+
     [HideInInspector] public MeshRenderer[] subRenderers;
     private Mesh mesh; // reuso
 
@@ -27,8 +25,8 @@ public class Chunk : MonoBehaviour
     private Mesh colliderMesh;
     private MeshCollider meshCollider;
 
-    [SerializeField] private Material[] materials;  // MODIFICAÇÃO: Nova
-                                                    // Controle de Job ativo para este chunk
+
+    // Controle de Job ativo para este chunk
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
 
@@ -46,12 +44,10 @@ public class Chunk : MonoBehaviour
     public NativeArray<byte> chunkLight; // combined light (max skylight, blocklight)
     private void Awake()
     {
-        meshFilter = GetComponent<MeshFilter>();
-        meshRenderer = GetComponent<MeshRenderer>();
 
-        mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-        mesh.MarkDynamic();
-        meshFilter.sharedMesh = mesh;
+
+
+
 
         // Obter ou criar MeshCollider
         meshCollider = GetComponent<MeshCollider>();
@@ -121,12 +117,7 @@ public class Chunk : MonoBehaviour
         );
     }
 
-    public void SetMaterials(Material[] mats)  // MODIFICAÇÃO: Nova função (substitui SetMaterial)
-    {
-        materials = mats;
-        if (meshRenderer != null)
-            meshRenderer.sharedMaterials = mats;
-    }
+
 
 
     public Vector2Int coord;

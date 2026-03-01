@@ -11,7 +11,9 @@ public static class MeshGenerator
     private const int SizeX = Chunk.SizeX;
     private const int SizeY = Chunk.SizeY;
     private const int SizeZ = Chunk.SizeZ;
-
+    // No topo da classe (junto com as outras const)
+    private const int SubchunkHeight = Chunk.SubchunkHeight;
+    private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
     // ------------------- Tree Instance -------------------
     public struct TreeInstance
     {
@@ -48,12 +50,13 @@ public static class MeshGenerator
         float caveRarityThreshold,
         float caveMaskSmoothness,
         NativeArray<BlockEdit> blockEdits,
-        NativeArray<TreeInstance> treeInstances,
+       
         int treeMargin,
         int borderSize,
         int maxTreeRadius,
         int CliffTreshold,
-        NativeArray<byte> voxelOutput,
+        bool enableCave,
+        bool enableTrees,
         NativeArray<byte> lightData, // <--- NOVA INJEÇÃO DE DEPENDÊNCIA DE LUZ
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
@@ -63,7 +66,9 @@ public static class MeshGenerator
         out NativeArray<NoiseLayer> nativeNoiseLayers,
         out NativeArray<WarpLayer> nativeWarpLayers,
         out NativeArray<NoiseLayer> nativeCaveLayers,
-        out NativeArray<BlockTextureMapping> nativeBlockMappings
+        out NativeArray<BlockTextureMapping> nativeBlockMappings,
+        out NativeArray<bool> subchunkNonEmpty,
+        TreeSettings treeSettings
     )
     {
         // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
@@ -73,6 +78,7 @@ public static class MeshGenerator
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
+        subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
         // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
@@ -98,7 +104,7 @@ public static class MeshGenerator
             caveLayers = nativeCaveLayers,
             blockMappings = nativeBlockMappings,
             blockEdits = blockEdits,
-            treeInstances = treeInstances,
+           // treeInstances = treeInstances,
 
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
@@ -118,7 +124,11 @@ public static class MeshGenerator
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
-            voxelOutput = voxelOutput
+            treeSettings = treeSettings,
+
+            enableTrees = enableTrees,
+            enableCave = enableCave,
+            subchunkNonEmpty = subchunkNonEmpty
         };
         JobHandle chunkDataHandle = chunkDataJob.Schedule(); // Inicia sem dependências
 
@@ -227,8 +237,8 @@ public static class MeshGenerator
 
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
-        [ReadOnly] public NativeArray<TreeInstance> treeInstances;
-
+        //[ReadOnly] public NativeArray<TreeInstance> treeInstances;
+        public TreeSettings treeSettings;
         public int treeMargin;
         public int border;
         public int maxTreeRadius;
@@ -243,17 +253,21 @@ public static class MeshGenerator
         public float caveRarityThreshold;
         public float caveMaskSmoothness;
         public int CliffTreshold;
-
+        public bool enableCave;
+        public bool enableTrees;
         public NativeArray<int> heightCache;
         public NativeArray<BlockType> blockTypes;
         public NativeArray<bool> solids;
-        [WriteOnly] public NativeArray<byte> voxelOutput;
 
+        public NativeArray<bool> subchunkNonEmpty;
         public void Execute()
         {
             int heightSize = SizeX + 2 * border;
             int totalHeightPoints = heightSize * heightSize;
             int heightStride = heightSize;
+
+
+
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -273,36 +287,165 @@ public static class MeshGenerator
 
             // 2. Popular voxels (terreno, cavernas, água)
             PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
-            GenerateCaves(heightCache, blockTypes, solids);
+
+            if (enableCave)
+            {
+                GenerateCaves(heightCache, blockTypes, solids);
+            }
+
+
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            // 3. Árvores e Edições
-            TreePlacement.ApplyTreeInstancesToVoxels(
-                blockTypes, solids, blockMappings, treeInstances, coord, border,
-                SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
-            );
+            if (enableTrees)
+            {
+                // NOVO: Gere as árvores aqui
+                NativeList<TreeInstance> trees = GenerateTreeInstances();
+
+                // Aplicação existente (agora com trees local)
+                TreePlacement.ApplyTreeInstancesToVoxels(
+                    blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
+                    SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
+                );
+
+                trees.Dispose();  // Cleanup
+            }
 
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            // 4. Copiar para voxelOutput COM CAST PARA BYTE
-            if (voxelOutput.IsCreated && voxelOutput.Length == SizeX * SizeY * SizeZ)
+            // === NOVO: pré-calcula quais subchunks têm blocos ===
+            for (int s = 0; s < SubchunksPerColumn; s++)
+                subchunkNonEmpty[s] = false;
+
+            for (int s = 0; s < SubchunksPerColumn; s++)
             {
-                int dstIdx = 0;
-                for (int y = 0; y < SizeY; y++)
-                {
-                    for (int z = 0; z < SizeZ; z++)
-                    {
-                        int srcZOffset = (z + border) * voxelPlaneSize;
-                        for (int x = 0; x < SizeX; x++)
+                int startY = s * SubchunkHeight;
+                int endY = startY + SubchunkHeight;
+                bool hasBlock = false;
+
+                for (int y = startY; y < endY && !hasBlock; y++)
+                    for (int z = border; z < border + SizeZ && !hasBlock; z++)
+                        for (int x = border; x < border + SizeX && !hasBlock; x++)
                         {
-                            int srcIdx = (x + border) + y * voxelSizeX + srcZOffset;
-                            voxelOutput[dstIdx++] = (byte)blockTypes[srcIdx];
+                            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                            if (blockTypes[idx] != BlockType.Air)
+                            {
+                                hasBlock = true;
+                                break;
+                            }
                         }
-                    }
-                }
+                subchunkNonEmpty[s] = hasBlock;
             }
         }
+        // NOVO: Método privado para gerar árvores (adaptado de BuildTreeInstancesForChunk)
+        private NativeList<TreeInstance> GenerateTreeInstances()
+        {
+            int cellSize = math.max(1, treeSettings.minSpacing);
+            int chunkMinX = coord.x * SizeX;
+            int chunkMinZ = coord.y * SizeZ;
+            int chunkMaxX = chunkMinX + SizeX - 1;
+            int chunkMaxZ = chunkMinZ + SizeZ - 1;
 
+            int searchMargin = treeSettings.canopyRadius + treeSettings.minSpacing;
+            int cellX0 = FloorDiv(chunkMinX - searchMargin, cellSize);
+            int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
+            int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
+            int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
+
+            float freq = treeSettings.noiseScale;
+
+            // Estime capacidade máxima: número de cells possíveis
+            int maxTrees = (cellX1 - cellX0 + 1) * (cellZ1 - cellZ0 + 1);
+            NativeList<TreeInstance> trees = new NativeList<TreeInstance>(maxTrees, Allocator.Temp);
+
+            for (int cx = cellX0; cx <= cellX1; cx++)
+            {
+                for (int cz = cellZ0; cz <= cellZ1; cz++)
+                {
+                    float noiseX = (cx * 12.9898f + treeSettings.seed) * freq;
+                    float noiseZ = (cz * 78.233f + treeSettings.seed) * freq;
+
+                    // Substitua Mathf.PerlinNoise por noise.cnoise (normalizado para [0,1])
+                    float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
+
+                    if (sample > treeSettings.density) continue;
+
+                    // Offsets dentro da cell (novamente com noise)
+                    float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
+                    float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
+
+                    int worldX = cx * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
+                    int worldZ = cz * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
+
+                    if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
+                        worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
+
+                    // Use GetSurfaceHeight (já existe no job, mas ajuste para coords locais se necessário)
+                    int surfaceY = GetSurfaceHeight(worldX, worldZ);
+                    if (surfaceY <= 0 || surfaceY >= SizeY) continue;
+
+                    // Cheque groundType e cliff (implemente GetSurfaceBlockType e IsCliff usando heightCache)
+                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);  // NOVO método (ver abaixo)
+                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt) continue;
+                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;  // NOVO método (ver abaixo)
+
+                    // Height noise
+                    float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + treeSettings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + treeSettings.seed * 0.001f)) * 0.5f + 0.5f;
+                    int trunkH = treeSettings.minHeight + (int)math.round(heightNoise * (treeSettings.maxHeight - treeSettings.minHeight + 1));
+
+                    trees.Add(new TreeInstance
+                    {
+                        worldX = worldX,
+                        worldZ = worldZ,
+                        trunkHeight = trunkH,
+                        canopyRadius = treeSettings.canopyRadius,
+                        canopyHeight = treeSettings.canopyHeight
+                    });
+                }
+            }
+
+            return trees;
+        }
+
+        // NOVO: Versão interna de GetSurfaceBlockType (usa heightCache e coords world)
+        private BlockType GetSurfaceBlockTypeInternal(int worldX, int worldZ)
+        {
+            int h = GetSurfaceHeight(worldX, worldZ);
+            bool isBeachArea = (h <= seaLevel + 2);
+            bool isCliff = IsCliffInternal(worldX, worldZ, CliffTreshold);
+            int mountainStoneHeight = baseHeight + 70;
+            bool isHighMountain = h >= mountainStoneHeight;
+
+            if (isHighMountain) return BlockType.Stone;
+            else if (isCliff) return BlockType.Stone;
+            else return isBeachArea ? BlockType.Sand : BlockType.Grass;
+        }
+
+        // NOVO: Versão interna de IsCliff (usa heightCache, ajuste coords locais)
+        private bool IsCliffInternal(int worldX, int worldZ, int threshold = 2)
+        {
+            int realLx = worldX - coord.x * SizeX;
+            int realLz = worldZ - coord.y * SizeZ;
+            int cacheX = realLx + border;
+            int cacheZ = realLz + border;
+            int heightStride = SizeX + 2 * border;
+
+            if (cacheX <= 0 || cacheZ <= 0 || cacheX >= heightStride - 1 || cacheZ >= heightCache.Length / heightStride - 1)
+                return false;
+
+            int centerIdx = cacheX + cacheZ * heightStride;
+            int h = heightCache[centerIdx];
+
+            int hN = heightCache[centerIdx + heightStride];
+            int hS = heightCache[centerIdx - heightStride];
+            int hE = heightCache[centerIdx + 1];
+            int hW = heightCache[centerIdx - 1];
+
+            int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
+            maxDiff = math.max(maxDiff, math.abs(h - hE));
+            maxDiff = math.max(maxDiff, math.abs(h - hW));
+
+            return maxDiff >= threshold;
+        }
         private int GetSurfaceHeight(int worldX, int worldZ)
         {
             // === Domain Warping ===
@@ -789,6 +932,34 @@ public static class MeshGenerator
 
                                 bool isVisible = false;
 
+                                // if (outside)
+                                // {
+                                //     isVisible = true;
+                                // }
+                                // else
+                                // {
+                                //     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
+                                //     BlockType neighbor = blockTypes[nIdx];
+
+                                //     if (current == BlockType.Water && neighbor == BlockType.Water)
+                                //     {
+                                //         isVisible = false;
+                                //     }
+                                //     else if (current != BlockType.Water && !blockMappings[(int)current].isSolid)
+                                //     {
+                                //         isVisible = false;
+                                //     }
+                                //     else if (blockMappings[(int)neighbor].isEmpty)
+                                //     {
+                                //         isVisible = true;
+                                //     }
+                                //     else
+                                //     {
+                                //         bool neighborOpaque = blockMappings[(int)neighbor].isSolid && !blockMappings[(int)neighbor].isTransparent;
+                                //         isVisible = !neighborOpaque;
+                                //     }
+                                // }
+
                                 if (outside)
                                 {
                                     isVisible = true;
@@ -798,11 +969,11 @@ public static class MeshGenerator
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
 
-                                    if (current == BlockType.Water && neighbor == BlockType.Water)
-                                    {
-                                        isVisible = false;
-                                    }
-                                    else if (current != BlockType.Water && !blockMappings[(int)current].isSolid)
+                                    // === CORREÇÃO PRINCIPAL ===
+                                    // Corta faces entre blocos transparentes do MESMO tipo
+                                    // (folhas com folhas, água com água, vidro com vidro, etc.)
+                                    if (current == neighbor &&
+                                        (current == BlockType.Water || blockMappings[(int)current].isTransparent))
                                     {
                                         isVisible = false;
                                     }
@@ -812,7 +983,8 @@ public static class MeshGenerator
                                     }
                                     else
                                     {
-                                        bool neighborOpaque = blockMappings[(int)neighbor].isSolid && !blockMappings[(int)neighbor].isTransparent;
+                                        bool neighborOpaque = blockMappings[(int)neighbor].isSolid &&
+                                                              !blockMappings[(int)neighbor].isTransparent;
                                         isVisible = !neighborOpaque;
                                     }
                                 }
@@ -1137,6 +1309,8 @@ public static class MeshGenerator
     }
 
 
+
+
     [BurstCompile]
     public struct DisposeChunkDataJob : IJob
     {
@@ -1145,7 +1319,7 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
-
+        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ← NOVO
         public void Execute() { }
     }
 
