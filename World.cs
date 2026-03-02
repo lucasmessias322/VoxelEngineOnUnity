@@ -348,101 +348,6 @@ public class World : MonoBehaviour
 
     }
 
-    // private void ProcessChunkQueue()
-    // {
-    //     float frameStartTime = Time.realtimeSinceStartup;
-    //     float budgetSeconds = frameTimeBudgetMS / 1000f;   // ex: 4ms → 0.004s
-
-    //     int dataProcessedThisFrame = 0;
-    //     meshesAppliedThisFrame = 0; // já reseta no Update, mas reforçando
-
-    //     // ====================== STAGE 1: DATA JOBS (Geração de voxel) ======================
-    //     for (int i = pendingDataJobs.Count - 1; i >= 0; i--)
-    //     {
-    //         // 1. Checagem de tempo real (prioridade máxima)
-    //         if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds)
-    //             break;
-
-    //         // 2. Limite rígido de data jobs por frame
-    //         if (dataProcessedThisFrame >= maxDataCompletionsPerFrame)
-    //             break;
-
-    //         var pd = pendingDataJobs[i];
-    //         if (!pd.handle.IsCompleted)
-    //             continue;
-
-    //         // ==================== EXECUÇÃO ====================
-    //         pd.handle.Complete();
-    //         dataProcessedThisFrame++;
-
-    //         // Dispose de arrays temporários do job
-    //         if (pd.edits.IsCreated) pd.edits.Dispose();
-    //         if (pd.trees.IsCreated) pd.trees.Dispose();
-    //         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
-
-    //         if (activeChunks.TryGetValue(pd.coord, out Chunk activeChunk) &&
-    //             activeChunk.generation == pd.expectedGen)
-    //         {
-    //             activeChunk.InitializeSubchunks(Material);
-    //             activeChunk.hasVoxelData = true;
-    //             activeChunk.state = Chunk.ChunkState.MeshReady;
-
-    //             // === COPY VOXEL DATA (otimizado com unsafe + memcpy se possível) ===
-    //             CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData);
-
-    //             // Agenda os mesh jobs dos subchunks
-    //             ScheduleSubchunkMeshJobs(pd, activeChunk);
-    //         }
-    //         else
-    //         {
-    //             // Cleanup se o chunk foi removido enquanto o job rodava
-    //             DisposeDataJobResources(pd);
-    //         }
-
-    //         pendingDataJobs.RemoveAt(i);
-    //     }
-
-    //     // ====================== STAGE 2: MESH JOBS (Aplicação na GPU) ======================
-    //     for (int i = pendingMeshes.Count - 1; i >= 0; i--)
-    //     {
-    //         // Tempo real + limite de malhas
-    //         if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds)
-    //             break;
-
-    //         if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame)
-    //             break;
-
-    //         var pm = pendingMeshes[i];
-    //         if (!pm.handle.IsCompleted)
-    //             continue;
-
-    //         pm.handle.Complete();
-
-    //         if (activeChunks.TryGetValue(pm.coord, out Chunk activeChunk) &&
-    //             activeChunk.generation == pm.expectedGen)
-    //         {
-    //             Subchunk sub = activeChunk.subchunks[pm.subchunkIndex];
-
-    //             if (pm.vertices.Length > 0)
-    //             {
-    //                 sub.gameObject.SetActive(true);
-    //                 sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles,
-    //                                   pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
-    //             }
-    //             else
-    //             {
-    //                 sub.ClearMesh();
-    //             }
-
-    //             activeChunk.state = Chunk.ChunkState.Active;
-    //             chunksToRecull.Add(pm.coord);
-    //         }
-
-    //         DisposePendingMesh(pm);
-    //         pendingMeshes.RemoveAt(i);
-    //         meshesAppliedThisFrame++;
-    //     }
-    // }
 
     // ===================================================================
     // 1. COPY VOXEL DATA OTIMIZADO (substitui o loop pesado original)
@@ -478,6 +383,8 @@ public class World : MonoBehaviour
             // ==================== EXECUÇÃO ====================
             pd.handle.Complete();
             dataProcessedThisFrame++;
+
+
 
             // Dispose de arrays temporários do job
             if (pd.edits.IsCreated) pd.edits.Dispose();
@@ -554,7 +461,7 @@ public class World : MonoBehaviour
 
     private void CopyVoxelDataOptimized(NativeArray<BlockType> src, NativeArray<byte> dst)
     {
-        int border = Border;                    // seu Border público (geralmente 1)
+        int border = treeSettings.canopyRadius + Border;
         int vx = Chunk.SizeX + 2 * border;
         int plane = vx * Chunk.SizeY;
 
@@ -891,13 +798,6 @@ public class World : MonoBehaviour
             chunk = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform).GetComponent<Chunk>();
         }
 
-        Material[] matsForChunk = (Material != null && Material.Length >= 3) ?
-            new Material[] { Material[0], Material[1], Material[2] } :
-            new Material[] { (Material.Length > 0 ? Material[0] : null),
-                     (Material.Length > 1 ? Material[1] : Material[0]),
-                     (Material.Length > 2 ? Material[2] : Material[0]) };
-
-
 
         Vector3 pos = new Vector3(coord.x * Chunk.SizeX, 0, coord.y * Chunk.SizeZ);
         chunk.transform.position = pos;
@@ -1002,7 +902,7 @@ public class World : MonoBehaviour
             coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
             caveThreshold, caveStride, maxCaveDepthMultiplier,
-            caveRarityScale, caveRarityThreshold, caveMaskSmoothness,
+
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableCave,
             enableTrees,
@@ -1149,9 +1049,7 @@ public class World : MonoBehaviour
               caveThreshold,
               caveStride,
               maxCaveDepthMultiplier,
-              caveRarityScale,
-              caveRarityThreshold,
-              caveMaskSmoothness,
+
               nativeEdits,
 
               treeMargin,
@@ -1160,7 +1058,6 @@ public class World : MonoBehaviour
               CliffTreshold,
                 enableCave,
                 enableTrees,
-
               chunkLightData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
@@ -1287,15 +1184,15 @@ public class World : MonoBehaviour
         int sizeX = Chunk.SizeX;
         int sizeY = Chunk.SizeY;
         int sizeZ = Chunk.SizeZ;
-
-        int padX = sizeX + 2;
-        int padZ = sizeZ + 2;
+        int border = treeSettings.canopyRadius + Border;
+        int padX = sizeX + border;
+        int padZ = sizeZ + border;
 
         NativeArray<byte> paddedData = new NativeArray<byte>(padX * sizeY * padZ, Allocator.TempJob);
 
-        for (int z = -1; z < sizeZ + 1; z++)
+        for (int z = -border; z < sizeZ + border; z++)
         {
-            for (int x = -1; x < sizeX + 1; x++)
+            for (int x = -border; x < sizeX + border; x++)
             {
                 int currentCX = chunkX;
                 int currentCZ = chunkZ;
@@ -1342,6 +1239,7 @@ public class World : MonoBehaviour
         if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY) return BlockType.Air;
         if (worldPos.y <= 2) return BlockType.Bedrock;
 
+        // 1. Overrides (colocações do jogador)
         if (blockOverrides.TryGetValue(worldPos, out BlockType overridden))
             return overridden;
 
@@ -1353,10 +1251,11 @@ public class World : MonoBehaviour
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
+        // 2. FAST PATH - Chunk carregado → só ler voxelData (o que você queria)
         if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && chunk.hasVoxelData)
         {
-            int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
-            int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+            int lx = worldX - chunkCoord.x * Chunk.SizeX;
+            int lz = worldZ - chunkCoord.y * Chunk.SizeZ;
             int ly = worldPos.y;
 
             if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
@@ -1366,56 +1265,21 @@ public class World : MonoBehaviour
             }
         }
 
-        // Se chunk não estiver gerado ou sem dados, fallback para geração procedural
-        NativeArray<MeshGenerator.TreeInstance> trees = BuildTreeInstancesForChunk(chunkCoord, treeSettings);
-        BlockType treeBlockFound = BlockType.Air;
+        // 3. FALLBACK LEVE (apenas para chunks não carregados - bem raro agora)
+        //    Removemos completamente a geração de árvores aqui (era o maior vilão)
+        return GetProceduralBlockFast(worldPos, chunkCoord);
+    }
 
-        try
-        {
-            for (int i = 0; i < trees.Length; i++)
-            {
-                var t = trees[i];
+    private BlockType GetProceduralBlockFast(Vector3Int worldPos, Vector2Int chunkCoord)
+    {
+        int worldX = worldPos.x;
+        int worldZ = worldPos.z;
 
-                if (GetSurfaceBlockType(t.worldX, t.worldZ) != BlockType.Grass)
-                    continue;
-
-                int baseY = GetSurfaceHeight(t.worldX, t.worldZ);
-                int trunkTop = baseY + t.trunkHeight;
-
-                if (worldPos.x == t.worldX && worldPos.z == t.worldZ &&
-                    worldPos.y > baseY && worldPos.y <= trunkTop)
-                {
-                    treeBlockFound = BlockType.Log;
-                    break;
-                }
-
-                int canopyStartY = trunkTop - t.canopyHeight + 1;
-                int canopyEndY = trunkTop + 1;
-
-                if (worldPos.y >= canopyStartY && worldPos.y <= canopyEndY)
-                {
-                    int dx = worldPos.x - t.worldX;
-                    int dz = worldPos.z - t.worldZ;
-                    if (dx * dx + dz * dz <= t.canopyRadius * t.canopyRadius)
-                    {
-                        treeBlockFound = BlockType.Leaves;
-                        break;
-                    }
-                }
-            }
-        }
-        finally
-        {
-            trees.Dispose();
-        }
-
-        if (treeBlockFound != BlockType.Air)
-            return treeBlockFound;
-
-        bool isCave = false;
         int surfaceHeight = GetSurfaceHeight(worldX, worldZ);
 
-        if (caveLayers != null && caveLayers.Length > 0)
+        // Caverna (mantemos porque é barato)
+        bool isCave = false;
+        if (caveLayers != null && caveLayers.Length > 0 && worldPos.y <= seaLevel * maxCaveDepthMultiplier && enableCave)
         {
             int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
             if (worldPos.y <= maxCaveY)
@@ -1477,59 +1341,36 @@ public class World : MonoBehaviour
             }
         }
 
-        if (isCave)
-            return BlockType.Air;
+        if (isCave) return BlockType.Air;
 
         if (worldPos.y > surfaceHeight)
-        {
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
-        }
-        else
-        {
-            bool isBeachArea = (surfaceHeight <= seaLevel + 2);
-            bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
-            int mountainStoneHeight = baseHeight + 70;
-            bool isHighMountain = surfaceHeight >= mountainStoneHeight;
 
-            if (worldPos.y == surfaceHeight)
-            {
-                if (isHighMountain)
-                {
-                    return BlockType.Stone;
-                }
-                else if (isCliff)
-                {
-                    return BlockType.Stone;
-                }
-                else
-                {
-                    return isBeachArea ? BlockType.Sand : BlockType.Grass;
-                }
-            }
-            else if (worldPos.y > surfaceHeight - 4)
-            {
-                if (isCliff)
-                {
-                    return BlockType.Stone;
-                }
-                else
-                {
-                    return isBeachArea ? BlockType.Sand : BlockType.Dirt;
-                }
-            }
-            else if (worldPos.y <= 2)
-            {
-                return BlockType.Bedrock;
-            }
-            else if (worldPos.y > surfaceHeight - 50)
-            {
-                return BlockType.Stone;
-            }
-            else
-            {
-                return BlockType.Deepslate;
-            }
+        // Superfície / subsolo (sem árvores)
+        bool isBeachArea = (surfaceHeight <= seaLevel + 2);
+        bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
+        bool isHighMountain = surfaceHeight >= baseHeight + 70;
+
+        if (worldPos.y == surfaceHeight)
+        {
+            if (isHighMountain || isCliff) return BlockType.Stone;
+            return isBeachArea ? BlockType.Sand : BlockType.Grass;
         }
+        else if (worldPos.y > surfaceHeight - 4)
+        {
+            return (isCliff || isHighMountain) ? BlockType.Stone : (isBeachArea ? BlockType.Sand : BlockType.Dirt);
+        }
+        else if (worldPos.y <= 2)
+            return BlockType.Bedrock;
+        else if (worldPos.y > surfaceHeight - 50)
+            return BlockType.Stone;
+        else
+            return BlockType.Deepslate;
+    }
+    private bool IsChunkLoaded(Vector2Int coord)
+    {
+        return activeChunks.TryGetValue(coord, out Chunk chunk) &&
+               chunk.hasVoxelData;
     }
     private float ComputeCaveNoise(int wx, int wy, int wz)
     {
@@ -1637,92 +1478,10 @@ public class World : MonoBehaviour
         return GetHeightFromNoise(totalNoise, sumAmp);
     }
 
-    private NativeArray<MeshGenerator.TreeInstance> BuildTreeInstancesForChunk(Vector2Int coord, TreeSettings settings)
-    {
-        int cellSize = Mathf.Max(1, settings.minSpacing);
-        int chunkMinX = coord.x * Chunk.SizeX;
-        int chunkMinZ = coord.y * Chunk.SizeZ;
-        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
-        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
-
-        int searchMargin = settings.canopyRadius + settings.minSpacing;
-        int cellX0 = Mathf.FloorToInt((float)(chunkMinX - searchMargin) / cellSize);
-        int cellX1 = Mathf.FloorToInt((float)(chunkMaxX + searchMargin) / cellSize);
-        int cellZ0 = Mathf.FloorToInt((float)(chunkMinZ - searchMargin) / cellSize);
-        int cellZ1 = Mathf.FloorToInt((float)(chunkMaxZ + searchMargin) / cellSize);
-
-        float freq = settings.noiseScale;
-
-        List<MeshGenerator.TreeInstance> tmp = new List<MeshGenerator.TreeInstance>();
-
-        for (int cx = cellX0; cx <= cellX1; cx++)
-        {
-            for (int cz = cellZ0; cz <= cellZ1; cz++)
-            {
-                float noiseX = (cx * 12.9898f + settings.seed) * freq;
-                float noiseZ = (cz * 78.233f + settings.seed) * freq;
-                float sample = Mathf.PerlinNoise(noiseX, noiseZ);
-
-                if (sample > settings.density) continue;
-
-                int worldX = cx * cellSize + Mathf.RoundToInt(Mathf.PerlinNoise(noiseX + 1f, noiseZ + 1f) * (cellSize - 1));
-                int worldZ = cz * cellSize + Mathf.RoundToInt(Mathf.PerlinNoise(noiseX + 2f, noiseZ + 2f) * (cellSize - 1));
-
-                if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
-                    worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
-
-                int surfaceY = GetSurfaceHeight(worldX, worldZ);
-                if (surfaceY <= 0 || surfaceY >= Chunk.SizeY) continue;
-
-                BlockType groundType = GetSurfaceBlockType(worldX, worldZ);
-                if (groundType != BlockType.Grass && groundType != BlockType.Dirt) continue;
-                if (IsCliff(worldX, worldZ, CliffTreshold)) continue;
-
-                float heightNoise = Mathf.PerlinNoise((worldX + 0.1f) * 0.137f + settings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + settings.seed * 0.001f);
-                int trunkH = settings.minHeight + Mathf.RoundToInt(heightNoise * (settings.maxHeight - settings.minHeight + 1));
-
-                tmp.Add(new MeshGenerator.TreeInstance
-                {
-                    worldX = worldX,
-                    worldZ = worldZ,
-                    trunkHeight = trunkH,
-                    canopyRadius = settings.canopyRadius,
-                    canopyHeight = settings.canopyHeight
-                });
-            }
-        }
-
-        var arr = new NativeArray<MeshGenerator.TreeInstance>(tmp.Count, Allocator.Persistent);
-        for (int i = 0; i < tmp.Count; i++) arr[i] = tmp[i];
-        return arr;
-    }
-
     private int GetHeightFromNoise(float noise, float sumAmp)
     {
         float centered = noise - sumAmp * 0.5f;
         return math.clamp(baseHeight + (int)math.floor(centered), 1, Chunk.SizeY - 1);
-    }
-
-    private BlockType GetSurfaceBlockType(int worldX, int worldZ)
-    {
-        int h = GetSurfaceHeight(worldX, worldZ);
-        bool isBeachArea = (h <= seaLevel + 2);
-        bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
-        int mountainStoneHeight = baseHeight + 70;
-        bool isHighMountain = h >= mountainStoneHeight;
-
-        if (isHighMountain)
-        {
-            return BlockType.Stone;
-        }
-        else if (isCliff)
-        {
-            return BlockType.Stone;
-        }
-        else
-        {
-            return isBeachArea ? BlockType.Sand : BlockType.Grass;
-        }
     }
 
     private bool IsCliff(int worldX, int worldZ, int threshold = 2)
@@ -1801,7 +1560,13 @@ public class World : MonoBehaviour
 
                 // Limite vertical básico (SizeY)
                 if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
-
+                // === PROTEÇÃO NOVA ===
+                Vector2Int neighborChunk = new Vector2Int(
+                    Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
+                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
+                );
+                if (!IsChunkLoaded(neighborChunk))
+                    continue;
                 // Aqui lê-se o bloco diretamente
                 // (Nota: Certifique-se que o seu método GetBlockAt existe e retorna o bloco correto do mundo)
                 BlockType neighborBlock = GetBlockAt(neighborPos);
@@ -1850,7 +1615,13 @@ public class World : MonoBehaviour
             {
                 Vector3Int neighborPos = node.pos + dir;
                 if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
-
+                // === PROTEÇÃO NOVA ===
+                Vector2Int neighborChunk = new Vector2Int(
+                    Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
+                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
+                );
+                if (!IsChunkLoaded(neighborChunk))
+                    continue;
                 if (globalLightMap.TryGetValue(neighborPos, out byte neighborLight) && neighborLight > 0)
                 {
                     if (neighborLight < node.lightLevel)

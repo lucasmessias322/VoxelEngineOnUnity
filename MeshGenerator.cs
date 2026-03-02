@@ -234,9 +234,8 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
-        float caveRarityScale,
-        float caveRarityThreshold,
-        float caveMaskSmoothness,
+       
+        
         NativeArray<BlockEdit> blockEdits,
 
         int treeMargin,
@@ -347,9 +346,8 @@ public static class MeshGenerator
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
-            caveRarityScale = caveRarityScale,
-            caveRarityThreshold = caveRarityThreshold,
-            caveMaskSmoothness = caveMaskSmoothness,
+         
+          
             treeMargin = treeMargin,
             border = borderSize,
             maxTreeRadius = maxTreeRadius,
@@ -486,8 +484,8 @@ public static class MeshGenerator
         public int caveStride;
         public int maxCaveDepthMultiplier;
         public float caveRarityScale;
-        public float caveRarityThreshold;
-        public float caveMaskSmoothness;
+       
+       
         public int CliffTreshold;
         public bool enableCave;
         public bool enableTrees;

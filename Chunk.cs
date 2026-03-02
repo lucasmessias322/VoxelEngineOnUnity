@@ -8,8 +8,7 @@ public class Chunk : MonoBehaviour
     public const int SizeX = 16;
     public const int SizeY = 384;
     public const int SizeZ = 16;
-    public NativeArray<byte> voxelData; // ou BlockType se preferir enum
-                                        // NOVAS CONSTANTES PARA OS SUBCHUNKS
+    public NativeArray<byte> voxelData;
     public const int SubchunkHeight = 128;
     public const int SubchunksPerColumn = SizeY / SubchunkHeight; // Resulta em 6
 
@@ -19,17 +18,9 @@ public class Chunk : MonoBehaviour
     public bool hasVoxelData = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
-    private Mesh mesh; // reuso
 
-    // Mesh usado exclusivamente para colisão (contém somente triângulos opacos)
-    private Mesh colliderMesh;
-    private MeshCollider meshCollider;
-
-
-    // Controle de Job ativo para este chunk
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
-
 
     public enum ChunkState
     {
@@ -40,30 +31,13 @@ public class Chunk : MonoBehaviour
     }
 
     public ChunkState state;
-    public NativeArray<BlockType> chunkBlocks;
-    public NativeArray<byte> chunkLight; // combined light (max skylight, blocklight)
+
+
     private void Awake()
     {
 
-
-
-
-
-        // Obter ou criar MeshCollider
-        meshCollider = GetComponent<MeshCollider>();
-        if (meshCollider == null)
-        {
-            meshCollider = gameObject.AddComponent<MeshCollider>();
-        }
-        meshCollider.sharedMesh = null; // sem colisão até gerar mesh
-        meshCollider.convex = false; // deve ser não-convexo para terrenos
-                                     // opcionais: ajustar meshCollider.cookingOptions se necessário
-
         int total = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
-        chunkBlocks = new NativeArray<BlockType>(total, Allocator.Persistent);
-        chunkLight = new NativeArray<byte>(total, Allocator.Persistent);
 
-        // ← ADICIONE ESTA LINHA
         voxelData = new NativeArray<byte>(total, Allocator.Persistent);
 
         hasVoxelData = false; // ainda útil para saber se já tem dados válidos
@@ -74,8 +48,8 @@ public class Chunk : MonoBehaviour
         {
             currentJob.Complete();
         }
-        if (chunkBlocks.IsCreated) chunkBlocks.Dispose();
-        if (chunkLight.IsCreated) chunkLight.Dispose();
+
+
         // Segurança extra para pool
         if (voxelData.IsCreated) voxelData.Dispose();
 
@@ -135,14 +109,6 @@ public class Chunk : MonoBehaviour
         state = ChunkState.Inactive;
         generation = -1;
         hasVoxelData = false;
-
-        if (mesh != null) mesh.Clear();
-        if (meshCollider != null)
-        {
-            meshCollider.sharedMesh = null;
-            meshCollider.enabled = false;
-        }
-        if (colliderMesh != null) colliderMesh.Clear();
 
         if (subchunks != null)
         {
