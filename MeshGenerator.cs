@@ -30,9 +30,197 @@ public static class MeshGenerator
         public int x;
         public int y;
         public int z;
-        public int type; // enum BlockType como int
+        public int type;
     }
 
+    [BurstCompile]
+    private struct HeightmapJob : IJobParallelFor
+    {
+        public Vector2Int coord;
+
+        [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
+        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
+
+        public int baseHeight;
+        public float offsetX;
+        public float offsetZ;
+        public int border;
+
+        public NativeArray<int> heightCache;
+        public int heightStride;
+
+        public void Execute(int i)
+        {
+            int lx = i % heightStride;
+            int lz = i / heightStride;
+            int realLx = lx - border;
+            int realLz = lz - border;
+            int worldX = coord.x * SizeX + realLx;
+            int worldZ = coord.y * SizeZ + realLz;
+            heightCache[i] = GetSurfaceHeight(worldX, worldZ);
+        }
+
+        private int GetSurfaceHeight(int worldX, int worldZ)
+        {
+            // === Domain Warping ===
+            float warpX = 0f;
+            float warpZ = 0f;
+            float sumWarpAmp = 0f;
+
+            for (int j = 0; j < warpLayers.Length; j++)
+            {
+                var layer = warpLayers[j];
+                if (!layer.enabled) continue;
+
+                float baseNx = worldX + layer.offset.x;
+                float baseNz = worldZ + layer.offset.y;
+
+                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
+                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
+
+                warpX += (sampleX * 2f - 1f) * layer.amplitude;
+                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
+                sumWarpAmp += layer.amplitude;
+            }
+
+            if (sumWarpAmp > 0f)
+            {
+                warpX /= sumWarpAmp;
+                warpZ /= sumWarpAmp;
+            }
+            warpX = (warpX - 0.5f) * 2f;
+            warpZ = (warpZ - 0.5f) * 2f;
+
+            // === Noise layers ===
+            float totalNoise = 0f;
+            float sumAmp = 0f;
+            bool hasActiveLayers = false;
+
+            for (int j = 0; j < noiseLayers.Length; j++)
+            {
+                var layer = noiseLayers[j];
+                if (!layer.enabled) continue;
+
+                hasActiveLayers = true;
+
+                float nx = (worldX + warpX) + layer.offset.x;
+                float nz = (worldZ + warpZ) + layer.offset.y;
+
+                float sample = MyNoise.OctavePerlin(nx, nz, layer);
+
+                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+                {
+                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
+                }
+
+                totalNoise += sample * layer.amplitude;
+                sumAmp += math.max(1e-5f, layer.amplitude);
+            }
+
+            if (!hasActiveLayers || sumAmp <= 0f)
+            {
+                float nx = (worldX + warpX) * 0.05f + offsetX;
+                float nz = (worldZ + warpZ) * 0.05f + offsetZ;
+                totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+                sumAmp = 1f;
+            }
+
+            float centered = totalNoise - sumAmp * 0.5f;
+            return math.clamp(baseHeight + (int)math.floor(centered), 1, SizeY - 1);
+        }
+    }
+
+
+
+    [BurstCompile]
+    struct PopulateTerrainJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<int> heightCache;
+        [NativeDisableParallelForRestriction]
+        [WriteOnly] public NativeArray<BlockType> blockTypes;
+
+        [NativeDisableParallelForRestriction]
+        [WriteOnly] public NativeArray<bool> solids;
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+
+        public int border;
+        public float seaLevel;
+        public int baseHeight;
+        public int CliffTreshold;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+            int heightStride = paddedSize;
+
+            int lx = index % paddedSize;   // cacheX
+            int lz = index / paddedSize;   // cacheZ
+
+            int h = heightCache[lx + lz * heightStride];
+
+            bool isBeachArea = h <= seaLevel + 2f;
+
+            // === IsCliff local (corrigido - não precisa de coord) ===
+            bool isCliff = false;
+            if (lx > 0 && lx < paddedSize - 1 && lz > 0 && lz < paddedSize - 1)
+            {
+                int centerIdx = lx + lz * heightStride;
+                int hN = heightCache[centerIdx + heightStride];
+                int hS = heightCache[centerIdx - heightStride];
+                int hE = heightCache[centerIdx + 1];
+                int hW = heightCache[centerIdx - 1];
+
+                int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
+                maxDiff = math.max(maxDiff, math.abs(h - hE));
+                maxDiff = math.max(maxDiff, math.abs(h - hW));
+
+                isCliff = maxDiff >= CliffTreshold;
+            }
+
+            int mountainStoneHeight = baseHeight + 70;
+            bool isHighMountain = h >= mountainStoneHeight;
+
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+
+            for (int y = 0; y < SizeY; y++)
+            {
+                int idx = lx + y * voxelSizeX + lz * voxelPlaneSize;
+
+                if (y <= h)
+                {
+                    BlockType bt;
+                    if (y == h)
+                    {
+                        if (isHighMountain) bt = BlockType.Stone;
+                        else if (isCliff) bt = BlockType.Stone;
+                        else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+                    }
+                    else if (y > h - 4)
+                    {
+                        if (isCliff) bt = BlockType.Stone;
+                        else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                    }
+                    else if (y <= 2)
+                    {
+                        bt = BlockType.Bedrock;
+                    }
+                    else
+                    {
+                        bt = BlockType.Stone;
+                    }
+
+                    blockTypes[idx] = bt;
+                    solids[idx] = blockMappings[(int)bt].isSolid;
+                }
+                else
+                {
+                    blockTypes[idx] = BlockType.Air;
+                    solids[idx] = false;
+                }
+            }
+        }
+    }
     public static void ScheduleDataJob(
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
@@ -50,7 +238,7 @@ public static class MeshGenerator
         float caveRarityThreshold,
         float caveMaskSmoothness,
         NativeArray<BlockEdit> blockEdits,
-       
+
         int treeMargin,
         int borderSize,
         int maxTreeRadius,
@@ -93,6 +281,52 @@ public static class MeshGenerator
         solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
         light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
 
+
+
+
+        // ==========================================
+        // JOB 0: Geração do Heightmap (Paralelo)
+        // ==========================================
+        var heightJob = new HeightmapJob
+        {
+            coord = coord,
+            noiseLayers = nativeNoiseLayers,
+            warpLayers = nativeWarpLayers,
+            baseHeight = baseHeight,
+            offsetX = globalOffsetX,
+            offsetZ = globalOffsetZ,
+            border = borderSize,
+            heightCache = heightCache,
+            heightStride = heightSize
+        };
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessário)
+
+
+
+
+        // ==========================================
+        // JOB 1a: Populate Terrain Columns (PARALELO!)
+        // ==========================================
+        var populateJob = new PopulateTerrainJob
+        {
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            blockMappings = nativeBlockMappings,
+            border = borderSize,
+            seaLevel = seaLevel,
+            baseHeight = baseHeight,
+            CliffTreshold = CliffTreshold
+        };
+
+        int paddedSize = SizeX + 2 * borderSize;
+        int totalColumns = paddedSize * paddedSize;
+
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 64, heightHandle); // batch 64 é ótimo
+
+
+
+
         // ==========================================
         // JOB 1: Geração de Dados (Terreno)
         // ==========================================
@@ -104,7 +338,7 @@ public static class MeshGenerator
             caveLayers = nativeCaveLayers,
             blockMappings = nativeBlockMappings,
             blockEdits = blockEdits,
-           // treeInstances = treeInstances,
+
 
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
@@ -130,7 +364,8 @@ public static class MeshGenerator
             enableCave = enableCave,
             subchunkNonEmpty = subchunkNonEmpty
         };
-        JobHandle chunkDataHandle = chunkDataJob.Schedule(); // Inicia sem dependências
+        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // Dependência no heightHandle
+        JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
         var lightJob = new ChunkLightingJob
         {
@@ -223,6 +458,7 @@ public static class MeshGenerator
         meshHandle = meshJob.Schedule();
     }
 
+
     // =========================================================================
     // JOB 1: CHUNK DATA JOB (Gera Terreno, Cavernas, Água, Árvores)
     // =========================================================================
@@ -260,39 +496,26 @@ public static class MeshGenerator
         public NativeArray<bool> solids;
 
         public NativeArray<bool> subchunkNonEmpty;
+
         public void Execute()
         {
             int heightSize = SizeX + 2 * border;
             int totalHeightPoints = heightSize * heightSize;
             int heightStride = heightSize;
 
-
-
-
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
 
-            // 1. Heightmap
-            for (int i = 0; i < totalHeightPoints; i++)
-            {
-                int lx = i % heightStride;
-                int lz = i / heightStride;
-                int realLx = lx - border;
-                int realLz = lz - border;
-                int worldX = coord.x * SizeX + realLx;
-                int worldZ = coord.y * SizeZ + realLz;
-                heightCache[i] = GetSurfaceHeight(worldX, worldZ);
-            }
+
 
             // 2. Popular voxels (terreno, cavernas, água)
-            PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
+            //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
             if (enableCave)
             {
                 GenerateCaves(heightCache, blockTypes, solids);
             }
-
 
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
@@ -336,7 +559,7 @@ public static class MeshGenerator
                 subchunkNonEmpty[s] = hasBlock;
             }
         }
-        // NOVO: Método privado para gerar árvores (adaptado de BuildTreeInstancesForChunk)
+
         private NativeList<TreeInstance> GenerateTreeInstances()
         {
             int cellSize = math.max(1, treeSettings.minSpacing);
@@ -380,7 +603,7 @@ public static class MeshGenerator
                         worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
 
                     // Use GetSurfaceHeight (já existe no job, mas ajuste para coords locais se necessário)
-                    int surfaceY = GetSurfaceHeight(worldX, worldZ);
+                    int surfaceY = GetCachedHeight(worldX, worldZ);
                     if (surfaceY <= 0 || surfaceY >= SizeY) continue;
 
                     // Cheque groundType e cliff (implemente GetSurfaceBlockType e IsCliff usando heightCache)
@@ -446,6 +669,25 @@ public static class MeshGenerator
 
             return maxDiff >= threshold;
         }
+
+
+        // Lookup rápido no heightCache (usando o border já calculado)
+        private int GetCachedHeight(int worldX, int worldZ)
+        {
+            int realLx = worldX - coord.x * SizeX;
+            int realLz = worldZ - coord.y * SizeZ;
+            int cacheX = realLx + border;
+            int cacheZ = realLz + border;
+            int heightStride = SizeX + 2 * border;
+
+            // Segurança (nunca deve cair aqui se o border estiver correto)
+            if (cacheX < 0 || cacheX >= heightStride || cacheZ < 0 || cacheZ >= heightStride)
+                return GetSurfaceHeight(worldX, worldZ); // fallback raro
+
+            return heightCache[cacheX + cacheZ * heightStride];
+        }
+
+
         private int GetSurfaceHeight(int worldX, int worldZ)
         {
             // === Domain Warping ===
@@ -515,6 +757,7 @@ public static class MeshGenerator
             return math.clamp(baseHeight + (int)math.floor(centered), 1, SizeY - 1);
         }
 
+
         private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
             if (blockEdits.Length == 0) return;
@@ -542,84 +785,6 @@ public static class MeshGenerator
                     solids[idx] = mapping.isSolid;
                 }
             }
-        }
-
-        private void PopulateTerrainColumns(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
-        {
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = voxelSizeX;
-
-            for (int lx = -border; lx < SizeX + border; lx++)
-            {
-                for (int lz = -border; lz < SizeZ + border; lz++)
-                {
-                    int cacheX = lx + border;
-                    int cacheZ = lz + border;
-                    int cacheIdx = cacheX + cacheZ * heightStride;
-                    int h = heightCache[cacheIdx];
-                    bool isBeachArea = (h <= seaLevel + 2);
-
-                    bool isCliff = IsCliff(heightCache, cacheX, cacheZ, heightStride, CliffTreshold);
-                    int mountainStoneHeight = baseHeight + 70;
-                    bool isHighMountain = h >= mountainStoneHeight;
-
-                    for (int y = 0; y < SizeY; y++)
-                    {
-                        int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
-
-                        if (y <= h)
-                        {
-                            BlockType bt;
-                            if (y == h)
-                            {
-                                if (isHighMountain) bt = BlockType.Stone;
-                                else if (isCliff) bt = BlockType.Stone;
-                                else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
-                            }
-                            else if (y > h - 4)
-                            {
-                                if (isCliff) bt = BlockType.Stone;
-                                else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
-                            }
-                            else if (y <= 2)
-                            {
-                                bt = BlockType.Bedrock;
-                            }
-                            else
-                            {
-                                bt = BlockType.Stone;
-                            }
-                            blockTypes[voxelIdx] = bt;
-                            solids[voxelIdx] = blockMappings[(int)bt].isSolid;
-                        }
-                        else
-                        {
-                            blockTypes[voxelIdx] = BlockType.Air;
-                            solids[voxelIdx] = false;
-                        }
-                    }
-                }
-            }
-        }
-
-        private bool IsCliff(NativeArray<int> heightCache, int x, int z, int heightStride, int threshold = 2)
-        {
-            if (x <= 0 || z <= 0 || x >= heightStride - 1 || z >= heightCache.Length / heightStride - 1)
-                return false;
-
-            int centerIdx = x + z * heightStride;
-            int h = heightCache[centerIdx];
-
-            int hN = heightCache[centerIdx + heightStride];
-            int hS = heightCache[centerIdx - heightStride];
-            int hE = heightCache[centerIdx + 1];
-            int hW = heightCache[centerIdx - 1];
-
-            int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
-            maxDiff = math.max(maxDiff, math.abs(h - hE));
-            maxDiff = math.max(maxDiff, math.abs(h - hW));
-
-            return maxDiff >= threshold;
         }
 
 
@@ -798,6 +963,7 @@ public static class MeshGenerator
             return q;
         }
     }
+
 
     // =========================================================================
     // JOB 2: CHUNK MESH JOB (Greedy Meshing e Arrays Visuais)
@@ -1183,6 +1349,7 @@ public static class MeshGenerator
             return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
         }
     }
+
 
     [BurstCompile]
     private struct ChunkLightingJob : IJob

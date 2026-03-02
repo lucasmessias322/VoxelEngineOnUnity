@@ -959,7 +959,7 @@ public class World : MonoBehaviour
             nativeEdits = new NativeArray<MeshGenerator.BlockEdit>(0, Allocator.Persistent);
         }
 
-        // NativeArray<MeshGenerator.TreeInstance> nativeTrees = BuildTreeInstancesForChunk(coord, treeSettings);
+
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
         int borderSize = treeSettings.canopyRadius + Border;
