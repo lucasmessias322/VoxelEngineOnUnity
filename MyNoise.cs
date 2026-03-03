@@ -6,6 +6,19 @@ using System;
 
 
 [Serializable]
+public struct WarpLayer
+{
+    public bool enabled;
+    public float scale;
+    public float amplitude;
+    public int octaves;
+    public float persistence;
+    public float lacunarity;
+    public Vector2 offset;
+    public float maxAmp;
+}
+
+[Serializable]
 public struct NoiseLayer
 {
     public bool enabled;
