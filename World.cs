@@ -1006,26 +1006,27 @@ public class World : MonoBehaviour
 
 
         // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL ===
-        int voxelSizeX = Chunk.SizeX + 2; // +2 porque o border agora é sempre 1
-        int voxelSizeZ = Chunk.SizeZ + 2;
+        // === INÍCIO DA INJEÇÃO DA LUZ GLOBAL (CORRIGIDO) ===
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
 
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
         for (int y = 0; y < Chunk.SizeY; y++)
         {
-            for (int z = -1; z <= Chunk.SizeZ; z++)
+            for (int z = -borderSize; z < Chunk.SizeZ + borderSize; z++)
             {
-                for (int x = -1; x <= Chunk.SizeX; x++)
+                for (int x = -borderSize; x < Chunk.SizeX + borderSize; x++)
                 {
                     Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
-                    globalLightMap.TryGetValue(wp, out byte l); // Procura no dicionário infinito
-
-                    int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
+                    globalLightMap.TryGetValue(wp, out byte l);
+                    int idx = (x + borderSize) + y * voxelSizeX + (z + borderSize) * voxelPlaneSize;
                     chunkLightData[idx] = l;
                 }
             }
         }
+        // FIM DA INJEÇÃO
         if (chunk.jobScheduled)
         {
             try
