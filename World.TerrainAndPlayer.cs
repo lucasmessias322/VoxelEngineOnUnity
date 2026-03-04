@@ -381,14 +381,30 @@ public partial class World : MonoBehaviour
 
         byte newEmission = GetBlockEmission(type);
         byte oldEmission = GetBlockEmission(current);
+        byte newOpacity = GetBlockOpacity(type);
+        byte oldOpacity = GetBlockOpacity(current);
 
         if (newEmission > 0)
         {
             PropagateLightGlobal(worldPos, newEmission);
         }
-        else if (oldEmission > 0 || globalLightColumns.ContainsKey(new Vector2Int(worldPos.x, worldPos.z)))
+        else if (oldEmission > 0)
         {
             RemoveLightGlobal(worldPos);
+        }
+        else
+        {
+            bool becameOpaque = oldOpacity < 15 && newOpacity >= 15;
+            bool becameTransparent = oldOpacity >= 15 && newOpacity < 15;
+
+            if (becameOpaque)
+            {
+                RemoveLightGlobal(worldPos);
+            }
+            else if (becameTransparent)
+            {
+                RefillLightGlobal(worldPos);
+            }
         }
 
         foreach (Vector2Int coord in chunksToRebuild)

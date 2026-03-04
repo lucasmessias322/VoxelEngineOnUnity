@@ -215,6 +215,117 @@ public partial class World
 
         CleanupEmptyLightColumns();
     }
+
+    public void RefillLightGlobal(Vector3Int startWorldPos)
+    {
+        if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
+
+        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+        Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
+        HashSet<Vector3Int> enqueued = new HashSet<Vector3Int>();
+
+        // Try to relight the changed voxel from the brightest lit neighbor.
+        BlockType startBlock = GetBlockAt(startWorldPos);
+        byte startOpacity = GetBlockOpacity(startBlock);
+        if (startOpacity < 15)
+        {
+            byte bestAtStart = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
+
+            foreach (Vector3Int dir in sixDirections)
+            {
+                Vector3Int n = startWorldPos + dir;
+                if (n.y < 0 || n.y >= Chunk.SizeY) continue;
+
+                Vector2Int neighborChunk = new Vector2Int(
+                    Mathf.FloorToInt((float)n.x / Chunk.SizeX),
+                    Mathf.FloorToInt((float)n.z / Chunk.SizeZ)
+                );
+                if (!IsChunkLoaded(neighborChunk)) continue;
+
+                byte nLight = GetColumnLight(n.x, n.z, n.y);
+                if (nLight == 0) continue;
+
+                byte candidate = (byte)Mathf.Max(0, nLight - (1 + startOpacity));
+                if (candidate > bestAtStart) bestAtStart = candidate;
+            }
+
+            if (bestAtStart > GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y))
+            {
+                SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, bestAtStart);
+            }
+        }
+
+        // Seed queue with changed position and lit neighbors.
+        if (GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y) > 0)
+        {
+            refillQueue.Enqueue(startWorldPos);
+            enqueued.Add(startWorldPos);
+        }
+
+        foreach (Vector3Int dir in sixDirections)
+        {
+            Vector3Int n = startWorldPos + dir;
+            if (n.y < 0 || n.y >= Chunk.SizeY) continue;
+
+            Vector2Int neighborChunk = new Vector2Int(
+                Mathf.FloorToInt((float)n.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)n.z / Chunk.SizeZ)
+            );
+            if (!IsChunkLoaded(neighborChunk)) continue;
+
+            if (GetColumnLight(n.x, n.z, n.y) > 0 && enqueued.Add(n))
+            {
+                refillQueue.Enqueue(n);
+            }
+        }
+
+        while (refillQueue.Count > 0)
+        {
+            Vector3Int node = refillQueue.Dequeue();
+            byte currentLight = GetColumnLight(node.x, node.z, node.y);
+            if (currentLight == 0) continue;
+
+            Vector2Int chunkCoord = new Vector2Int(
+                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
+            );
+            dirtiedChunks.Add(chunkCoord);
+
+            foreach (Vector3Int dir in sixDirections)
+            {
+                Vector3Int neighborPos = node + dir;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+
+                Vector2Int neighborChunk = new Vector2Int(
+                    Mathf.FloorToInt((float)neighborPos.x / Chunk.SizeX),
+                    Mathf.FloorToInt((float)neighborPos.z / Chunk.SizeZ)
+                );
+                if (!IsChunkLoaded(neighborChunk)) continue;
+
+                BlockType neighborBlock = GetBlockAt(neighborPos);
+                byte opacity = GetBlockOpacity(neighborBlock);
+                if (opacity >= 15) continue;
+
+                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                byte candidateLight = (byte)Mathf.Max(0, currentLight - (1 + opacity));
+
+                if (candidateLight > neighborLight)
+                {
+                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
+                    if (enqueued.Add(neighborPos))
+                    {
+                        refillQueue.Enqueue(neighborPos);
+                    }
+                }
+            }
+        }
+
+        foreach (Vector2Int coord in dirtiedChunks)
+        {
+            RequestChunkRebuild(coord);
+        }
+    }
+
     private void CleanupEmptyLightColumns()
     {
         var toRemove = new List<Vector2Int>();
