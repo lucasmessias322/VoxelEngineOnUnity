@@ -22,6 +22,7 @@ public class Subchunk : MonoBehaviour
     [HideInInspector] public MeshRenderer meshRenderer;
     private MeshCollider meshCollider;
     private Mesh mesh;
+    private Mesh colliderMesh;
 
     // ==================== NOVO PARA CULLING ====================
     [HideInInspector]
@@ -39,6 +40,9 @@ public class Subchunk : MonoBehaviour
         mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
         mesh.MarkDynamic();
         meshFilter.sharedMesh = mesh;
+
+        colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+        colliderMesh.MarkDynamic();
 
         transform.localPosition = Vector3.zero;
     }
@@ -136,7 +140,38 @@ public class Subchunk : MonoBehaviour
 
         if (hasSolid)
         {
-            meshCollider.sharedMesh = mesh;
+            int colliderIndicesCount = opaqueTris.Length + transparentTris.Length;
+            var colliderDataArray = Mesh.AllocateWritableMeshData(1);
+            var colliderData = colliderDataArray[0];
+
+            var colliderVertexAttributes = new NativeArray<VertexAttributeDescriptor>(1, Allocator.Temp);
+            colliderVertexAttributes[0] = new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3);
+            colliderData.SetVertexBufferParams(vertexCount, colliderVertexAttributes);
+            colliderVertexAttributes.Dispose();
+
+            var colliderVertData = colliderData.GetVertexData<Vector3>();
+            colliderVertData.CopyFrom(vertices.AsArray());
+
+            colliderData.SetIndexBufferParams(colliderIndicesCount, IndexFormat.UInt32);
+            var colliderIndexData = colliderData.GetIndexData<int>();
+            int colliderOffset = 0;
+            colliderIndexData.Slice(colliderOffset, opaqueTris.Length).CopyFrom(opaqueTris.AsArray());
+            colliderOffset += opaqueTris.Length;
+            colliderIndexData.Slice(colliderOffset, transparentTris.Length).CopyFrom(transparentTris.AsArray());
+
+            colliderData.subMeshCount = 1;
+            colliderData.SetSubMesh(0, new SubMeshDescriptor(0, colliderIndicesCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+
+            colliderMesh.Clear();
+            Mesh.ApplyAndDisposeWritableMeshData(colliderDataArray, colliderMesh,
+                MeshUpdateFlags.DontRecalculateBounds |
+                MeshUpdateFlags.DontValidateIndices |
+                MeshUpdateFlags.DontNotifyMeshUsers);
+            colliderMesh.RecalculateBounds();
+
+            // Force recook when geometry changed.
+            meshCollider.sharedMesh = null;
+            meshCollider.sharedMesh = colliderMesh;
             meshCollider.enabled = true;
         }
         else
@@ -160,6 +195,7 @@ public class Subchunk : MonoBehaviour
     public void ClearMesh()
     {
         if (mesh != null) mesh.Clear();
+        if (colliderMesh != null) colliderMesh.Clear();
         hasGeometry = false;
         if (meshRenderer != null) meshRenderer.enabled = false;
         if (meshCollider != null)
