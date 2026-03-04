@@ -26,6 +26,7 @@ public static class MeshGenerator
     private const int SizeX = Chunk.SizeX;
     private const int SizeY = Chunk.SizeY;
     private const int SizeZ = Chunk.SizeZ;
+    private const float AOCurveExponent = 1.12f; // slight boost without harsh banding
 
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
     // ------------------- Tree Instance -------------------
@@ -735,7 +736,7 @@ public static class MeshGenerator
 
                                     float rawLight = finalLight / 15f;
                                     float floatTint = tint ? 1f : 0f;
-                                    float floatAO = currentAO / 3f;
+                                    float floatAO = math.pow(currentAO / 3f, AOCurveExponent);
 
                                     extraUVs.Add(new Vector4(rawLight, floatTint, floatAO, 0f));
 

@@ -782,12 +782,14 @@ public partial class World : MonoBehaviour
 
         // Build edits from blockOverrides
         var editsList = new List<BlockEdit>();
+        int borderSize = GetChunkBorderSize();
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
         int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
         int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
 
-        int extend = 1;
+        // Must cover the same padded area used by generation/lighting.
+        int extend = borderSize;
         int minX = chunkMinX - extend;
         int minZ = chunkMinZ - extend;
         int maxX = chunkMaxX + extend;
@@ -820,7 +822,6 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = GetChunkBorderSize();
 
         // Injeção da luz global
         // Light injection corrected for rebuild (uses borderSize)
@@ -892,13 +893,15 @@ public partial class World : MonoBehaviour
 
         // Build edits similar ao RequestChunk
         var editsList = new List<BlockEdit>();
+        int borderSize = GetChunkBorderSize();
 
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
         int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
         int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
 
-        int extend = 1;
+        // Must cover the same padded area used by generation/lighting.
+        int extend = borderSize;
         int minX = chunkMinX - extend;
         int minZ = chunkMinZ - extend;
         int maxX = chunkMaxX + extend;
@@ -931,7 +934,6 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = GetChunkBorderSize();
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
