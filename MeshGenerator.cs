@@ -178,7 +178,7 @@ public static class MeshGenerator
                 isCliff = maxDiff >= CliffTreshold;
             }
 
-            int mountainStoneHeight = baseHeight + 70;
+            int mountainStoneHeight = baseHeight + 80;
             bool isHighMountain = h >= mountainStoneHeight;
 
             int voxelSizeX = SizeX + 2 * border;
@@ -323,7 +323,7 @@ public static class MeshGenerator
         int paddedSize = SizeX + 2 * borderSize;
         int totalColumns = paddedSize * paddedSize;
 
-        JobHandle populateHandle = populateJob.Schedule(totalColumns, 64, heightHandle); // batch 64 é ótimo
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 é ótimo
 
 
 

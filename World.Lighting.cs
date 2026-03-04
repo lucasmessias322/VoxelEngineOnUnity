@@ -37,6 +37,34 @@ public partial class World
 
     #endregion
 
+    #region Column Light Helpers (MUITO mais rápido)
+
+    private byte GetColumnLight(int worldX, int worldZ, int y)
+    {
+        if (y < 0 || y >= Chunk.SizeY) return 0;
+
+        var key = new Vector2Int(worldX, worldZ);
+        return globalLightColumns.TryGetValue(key, out byte[] column) ? column[y] : (byte)0;
+    }
+
+    private void SetColumnLight(int worldX, int worldZ, int y, byte value)
+    {
+        if (y < 0 || y >= Chunk.SizeY) return;
+
+        var key = new Vector2Int(worldX, worldZ);
+
+        if (!globalLightColumns.TryGetValue(key, out byte[] column))
+        {
+            if (value == 0) return;
+            column = new byte[Chunk.SizeY];
+            globalLightColumns[key] = column;
+        }
+
+        column[y] = value;
+    }
+
+    #endregion
+
     #region Global Light Propagation
 
 
@@ -45,14 +73,19 @@ public partial class World
         Queue<Vector3Int> lightQueue = new Queue<Vector3Int>();
         lightQueue.Enqueue(startWorldPos);
 
-        globalLightMap[startWorldPos] = lightEmission;
+        // Define a luz inicial usando o novo sistema de colunas
+        SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, lightEmission);
+
         HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
 
         while (lightQueue.Count > 0)
         {
             Vector3Int node = lightQueue.Dequeue();
-            globalLightMap.TryGetValue(node, out byte currentLight);
 
+            // Pega a luz atual da coluna
+            byte currentLight = GetColumnLight(node.x, node.z, node.y);
+
+            // Marca o chunk como sujo
             Vector2Int chunkCoord = new Vector2Int(
                 Mathf.FloorToInt((float)node.x / Chunk.SizeX),
                 Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
@@ -63,47 +96,55 @@ public partial class World
             {
                 Vector3Int neighborPos = node + dir;
 
-                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY)
+                    continue;
 
                 Vector2Int neighborChunk = new Vector2Int(
                     Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
                     Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
                 );
-                if (!IsChunkLoaded(neighborChunk)) continue;
+
+                if (!IsChunkLoaded(neighborChunk))
+                    continue;
 
                 BlockType neighborBlock = GetBlockAt(neighborPos);
                 byte opacity = GetBlockOpacity(neighborBlock);
 
-                if (opacity >= 15) continue;
+                if (opacity >= 15)
+                    continue;
 
-                globalLightMap.TryGetValue(neighborPos, out byte neighborLight);
+                // Pega a luz do vizinho usando coluna
+                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+
                 byte cost = (opacity < 1) ? (byte)1 : opacity;
                 byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
 
                 if (candidateLight > neighborLight)
                 {
-                    globalLightMap[neighborPos] = candidateLight;
+                    // Define a nova luz usando coluna
+                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
                     lightQueue.Enqueue(neighborPos);
                 }
             }
         }
 
+        // Reconstrói os chunks que receberam luz
         foreach (Vector2Int coord in dirtiedChunks)
         {
             RequestChunkRebuild(coord);
         }
     }
-
     public void RemoveLightGlobal(Vector3Int startWorldPos)
     {
-        if (!globalLightMap.TryGetValue(startWorldPos, out byte oldLight)) return;
+        byte oldLight = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
+        if (oldLight == 0) return;
 
         Queue<(Vector3Int pos, byte lightLevel)> darkQueue = new Queue<(Vector3Int, byte)>();
         Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
         HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
 
         darkQueue.Enqueue((startWorldPos, oldLight));
-        globalLightMap[startWorldPos] = 0;
+        SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, 0);
 
         while (darkQueue.Count > 0)
         {
@@ -122,11 +163,12 @@ public partial class World
                 );
                 if (!IsChunkLoaded(neighborChunk)) continue;
 
-                if (globalLightMap.TryGetValue(neighborPos, out byte neighborLight) && neighborLight > 0)
+                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                if (neighborLight > 0)
                 {
                     if (neighborLight < node.lightLevel)
                     {
-                        globalLightMap[neighborPos] = 0;
+                        SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, 0);
                         darkQueue.Enqueue((neighborPos, neighborLight));
                     }
                     else if (neighborLight >= node.lightLevel)
@@ -140,33 +182,52 @@ public partial class World
         while (refillQueue.Count > 0)
         {
             Vector3Int node = refillQueue.Dequeue();
-            if (globalLightMap.TryGetValue(node, out byte currentLight))
+            byte currentLight = GetColumnLight(node.x, node.z, node.y);
+
+            foreach (Vector3Int dir in sixDirections)
             {
-                foreach (Vector3Int dir in sixDirections)
+                Vector3Int neighborPos = node + dir;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+
+                Vector2Int neighborChunk = new Vector2Int(
+                    Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
+                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
+                );
+                if (!IsChunkLoaded(neighborChunk)) continue;
+
+                BlockType neighborBlock = GetBlockAt(neighborPos);
+                byte opacity = GetBlockOpacity(neighborBlock);
+                if (opacity >= 15) continue;
+
+                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                byte cost = (opacity < 1) ? (byte)1 : opacity;
+                byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
+
+                if (candidateLight > neighborLight)
                 {
-                    Vector3Int neighborPos = node + dir;
-                    if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
-
-                    BlockType neighborBlock = GetBlockAt(neighborPos);
-                    byte opacity = GetBlockOpacity(neighborBlock);
-                    if (opacity >= 15) continue;
-
-                    globalLightMap.TryGetValue(neighborPos, out byte neighborLight);
-                    byte cost = (opacity < 1) ? (byte)1 : opacity;
-                    byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
-
-                    if (candidateLight > neighborLight)
-                    {
-                        globalLightMap[neighborPos] = candidateLight;
-                        refillQueue.Enqueue(neighborPos);
-                    }
+                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
+                    refillQueue.Enqueue(neighborPos);
                 }
             }
         }
 
         foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
+
+        CleanupEmptyLightColumns();
     }
-
-
+    private void CleanupEmptyLightColumns()
+    {
+        var toRemove = new List<Vector2Int>();
+        foreach (var kv in globalLightColumns)
+        {
+            bool allZero = true;
+            for (int i = 0; i < kv.Value.Length; i++)
+            {
+                if (kv.Value[i] != 0) { allZero = false; break; }
+            }
+            if (allZero) toRemove.Add(kv.Key);
+        }
+        foreach (var k in toRemove) globalLightColumns.Remove(k);
+    }
     #endregion
 }

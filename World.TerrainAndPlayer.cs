@@ -386,7 +386,7 @@ public partial class World : MonoBehaviour
         {
             PropagateLightGlobal(worldPos, newEmission);
         }
-        else if (oldEmission > 0 || globalLightMap.ContainsKey(worldPos))
+        else if (oldEmission > 0 || globalLightColumns.ContainsKey(new Vector2Int(worldPos.x, worldPos.z)))
         {
             RemoveLightGlobal(worldPos);
         }

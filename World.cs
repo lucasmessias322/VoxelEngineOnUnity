@@ -146,8 +146,8 @@ public partial class World : MonoBehaviour
 
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
-    private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
-
+    // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
+    private Dictionary<Vector2Int, byte[]> globalLightColumns = new Dictionary<Vector2Int, byte[]>();
     // Misc
     private float offsetX, offsetZ;
     private int nextChunkGeneration = 0;
@@ -744,25 +744,35 @@ public partial class World : MonoBehaviour
         int borderSize = treeSettings.canopyRadius + 1;
 
         // Injeção da luz global
-        int voxelSizeX = Chunk.SizeX + 2; // border = 1 no Request original
-        int voxelSizeZ = Chunk.SizeZ + 2;
+        // Light injection corrected for rebuild (uses borderSize)
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        for (int y = 0; y < Chunk.SizeY; y++)
+        int minWX = chunkMinX - borderSize;
+        int maxWX = chunkMinX + Chunk.SizeX + borderSize - 1;
+        int minWZ = chunkMinZ - borderSize;
+        int maxWZ = chunkMinZ + Chunk.SizeZ + borderSize - 1;
+
+        for (int wx = minWX; wx <= maxWX; wx++)
         {
-            for (int z = -1; z <= Chunk.SizeZ; z++)
+            for (int wz = minWZ; wz <= maxWZ; wz++)
             {
-                for (int x = -1; x <= Chunk.SizeX; x++)
+                var key = new Vector2Int(wx, wz);
+                if (globalLightColumns.TryGetValue(key, out byte[] column))
                 {
-                    Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
-                    globalLightMap.TryGetValue(wp, out byte packedLight);
-                    int idx = (x + 1) + y * voxelSizeX + (z + 1) * voxelPlaneSize;
-                    chunkLightData[idx] = packedLight;
+                    int padX = wx - chunkMinX + borderSize;
+                    int padZ = wz - chunkMinZ + borderSize;
+
+                    for (int y = 0; y < Chunk.SizeY; y++)
+                    {
+                        int idx = padX + y * voxelSizeX + padZ * voxelPlaneSize;
+                        chunkLightData[idx] = column[y];
+                    }
                 }
             }
         }
-
         if (chunk.jobScheduled)
         {
             try { chunk.currentJob.Complete(); } catch { }
@@ -872,16 +882,26 @@ public partial class World : MonoBehaviour
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        for (int y = 0; y < Chunk.SizeY; y++)
+        int minWX = chunkMinX - borderSize;
+        int maxWX = chunkMinX + Chunk.SizeX + borderSize - 1;
+        int minWZ = chunkMinZ - borderSize;
+        int maxWZ = chunkMinZ + Chunk.SizeZ + borderSize - 1;
+
+        for (int wx = minWX; wx <= maxWX; wx++)
         {
-            for (int z = -borderSize; z < Chunk.SizeZ + borderSize; z++)
+            for (int wz = minWZ; wz <= maxWZ; wz++)
             {
-                for (int x = -borderSize; x < Chunk.SizeX + borderSize; x++)
+                var key = new Vector2Int(wx, wz);
+                if (globalLightColumns.TryGetValue(key, out byte[] column))
                 {
-                    Vector3Int wp = new Vector3Int(chunkMinX + x, y, chunkMinZ + z);
-                    globalLightMap.TryGetValue(wp, out byte l);
-                    int idx = (x + borderSize) + y * voxelSizeX + (z + borderSize) * voxelPlaneSize;
-                    chunkLightData[idx] = l;
+                    int padX = wx - chunkMinX + borderSize;
+                    int padZ = wz - chunkMinZ + borderSize;
+
+                    for (int y = 0; y < Chunk.SizeY; y++)
+                    {
+                        int idx = padX + y * voxelSizeX + padZ * voxelPlaneSize;
+                        chunkLightData[idx] = column[y];
+                    }
                 }
             }
         }
