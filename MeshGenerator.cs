@@ -370,7 +370,6 @@ public static class MeshGenerator
         var lightJob = new ChunkLighting.ChunkLightingJob
         {
             blockTypes = blockTypes,
-            solids = solids,
             light = light, // Output calculado
             blockLightData = lightData, // Injeta block light do global
             blockMappings = nativeBlockMappings,
@@ -556,11 +555,13 @@ public static class MeshGenerator
                     int minN = (axis == 1) ? startY : border;
                     int maxN = (axis == 1) ? endY : border + chunkSize;
 
-                    int minU = (u == 1) ? startY : 0;
-                    int maxU = (u == 1) ? endY : sizeU;
+                    // Restrict scan to the active chunk footprint for X/Z axes.
+                    // This avoids iterating the full lighting padding when only the core area can emit faces.
+                    int minU = (u == 1) ? startY : (u == 0 ? border : border);
+                    int maxU = (u == 1) ? endY : (u == 0 ? border + SizeX : border + SizeZ);
 
-                    int minV = (v == 1) ? startY : 0;
-                    int maxV = (v == 1) ? endY : sizeV;
+                    int minV = (v == 1) ? startY : (v == 0 ? border : border);
+                    int maxV = (v == 1) ? endY : (v == 0 ? border + SizeX : border + SizeZ);
 
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
                     BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
@@ -577,9 +578,6 @@ public static class MeshGenerator
                                 int x = (u == 0 ? i : v == 0 ? j : n);
                                 int y = (u == 1 ? i : v == 1 ? j : n);
                                 int z = (u == 2 ? i : v == 2 ? j : n);
-
-                                bool isCurrentActive = x >= border && x < border + SizeX && z >= border && z < border + SizeZ;
-                                if (!isCurrentActive) { mask[i + j * sizeU] = 0; continue; }
 
                                 int idx = x + y * voxelSizeX + z * voxelPlaneSize;
                                 BlockType current = blockTypes[idx];

@@ -116,7 +116,7 @@ public partial class World
                 // Pega a luz do vizinho usando coluna
                 byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
 
-                byte cost = (opacity < 1) ? (byte)1 : opacity;
+                byte cost = (byte)(1 + opacity);
                 byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
 
                 if (candidateLight > neighborLight)
@@ -200,7 +200,7 @@ public partial class World
                 if (opacity >= 15) continue;
 
                 byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
-                byte cost = (opacity < 1) ? (byte)1 : opacity;
+                byte cost = (byte)(1 + opacity);
                 byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
 
                 if (candidateLight > neighborLight)

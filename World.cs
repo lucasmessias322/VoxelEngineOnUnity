@@ -115,6 +115,9 @@ public partial class World : MonoBehaviour
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
+    [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
+    [Min(1)]
+    public int maxPendingDataJobs = 2;
 
     [Header("Frustum Culling")]
     public bool enableFrustumCulling = true;
@@ -130,6 +133,11 @@ public partial class World : MonoBehaviour
     [Header("Features Toggle")]
     public bool enableCave = true;
     public bool enableTrees = true;
+
+    [Header("Lighting")]
+    [Tooltip("Padding horizontal em voxels para propagação de skylight entre chunks. Use 16 para eliminar costura visível na suavização.")]
+    [Min(1)]
+    public int sunlightSmoothingPadding = 16;
 
     #endregion
 
@@ -162,6 +170,12 @@ public partial class World : MonoBehaviour
 
     // Chunks that need recull
     private HashSet<Vector2Int> chunksToRecull = new HashSet<Vector2Int>();
+
+    private int GetChunkBorderSize()
+    {
+        int treeBorder = treeSettings.canopyRadius + 1;
+        return Mathf.Max(treeBorder, sunlightSmoothingPadding);
+    }
 
     #endregion
 
@@ -467,7 +481,7 @@ public partial class World : MonoBehaviour
     private void CopyVoxelDataOptimized(NativeArray<BlockType> src, NativeArray<byte> dst)
     {
         // Copia bloco por bloco do native BlockType array para o voxelData (byte).
-        int border = treeSettings.canopyRadius + 1; // Border usado nas rotinas
+        int border = GetChunkBorderSize();
         int vx = Chunk.SizeX + 2 * border;
         int plane = vx * Chunk.SizeY;
 
@@ -488,7 +502,7 @@ public partial class World : MonoBehaviour
 
     private void ScheduleSubchunkMeshJobs(PendingData pd, Chunk activeChunk)
     {
-        int borderSize = treeSettings.canopyRadius + 1;
+        int borderSize = GetChunkBorderSize();
         NativeList<JobHandle> meshHandles = new NativeList<JobHandle>(Chunk.SubchunksPerColumn, Allocator.Temp);
 
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
@@ -565,6 +579,68 @@ public partial class World : MonoBehaviour
         disposeJob.Schedule(combinedMeshHandle);
 
         activeChunk.currentJob = combinedMeshHandle;
+    }
+
+    private void InjectGlobalLightColumns(
+        NativeArray<byte> chunkLightData,
+        int chunkMinX,
+        int chunkMinZ,
+        int borderSize,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        if (globalLightColumns.Count == 0) return;
+
+        int minWX = chunkMinX - borderSize;
+        int maxWX = chunkMinX + Chunk.SizeX + borderSize - 1;
+        int minWZ = chunkMinZ - borderSize;
+        int maxWZ = chunkMinZ + Chunk.SizeZ + borderSize - 1;
+
+        int areaColumns = voxelSizeX * voxelSizeZ;
+
+        // Sparse mode: iterate only existing global columns (better when emissive lights are sparse).
+        if (globalLightColumns.Count < areaColumns)
+        {
+            foreach (var kv in globalLightColumns)
+            {
+                int wx = kv.Key.x;
+                int wz = kv.Key.y;
+                if (wx < minWX || wx > maxWX || wz < minWZ || wz > maxWZ) continue;
+
+                byte[] column = kv.Value;
+                int padX = wx - chunkMinX + borderSize;
+                int padZ = wz - chunkMinZ + borderSize;
+
+                int idx = padX + padZ * voxelPlaneSize;
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    chunkLightData[idx] = column[y];
+                    idx += voxelSizeX;
+                }
+            }
+            return;
+        }
+
+        // Dense mode: bounded grid lookup (better when many lit columns exist).
+        for (int wx = minWX; wx <= maxWX; wx++)
+        {
+            for (int wz = minWZ; wz <= maxWZ; wz++)
+            {
+                var key = new Vector2Int(wx, wz);
+                if (!globalLightColumns.TryGetValue(key, out byte[] column)) continue;
+
+                int padX = wx - chunkMinX + borderSize;
+                int padZ = wz - chunkMinZ + borderSize;
+
+                int idx = padX + padZ * voxelPlaneSize;
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    chunkLightData[idx] = column[y];
+                    idx += voxelSizeX;
+                }
+            }
+        }
     }
 
     #endregion
@@ -654,6 +730,9 @@ public partial class World : MonoBehaviour
             {
                 while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
                 {
+                    if (pendingDataJobs.Count >= maxPendingDataJobs)
+                        break;
+
                     var item = pendingChunks[0];
                     pendingChunks.RemoveAt(0);
 
@@ -741,7 +820,7 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = treeSettings.canopyRadius + 1;
+        int borderSize = GetChunkBorderSize();
 
         // Injeção da luz global
         // Light injection corrected for rebuild (uses borderSize)
@@ -750,29 +829,7 @@ public partial class World : MonoBehaviour
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        int minWX = chunkMinX - borderSize;
-        int maxWX = chunkMinX + Chunk.SizeX + borderSize - 1;
-        int minWZ = chunkMinZ - borderSize;
-        int maxWZ = chunkMinZ + Chunk.SizeZ + borderSize - 1;
-
-        for (int wx = minWX; wx <= maxWX; wx++)
-        {
-            for (int wz = minWZ; wz <= maxWZ; wz++)
-            {
-                var key = new Vector2Int(wx, wz);
-                if (globalLightColumns.TryGetValue(key, out byte[] column))
-                {
-                    int padX = wx - chunkMinX + borderSize;
-                    int padZ = wz - chunkMinZ + borderSize;
-
-                    for (int y = 0; y < Chunk.SizeY; y++)
-                    {
-                        int idx = padX + y * voxelSizeX + padZ * voxelPlaneSize;
-                        chunkLightData[idx] = column[y];
-                    }
-                }
-            }
-        }
+        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         if (chunk.jobScheduled)
         {
             try { chunk.currentJob.Complete(); } catch { }
@@ -874,7 +931,7 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
-        int borderSize = treeSettings.canopyRadius + 1;
+        int borderSize = GetChunkBorderSize();
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
@@ -882,29 +939,7 @@ public partial class World : MonoBehaviour
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        int minWX = chunkMinX - borderSize;
-        int maxWX = chunkMinX + Chunk.SizeX + borderSize - 1;
-        int minWZ = chunkMinZ - borderSize;
-        int maxWZ = chunkMinZ + Chunk.SizeZ + borderSize - 1;
-
-        for (int wx = minWX; wx <= maxWX; wx++)
-        {
-            for (int wz = minWZ; wz <= maxWZ; wz++)
-            {
-                var key = new Vector2Int(wx, wz);
-                if (globalLightColumns.TryGetValue(key, out byte[] column))
-                {
-                    int padX = wx - chunkMinX + borderSize;
-                    int padZ = wz - chunkMinZ + borderSize;
-
-                    for (int y = 0; y < Chunk.SizeY; y++)
-                    {
-                        int idx = padX + y * voxelSizeX + padZ * voxelPlaneSize;
-                        chunkLightData[idx] = column[y];
-                    }
-                }
-            }
-        }
+        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
         if (chunk.jobScheduled)
         {

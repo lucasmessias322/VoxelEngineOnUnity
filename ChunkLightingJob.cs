@@ -1,9 +1,7 @@
 using System;
-using System.Collections.Generic;
-using UnityEngine;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
-using Unity.Burst;
 using Unity.Mathematics;
 
 public static class ChunkLighting
@@ -12,7 +10,6 @@ public static class ChunkLighting
     public struct ChunkLightingJob : IJob
     {
         [ReadOnly] public NativeArray<BlockType> blockTypes;
-        [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> blockLightData;
 
@@ -21,18 +18,17 @@ public static class ChunkLighting
         public int voxelSizeX;
         public int voxelSizeZ;
         public int totalVoxels;
-        public int voxelPlaneSize; // Assumindo que seja voxelSizeX * SizeY
+        public int voxelPlaneSize;
         public int SizeX;
         public int SizeY;
         public int SizeZ;
 
         public void Execute()
         {
-            // 1. Criamos um mapa temporário para a Skylight e uma fila para a propagação
             NativeArray<byte> skyMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
 
-            // 2. PASSO 1: Raio de Sol Vertical (Luz Direta)
+            // Step 1: vertical sun rays.
             for (int lx = 0; lx < voxelSizeX; lx++)
             {
                 for (int lz = 0; lz < voxelSizeZ; lz++)
@@ -40,6 +36,12 @@ public static class ChunkLighting
                     byte currentSky = 15;
                     for (int y = SizeY - 1; y >= 0; y--)
                     {
+                        if (currentSky == 0)
+                        {
+                            // Remaining voxels below stay 0 (skyMap is zero-initialized).
+                            break;
+                        }
+
                         int idx = lx + y * voxelSizeX + lz * voxelPlaneSize;
                         byte opacity = blockMappings[(int)blockTypes[idx]].lightOpacity;
 
@@ -53,9 +55,30 @@ public static class ChunkLighting
                         }
 
                         skyMap[idx] = currentSky;
+                    }
+                }
+            }
 
-                        // Enfileira os nós que receberam luz para o passo de suavização
-                        if (currentSky > 0)
+            // Step 2a: enqueue only real propagation sources.
+            for (int z = 0; z < voxelSizeZ; z++)
+            {
+                for (int y = 0; y < SizeY; y++)
+                {
+                    for (int x = 0; x < voxelSizeX; x++)
+                    {
+                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                        byte currentLight = skyMap[idx];
+                        if (currentLight <= 1) continue;
+
+                        bool canPropagate = false;
+
+                        if (x + 1 < voxelSizeX && CanImproveNeighbor(idx + 1, currentLight, skyMap)) canPropagate = true;
+                        else if (x - 1 >= 0 && CanImproveNeighbor(idx - 1, currentLight, skyMap)) canPropagate = true;
+                        else if (y - 1 >= 0 && CanImproveNeighbor(idx - voxelSizeX, currentLight, skyMap)) canPropagate = true;
+                        else if (z + 1 < voxelSizeZ && CanImproveNeighbor(idx + voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+                        else if (z - 1 >= 0 && CanImproveNeighbor(idx - voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+
+                        if (canPropagate)
                         {
                             lightQueue.Enqueue(idx);
                         }
@@ -63,56 +86,25 @@ public static class ChunkLighting
                 }
             }
 
-            // 3. PASSO 2: Suavização / Propagação (Flood Fill BFS)
-            // Offsets 1D para os 6 vizinhos: +X, -X, +Y, -Y, +Z, -Z
-            NativeArray<int> neighborOffsets = new NativeArray<int>(6, Allocator.Temp);
-            neighborOffsets[0] = 1;                  // Direita (+X)
-            neighborOffsets[1] = -1;                 // Esquerda (-X)
-            neighborOffsets[2] = voxelSizeX;         // Cima (+Y)
-            neighborOffsets[3] = -voxelSizeX;        // Baixo (-Y)
-            neighborOffsets[4] = voxelPlaneSize;     // Frente (+Z)
-            neighborOffsets[5] = -voxelPlaneSize;    // Trás (-Z)
-
+            // Step 2b: flood-fill smoothing (no +Y for skylight).
             while (lightQueue.TryDequeue(out int currentIndex))
             {
                 byte currentLight = skyMap[currentIndex];
-
-                // Se a luz já é muito fraca, não pode propagar
                 if (currentLight <= 1) continue;
 
-                // Decodificando 1D para 3D para evitar propagar para fora do Chunk atual
                 int z = currentIndex / voxelPlaneSize;
                 int rem = currentIndex % voxelPlaneSize;
                 int y = rem / voxelSizeX;
                 int x = rem % voxelSizeX;
 
-                for (int i = 0; i < 6; i++)
-                {
-                    // Checagem de limites do chunk (para não acessar memória indevida)
-                    if (x == 0 && i == 1) continue;
-                    if (x == voxelSizeX - 1 && i == 0) continue;
-                    if (y == 0 && i == 3) continue;
-                    if (y == SizeY - 1 && i == 2) continue;
-                    if (z == 0 && i == 5) continue;
-                    if (z == voxelSizeZ - 1 && i == 4) continue;
-
-                    int neighborIndex = currentIndex + neighborOffsets[i];
-                    byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
-
-                    // A luz perde 1 de intensidade ao se mover para o lado/cima/baixo + a opacidade do bloco
-                    int lightLoss = 1 + opacity;
-                    byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
-
-                    // Se a luz que chega no vizinho é maior que a luz que ele já tem, atualizamos e enfileiramos
-                    if (propagatedLight > skyMap[neighborIndex])
-                    {
-                        skyMap[neighborIndex] = propagatedLight;
-                        lightQueue.Enqueue(neighborIndex);
-                    }
-                }
+                if (x + 1 < voxelSizeX) TryPropagate(currentIndex + 1, currentLight, skyMap, lightQueue);
+                if (x - 1 >= 0) TryPropagate(currentIndex - 1, currentLight, skyMap, lightQueue);
+                if (y - 1 >= 0) TryPropagate(currentIndex - voxelSizeX, currentLight, skyMap, lightQueue);
+                if (z + 1 < voxelSizeZ) TryPropagate(currentIndex + voxelPlaneSize, currentLight, skyMap, lightQueue);
+                if (z - 1 >= 0) TryPropagate(currentIndex - voxelPlaneSize, currentLight, skyMap, lightQueue);
             }
 
-            // 4. PASSO 3: Mesclar Skylight suavizada com BlockLight
+            // Step 3: pack sky + block light.
             for (int i = 0; i < totalVoxels; i++)
             {
                 byte blockL = 0;
@@ -121,16 +113,32 @@ public static class ChunkLighting
                     blockL = blockLightData[i];
                 }
 
-                // Empacota (0-15 de sky, 0-15 de block) no mesmo byte!
                 light[i] = LightUtils.PackLight(skyMap[i], blockL);
             }
 
-            // 5. Cleanup dos Allocator.Temp
             skyMap.Dispose();
             lightQueue.Dispose();
-            neighborOffsets.Dispose();
+        }
+
+        private bool CanImproveNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
+        {
+            byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
+            int lightLoss = 1 + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            return propagatedLight > skyMap[neighborIndex];
+        }
+
+        private void TryPropagate(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
+        {
+            byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
+            int lightLoss = 1 + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+            if (propagatedLight > skyMap[neighborIndex])
+            {
+                skyMap[neighborIndex] = propagatedLight;
+                lightQueue.Enqueue(neighborIndex);
+            }
         }
     }
-
-
 }
