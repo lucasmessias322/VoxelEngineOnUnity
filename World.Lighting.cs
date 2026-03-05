@@ -70,6 +70,8 @@ public partial class World
 
     public void PropagateLightGlobal(Vector3Int startWorldPos, byte lightEmission)
     {
+        if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
+
         Queue<Vector3Int> lightQueue = new Queue<Vector3Int>();
         lightQueue.Enqueue(startWorldPos);
 
@@ -136,6 +138,8 @@ public partial class World
     }
     public void RemoveLightGlobal(Vector3Int startWorldPos)
     {
+        if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
+
         byte oldLight = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
         if (oldLight == 0) return;
 

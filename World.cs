@@ -322,6 +322,7 @@ public partial class World : MonoBehaviour
         }
 
         lastEnableBlockColliders = enableBlockColliders;
+        InitializeDistantTerrainLodState();
     }
 
     private void Update()
@@ -329,7 +330,9 @@ public partial class World : MonoBehaviour
         HandleBlockColliderToggle();
         meshesAppliedThisFrame = 0;
         ProcessQueuedChunkRebuilds();
+        ProcessQueuedHighBuildMeshRebuilds();
         UpdateChunks();
+        UpdateDistantTerrainLod();
         ProcessChunkQueue();
     }
 
@@ -581,7 +584,13 @@ public partial class World : MonoBehaviour
             }
 
             int startY = sub * Chunk.SubchunkHeight;
-            int endY = startY + Chunk.SubchunkHeight;
+            if (startY >= Chunk.SizeY)
+            {
+                activeChunk.subchunks[sub].ClearMesh();
+                continue;
+            }
+
+            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
             NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
             for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
                 nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
@@ -786,6 +795,7 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
+                    RemoveHighBuildMesh(coord);
                 }
             }
 
@@ -879,7 +889,9 @@ public partial class World : MonoBehaviour
             chunk.hasVoxelData = false;
         }
 
+        RemoveDistantTerrainChunk(coord);
         activeChunks.Add(coord, chunk);
+        RequestHighBuildMeshRebuild(coord);
 
         // Build edits from blockOverrides
         var editsList = new List<BlockEdit>();
@@ -1172,12 +1184,15 @@ public partial class World : MonoBehaviour
             }
         }
 
+        SetHighBuildCollidersEnabled(enableBlockColliders);
+
         // If colliders were re-enabled, rebuild active chunks so subchunks generated while disabled gain collider data.
         if (enableBlockColliders)
         {
             foreach (var kv in activeChunks)
             {
                 RequestChunkRebuild(kv.Key);
+                RequestHighBuildMeshRebuild(kv.Key);
             }
         }
     }
@@ -1279,6 +1294,8 @@ public partial class World : MonoBehaviour
                 }
             }
         }
+
+        DrawDistantTerrainLodGizmos();
     }
 
 

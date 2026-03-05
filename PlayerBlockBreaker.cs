@@ -91,7 +91,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 ? targetBlock
                 : targetBlock + hitNormal;
 
-            if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
+            if (placePos.y <= 2)
                 return;
 
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);

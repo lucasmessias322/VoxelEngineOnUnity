@@ -63,11 +63,12 @@ public partial class World : MonoBehaviour
 
     public BlockType GetBlockAt(Vector3Int worldPos)
     {
-        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY) return BlockType.Air;
-        if (worldPos.y <= 2) return BlockType.Bedrock;
-
         if (blockOverrides.TryGetValue(worldPos, out BlockType overridden))
             return overridden;
+
+        if (worldPos.y < 0) return BlockType.Air;
+        if (worldPos.y >= Chunk.SizeY) return BlockType.Air;
+        if (worldPos.y <= 2) return BlockType.Bedrock;
 
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
@@ -356,7 +357,7 @@ public partial class World : MonoBehaviour
 
     public void SuppressGrassBillboardAt(Vector3Int billboardPos)
     {
-        if (billboardPos.y <= 0 || billboardPos.y >= Chunk.SizeY) return;
+        if (billboardPos.y <= 0) return;
         if (!suppressedGrassBillboards.Add(billboardPos)) return;
 
         Vector2Int coord = new Vector2Int(
@@ -370,6 +371,12 @@ public partial class World : MonoBehaviour
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
+        if (worldPos.y <= 2)
+        {
+            Debug.Log("Tentativa de modificar Bedrock/abaixo ignorada: " + worldPos);
+            return;
+        }
+
         BlockType current = GetBlockAt(worldPos);
         if (current == BlockType.Bedrock)
         {
@@ -387,7 +394,8 @@ public partial class World : MonoBehaviour
         if (type != BlockType.Grass)
             suppressedGrassBillboards.Remove(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
 
-        blockOverrides[worldPos] = type;
+        if (type == BlockType.Air) blockOverrides.Remove(worldPos);
+        else blockOverrides[worldPos] = type;
 
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
@@ -404,6 +412,26 @@ public partial class World : MonoBehaviour
         if (localX == Chunk.SizeX - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right);
         if (localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.down);
         if (localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.up);
+
+        // Fora da altura simulada por chunk, mantemos apenas override:
+        // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.
+        if (worldPos.y >= Chunk.SizeY)
+        {
+            IndexHighOverride(worldPos, chunkCoord, type);
+
+            RequestHighBuildMeshRebuild(chunkCoord);
+            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
+            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
+            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
+            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
+
+            if (worldPos.y == Chunk.SizeY || worldPos.y == Chunk.SizeY + 1)
+            {
+                foreach (Vector2Int coord in chunksToRebuild)
+                    RequestChunkRebuild(coord);
+            }
+            return;
+        }
 
         byte newEmission = GetBlockEmission(type);
         byte oldEmission = GetBlockEmission(current);
@@ -436,6 +464,16 @@ public partial class World : MonoBehaviour
         foreach (Vector2Int coord in chunksToRebuild)
         {
             RequestChunkRebuild(coord);
+        }
+
+        // Mudanca no topo do chunk pode expor/ocultar a face inferior de construcoes altas.
+        if (worldPos.y >= Chunk.SizeY - 1)
+        {
+            RequestHighBuildMeshRebuild(chunkCoord);
+            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
+            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
+            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
+            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
         }
     }
 

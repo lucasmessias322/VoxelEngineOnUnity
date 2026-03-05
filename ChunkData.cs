@@ -97,7 +97,13 @@ public static class ChunkData
             for (int s = 0; s < SubchunksPerColumn; s++)
             {
                 int startY = s * SubchunkHeight;
-                int endY = startY + SubchunkHeight;
+                if (startY >= SizeY)
+                {
+                    subchunkNonEmpty[s] = false;
+                    continue;
+                }
+
+                int endY = math.min(startY + SubchunkHeight, SizeY);
                 bool hasBlock = false;
 
                 for (int y = startY; y < endY && !hasBlock; y++)

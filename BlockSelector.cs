@@ -254,7 +254,7 @@ public class BlockSelector : MonoBehaviour
         if (world == null || !world.enableGrassBillboards || world.grassBillboardChance <= 0f)
             return false;
 
-        if (voxel.y <= 0 || voxel.y >= Chunk.SizeY)
+        if (voxel.y <= 0)
             return false;
 
         if (world.GetBlockAt(voxel) != BlockType.Air)
