@@ -26,7 +26,7 @@ public static class MeshGenerator
     private const int SizeX = Chunk.SizeX;
     private const int SizeY = Chunk.SizeY;
     private const int SizeZ = Chunk.SizeZ;
-    private const float AOCurveExponent = 1.12f; // slight boost without harsh banding
+    private const float DefaultAOCurveExponent = 1.12f;
 
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
     // ------------------- Tree Instance -------------------
@@ -395,12 +395,24 @@ public static class MeshGenerator
         int atlasTilesY,
         bool generateSides,
         int borderSize,
+        int chunkCoordX,
+        int chunkCoordZ,
         int startY,
-    int endY,
+        int endY,
+        bool enableGrassBillboards,
+        float grassBillboardChance,
+        BlockType grassBillboardBlockType,
+        float grassBillboardHeight,
+        float grassBillboardNoiseScale,
+        float grassBillboardJitter,
+        float aoStrength,
+        float aoCurveExponent,
+        float aoMinLight,
         out JobHandle meshHandle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
         out NativeList<int> transparentTriangles,
+        out NativeList<int> billboardTriangles,
         out NativeList<int> waterTriangles,
         out NativeList<Vector2> uvs,
         out NativeList<Vector2> uv2,
@@ -416,6 +428,7 @@ public static class MeshGenerator
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
+        billboardTriangles = new NativeList<int>(2048 * 3, Allocator.TempJob);
         normals = new NativeList<Vector3>(4096, Allocator.TempJob);
         extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
         vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);
@@ -441,11 +454,23 @@ public static class MeshGenerator
             atlasTilesX = atlasTilesX,
             atlasTilesY = atlasTilesY,
             generateSides = generateSides,
+            chunkCoordX = chunkCoordX,
+            chunkCoordZ = chunkCoordZ,
+            enableGrassBillboards = enableGrassBillboards,
+            grassBillboardChance = grassBillboardChance,
+            grassBillboardBlockType = grassBillboardBlockType,
+            grassBillboardHeight = grassBillboardHeight,
+            grassBillboardNoiseScale = grassBillboardNoiseScale,
+            grassBillboardJitter = grassBillboardJitter,
+            aoStrength = aoStrength,
+            aoCurveExponent = aoCurveExponent,
+            aoMinLight = aoMinLight,
 
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
+            billboardTriangles = billboardTriangles,
             uvs = uvs,
             uv2 = uv2,
             normals = normals,
@@ -478,6 +503,17 @@ public static class MeshGenerator
         public int atlasTilesX;
         public int atlasTilesY;
         public bool generateSides;
+        public int chunkCoordX;
+        public int chunkCoordZ;
+        public bool enableGrassBillboards;
+        public float grassBillboardChance;
+        public BlockType grassBillboardBlockType;
+        public float grassBillboardHeight;
+        public float grassBillboardNoiseScale;
+        public float grassBillboardJitter;
+        public float aoStrength;
+        public float aoCurveExponent;
+        public float aoMinLight;
 
         // LIMITES DO SUBCHUNK
         public int startY;
@@ -487,6 +523,7 @@ public static class MeshGenerator
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
+        public NativeList<int> billboardTriangles;
         public NativeList<Vector2> uvs;
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
@@ -505,6 +542,7 @@ public static class MeshGenerator
             float invAtlasTilesY = 1f / atlasTilesY;
 
             GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+            GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
         }
 
         private bool IsSubchunkEmpty()
@@ -528,6 +566,191 @@ public static class MeshGenerator
                 }
             }
             return true; // 100% ar → pula
+        }
+
+        private void GenerateGrassBillboards(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> light,
+            float invAtlasTilesX,
+            float invAtlasTilesY)
+        {
+            if (!enableGrassBillboards || grassBillboardChance <= 0f)
+                return;
+
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            float noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
+            float jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
+
+            BlockTextureMapping mapping = blockMappings[(int)grassBillboardBlockType];
+            Vector2 atlasUv = new Vector2(
+                mapping.side.x * invAtlasTilesX + 0.001f,
+                mapping.side.y * invAtlasTilesY + 0.001f
+            );
+            float tint = mapping.tintSide ? 1f : 0f;
+
+            int minY = math.max(startY - 1, 0);
+            int maxY = math.min(endY - 1, SizeY - 2);
+
+            for (int y = minY; y <= maxY; y++)
+            {
+                int py = y + 1;
+                if (py < startY || py >= endY)
+                    continue;
+
+                for (int z = border; z < border + SizeZ; z++)
+                {
+                    int worldZ = chunkCoordZ * SizeZ + (z - border);
+                    for (int x = border; x < border + SizeX; x++)
+                    {
+                        int worldX = chunkCoordX * SizeX + (x - border);
+                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+
+                        if (blockTypes[idx] != BlockType.Grass)
+                            continue;
+
+                        int upIdx = idx + voxelSizeX;
+                        if (blockTypes[upIdx] != BlockType.Air)
+                            continue;
+
+                        float n = noise.snoise(new float2(
+                            (worldX + 123.17f) * noiseScale,
+                            (worldZ - 91.73f) * noiseScale
+                        )) * 0.5f + 0.5f;
+
+                        float effectiveChance = math.saturate(
+                            grassBillboardChance * math.lerp(0.35f, 1.65f, n)
+                        );
+
+                        uint h = math.hash(new int3(worldX, py, worldZ));
+                        float chance = (h & 0x00FFFFFF) / 16777215f;
+                        if (chance > effectiveChance)
+                            continue;
+
+                        byte packed = light[upIdx];
+                        byte billboardLight = (byte)math.max(
+                            (int)LightUtils.GetSkyLight(packed),
+                            (int)LightUtils.GetBlockLight(packed)
+                        );
+                        float light01 = billboardLight / 15f;
+
+                        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
+                        float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
+                        float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
+
+                        Vector3 center = new Vector3((x - border) + 0.5f + jx, py - 0.02f, (z - border) + 0.5f + jz);
+                        AddBillboardCross(center, grassBillboardHeight, atlasUv, light01, tint);
+                    }
+                }
+            }
+        }
+
+        private void AddBillboardCross(Vector3 center, float height, Vector2 atlasUv, float light01, float tint)
+        {
+            const float halfWidth = 0.38f;
+            Vector3 a0 = center + new Vector3(-halfWidth, 0f, -halfWidth);
+            Vector3 a1 = center + new Vector3(halfWidth, 0f, halfWidth);
+            Vector3 a2 = a1 + new Vector3(0f, height, 0f);
+            Vector3 a3 = a0 + new Vector3(0f, height, 0f);
+            AddDoubleSidedQuad(a0, a1, a2, a3, atlasUv, light01, tint);
+
+            Vector3 b0 = center + new Vector3(-halfWidth, 0f, halfWidth);
+            Vector3 b1 = center + new Vector3(halfWidth, 0f, -halfWidth);
+            Vector3 b2 = b1 + new Vector3(0f, height, 0f);
+            Vector3 b3 = b0 + new Vector3(0f, height, 0f);
+            AddDoubleSidedQuad(b0, b1, b2, b3, atlasUv, light01, tint);
+        }
+
+        private void AddDoubleSidedQuad(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector2 atlasUv,
+            float light01,
+            float tint)
+        {
+            int vIndex = vertices.Length;
+            Vector3 upNormal = new Vector3(0f, 1f, 0f);
+
+            vertices.Add(p0);
+            vertices.Add(p1);
+            vertices.Add(p2);
+            vertices.Add(p3);
+
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+
+            uvs.Add(new Vector2(0f, 0f));
+            uvs.Add(new Vector2(1f, 0f));
+            uvs.Add(new Vector2(1f, 1f));
+            uvs.Add(new Vector2(0f, 1f));
+
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+
+            Vector4 e = new Vector4(light01, tint, 1f, 0f);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+
+            billboardTriangles.Add(vIndex + 0);
+            billboardTriangles.Add(vIndex + 1);
+            billboardTriangles.Add(vIndex + 2);
+            billboardTriangles.Add(vIndex + 0);
+            billboardTriangles.Add(vIndex + 2);
+            billboardTriangles.Add(vIndex + 3);
+
+            billboardTriangles.Add(vIndex + 0);
+            billboardTriangles.Add(vIndex + 2);
+            billboardTriangles.Add(vIndex + 1);
+            billboardTriangles.Add(vIndex + 0);
+            billboardTriangles.Add(vIndex + 3);
+            billboardTriangles.Add(vIndex + 2);
+        }
+
+        private bool IsFaceVisibleForCurrentBlock(BlockType current, BlockType neighbor)
+        {
+            if (current == neighbor &&
+                (current == BlockType.Water || blockMappings[(int)current].isTransparent))
+            {
+                return false;
+            }
+
+            if (blockMappings[(int)neighbor].isEmpty)
+                return true;
+
+            bool neighborOpaque = blockMappings[(int)neighbor].isSolid &&
+                                  !blockMappings[(int)neighbor].isTransparent;
+            return !neighborOpaque;
+        }
+
+        private bool LeavesHasAnyExposedFace(int x, int y, int z, NativeArray<BlockType> blockTypes, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            // Renderiza "cubo completo" apenas quando houver ao menos uma face exposta.
+            for (int d = 0; d < 6; d++)
+            {
+                int nx = x + (d == 0 ? 1 : d == 1 ? -1 : 0);
+                int ny = y + (d == 2 ? 1 : d == 3 ? -1 : 0);
+                int nz = z + (d == 4 ? 1 : d == 5 ? -1 : 0);
+
+                bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
+                if (outside)
+                    return true;
+
+                int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
+                BlockType neighbor = blockTypes[nIdx];
+                if (IsFaceVisibleForCurrentBlock(BlockType.Leaves, neighbor))
+                    return true;
+            }
+
+            return false;
         }
 
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
@@ -603,24 +826,14 @@ public static class MeshGenerator
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
 
-                                    // === CORREÇÃO PRINCIPAL ===
-                                    // Corta faces entre blocos transparentes do MESMO tipo
-                                    // (folhas com folhas, água com água, vidro com vidro, etc.)
-                                    if (current == neighbor &&
-                                        (current == BlockType.Water || blockMappings[(int)current].isTransparent))
-                                    {
-                                        isVisible = false;
-                                    }
-                                    else if (blockMappings[(int)neighbor].isEmpty)
-                                    {
+                                    isVisible = IsFaceVisibleForCurrentBlock(current, neighbor);
+                                }
+
+                                if (!isVisible && current == BlockType.Leaves)
+                                {
+                                    bool shouldRenderFullCube = LeavesHasAnyExposedFace(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    if (shouldRenderFullCube)
                                         isVisible = true;
-                                    }
-                                    else
-                                    {
-                                        bool neighborOpaque = blockMappings[(int)neighbor].isSolid &&
-                                                              !blockMappings[(int)neighbor].isTransparent;
-                                        isVisible = !neighborOpaque;
-                                    }
                                 }
 
                                 if (isVisible)
@@ -736,7 +949,11 @@ public static class MeshGenerator
 
                                     float rawLight = finalLight / 15f;
                                     float floatTint = tint ? 1f : 0f;
-                                    float floatAO = math.pow(currentAO / 3f, AOCurveExponent);
+                                    float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
+                                    float aoBase = currentAO / 3f;
+                                    float aoCurved = math.pow(aoBase, aoCurve);
+                                    float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
+                                    float floatAO = math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
 
                                     extraUVs.Add(new Vector4(rawLight, floatTint, floatAO, 0f));
 

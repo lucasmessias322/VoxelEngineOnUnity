@@ -23,6 +23,7 @@ public class Subchunk : MonoBehaviour
     private MeshCollider meshCollider;
     private Mesh mesh;
     private Mesh colliderMesh;
+    private bool hasColliderData = false;
 
     // ==================== NOVO PARA CULLING ====================
     [HideInInspector]
@@ -50,11 +51,13 @@ public class Subchunk : MonoBehaviour
      NativeList<Vector3> vertices,
      NativeList<int> opaqueTris,
      NativeList<int> transparentTris,
+     NativeList<int> billboardTris,
      NativeList<int> waterTris,
      NativeList<Vector2> uvs,
      NativeList<Vector2> uv2,
      NativeList<Vector3> normals,
-     NativeList<Vector4> extraUVs)
+     NativeList<Vector4> extraUVs,
+     bool enableBlockColliders)
     {
         if (vertices.Length == 0)
         {
@@ -95,7 +98,7 @@ public class Subchunk : MonoBehaviour
         }
 
         // ====================== ÍNDICES ======================
-        int totalIndices = opaqueTris.Length + transparentTris.Length + waterTris.Length;
+        int totalIndices = opaqueTris.Length + transparentTris.Length + billboardTris.Length + waterTris.Length;
         meshData.SetIndexBufferParams(totalIndices, IndexFormat.UInt32);
 
         var indexData = meshData.GetIndexData<int>();
@@ -111,10 +114,19 @@ public class Subchunk : MonoBehaviour
         indexOffset += count;
 
         // SubMesh 1 - Transparent
-        count = transparentTris.Length;
-        indexData.Slice(indexOffset, count).CopyFrom(transparentTris.AsArray());
-        meshData.SetSubMesh(1, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-        indexOffset += count;
+        int transparentStart = indexOffset;
+        int transparentCount = transparentTris.Length + billboardTris.Length;
+        if (transparentTris.Length > 0)
+        {
+            indexData.Slice(indexOffset, transparentTris.Length).CopyFrom(transparentTris.AsArray());
+            indexOffset += transparentTris.Length;
+        }
+        if (billboardTris.Length > 0)
+        {
+            indexData.Slice(indexOffset, billboardTris.Length).CopyFrom(billboardTris.AsArray());
+            indexOffset += billboardTris.Length;
+        }
+        meshData.SetSubMesh(1, new SubMeshDescriptor(transparentStart, transparentCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
         // SubMesh 2 - Water
         count = waterTris.Length;
@@ -138,7 +150,7 @@ public class Subchunk : MonoBehaviour
         gameObject.SetActive(true);
         meshRenderer.enabled = true;
 
-        if (hasSolid)
+        if (enableBlockColliders && hasSolid)
         {
             int colliderIndicesCount = opaqueTris.Length + transparentTris.Length;
             var colliderDataArray = Mesh.AllocateWritableMeshData(1);
@@ -173,10 +185,16 @@ public class Subchunk : MonoBehaviour
             meshCollider.sharedMesh = null;
             meshCollider.sharedMesh = colliderMesh;
             meshCollider.enabled = true;
+            hasColliderData = true;
         }
         else
         {
-            meshCollider.sharedMesh = null;
+            // Keep any existing collider mesh cached, but disable physics when system is off.
+            if (!hasSolid)
+            {
+                meshCollider.sharedMesh = null;
+                hasColliderData = false;
+            }
             meshCollider.enabled = false;
         }
     }
@@ -192,11 +210,25 @@ public class Subchunk : MonoBehaviour
             meshRenderer.enabled = shouldShow;
     }
 
+    public void SetColliderSystemEnabled(bool enabled)
+    {
+        if (meshCollider == null) return;
+
+        if (!enabled)
+        {
+            meshCollider.enabled = false;
+            return;
+        }
+
+        meshCollider.enabled = hasGeometry && hasColliderData;
+    }
+
     public void ClearMesh()
     {
         if (mesh != null) mesh.Clear();
         if (colliderMesh != null) colliderMesh.Clear();
         hasGeometry = false;
+        hasColliderData = false;
         if (meshRenderer != null) meshRenderer.enabled = false;
         if (meshCollider != null)
         {

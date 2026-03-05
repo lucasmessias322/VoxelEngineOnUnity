@@ -134,6 +134,59 @@ public partial class World : MonoBehaviour
     public bool enableCave = true;
     public bool enableTrees = true;
 
+    [Header("Billboard Grass")]
+    public bool enableGrassBillboards = true;
+    [Range(0f, 1f)]
+    public float grassBillboardChance = 0.22f;
+    public BlockType grassBillboardBlockType = BlockType.Leaves;
+    [Range(0.2f, 2f)]
+    public float grassBillboardHeight = 0.9f;
+    [Range(0.01f, 1f)]
+    public float grassBillboardNoiseScale = 0.12f;
+    [Range(0f, 0.35f)]
+    public float grassBillboardJitter = 0.16f;
+
+    [Header("Ambient Occlusion")]
+    [Tooltip("Forca do AO. 1 = padrao, >1 escurece mais os cantos, 0 desativa o AO.")]
+    [Range(0f, 2.5f)]
+    public float aoStrength = 1.35f;
+    [Tooltip("Curva do AO. Valores maiores aumentam o contraste do escurecimento.")]
+    [Range(0.5f, 3f)]
+    public float aoCurveExponent = 1.25f;
+    [Tooltip("Luz minima aplicada apos AO. Menor valor permite cantos mais escuros.")]
+    [Range(0f, 1f)]
+    public float aoMinLight = 0.08f;
+
+    [Header("Debug / Physics")]
+    [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
+    public bool enableBlockColliders = true;
+
+    [Header("Debug / Gizmos")]
+    [Tooltip("Ativa a renderizacao de gizmos de debug do sistema de chunks.")]
+    public bool debugDrawGizmos = false;
+    [Tooltip("Quando ativado, os gizmos so aparecem em Play Mode.")]
+    public bool debugGizmosOnlyWhenPlaying = true;
+    [Tooltip("Mostra os limites do chunk onde o player esta.")]
+    public bool debugDrawPlayerChunkBounds = true;
+    [Tooltip("Mostra a grade de chunks na area de renderDistance.")]
+    public bool debugDrawRenderDistanceGrid = true;
+    [Tooltip("Mostra os bounds dos chunks ativos.")]
+    public bool debugDrawActiveChunkBounds = true;
+    [Tooltip("Mostra chunks pendentes de geracao/mesh.")]
+    public bool debugDrawPendingChunkQueue = false;
+    [Tooltip("Mostra os bounds de cada subchunk dos chunks ativos.")]
+    public bool debugDrawSubchunkBounds = false;
+    [Tooltip("Quando ligado, desenha apenas subchunks com geometria.")]
+    public bool debugSubchunksOnlyWithGeometry = true;
+    [Range(0f, 0.25f)]
+    public float debugGizmoFillAlpha = 0.06f;
+
+    public Color debugPlayerChunkColor = new Color(1f, 0.8f, 0.15f, 1f);
+    public Color debugRenderGridColor = new Color(0.2f, 0.6f, 1f, 1f);
+    public Color debugActiveChunkColor = new Color(0.25f, 1f, 0.35f, 1f);
+    public Color debugPendingChunkColor = new Color(1f, 0.4f, 0.2f, 1f);
+    public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
+
     [Header("Lighting")]
     [Tooltip("Padding horizontal em voxels para propagação de skylight entre chunks. Use 16 para eliminar costura visível na suavização.")]
     [Min(1)]
@@ -161,6 +214,7 @@ public partial class World : MonoBehaviour
     private int nextChunkGeneration = 0;
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
+    private bool lastEnableBlockColliders = true;
 
 
     // Optimization temporaries
@@ -189,6 +243,7 @@ public partial class World : MonoBehaviour
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
+        public NativeList<int> billboardTriangles;
         public NativeList<Vector2> uvs;
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
@@ -258,10 +313,13 @@ public partial class World : MonoBehaviour
             Chunk chunk = obj.GetComponent<Chunk>();
             chunkPool.Enqueue(chunk);
         }
+
+        lastEnableBlockColliders = enableBlockColliders;
     }
 
     private void Update()
     {
+        HandleBlockColliderToggle();
         meshesAppliedThisFrame = 0;
         UpdateChunks();
         ProcessChunkQueue();
@@ -456,8 +514,8 @@ public partial class World : MonoBehaviour
                 if (pm.vertices.Length > 0)
                 {
                     sub.gameObject.SetActive(true);
-                    sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles,
-                                      pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs);
+                    sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
+                                      pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs, enableBlockColliders);
                 }
                 else
                 {
@@ -518,11 +576,17 @@ public partial class World : MonoBehaviour
 
             MeshGenerator.ScheduleMeshJob(
                 pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings,
-                atlasTilesX, atlasTilesY, true, borderSize, startY, endY,
+                atlasTilesX, atlasTilesY, true, borderSize,
+                pd.coord.x, pd.coord.y,
+                startY, endY,
+                enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
+                grassBillboardNoiseScale, grassBillboardJitter,
+                aoStrength, aoCurveExponent, aoMinLight,
                 out JobHandle meshHandle,
                 out NativeList<Vector3> vertices,
                 out NativeList<int> opaqueTriangles,
                 out NativeList<int> transparentTriangles,
+                out NativeList<int> billboardTriangles,
                 out NativeList<int> waterTriangles,
                 out NativeList<Vector2> uvs,
                 out NativeList<Vector2> uv2,
@@ -541,6 +605,7 @@ public partial class World : MonoBehaviour
                 vertices = vertices,
                 opaqueTriangles = opaqueTriangles,
                 transparentTriangles = transparentTriangles,
+                billboardTriangles = billboardTriangles,
                 waterTriangles = waterTriangles,
                 uvs = uvs,
                 uv2 = uv2,
@@ -1023,6 +1088,134 @@ public partial class World : MonoBehaviour
         return false;
     }
 
+    private void HandleBlockColliderToggle()
+    {
+        if (lastEnableBlockColliders == enableBlockColliders) return;
+
+        lastEnableBlockColliders = enableBlockColliders;
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+            if (chunk == null || chunk.subchunks == null) continue;
+
+            for (int i = 0; i < chunk.subchunks.Length; i++)
+            {
+                Subchunk sc = chunk.subchunks[i];
+                if (sc != null)
+                    sc.SetColliderSystemEnabled(enableBlockColliders);
+            }
+        }
+
+        // If colliders were re-enabled, rebuild active chunks so subchunks generated while disabled gain collider data.
+        if (enableBlockColliders)
+        {
+            foreach (var kv in activeChunks)
+            {
+                RequestChunkRebuild(kv.Key);
+            }
+        }
+    }
+
+    private Vector2Int GetChunkCoordFromWorldPosition(Vector3 worldPos)
+    {
+        return new Vector2Int(
+            Mathf.FloorToInt(worldPos.x / Chunk.SizeX),
+            Mathf.FloorToInt(worldPos.z / Chunk.SizeZ)
+        );
+    }
+
+    private Bounds GetChunkBoundsFromCoord(Vector2Int coord)
+    {
+        Vector3 center = new Vector3(
+            coord.x * Chunk.SizeX + Chunk.SizeX * 0.5f,
+            Chunk.SizeY * 0.5f,
+            coord.y * Chunk.SizeZ + Chunk.SizeZ * 0.5f
+        );
+        Vector3 size = new Vector3(Chunk.SizeX, Chunk.SizeY, Chunk.SizeZ);
+        return new Bounds(center, size);
+    }
+
+    private void DrawBoundsGizmo(Bounds b, Color color, bool filled)
+    {
+        if (filled)
+        {
+            Color fill = new Color(color.r, color.g, color.b, Mathf.Clamp01(debugGizmoFillAlpha));
+            Gizmos.color = fill;
+            Gizmos.DrawCube(b.center, b.size);
+        }
+
+        Gizmos.color = color;
+        Gizmos.DrawWireCube(b.center, b.size);
+    }
+
+    private void OnDrawGizmos()
+    {
+        if (!debugDrawGizmos) return;
+        if (debugGizmosOnlyWhenPlaying && !Application.isPlaying) return;
+        if (player == null) return;
+
+        Vector2Int playerCoord = GetChunkCoordFromWorldPosition(player.position);
+
+        if (debugDrawRenderDistanceGrid)
+        {
+            for (int x = -renderDistance; x <= renderDistance; x++)
+            {
+                for (int z = -renderDistance; z <= renderDistance; z++)
+                {
+                    Vector2Int coord = new Vector2Int(playerCoord.x + x, playerCoord.y + z);
+                    DrawBoundsGizmo(GetChunkBoundsFromCoord(coord), debugRenderGridColor, false);
+                }
+            }
+        }
+
+        if (debugDrawPlayerChunkBounds)
+        {
+            DrawBoundsGizmo(GetChunkBoundsFromCoord(playerCoord), debugPlayerChunkColor, true);
+        }
+
+        if (debugDrawActiveChunkBounds)
+        {
+            foreach (var kv in activeChunks)
+            {
+                DrawBoundsGizmo(GetChunkBoundsFromCoord(kv.Key), debugActiveChunkColor, false);
+            }
+        }
+
+        if (debugDrawPendingChunkQueue)
+        {
+            for (int i = 0; i < pendingChunks.Count; i++)
+            {
+                Bounds b = GetChunkBoundsFromCoord(pendingChunks[i].coord);
+                Gizmos.color = debugPendingChunkColor;
+                Gizmos.DrawWireCube(b.center, b.size);
+                Gizmos.DrawSphere(b.center, 0.6f);
+            }
+        }
+
+        if (debugDrawSubchunkBounds)
+        {
+            foreach (var kv in activeChunks)
+            {
+                Chunk chunk = kv.Value;
+                if (chunk == null || chunk.subchunks == null) continue;
+
+                for (int i = 0; i < chunk.subchunks.Length; i++)
+                {
+                    Subchunk sc = chunk.subchunks[i];
+                    if (sc == null) continue;
+                    if (debugSubchunksOnlyWithGeometry && !sc.hasGeometry) continue;
+
+                    float minY = i * Chunk.SubchunkHeight;
+                    Vector3 center = chunk.transform.position + new Vector3(Chunk.SizeX * 0.5f, minY + Chunk.SubchunkHeight * 0.5f, Chunk.SizeZ * 0.5f);
+                    Vector3 size = new Vector3(Chunk.SizeX, Chunk.SubchunkHeight, Chunk.SizeZ);
+                    Gizmos.color = debugSubchunkColor;
+                    Gizmos.DrawWireCube(center, size);
+                }
+            }
+        }
+    }
+
 
     #endregion
 
@@ -1048,6 +1241,7 @@ public partial class World : MonoBehaviour
         if (pm.vertices.IsCreated) pm.vertices.Dispose();
         if (pm.opaqueTriangles.IsCreated) pm.opaqueTriangles.Dispose();
         if (pm.transparentTriangles.IsCreated) pm.transparentTriangles.Dispose();
+        if (pm.billboardTriangles.IsCreated) pm.billboardTriangles.Dispose();
         if (pm.waterTriangles.IsCreated) pm.waterTriangles.Dispose();
         if (pm.uvs.IsCreated) pm.uvs.Dispose();
         if (pm.uv2.IsCreated) pm.uv2.Dispose();
