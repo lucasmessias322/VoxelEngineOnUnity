@@ -394,8 +394,9 @@ public partial class World : MonoBehaviour
         if (type != BlockType.Grass)
             suppressedGrassBillboards.Remove(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
 
-        if (type == BlockType.Air) blockOverrides.Remove(worldPos);
-        else blockOverrides[worldPos] = type;
+        // Keep explicit Air overrides so broken procedural terrain stays removed.
+        // Removing the key would make GetBlockAt() fall back to procedural data again.
+        blockOverrides[worldPos] = type;
 
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
@@ -500,20 +501,22 @@ public partial class World : MonoBehaviour
 
             Vector2Int chunkCoord = kvp.Key;
 
-            bool isOneOfTheNineChunks =
-                Mathf.Abs(chunkCoord.x - playerChunkCoord.x) <= 1 &&
-                Mathf.Abs(chunkCoord.y - playerChunkCoord.y) <= 1;
+            bool isWithinFullVisibilityRadius =
+                Mathf.Abs(chunkCoord.x - playerChunkCoord.x) <= horizontalFullVisibilityRadius &&
+                Mathf.Abs(chunkCoord.y - playerChunkCoord.y) <= horizontalFullVisibilityRadius;
 
             for (int subIdx = 0; subIdx < Chunk.SubchunksPerColumn; subIdx++)
             {
-                if (isOneOfTheNineChunks)
+                if (isWithinFullVisibilityRadius)
                 {
                     chunk.subchunks[subIdx].SetVisible(true);
                 }
                 else
                 {
-                    int verticalDistance = Mathf.Abs(subIdx - playerSubchunkY);
-                    bool shouldBeVisible = verticalDistance <= verticalSubchunkRenderDistance;
+                    int verticalDelta = subIdx - playerSubchunkY;
+                    bool shouldBeVisible = verticalDelta >= 0
+                        ? verticalDelta <= verticalSubchunkRenderDistanceAbove
+                        : (-verticalDelta) <= verticalSubchunkRenderDistanceBelow;
                     chunk.subchunks[subIdx].SetVisible(shouldBeVisible);
                 }
             }

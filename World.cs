@@ -4,6 +4,7 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 
 [Serializable]
@@ -127,8 +128,14 @@ public partial class World : MonoBehaviour
     public Camera mainCamera;
 
     [Header("Vertical Render Distance + Full Visibility")]
-    [Tooltip("Quantos subchunks acima/abaixo do jogador serão renderizados")]
-    public int verticalSubchunkRenderDistance = 2;
+    [FormerlySerializedAs("verticalSubchunkRenderDistance")]
+    [Tooltip("Quantos subchunks acima do jogador serao renderizados")]
+    [Min(0)]
+    public int verticalSubchunkRenderDistanceAbove = 4;
+
+    [Tooltip("Quantos subchunks abaixo do jogador serao renderizados")]
+    [Min(0)]
+    public int verticalSubchunkRenderDistanceBelow = 2;
 
     [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical).")]
     public int horizontalFullVisibilityRadius = 2;
