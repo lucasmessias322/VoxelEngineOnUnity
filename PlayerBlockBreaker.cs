@@ -14,9 +14,6 @@ public class PlayerBlockBreaker : MonoBehaviour
     public AudioClip placeBlockClip;
     public AudioClip breakBlockClip;
 
-
-
-
     void Awake()
     {
         audioSource = GetComponent<AudioSource>();
@@ -40,98 +37,83 @@ public class PlayerBlockBreaker : MonoBehaviour
                 else if (i == 8) placeBlockType = BlockType.Snow;
                 else if (i == 9) placeBlockType = BlockType.Leaves;
 
-
                 Debug.Log($"Selected block type for placing: {placeBlockType}");
             }
         }
 
-
         HandleBreakBlock();
         HandlePlaceBlock();
-
-
-
     }
 
     void HandleBreakBlock()
     {
-        if (Input.GetMouseButtonDown(0)) // clique esquerdo -> quebrar
+        if (Input.GetMouseButtonDown(0))
         {
-            Vector3Int sel = selector.GetSelectedBlock();
-            if (sel.x != int.MinValue)
+            if (!selector.TryGetSelectedBlock(out Vector3Int sel, out _))
+                return;
+
+            if (selector.IsBillboardHit)
             {
-                // opcional: checar alcance (mas BlockSelector já faz raycast com reach)
-                BlockType current = World.Instance.GetBlockAt(sel);
-
-                // 🔒 não quebrável
-                if (current == BlockType.Bedrock || current == BlockType.Air || current == BlockType.Water)
-                {
-                    Debug.Log("Tentou quebrar Bedrock 😈");
-                    return;
-                }
-
-                World.Instance.SetBlockAt(sel, BlockType.Air);
-                Debug.Log($"Break request at {sel} -> success");
-
-                Debug.Log($"Break request at {sel} -> queued");
-
-                audioSource.PlayOneShot(breakBlockClip);
+                // Billboard de grama nao existe como voxel real.
+                // Suprime apenas o billboard nessa celula, mantendo o bloco de grama-base.
+                World.Instance.SuppressGrassBillboardAt(sel);
+                if (breakBlockClip != null)
+                    audioSource.PlayOneShot(breakBlockClip);
+                return;
             }
+
+            BlockType current = World.Instance.GetBlockAt(sel);
+
+            if (current == BlockType.Bedrock || current == BlockType.Air || current == BlockType.Water)
+            {
+                Debug.Log("Tentou quebrar Bedrock ??");
+                return;
+            }
+
+            World.Instance.SetBlockAt(sel, BlockType.Air);
+            Debug.Log($"Break request at {sel} -> success");
+            Debug.Log($"Break request at {sel} -> queued");
+
+            if (breakBlockClip != null)
+                audioSource.PlayOneShot(breakBlockClip);
         }
     }
+
     void HandlePlaceBlock()
     {
         if (Input.GetMouseButtonDown(1))
         {
-            Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+            if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
+                return;
 
-            if (Physics.Raycast(ray, out RaycastHit hit, selector.reach))
+            // Se o alvo for billboard, coloca exatamente na celula do billboard (substitui).
+            Vector3Int placePos = selector.IsBillboardHit
+                ? targetBlock
+                : targetBlock + hitNormal;
+
+            if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
+                return;
+
+            BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
+            if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
+                return;
+
+            Vector3 blockCenter = placePos + Vector3.one * 0.5f;
+            Vector3 halfExtents = Vector3.one * 0.5f;
+
+            Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
+
+            foreach (var col in hits)
             {
-                // 🔹 Cálculo mais robusto do bloco atingido
-                // conversão segura da normal -> inteiro (-1,0,1)
-                Vector3Int normalInt = new Vector3Int(
-                    Mathf.RoundToInt(hit.normal.x),
-                    Mathf.RoundToInt(hit.normal.y),
-                    Mathf.RoundToInt(hit.normal.z)
-                );
-
-
-
-                Vector3Int targetBlock = Vector3Int.FloorToInt(hit.point - hit.normal * 0.01f);
-                Vector3Int placePos = targetBlock + normalInt;
-
-                // 🔹 Proteção Y
-                if (placePos.y <= 2 || placePos.y >= Chunk.SizeY)
-                    return;
-
-                // 🔹 Verifica se já existe bloco sólido
-                BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-                if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
-                    return;
-
-                // ================================
-                // 🔥 VERIFICAÇÃO PROFISSIONAL
-                // ================================
-
-                Vector3 blockCenter = placePos + Vector3.one * 0.5f;
-                Vector3 halfExtents = Vector3.one * 0.5f;
-
-                Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
-
-                foreach (var col in hits)
+                if (col.transform == transform)
                 {
-                    if (col.transform == transform)
-                    {
-                        // Está colidindo com o player
-                        return;
-                    }
+                    return;
                 }
-
-                // ================================
-
-                World.Instance.SetBlockAt(placePos, placeBlockType);
-                audioSource.PlayOneShot(placeBlockClip);
             }
+
+            World.Instance.SetBlockAt(placePos, placeBlockType);
+            if (placeBlockClip != null)
+                audioSource.PlayOneShot(placeBlockClip);
         }
     }
 }

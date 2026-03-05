@@ -14,14 +14,12 @@ public class SelectedBlockUI : MonoBehaviour
 
     void UpdateText()
     {
-        BlockType block = blockSelector.CurrentBlock;
+        if (blockSelector == null || !blockSelector.HasBlock)
+        {
+            blockText.text = "";
+            return;
+        }
 
-        // if (block == BlockType.Air )
-        // {
-        //     blockText.text = "";
-        //     return;
-        // }
-
-        blockText.text = block.ToString();
+        blockText.text = blockSelector.CurrentBlock.ToString();
     }
 }

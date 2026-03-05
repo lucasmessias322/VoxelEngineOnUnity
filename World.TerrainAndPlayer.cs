@@ -349,6 +349,24 @@ public partial class World : MonoBehaviour
 
     #region Player Actions
 
+    public bool IsGrassBillboardSuppressed(Vector3Int billboardPos)
+    {
+        return suppressedGrassBillboards.Contains(billboardPos);
+    }
+
+    public void SuppressGrassBillboardAt(Vector3Int billboardPos)
+    {
+        if (billboardPos.y <= 0 || billboardPos.y >= Chunk.SizeY) return;
+        if (!suppressedGrassBillboards.Add(billboardPos)) return;
+
+        Vector2Int coord = new Vector2Int(
+            Mathf.FloorToInt((float)billboardPos.x / Chunk.SizeX),
+            Mathf.FloorToInt((float)billboardPos.z / Chunk.SizeZ)
+        );
+
+        RequestChunkRebuild(coord);
+    }
+
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
@@ -360,6 +378,14 @@ public partial class World : MonoBehaviour
         }
 
         if (current == type) return;
+
+        // If this position gets occupied, it cannot host a billboard anymore.
+        if (type != BlockType.Air)
+            suppressedGrassBillboards.Remove(worldPos);
+
+        // If ground changes from grass to anything else, clear suppression above it.
+        if (type != BlockType.Grass)
+            suppressedGrassBillboards.Remove(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
 
         blockOverrides[worldPos] = type;
 

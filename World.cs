@@ -207,6 +207,7 @@ public partial class World : MonoBehaviour
 
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
+    private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>();
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
     private Dictionary<Vector2Int, byte[]> globalLightColumns = new Dictionary<Vector2Int, byte[]>();
     // Misc
@@ -261,6 +262,7 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public NativeArray<BlockTextureMapping> nativeBlockMappings;
+        public NativeArray<int3> suppressedBillboards;
         public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
     }
@@ -562,6 +564,7 @@ public partial class World : MonoBehaviour
     {
         int borderSize = GetChunkBorderSize();
         NativeList<JobHandle> meshHandles = new NativeList<JobHandle>(Chunk.SubchunksPerColumn, Allocator.Temp);
+        List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
 
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
@@ -573,9 +576,12 @@ public partial class World : MonoBehaviour
 
             int startY = sub * Chunk.SubchunkHeight;
             int endY = startY + Chunk.SubchunkHeight;
+            NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
+            for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
+                nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
             MeshGenerator.ScheduleMeshJob(
-                pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings,
+                pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings, nativeSuppressedBillboards,
                 atlasTilesX, atlasTilesY, true, borderSize,
                 pd.coord.x, pd.coord.y,
                 startY, endY,
@@ -622,7 +628,8 @@ public partial class World : MonoBehaviour
                 blockTypes = pd.blockTypes,
                 solids = pd.solids,
                 light = pd.light,
-                nativeBlockMappings = pd.nativeBlockMappings
+                nativeBlockMappings = pd.nativeBlockMappings,
+                suppressedBillboards = nativeSuppressedBillboards
             });
         }
 
@@ -644,6 +651,29 @@ public partial class World : MonoBehaviour
         disposeJob.Schedule(combinedMeshHandle);
 
         activeChunk.currentJob = combinedMeshHandle;
+    }
+
+    private List<int3> GetSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord)
+    {
+        List<int3> result = new List<int3>();
+        if (suppressedGrassBillboards.Count == 0) return result;
+
+        int minX = chunkCoord.x * Chunk.SizeX;
+        int minZ = chunkCoord.y * Chunk.SizeZ;
+        int maxX = minX + Chunk.SizeX - 1;
+        int maxZ = minZ + Chunk.SizeZ - 1;
+
+        foreach (Vector3Int pos in suppressedGrassBillboards)
+        {
+            if (pos.x >= minX && pos.x <= maxX &&
+                pos.z >= minZ && pos.z <= maxZ &&
+                pos.y >= 0 && pos.y < Chunk.SizeY)
+            {
+                result.Add(new int3(pos.x, pos.y, pos.z));
+            }
+        }
+
+        return result;
     }
 
     private void InjectGlobalLightColumns(
@@ -1248,6 +1278,7 @@ public partial class World : MonoBehaviour
         if (pm.normals.IsCreated) pm.normals.Dispose();
         if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
         if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
+        if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
         if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
     }

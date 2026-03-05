@@ -391,6 +391,7 @@ public static class MeshGenerator
         NativeArray<bool> solids,
         NativeArray<byte> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
+        NativeArray<int3> suppressedGrassBillboards,
         int atlasTilesX,
         int atlasTilesY,
         bool generateSides,
@@ -449,6 +450,7 @@ public static class MeshGenerator
             light = light, // Usa a luz previamente calculada e passada por parâmetro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
+            suppressedGrassBillboards = suppressedGrassBillboards,
 
             border = borderSize,
             atlasTilesX = atlasTilesX,
@@ -498,6 +500,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> light;
+        [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
 
         public int border;
         public int atlasTilesX;
@@ -628,6 +631,9 @@ public static class MeshGenerator
                         if (chance > effectiveChance)
                             continue;
 
+                        if (IsSuppressedGrassBillboard(worldX, py, worldZ))
+                            continue;
+
                         byte packed = light[upIdx];
                         byte billboardLight = (byte)math.max(
                             (int)LightUtils.GetSkyLight(packed),
@@ -660,6 +666,17 @@ public static class MeshGenerator
             Vector3 b2 = b1 + new Vector3(0f, height, 0f);
             Vector3 b3 = b0 + new Vector3(0f, height, 0f);
             AddDoubleSidedQuad(b0, b1, b2, b3, atlasUv, light01, tint);
+        }
+
+        private bool IsSuppressedGrassBillboard(int worldX, int worldY, int worldZ)
+        {
+            for (int i = 0; i < suppressedGrassBillboards.Length; i++)
+            {
+                int3 p = suppressedGrassBillboards[i];
+                if (p.x == worldX && p.y == worldY && p.z == worldZ)
+                    return true;
+            }
+            return false;
         }
 
         private void AddDoubleSidedQuad(
