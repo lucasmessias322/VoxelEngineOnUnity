@@ -537,40 +537,12 @@ public static class MeshGenerator
 
         public void Execute()
         {
-            if (IsSubchunkEmpty())
-            {
-                return; // pula TODO o greedy meshing
-            }
             float invAtlasTilesX = 1f / atlasTilesX;
             float invAtlasTilesY = 1f / atlasTilesY;
 
             GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
             GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
         }
-
-        private bool IsSubchunkEmpty()
-        {
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-
-            for (int y = startY; y < endY; y++)
-            {
-                for (int z = border; z < border + SizeZ; z++)
-                {
-                    for (int x = border; x < border + SizeX; x++)
-                    {
-                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-                        if (blockTypes[idx] != BlockType.Air)
-                        {
-                            return false; // tem bloco (terra, água, árvore, etc)
-                        }
-                    }
-                }
-            }
-            return true; // 100% ar → pula
-        }
-
         private void GenerateGrassBillboards(
             NativeArray<BlockType> blockTypes,
             NativeArray<byte> light,
@@ -872,13 +844,19 @@ public static class MeshGenerator
                                         axis == 2 ? aoPlaneN : z
                                     );
 
-                                    byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao1 = GetVertexAO(aoPos, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao2 = GetVertexAO(aoPos, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    byte ao3 = GetVertexAO(aoPos, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-
-                                    // Empacota os 4 valores de AO (2 bits cada = 8 bits totais)
-                                    int packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
+                                    int packedAO;
+                                    if (aoStrength <= 0f)
+                                    {
+                                        packedAO = 0xFF;
+                                    }
+                                    else
+                                    {
+                                        byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao1 = GetVertexAO(aoPos, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao2 = GetVertexAO(aoPos, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao3 = GetVertexAO(aoPos, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
+                                    }
 
                                     // Mask agora guarda: [8 bits AO] | [4 bits Luz] | [12 bits Bloco]
                                     mask[i + j * sizeU] = (int)current | ((int)faceLight << 12) | (packedAO << 16);
@@ -1025,13 +1003,7 @@ public static class MeshGenerator
             mask.Dispose();
         }
 
-        private Vector3Int GetAoBase(int uCoord, int vCoord, int aoN, int uAxis, int vAxis)
-        {
-            int ax = (uAxis == 0 ? uCoord : vAxis == 0 ? vCoord : aoN);
-            int ay = (uAxis == 1 ? uCoord : vAxis == 1 ? vCoord : aoN);
-            int az = (uAxis == 2 ? uCoord : vAxis == 2 ? vCoord : aoN);
-            return new Vector3Int(ax, ay, az);
-        }
+       
         private bool IsOccluder(int x, int y, int z, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
@@ -1089,4 +1061,5 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
 

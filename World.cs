@@ -118,6 +118,9 @@ public partial class World : MonoBehaviour
     [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
+    [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
+    [Min(1)]
+    public int maxChunkRebuildsPerFrame = 1;
 
     [Header("Frustum Culling")]
     public bool enableFrustumCulling = true;
@@ -204,6 +207,8 @@ public partial class World : MonoBehaviour
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
     private List<PendingData> pendingDataJobs = new List<PendingData>();
+    private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>();
+    private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
 
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
@@ -323,6 +328,7 @@ public partial class World : MonoBehaviour
     {
         HandleBlockColliderToggle();
         meshesAppliedThisFrame = 0;
+        ProcessQueuedChunkRebuilds();
         UpdateChunks();
         ProcessChunkQueue();
     }
@@ -979,7 +985,36 @@ public partial class World : MonoBehaviour
 
     private void RequestChunkRebuild(Vector2Int coord)
     {
-        if (IsChunkJobPending(coord)) return;
+        if (!queuedChunkRebuildsSet.Add(coord)) return;
+        queuedChunkRebuilds.Enqueue(coord);
+    }
+
+    private void ProcessQueuedChunkRebuilds()
+    {
+        if (queuedChunkRebuilds.Count == 0) return;
+        int perFrameLimit = Mathf.Max(1, maxChunkRebuildsPerFrame);
+
+        int processed = 0;
+        int attempts = queuedChunkRebuilds.Count;
+        while (processed < perFrameLimit && attempts-- > 0)
+        {
+            Vector2Int coord = queuedChunkRebuilds.Dequeue();
+            queuedChunkRebuildsSet.Remove(coord);
+
+            if (IsChunkJobPending(coord))
+            {
+                if (queuedChunkRebuildsSet.Add(coord))
+                    queuedChunkRebuilds.Enqueue(coord);
+                continue;
+            }
+
+            RequestChunkRebuildImmediate(coord);
+            processed++;
+        }
+    }
+
+    private void RequestChunkRebuildImmediate(Vector2Int coord)
+    {
         if (!activeChunks.TryGetValue(coord, out Chunk chunk)) return;
 
         int expectedGen = nextChunkGeneration++;
