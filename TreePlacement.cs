@@ -38,6 +38,8 @@ public static class TreePlacement
         for (int i = 0; i < treeInstances.Length; i++)
         {
             var t = treeInstances[i];
+            int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791);
+            BlockType trunkType = (treeHash & 3) == 0 ? BlockType.birch_log : BlockType.Log;
 
             int localX = t.worldX - baseWorldX;
             int localZ = t.worldZ - baseWorldZ;
@@ -162,8 +164,8 @@ public static class TreePlacement
                 // NÃO substituir água — só substitui se for ar ou folhas (evita destruir outros blocos/água)
                 if (existing == BlockType.Air || existing == BlockType.Leaves)
                 {
-                    blockTypes[tidx] = BlockType.Log;
-                    solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
+                    blockTypes[tidx] = trunkType;
+                    solids[tidx] = blockMappings[(int)trunkType].isSolid;
                 }
             }
 
@@ -171,7 +173,6 @@ public static class TreePlacement
             // Copa (estilo Minecraft Oak com variação)
             // --------------------------------------------------
             // Hash simples para variação determinística por árvore e camada
-            int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791);
 
             for (int dy = 0; dy < canopyH; dy++)
             {
@@ -190,7 +191,7 @@ public static class TreePlacement
 
                             int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
                             BlockType ex = blockTypes[lidx];
-                            if (ex == BlockType.Log) continue;
+                            if (ex == BlockType.Log || ex == BlockType.birch_log) continue;
                             // NÃO substituir água
                             if (ex == BlockType.Air || ex == BlockType.Leaves)
                             {
@@ -232,7 +233,7 @@ public static class TreePlacement
                         int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
                         BlockType existing = blockTypes[lidx];
 
-                        if (existing == BlockType.Log) continue;
+                        if (existing == BlockType.Log || existing == BlockType.birch_log) continue;
                         // NÃO substituir água
                         if (!(existing == BlockType.Air || existing == BlockType.Leaves))
                             continue;
@@ -249,13 +250,13 @@ public static class TreePlacement
                 int ty = surfaceY + dy;
                 if (ty >= chunkSizeY) break;
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                if (blockTypes[tidx] != BlockType.Log)
+                if (blockTypes[tidx] != BlockType.Log && blockTypes[tidx] != BlockType.birch_log)
                 {
                     // Só sobrescreve se for Air ou Leaves (nunca água)
                     if (blockTypes[tidx] == BlockType.Air || blockTypes[tidx] == BlockType.Leaves)
                     {
-                        blockTypes[tidx] = BlockType.Log;
-                        solids[tidx] = blockMappings[(int)BlockType.Log].isSolid;
+                        blockTypes[tidx] = trunkType;
+                        solids[tidx] = blockMappings[(int)trunkType].isSolid;
                     }
                 }
             }

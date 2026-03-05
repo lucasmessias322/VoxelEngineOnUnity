@@ -15,5 +15,6 @@ public enum BlockType
     glowstone = 12,
     oak_planks = 13,
     short_grass4 = 14,
+    birch_log = 15,
     
 }
