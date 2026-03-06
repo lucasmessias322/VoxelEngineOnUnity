@@ -8,8 +8,9 @@ public class PlayerBlockBreaker : MonoBehaviour
 {
     public BlockSelector selector;
     public Camera cam;
+    public HotbarMirror hotbar;
     [Header("Place settings")]
-    public BlockType placeBlockType = BlockType.Stone; // tipo a ser colocado (ajuste no Inspector)
+    public BlockType placeBlockType = BlockType.Stone; // fallback se nao houver hotbar configurada
 
     private AudioSource audioSource;
     public AudioClip placeBlockClip;
@@ -35,30 +36,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         audioSource = GetComponent<AudioSource>();
         if (selector == null) selector = GetComponent<BlockSelector>();
         if (cam == null && selector != null) cam = selector.cam;
+        if (hotbar == null) hotbar = FindObjectOfType<HotbarMirror>();
 
         CreateCrackOverlay();
     }
 
     void Update()
     {
-        for (int i = 1; i <= 9; i++)
-        {
-            if (Input.GetKeyDown((KeyCode)((int)KeyCode.Alpha1 + (i - 1))))
-            {
-                if (i == 1) placeBlockType = BlockType.Stone;
-                else if (i == 2) placeBlockType = BlockType.Dirt;
-                else if (i == 3) placeBlockType = BlockType.Grass;
-                else if (i == 4) placeBlockType = BlockType.oak_planks;
-                else if (i == 5) placeBlockType = BlockType.Log;
-                else if (i == 6) placeBlockType = BlockType.glowstone;
-                else if (i == 7) placeBlockType = BlockType.glass;
-                else if (i == 8) placeBlockType = BlockType.Snow;
-                else if (i == 9) placeBlockType = BlockType.Leaves;
-
-                Debug.Log($"Selected block type for placing: {placeBlockType}");
-            }
-        }
-
         HandleBreakBlock();
         HandlePlaceBlock();
     }
@@ -112,6 +96,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (breakProgress01 < 1f)
             return;
 
+        Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
+        BlockDrop.Spawn(World.Instance, sel, current, throwDir);
         World.Instance.SetBlockAt(sel, BlockType.Air);
         Debug.Log($"Break request at {sel} -> success");
         Debug.Log($"Break request at {sel} -> queued");
@@ -171,7 +157,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
 
         Texture2D tex = breakCrackStages[stage];
-        crackOverlayRuntimeMaterial.mainTexture = tex;
+        crackOverlayRuntimeMaterial.SetTexture("_CrackTex", tex);
         lastCrackStage = stage;
     }
 
@@ -205,6 +191,10 @@ public class PlayerBlockBreaker : MonoBehaviour
         {
             CancelBreak();
 
+            BlockType selectedBlockType = placeBlockType;
+            if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
+                return;
+
             if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
                 return;
 
@@ -233,7 +223,10 @@ public class PlayerBlockBreaker : MonoBehaviour
                 }
             }
 
-            World.Instance.SetBlockAt(placePos, placeBlockType);
+            if (hotbar != null && !hotbar.TryConsumeSelected(1))
+                return;
+
+            World.Instance.SetBlockAt(placePos, selectedBlockType);
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
