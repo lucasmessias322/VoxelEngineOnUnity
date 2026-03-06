@@ -70,7 +70,10 @@ public class BlockDrop : MonoBehaviour
         MeshFilter mf = gameObject.AddComponent<MeshFilter>();
         MeshRenderer mr = gameObject.AddComponent<MeshRenderer>();
 
-        Mesh mesh = BuildDropMesh(world, blockType, out int submeshIndex);
+        Mesh mesh = BuildBlockMesh(world, blockType, out int submeshIndex);
+        if (mesh == null)
+            return;
+
         mf.sharedMesh = mesh;
 
         mr.materials = world.Material;
@@ -87,8 +90,12 @@ public class BlockDrop : MonoBehaviour
         }
     }
 
-    private Mesh BuildDropMesh(World world, BlockType blockType, out int submeshIndex)
+    public static Mesh BuildBlockMesh(World world, BlockType blockType, out int submeshIndex)
     {
+        submeshIndex = 0;
+        if (world == null)
+            return null;
+
         Mesh mesh = new Mesh();
         mesh.name = $"DropMesh_{blockType}";
 
@@ -156,7 +163,6 @@ public class BlockDrop : MonoBehaviour
         mesh.SetUVs(2, uv2);
         mesh.subMeshCount = 3;
 
-        submeshIndex = 0;
         if (blockType == BlockType.Water) submeshIndex = 2;
         else if (mapping.isTransparent) submeshIndex = 1;
 
@@ -199,7 +205,7 @@ public class BlockDrop : MonoBehaviour
         box.size = Vector3.one;
 
         SphereCollider pickup = gameObject.AddComponent<SphereCollider>();
-        pickup.radius = 2f;
+        pickup.radius = 4f;
         pickup.isTrigger = true;
 
         rb = gameObject.AddComponent<Rigidbody>();

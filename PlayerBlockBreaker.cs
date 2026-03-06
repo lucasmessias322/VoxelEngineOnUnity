@@ -43,6 +43,12 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     void Update()
     {
+        if (PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
+        {
+            CancelBreak();
+            return;
+        }
+
         HandleBreakBlock();
         HandlePlaceBlock();
     }
