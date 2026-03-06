@@ -74,6 +74,18 @@ public class BlockDataSO : ScriptableObject
             default: return mValue.side;
         }
     }
+
+    /// <summary>
+    /// Retorna se o bloco foi marcado como liquido no mapeamento.
+    /// Mantem compatibilidade para agua mesmo sem mapeamento.
+    /// </summary>
+    public bool IsLiquid(BlockType type)
+    {
+        if (type == BlockType.Water) return true;
+
+        var m = GetMapping(type);
+        return m != null && m.Value.isLiquid;
+    }
 }
 
 
@@ -89,6 +101,7 @@ public struct BlockTextureMapping
     public bool isEmpty;   // default: false (ex: true para água/ar)
     public bool isSolid;   // default: false (defina como true no Inspector para blocos sólidos)
     public bool isTransparent; // default: false (ex: true para vidro, folhas)
+    public bool isLiquid;  // default: false (true para agua e outros blocos liquidos)
     public bool isLightSource; // default: false (ex: true para blocos que emitem luz, como tochas)
     public int materialIndex;  // default: 0
 

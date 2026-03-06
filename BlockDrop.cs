@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 public class BlockDrop : MonoBehaviour
@@ -13,11 +13,22 @@ public class BlockDrop : MonoBehaviour
     [SerializeField] private bool requirePlayerTag = false;
     [SerializeField] private bool debugPickupLogs = false;
 
+    [Header("Stacking")]
+    [SerializeField, Min(1)] private int stackAmount = 1;
+    [SerializeField, Min(1)] private int maxStackAmount = 64;
+    [SerializeField, Min(0f)] private float mergeRadius = 1.15f;
+    [SerializeField, Min(0.02f)] private float mergeCheckInterval = 0.2f;
+    [SerializeField, Min(0f)] private float mergeDelaySeconds = 0.15f;
+
     [Header("Runtime")]
     [SerializeField] private BlockType blockType;
 
     private float spawnTime;
+    private float nextMergeCheckTime;
     private Rigidbody rb;
+    private bool isCollected;
+    private const int MergeBufferSize = 24;
+    private static readonly Collider[] MergeBuffer = new Collider[MergeBufferSize];
 
     private struct FaceDef
     {
@@ -48,6 +59,7 @@ public class BlockDrop : MonoBehaviour
 
         BlockDrop drop = go.AddComponent<BlockDrop>();
         drop.blockType = blockType;
+        drop.stackAmount = 1;
         go.transform.localScale = Vector3.one * drop.dropScale;
         drop.BuildVisual(world, blockType);
         drop.SetupPhysics(throwDirection);
@@ -187,7 +199,7 @@ public class BlockDrop : MonoBehaviour
         box.size = Vector3.one;
 
         SphereCollider pickup = gameObject.AddComponent<SphereCollider>();
-        pickup.radius = 1f;
+        pickup.radius = 2f;
         pickup.isTrigger = true;
 
         rb = gameObject.AddComponent<Rigidbody>();
@@ -203,12 +215,25 @@ public class BlockDrop : MonoBehaviour
 
     private void Awake()
     {
+        mergeRadius = Mathf.Max(0.01f, mergeRadius);
+        mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
+        mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
+        maxStackAmount = Mathf.Max(1, maxStackAmount);
+        stackAmount = Mathf.Clamp(stackAmount, 1, maxStackAmount);
         spawnTime = Time.time;
+        nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
+        UpdateDropName();
     }
 
     private void Update()
     {
         transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
+
+        if (!isCollected && Time.time >= nextMergeCheckTime)
+        {
+            nextMergeCheckTime = Time.time + mergeCheckInterval;
+            TryMergeNearbyDrops();
+        }
 
         if (Time.time - spawnTime >= lifeTimeSeconds)
             Destroy(gameObject);
@@ -223,16 +248,17 @@ public class BlockDrop : MonoBehaviour
     {
         TryCollect(other);
     }
-
     private void TryCollect(Collider other)
     {
         if (other == null) return;
+        if (isCollected) return;
         if (Time.time - spawnTime < pickupDelaySeconds) return;
 
         PlayerInventory inventory = ResolveInventory(other);
         if (inventory == null)
         {
-            Debug.LogWarning($"[BlockDrop] Colisão com {other.name} mas PlayerInventory nao encontrado para coletar {blockType}.");
+            if (debugPickupLogs)
+                Debug.LogWarning($"[BlockDrop] Colisao com {other.name} sem PlayerInventory para coletar {blockType}.");
             return;
         }
 
@@ -244,16 +270,108 @@ public class BlockDrop : MonoBehaviour
             if (!isPlayer) return;
         }
 
-        if (inventory.TryAddBlockDrop(blockType, 1))
+        int collectedAmount = 0;
+        while (stackAmount > 0 && inventory.TryAddBlockDrop(blockType, 1))
+        {
+            stackAmount--;
+            collectedAmount++;
+        }
+
+        if (collectedAmount > 0)
         {
             if (debugPickupLogs)
-                Debug.Log($"[BlockDrop] Coletado: {blockType} -> inventario {inventory.name}");
-            Destroy(gameObject);
+                Debug.Log($"[BlockDrop] Coletado: {blockType} x{collectedAmount} -> inventario {inventory.name}");
+
+            if (stackAmount <= 0)
+            {
+                isCollected = true;
+                DisableSelfColliders();
+                Destroy(gameObject);
+                return;
+            }
+
+            UpdateDropName();
+            return;
         }
-        else if (debugPickupLogs)
+
+        if (debugPickupLogs)
         {
             Debug.LogWarning($"[BlockDrop] Falha ao coletar {blockType}. Verifique mapeamento BlockType->Item e espaco no inventario.");
         }
+    }
+
+    private void TryMergeNearbyDrops()
+    {
+        if (stackAmount >= maxStackAmount) return;
+        if (Time.time - spawnTime < mergeDelaySeconds) return;
+
+        int hits = Physics.OverlapSphereNonAlloc(
+            transform.position,
+            mergeRadius,
+            MergeBuffer,
+            ~0,
+            QueryTriggerInteraction.Collide
+        );
+
+        for (int i = 0; i < hits && stackAmount < maxStackAmount; i++)
+        {
+            Collider col = MergeBuffer[i];
+            MergeBuffer[i] = null;
+            if (col == null) continue;
+
+            BlockDrop other = col.GetComponent<BlockDrop>();
+            if (other == null)
+                other = col.GetComponentInParent<BlockDrop>();
+
+            if (!CanMergeWith(other)) continue;
+            if (GetInstanceID() > other.GetInstanceID()) continue;
+
+            AbsorbFrom(other);
+        }
+    }
+
+    private bool CanMergeWith(BlockDrop other)
+    {
+        if (other == null || other == this) return false;
+        if (other.isCollected) return false;
+        if (other.blockType != blockType) return false;
+        if (other.stackAmount <= 0) return false;
+        if (Time.time - other.spawnTime < other.mergeDelaySeconds) return false;
+
+        float mergeDistanceSqr = mergeRadius * mergeRadius;
+        return (other.transform.position - transform.position).sqrMagnitude <= mergeDistanceSqr;
+    }
+
+    private void AbsorbFrom(BlockDrop other)
+    {
+        int stackLimit = Mathf.Max(1, Mathf.Min(maxStackAmount, other.maxStackAmount));
+        int freeSpace = Mathf.Max(0, stackLimit - stackAmount);
+        if (freeSpace <= 0) return;
+
+        int moved = Mathf.Min(freeSpace, other.stackAmount);
+        if (moved <= 0) return;
+
+        stackAmount += moved;
+        other.stackAmount -= moved;
+        spawnTime = Mathf.Max(spawnTime, other.spawnTime);
+
+        UpdateDropName();
+
+        if (other.stackAmount <= 0)
+        {
+            other.isCollected = true;
+            other.DisableSelfColliders();
+            Destroy(other.gameObject);
+        }
+        else
+        {
+            other.UpdateDropName();
+        }
+    }
+
+    private void UpdateDropName()
+    {
+        gameObject.name = $"Drop_{blockType}_x{stackAmount}";
     }
 
     private static PlayerInventory ResolveInventory(Collider other)
@@ -275,16 +393,20 @@ public class BlockDrop : MonoBehaviour
             if (inventory != null) return inventory;
         }
 
-        Transform root = other.transform.root;
-        if (root != null)
+        return null;
+    }
+
+    private void DisableSelfColliders()
+    {
+        Collider[] allColliders = GetComponents<Collider>();
+        for (int i = 0; i < allColliders.Length; i++)
+            allColliders[i].enabled = false;
+
+        if (rb != null)
         {
-            inventory = root.GetComponent<PlayerInventory>();
-            if (inventory != null) return inventory;
-
-            inventory = root.GetComponentInChildren<PlayerInventory>();
-            if (inventory != null) return inventory;
+            rb.linearVelocity = Vector3.zero;
+            rb.angularVelocity = Vector3.zero;
+            rb.isKinematic = true;
         }
-
-        return Object.FindObjectOfType<PlayerInventory>();
     }
 }

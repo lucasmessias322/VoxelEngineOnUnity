@@ -112,7 +112,19 @@ public class PlayerBlockBreaker : MonoBehaviour
     {
         return blockType != BlockType.Bedrock &&
                blockType != BlockType.Air &&
-               blockType != BlockType.Water;
+               !IsLiquid(blockType);
+    }
+
+    bool IsLiquid(BlockType blockType)
+    {
+        if (blockType == BlockType.Air)
+            return false;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return blockType == BlockType.Water;
+
+        return world.blockData.IsLiquid(blockType);
     }
 
     void CreateCrackOverlay()
@@ -198,16 +210,17 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
                 return;
 
-            // Se o alvo for billboard, coloca exatamente na celula do billboard (substitui).
-            Vector3Int placePos = selector.IsBillboardHit
-                ? targetBlock
-                : targetBlock + hitNormal;
+            BlockType targetType = World.Instance.GetBlockAt(targetBlock);
+            bool replaceTarget = selector.IsBillboardHit || IsLiquid(targetType);
+
+            // Billboard e liquidos: substitui exatamente a celula alvo (estilo Minecraft).
+            Vector3Int placePos = replaceTarget ? targetBlock : targetBlock + hitNormal;
 
             if (placePos.y <= 2)
                 return;
 
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-            if (blockAtPlacePos != BlockType.Air && blockAtPlacePos != BlockType.Water)
+            if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos))
                 return;
 
             Vector3 blockCenter = placePos + Vector3.one * 0.5f;
