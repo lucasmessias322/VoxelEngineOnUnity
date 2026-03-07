@@ -84,6 +84,9 @@ public partial class World : MonoBehaviour
     [Header("Cave Settings")]
     public NoiseLayer[] caveLayers;
     public float caveThreshold = 0.58f;
+    [Tooltip("Espessura da borda da caverna ao redor do limiar (isocontorno). Valores maiores deixam tuneis mais grossos.")]
+    [Range(0.001f, 0.5f)]
+    public float caveSurfaceThickness = 0.06f;
     public int caveStride = 4;
     public int maxCaveDepthMultiplier = 1;
 
@@ -961,7 +964,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            caveThreshold, caveStride, maxCaveDepthMultiplier,
+            caveThreshold, caveSurfaceThickness, caveStride, maxCaveDepthMultiplier,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
             chunkLightData,
@@ -1109,6 +1112,7 @@ public partial class World : MonoBehaviour
               offsetZ,
               seaLevel,
               caveThreshold,
+              caveSurfaceThickness,
               caveStride,
               maxCaveDepthMultiplier,
               nativeEdits,

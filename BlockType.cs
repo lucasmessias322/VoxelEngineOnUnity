@@ -16,5 +16,6 @@ public enum BlockType
     oak_planks = 13,
     short_grass4 = 14,
     birch_log = 15,
+    Crafter = 16,
     
 }

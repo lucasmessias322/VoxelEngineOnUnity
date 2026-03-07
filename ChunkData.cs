@@ -38,6 +38,7 @@ public static class ChunkData
         public float offsetZ;
         public float seaLevel;
         public float caveThreshold;
+        public float caveSurfaceThickness;
         public int caveStride;
         public int maxCaveDepthMultiplier;
         public float caveRarityScale;
@@ -360,6 +361,7 @@ public static class ChunkData
             int baseWorldZ = coord.y * SizeZ;
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
+                float surfaceThickness = math.max(1e-4f, caveSurfaceThickness);
                 int stride = math.max(1, caveStride);
 
                 int minWorldX = baseWorldX - border;
@@ -481,7 +483,8 @@ public static class ChunkData
                             if (y < 5) surfaceBias -= 0.08f;
 
                             float adjustedThreshold = caveThreshold - surfaceBias;
-                            if (interpolatedCave > adjustedThreshold)
+                            float signedCave = interpolatedCave - adjustedThreshold;
+                            if (math.abs(signedCave) <= surfaceThickness)
                             {
                                 blockTypes[voxelIdx] = BlockType.Air;
                                 solids[voxelIdx] = false;

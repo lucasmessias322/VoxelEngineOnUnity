@@ -161,8 +161,10 @@ public partial class World : MonoBehaviour
                 if (worldPos.y < 5) surfaceBias -= 0.08f;
 
                 float adjustedThreshold = caveThreshold - surfaceBias;
+                float signedCave = interpolatedCave - adjustedThreshold;
+                float surfaceThickness = Mathf.Max(1e-4f, caveSurfaceThickness);
 
-                if (interpolatedCave > adjustedThreshold)
+                if (Mathf.Abs(signedCave) <= surfaceThickness)
                     isCave = true;
             }
         }

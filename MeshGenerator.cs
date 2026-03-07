@@ -235,6 +235,7 @@ public static class MeshGenerator
         float globalOffsetZ,
         float seaLevel,
         float caveThreshold,
+        float caveSurfaceThickness,
         int caveStride,
         int maxCaveDepthMultiplier,
 
@@ -347,6 +348,7 @@ public static class MeshGenerator
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,
             caveThreshold = caveThreshold,
+            caveSurfaceThickness = caveSurfaceThickness,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
 
