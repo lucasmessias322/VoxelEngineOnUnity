@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -24,7 +24,6 @@ public static class ChunkData
 
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
         [ReadOnly] public NativeArray<WarpLayer> warpLayers;
-        [ReadOnly] public NativeArray<NoiseLayer> caveLayers;
 
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
@@ -37,15 +36,9 @@ public static class ChunkData
         public float offsetX;
         public float offsetZ;
         public float seaLevel;
-        public float caveThreshold;
-        public float caveSurfaceThickness;
-        public int caveStride;
-        public int maxCaveDepthMultiplier;
-        public float caveRarityScale;
 
 
         public int CliffTreshold;
-        public bool enableCave;
         public bool enableTrees;
         public NativeArray<int> heightCache;
         public NativeArray<BlockType> blockTypes;
@@ -55,9 +48,7 @@ public static class ChunkData
 
         public void Execute()
         {
-            int heightSize = SizeX + 2 * border;
-            int totalHeightPoints = heightSize * heightSize;
-            int heightStride = heightSize;
+            int heightStride = SizeX + 2 * border;
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -65,22 +56,17 @@ public static class ChunkData
 
 
 
-            // 2. Popular voxels (terreno, cavernas, água)
+            // 2. Popular voxels (terreno, Ã¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
-
-            if (enableCave)
-            {
-                GenerateCaves(heightCache, blockTypes, solids);
-            }
 
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             if (enableTrees)
             {
-                // NOVO: Gere as árvores aqui
+                // NOVO: Gere as Ã¡rvores aqui
                 NativeList<TreeInstance> trees = GenerateTreeInstances();
 
-                // Aplicação existente (agora com trees local)
+                // AplicaÃ§Ã£o existente (agora com trees local)
                 TreePlacement.ApplyTreeInstancesToVoxels(
                     blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
                     SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
@@ -91,7 +77,7 @@ public static class ChunkData
 
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            // === NOVO: pré-calcula quais subchunks têm blocos ===
+            // === NOVO: prÃ©-calcula quais subchunks tÃªm blocos ===
             for (int s = 0; s < SubchunksPerColumn; s++)
                 subchunkNonEmpty[s] = false;
 
@@ -138,7 +124,7 @@ public static class ChunkData
 
             float freq = treeSettings.noiseScale;
 
-            // Estime capacidade máxima: número de cells possíveis
+            // Estime capacidade mÃ¡xima: nÃºmero de cells possÃ­veis
             int maxTrees = (cellX1 - cellX0 + 1) * (cellZ1 - cellZ0 + 1);
             NativeList<TreeInstance> trees = new NativeList<TreeInstance>(maxTrees, Allocator.Temp);
 
@@ -164,14 +150,14 @@ public static class ChunkData
                     if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
                         worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
 
-                    // Use GetSurfaceHeight (já existe no job, mas ajuste para coords locais se necessário)
+                    // Use GetSurfaceHeight (jÃ¡ existe no job, mas ajuste para coords locais se necessÃ¡rio)
                     int surfaceY = GetCachedHeight(worldX, worldZ);
                     if (surfaceY <= 0 || surfaceY >= SizeY) continue;
 
                     // Cheque groundType e cliff (implemente GetSurfaceBlockType e IsCliff usando heightCache)
-                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);  // NOVO método (ver abaixo)
+                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);  // NOVO mÃ©todo (ver abaixo)
                     if (groundType != BlockType.Grass && groundType != BlockType.Dirt) continue;
-                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;  // NOVO método (ver abaixo)
+                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;  // NOVO mÃ©todo (ver abaixo)
 
                     // Height noise
                     float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + treeSettings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + treeSettings.seed * 0.001f)) * 0.5f + 0.5f;
@@ -191,7 +177,7 @@ public static class ChunkData
             return trees;
         }
 
-        // NOVO: Versão interna de GetSurfaceBlockType (usa heightCache e coords world)
+        // NOVO: VersÃ£o interna de GetSurfaceBlockType (usa heightCache e coords world)
         private BlockType GetSurfaceBlockTypeInternal(int worldX, int worldZ)
         {
             int h = GetSurfaceHeight(worldX, worldZ);
@@ -205,7 +191,7 @@ public static class ChunkData
             else return isBeachArea ? BlockType.Sand : BlockType.Grass;
         }
 
-        // NOVO: Versão interna de IsCliff (usa heightCache, ajuste coords locais)
+        // NOVO: VersÃ£o interna de IsCliff (usa heightCache, ajuste coords locais)
         private bool IsCliffInternal(int worldX, int worldZ, int threshold = 2)
         {
             int realLx = worldX - coord.x * SizeX;
@@ -233,7 +219,7 @@ public static class ChunkData
         }
 
 
-        // Lookup rápido no heightCache (usando o border já calculado)
+        // Lookup rÃ¡pido no heightCache (usando o border jÃ¡ calculado)
         private int GetCachedHeight(int worldX, int worldZ)
         {
             int realLx = worldX - coord.x * SizeX;
@@ -242,7 +228,7 @@ public static class ChunkData
             int cacheZ = realLz + border;
             int heightStride = SizeX + 2 * border;
 
-            // Segurança (nunca deve cair aqui se o border estiver correto)
+            // SeguranÃ§a (nunca deve cair aqui se o border estiver correto)
             if (cacheX < 0 || cacheX >= heightStride || cacheZ < 0 || cacheZ >= heightStride)
                 return GetSurfaceHeight(worldX, worldZ); // fallback raro
 
@@ -350,153 +336,6 @@ public static class ChunkData
         }
 
 
-        private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
-        {
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
-
-            int baseWorldX = coord.x * SizeX;
-            int baseWorldZ = coord.y * SizeZ;
-            if (caveLayers.Length > 0 && caveStride >= 1)
-            {
-                float surfaceThickness = math.max(1e-4f, caveSurfaceThickness);
-                int stride = math.max(1, caveStride);
-
-                int minWorldX = baseWorldX - border;
-                int maxWorldX = baseWorldX + SizeX + border - 1;
-                int minWorldZ = baseWorldZ - border;
-                int maxWorldZ = baseWorldZ + SizeZ + border - 1;
-                int minWorldY = 0;
-                int maxWorldY = SizeY - 1;
-
-                int coarseCountX = FloorDiv(maxWorldX - minWorldX, stride) + 2;
-                int coarseCountY = FloorDiv(maxWorldY - minWorldY, stride) + 2;
-                int coarseCountZ = FloorDiv(maxWorldZ - minWorldZ, stride) + 2;
-
-                NativeArray<float> coarseCaveNoise = new NativeArray<float>(coarseCountX * coarseCountY * coarseCountZ, Allocator.Temp);
-                int coarseStrideX = coarseCountX;
-                int coarsePlaneSize = coarseCountX * coarseCountY;
-
-                for (int cy = 0; cy < coarseCountY; cy++)
-                {
-                    int worldY = minWorldY + cy * stride;
-                    for (int cx = 0; cx < coarseCountX; cx++)
-                    {
-                        int worldX = minWorldX + cx * stride;
-                        for (int cz = 0; cz < coarseCountZ; cz++)
-                        {
-                            int worldZ = minWorldZ + cz * stride;
-
-                            float totalCave = 0f;
-                            float sumCaveAmp = 0f;
-
-
-                            for (int i = 0; i < caveLayers.Length; i++)
-                            {
-                                var layer = caveLayers[i];
-                                if (!layer.enabled) continue;
-
-                                float nx = worldX + layer.offset.x;
-                                float ny = worldY;
-                                float nz = worldZ + layer.offset.y;
-
-                                // Usa o nosso novo Worley/Cellular Noise que já cria os formatos de túnel nativamente
-                                float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
-
-                                // Mantemos o suporte ao Redistribution Modifier para que você
-                                // possa controlar o tamanho/formato dos túneis no seu ScriptableObject/Inspector!
-                                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                                {
-                                    finalSample = MyNoise.Redistribution(finalSample, layer.redistributionModifier, layer.exponent);
-                                }
-
-                                totalCave += finalSample * layer.amplitude;
-                                sumCaveAmp += math.max(1e-5f, layer.amplitude);
-                            }
-
-                            if (sumCaveAmp > 0f) totalCave /= sumCaveAmp;
-
-                            int coarseIdx = cx + cy * coarseStrideX + cz * coarsePlaneSize;
-                            coarseCaveNoise[coarseIdx] = totalCave;
-                        }
-                    }
-                }
-
-                // Interpolação para voxels
-                for (int lx = -border; lx < SizeX + border; lx++)
-                {
-                    for (int lz = -border; lz < SizeZ + border; lz++)
-                    {
-                        int cacheX = lx + border;
-                        int cacheZ = lz + border;
-                        int cacheIdx = cacheX + cacheZ * heightStride;
-                        int h = heightCache[cacheIdx];
-
-                        int maxCaveY = math.min(SizeY - 1, (int)seaLevel * maxCaveDepthMultiplier);
-
-                        for (int y = 0; y <= maxCaveY; y++)
-                        {
-                            if (y <= 10) continue; // Protege o Bedrock
-                            int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
-                            if (!solids[voxelIdx]) continue;
-
-                            int worldX = baseWorldX + lx;
-                            int worldY = y;
-                            int worldZ = baseWorldZ + lz;
-
-                            int cx0 = FloorDiv(worldX - minWorldX, stride);
-                            int cy0 = FloorDiv(worldY - minWorldY, stride);
-                            int cz0 = FloorDiv(worldZ - minWorldZ, stride);
-
-                            int cx1 = cx0 + 1;
-                            int cy1 = cy0 + 1;
-                            int cz1 = cz0 + 1;
-
-                            float fracX = (float)(worldX - (minWorldX + cx0 * stride)) / stride;
-                            float fracY = (float)(worldY - (minWorldY + cy0 * stride)) / stride;
-                            float fracZ = (float)(worldZ - (minWorldZ + cz0 * stride)) / stride;
-
-                            float c000 = coarseCaveNoise[cx0 + cy0 * coarseStrideX + cz0 * coarsePlaneSize];
-                            float c001 = coarseCaveNoise[cx0 + cy0 * coarseStrideX + cz1 * coarsePlaneSize];
-                            float c010 = coarseCaveNoise[cx0 + cy1 * coarseStrideX + cz0 * coarsePlaneSize];
-                            float c011 = coarseCaveNoise[cx0 + cy1 * coarseStrideX + cz1 * coarsePlaneSize];
-                            float c100 = coarseCaveNoise[cx1 + cy0 * coarseStrideX + cz0 * coarsePlaneSize];
-                            float c101 = coarseCaveNoise[cx1 + cy0 * coarseStrideX + cz1 * coarsePlaneSize];
-                            float c110 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz0 * coarsePlaneSize];
-                            float c111 = coarseCaveNoise[cx1 + cy1 * coarseStrideX + cz1 * coarsePlaneSize];
-
-                            float c00 = math.lerp(c000, c100, fracX);
-                            float c01 = math.lerp(c001, c101, fracX);
-                            float c10 = math.lerp(c010, c110, fracX);
-                            float c11 = math.lerp(c011, c111, fracX);
-
-                            float c0 = math.lerp(c00, c10, fracY);
-                            float c1 = math.lerp(c01, c11, fracY);
-
-                            float interpolatedCave = math.lerp(c0, c1, fracZ);
-
-                            float maxPossibleY = math.max(1f, h);
-                            float relativeHeight = (float)y / maxPossibleY;
-                            float surfaceBias = 0.001f * relativeHeight;
-                            if (y < 5) surfaceBias -= 0.08f;
-
-                            float adjustedThreshold = caveThreshold - surfaceBias;
-                            float signedCave = interpolatedCave - adjustedThreshold;
-                            if (math.abs(signedCave) <= surfaceThickness)
-                            {
-                                blockTypes[voxelIdx] = BlockType.Air;
-                                solids[voxelIdx] = false;
-                            }
-                        }
-                    }
-                }
-
-                coarseCaveNoise.Dispose();
-            }
-
-        }
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             int heightStride = SizeX + 2 * border;
@@ -529,4 +368,5 @@ public static class ChunkData
     }
 
 }
+
 

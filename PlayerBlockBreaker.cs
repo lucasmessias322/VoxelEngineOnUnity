@@ -9,6 +9,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     public BlockSelector selector;
     public Camera cam;
     public HotbarMirror hotbar;
+    public CraftingStationUIController craftingStationUI;
     [Header("Place settings")]
     public BlockType placeBlockType = BlockType.Stone; // fallback se nao houver hotbar configurada
 
@@ -37,6 +38,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (selector == null) selector = GetComponent<BlockSelector>();
         if (cam == null && selector != null) cam = selector.cam;
         if (hotbar == null) hotbar = FindObjectOfType<HotbarMirror>();
+        if (craftingStationUI == null) craftingStationUI = FindAnyObjectByType<CraftingStationUIController>();
 
         CreateCrackOverlay();
     }
@@ -208,6 +210,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (Input.GetMouseButtonDown(1))
         {
             CancelBreak();
+
+            if (craftingStationUI != null && craftingStationUI.TryOpenCraftingTableFromSelection())
+                return;
 
             BlockType selectedBlockType = placeBlockType;
             if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))

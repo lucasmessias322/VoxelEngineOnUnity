@@ -84,7 +84,7 @@ public static class TreePlacement
             int canopyR = math.max(0, t.canopyRadius);
 
             // ---------------------------
-            // PRE-CHECK: evitar árvores sobre/na água e perto de entradas de caverna
+            // PRE-CHECK: evitar árvores sobre/na água 
             // ---------------------------
             bool skipTree = false;
 
@@ -124,32 +124,6 @@ public static class TreePlacement
             }
 
             if (skipTree) continue;
-
-            // 2) Detectar possíveis entradas de caverna: se qualquer bloco adjacente (3x3) no nível da superfície
-            // ou até 2 blocos abaixo é Air, então é provável uma entrada — pular árvore.
-            for (int dx = -1; dx <= 1 && !skipTree; dx++)
-            {
-                for (int dz = -1; dz <= 1 && !skipTree; dz++)
-                {
-                    for (int dy = 0; dy >= -2; dy--) // checar surfaceY, surfaceY-1, surfaceY-2
-                    {
-                        int cy = surfaceY + dy;
-                        if (cy < 0) break;
-                        int cx = ix + dx;
-                        int cz = iz + dz;
-                        if (cx < 0 || cx >= voxelSizeX || cz < 0 || cz >= voxelSizeZ) continue;
-                        int cidx = cx + cy * voxelSizeX + cz * voxelPlaneSize;
-                        if (blockTypes[cidx] == BlockType.Air)
-                        {
-                            skipTree = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (skipTree) continue;
-
             // --------------------------------------------------
             // Tronco (1×1)
             // --------------------------------------------------
@@ -263,3 +237,4 @@ public static class TreePlacement
         }
     }
 }
+

@@ -80,24 +80,6 @@ public partial class World : MonoBehaviour
 
     [Header("Noise Settings")]
     public NoiseLayer[] noiseLayers;
-
-    [Header("Cave Settings")]
-    public NoiseLayer[] caveLayers;
-    public float caveThreshold = 0.58f;
-    [Tooltip("Espessura da borda da caverna ao redor do limiar (isocontorno). Valores maiores deixam tuneis mais grossos.")]
-    [Range(0.001f, 0.5f)]
-    public float caveSurfaceThickness = 0.06f;
-    public int caveStride = 4;
-    public int maxCaveDepthMultiplier = 1;
-
-    [Header("Cave Rarity Mask")]
-    [Tooltip("Controla o tamanho dos 'bolsões' onde as cavernas podem existir. Valores altos (ex: 200-500) separam mais os sistemas de cavernas.")]
-    public float caveRarityScale = 300f;
-    [Range(-1f, 1f)]
-    [Tooltip("Quanto MAIOR o valor, mais RARAS são as cavernas. Valores negativos geram muitas cavernas.")]
-    public float caveRarityThreshold = 0.3f;
-    public float caveMaskSmoothness = 5f;
-
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
     public int baseHeight = 64;
@@ -144,7 +126,6 @@ public partial class World : MonoBehaviour
     public int horizontalFullVisibilityRadius = 2;
 
     [Header("Features Toggle")]
-    public bool enableCave = true;
     public bool enableTrees = true;
 
     [Header("Billboard Grass")]
@@ -291,7 +272,6 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> light;
         public NativeArray<NoiseLayer> nativeNoiseLayers;
         public NativeArray<WarpLayer> nativeWarpLayers;
-        public NativeArray<NoiseLayer> nativeCaveLayers;
         public NativeArray<BlockTextureMapping> nativeBlockMappings;
 
         public Chunk chunk;
@@ -320,7 +300,7 @@ public partial class World : MonoBehaviour
 
         InitializeNoiseLayers();
         InitializeWarpLayers();
-        InitializeCaveLayers();
+        
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -422,41 +402,6 @@ public partial class World : MonoBehaviour
             if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
 
             warpLayers[i] = layer;
-        }
-    }
-
-    private void InitializeCaveLayers()
-    {
-        if (caveLayers == null) return;
-
-        for (int i = 0; i < caveLayers.Length; i++)
-        {
-            NoiseLayer layer = caveLayers[i];
-            if (!layer.enabled) continue;
-
-            if (layer.redistributionModifier == 0f) layer.redistributionModifier = 1f;
-            if (layer.exponent == 0f) layer.exponent = 1f;
-
-            if (layer.scale <= 0f) layer.scale = 0.03f;
-            if (layer.octaves <= 0) layer.octaves = 4;
-            if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
-            if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
-
-            if (layer.offset == Vector2.zero)
-                layer.offset = new Vector2(offsetX + i * 19.87f, offsetZ + i * 8.76f);
-            else
-                layer.offset += new Vector2(offsetX, offsetZ);
-
-            float amp = 1f;
-            layer.maxAmp = 0f;
-            for (int o = 0; o < layer.octaves; o++)
-            {
-                layer.maxAmp += amp;
-                amp *= layer.persistence;
-            }
-            if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
-
-            caveLayers[i] = layer;
         }
     }
 
@@ -962,11 +907,10 @@ public partial class World : MonoBehaviour
 
         // Agendamento do data job
         MeshGenerator.ScheduleDataJob(
-            coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
+            coord, noiseLayers, warpLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            caveThreshold, caveSurfaceThickness, caveStride, maxCaveDepthMultiplier,
             nativeEdits, treeMargin, borderSize,
-            treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
+            treeSettings.canopyRadius, CliffTreshold, enableTrees,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -975,7 +919,6 @@ public partial class World : MonoBehaviour
             out NativeArray<byte> light,
             out NativeArray<NoiseLayer> nativeNoiseLayers,
             out NativeArray<WarpLayer> nativeWarpLayers,
-            out NativeArray<NoiseLayer> nativeCaveLayers,
             out NativeArray<BlockTextureMapping> nativeBlockMappings,
             out NativeArray<bool> subchunkNonEmpty,
             treeSettings
@@ -990,7 +933,6 @@ public partial class World : MonoBehaviour
             light = light,
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
-            nativeCaveLayers = nativeCaveLayers,
             nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
             coord = coord,
@@ -1105,22 +1047,16 @@ public partial class World : MonoBehaviour
               coord,
               noiseLayers,
               warpLayers,
-              caveLayers,
               blockData.mappings,
               baseHeight,
               offsetX,
               offsetZ,
               seaLevel,
-              caveThreshold,
-              caveSurfaceThickness,
-              caveStride,
-              maxCaveDepthMultiplier,
               nativeEdits,
               treeMargin,
               borderSize,
               treeSettings.canopyRadius,
               CliffTreshold,
-              enableCave,
               enableTrees,
               chunkLightData,
               out JobHandle dataHandle,
@@ -1130,7 +1066,6 @@ public partial class World : MonoBehaviour
               out NativeArray<byte> light,
               out NativeArray<NoiseLayer> nativeNoiseLayers,
               out NativeArray<WarpLayer> nativeWarpLayers,
-              out NativeArray<NoiseLayer> nativeCaveLayers,
               out NativeArray<BlockTextureMapping> nativeBlockMappings,
               out NativeArray<bool> subchunkNonEmpty,
               treeSettings
@@ -1145,7 +1080,6 @@ public partial class World : MonoBehaviour
             light = light,
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
-            nativeCaveLayers = nativeCaveLayers,
             nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
             coord = coord,
@@ -1322,7 +1256,6 @@ public partial class World : MonoBehaviour
         if (pd.light.IsCreated) pd.light.Dispose();
         if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
         if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
-        if (pd.nativeCaveLayers.IsCreated) pd.nativeCaveLayers.Dispose();
         if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
         if (pd.edits.IsCreated) pd.edits.Dispose();
@@ -1350,3 +1283,5 @@ public partial class World : MonoBehaviour
 
 
 }
+
+

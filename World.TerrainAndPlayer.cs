@@ -103,74 +103,6 @@ public partial class World : MonoBehaviour
 
         int surfaceHeight = GetSurfaceHeight(worldX, worldZ);
 
-        // Cave check (cheap fallback)
-        bool isCave = false;
-        if (caveLayers != null && caveLayers.Length > 0 && worldPos.y <= seaLevel * maxCaveDepthMultiplier && enableCave)
-        {
-            int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
-            if (worldPos.y <= maxCaveY)
-            {
-                int border = treeSettings.canopyRadius + 2;
-
-                int chunkMinX = chunkCoord.x * Chunk.SizeX;
-                int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
-
-                int minWorldX = chunkMinX - border;
-                int minWorldZ = chunkMinZ - border;
-                int minWorldY = 0;
-
-                int stride = math.max(1, caveStride);
-
-                int cx0 = FloorDiv(worldX - minWorldX, stride);
-                int cy0 = FloorDiv(worldPos.y - minWorldY, stride);
-                int cz0 = FloorDiv(worldZ - minWorldZ, stride);
-
-                int lowWX = minWorldX + cx0 * stride;
-                int highWX = lowWX + stride;
-
-                int lowWY = minWorldY + cy0 * stride;
-                int highWY = lowWY + stride;
-
-                int lowWZ = minWorldZ + cz0 * stride;
-                int highWZ = lowWZ + stride;
-
-                float c000 = ComputeCaveNoise(lowWX, lowWY, lowWZ);
-                float c100 = ComputeCaveNoise(highWX, lowWY, lowWZ);
-                float c010 = ComputeCaveNoise(lowWX, highWY, lowWZ);
-                float c110 = ComputeCaveNoise(highWX, highWY, lowWZ);
-                float c001 = ComputeCaveNoise(lowWX, lowWY, highWZ);
-                float c101 = ComputeCaveNoise(highWX, lowWY, highWZ);
-                float c011 = ComputeCaveNoise(lowWX, highWY, highWZ);
-                float c111 = ComputeCaveNoise(highWX, highWY, highWZ);
-
-                float fx = (float)(worldX - lowWX) / stride;
-                float fy = (float)(worldPos.y - lowWY) / stride;
-                float fz = (float)(worldZ - lowWZ) / stride;
-
-                float x00 = Mathf.Lerp(c000, c100, fx);
-                float x01 = Mathf.Lerp(c001, c101, fx);
-                float x10 = Mathf.Lerp(c010, c110, fx);
-                float x11 = Mathf.Lerp(c011, c111, fx);
-
-                float z0 = Mathf.Lerp(x00, x01, fz);
-                float z1 = Mathf.Lerp(x10, x11, fz);
-
-                float interpolatedCave = Mathf.Lerp(z0, z1, fy);
-
-                float surfaceBias = 0.001f * ((float)worldPos.y / math.max(1f, (float)surfaceHeight));
-                if (worldPos.y < 5) surfaceBias -= 0.08f;
-
-                float adjustedThreshold = caveThreshold - surfaceBias;
-                float signedCave = interpolatedCave - adjustedThreshold;
-                float surfaceThickness = Mathf.Max(1e-4f, caveSurfaceThickness);
-
-                if (Mathf.Abs(signedCave) <= surfaceThickness)
-                    isCave = true;
-            }
-        }
-
-        if (isCave) return BlockType.Air;
-
         if (worldPos.y > surfaceHeight)
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
 
@@ -198,37 +130,6 @@ public partial class World : MonoBehaviour
     #endregion
 
     #region Noise & Height Helpers
-
-
-    private float ComputeCaveNoise(int wx, int wy, int wz)
-    {
-        float totalCave = 0f;
-        float sumCaveAmp = 0f;
-
-        for (int i = 0; i < caveLayers.Length; i++)
-        {
-            var layer = caveLayers[i];
-            if (!layer.enabled) continue;
-
-            float nx = wx + layer.offset.x;
-            float ny = (float)wy;
-            float nz = wz + layer.offset.y;
-
-            float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
-
-            if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-            {
-                finalSample = MyNoise.Redistribution(finalSample, layer.redistributionModifier, layer.exponent);
-            }
-
-            totalCave += finalSample * layer.amplitude;
-            sumCaveAmp += math.max(1e-5f, layer.amplitude);
-        }
-
-        float baseCaveResult = (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
-        return baseCaveResult;
-    }
-
 
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
@@ -327,15 +228,6 @@ public partial class World : MonoBehaviour
         return maxDiff >= threshold;
     }
 
-
-
-    private static int FloorDiv(int a, int b)
-    {
-        int q = a / b;
-        int r = a % b;
-        if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
-        return q;
-    }
 
 
     #endregion
