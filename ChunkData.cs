@@ -350,6 +350,7 @@ public static class ChunkData
         }
 
 
+
         private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -361,7 +362,6 @@ public static class ChunkData
             int baseWorldZ = coord.y * SizeZ;
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
-                float surfaceThickness = math.max(1e-4f, caveSurfaceThickness);
                 int stride = math.max(1, caveStride);
 
                 int minWorldX = baseWorldX - border;
@@ -483,8 +483,7 @@ public static class ChunkData
                             if (y < 5) surfaceBias -= 0.08f;
 
                             float adjustedThreshold = caveThreshold - surfaceBias;
-                            float signedCave = interpolatedCave - adjustedThreshold;
-                            if (math.abs(signedCave) <= surfaceThickness)
+                            if (interpolatedCave > adjustedThreshold)
                             {
                                 blockTypes[voxelIdx] = BlockType.Air;
                                 solids[voxelIdx] = false;
@@ -497,6 +496,7 @@ public static class ChunkData
             }
 
         }
+
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             int heightStride = SizeX + 2 * border;
