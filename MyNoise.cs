@@ -40,6 +40,28 @@ public struct NoiseLayer
 /// Utilitários de noise (inspirado no seu snippet).
 /// Use OctavePerlin(nx, nz, layer) para substituir a implementação atual do MeshGenerator.
 /// </summary>
+[Serializable]
+public struct CaveWormSettings
+{
+    public bool enabled;
+    public int seed;
+    public int minY;
+    public int carveStride;
+    public int cellSize;
+    public float spawnChance;
+    public int minSteps;
+    public int maxSteps;
+    public float stepLength;
+    public float minRadius;
+    public float maxRadius;
+    public float verticalRadiusMultiplier;
+    public float directionNoiseScale;
+    public float boundaryPullStrength;
+    public float boundaryBand;
+    public float verticalJitter;
+    public int boundarySearchIters;
+}
+
 public static class MyNoise
 {
     public static float RemapValue(float value, float initialMin, float initialMax, float outputMin, float outputMax)
@@ -239,7 +261,7 @@ public static class MyNoise
             // Escava a partir do centro da célula (F1)
             // Apaga as bordas (gera ilhas flutuantes)
             //float sample = 1f - (cell.y - cell.x);
-            float sample = 1f - (cell.x * cell.y);
+            float sample =  (cell.x * cell.y);
 
             // Opcional: Elevar o sample ao cubo/quadrado torna as paredes mais espessas e os túneis mais estreitos
             // sample = sample * sample;

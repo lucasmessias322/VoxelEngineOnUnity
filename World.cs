@@ -26,13 +26,13 @@ public struct TreeSettings
 
 public static class LightUtils
 {
-    // Junta as duas luzes (0-15) em um único byte
+    // Junta as duas luzes (0-15) em um Ãºnico byte
     public static byte PackLight(byte skyLight, byte blockLight)
     {
         return (byte)((skyLight << 4) | (blockLight & 0x0F));
     }
 
-    // Extrai apenas a luz do céu (bits 4 a 7)
+    // Extrai apenas a luz do cÃ©u (bits 4 a 7)
     public static byte GetSkyLight(byte packedLight)
     {
         return (byte)((packedLight >> 4) & 0x0F);
@@ -84,20 +84,9 @@ public partial class World : MonoBehaviour
     [Header("Cave Settings")]
     public NoiseLayer[] caveLayers;
     public float caveThreshold = 0.58f;
-    [Tooltip("Espessura da borda da caverna ao redor do limiar (isocontorno). Valores maiores deixam tuneis mais grossos.")]
-    [Range(0.001f, 0.5f)]
-    public float caveSurfaceThickness = 0.06f;
-    public int caveStride = 4;
     public int maxCaveDepthMultiplier = 1;
-
-    [Header("Cave Rarity Mask")]
-    [Tooltip("Controla o tamanho dos 'bolsões' onde as cavernas podem existir. Valores altos (ex: 200-500) separam mais os sistemas de cavernas.")]
-    public float caveRarityScale = 300f;
-    [Range(-1f, 1f)]
-    [Tooltip("Quanto MAIOR o valor, mais RARAS são as cavernas. Valores negativos geram muitas cavernas.")]
-    public float caveRarityThreshold = 0.3f;
-    public float caveMaskSmoothness = 5f;
-
+    [Header("Cave Worm Settings")]
+    public CaveWormSettings caveWormSettings;
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
     public int baseHeight = 64;
@@ -119,7 +108,7 @@ public partial class World : MonoBehaviour
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
-    [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
+    [Tooltip("Limite de jobs de geraÃ§Ã£o de dados (inclui iluminaÃ§Ã£o) simultÃ¢neos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
     [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
@@ -140,7 +129,7 @@ public partial class World : MonoBehaviour
     [Min(0)]
     public int verticalSubchunkRenderDistanceBelow = 2;
 
-    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical).")]
+    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terÃ£o TODOS os subchunks visÃ­veis (sem culling vertical).")]
     public int horizontalFullVisibilityRadius = 2;
 
     [Header("Features Toggle")]
@@ -201,7 +190,7 @@ public partial class World : MonoBehaviour
     public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
 
     [Header("Lighting")]
-    [Tooltip("Padding horizontal em voxels para propagação de skylight entre chunks. Use 16 para eliminar costura visível na suavização.")]
+    [Tooltip("Padding horizontal em voxels para propagaÃ§Ã£o de skylight entre chunks. Use 16 para eliminar costura visÃ­vel na suavizaÃ§Ã£o.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
 
@@ -321,6 +310,7 @@ public partial class World : MonoBehaviour
         InitializeNoiseLayers();
         InitializeWarpLayers();
         InitializeCaveLayers();
+        InitializeCaveWormSettings();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -458,6 +448,35 @@ public partial class World : MonoBehaviour
 
             caveLayers[i] = layer;
         }
+    }
+
+    private void InitializeCaveWormSettings()
+    {
+        bool probablyNewConfig =
+            caveWormSettings.cellSize == 0 &&
+            caveWormSettings.minSteps == 0 &&
+            caveWormSettings.maxSteps == 0 &&
+            caveWormSettings.stepLength == 0f;
+
+        if (probablyNewConfig)
+            caveWormSettings.enabled = true;
+
+        if (caveWormSettings.seed == 0) caveWormSettings.seed = seed;
+        if (caveWormSettings.carveStride <= 0) caveWormSettings.carveStride = 4;
+        if (caveWormSettings.cellSize <= 0) caveWormSettings.cellSize = 32;
+        if (caveWormSettings.spawnChance <= 0f) caveWormSettings.spawnChance = 0.62f;
+        if (caveWormSettings.minY <= 0) caveWormSettings.minY = 12;
+        if (caveWormSettings.minSteps <= 0) caveWormSettings.minSteps = 56;
+        if (caveWormSettings.maxSteps < caveWormSettings.minSteps) caveWormSettings.maxSteps = caveWormSettings.minSteps + 36;
+        if (caveWormSettings.stepLength <= 0f) caveWormSettings.stepLength = 1.25f;
+        if (caveWormSettings.minRadius <= 0f) caveWormSettings.minRadius = 1.8f;
+        if (caveWormSettings.maxRadius < caveWormSettings.minRadius) caveWormSettings.maxRadius = caveWormSettings.minRadius + 1.3f;
+        if (caveWormSettings.verticalRadiusMultiplier <= 0f) caveWormSettings.verticalRadiusMultiplier = 0.72f;
+        if (caveWormSettings.directionNoiseScale <= 0f) caveWormSettings.directionNoiseScale = 0.03f;
+        if (caveWormSettings.boundaryPullStrength <= 0f) caveWormSettings.boundaryPullStrength = 0.85f;
+        if (caveWormSettings.boundaryBand <= 0f) caveWormSettings.boundaryBand = 0.06f;
+        if (caveWormSettings.verticalJitter <= 0f) caveWormSettings.verticalJitter = 0.3f;
+        if (caveWormSettings.boundarySearchIters <= 0) caveWormSettings.boundarySearchIters = 4;
     }
 
     #endregion
@@ -809,7 +828,7 @@ public partial class World : MonoBehaviour
                 }
             }
 
-            // B. Limpar pendentes desnecessários
+            // B. Limpar pendentes desnecessÃ¡rios
             for (int i = pendingChunks.Count - 1; i >= 0; i--)
             {
                 if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
@@ -828,7 +847,7 @@ public partial class World : MonoBehaviour
                 pendingChunks.Add((coord, distSq));
             }
 
-            // D. Reordenar fila por distância
+            // D. Reordenar fila por distÃ¢ncia
             for (int i = 0; i < pendingChunks.Count; i++)
             {
                 var item = pendingChunks[i];
@@ -946,7 +965,7 @@ public partial class World : MonoBehaviour
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
 
-        // Injeção da luz global
+        // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
@@ -964,7 +983,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            caveThreshold, caveSurfaceThickness, caveStride, maxCaveDepthMultiplier,
+            caveThreshold, maxCaveDepthMultiplier, caveWormSettings,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
             chunkLightData,
@@ -1030,9 +1049,174 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
-            RequestChunkRebuildImmediate(coord);
+            if (!TryScheduleChunkRebuildFromLoadedData(coord))
+            {
+                RequestChunkRebuildImmediate(coord);
+            }
             processed++;
         }
+    }
+
+    private bool TryScheduleChunkRebuildFromLoadedData(Vector2Int coord)
+    {
+        if (blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
+            return false;
+
+        if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+            return false;
+        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated)
+            return false;
+
+        int borderSize = GetChunkBorderSize();
+        int chunkPadRadiusX = Mathf.CeilToInt((float)borderSize / Chunk.SizeX);
+        int chunkPadRadiusZ = Mathf.CeilToInt((float)borderSize / Chunk.SizeZ);
+
+        for (int dz = -chunkPadRadiusZ; dz <= chunkPadRadiusZ; dz++)
+        {
+            for (int dx = -chunkPadRadiusX; dx <= chunkPadRadiusX; dx++)
+            {
+                Vector2Int neighborCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                if (!activeChunks.TryGetValue(neighborCoord, out Chunk neighbor) ||
+                    neighbor == null ||
+                    !neighbor.hasVoxelData ||
+                    !neighbor.voxelData.IsCreated)
+                {
+                    return false;
+                }
+            }
+        }
+
+        int expectedGen = nextChunkGeneration++;
+        chunk.generation = expectedGen;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int totalVoxels = voxelPlaneSize * voxelSizeZ;
+
+        NativeArray<int> heightCache = new NativeArray<int>(voxelSizeX * voxelSizeZ, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> chunkLightData = new NativeArray<byte>(totalVoxels, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+        NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockData.mappings, Allocator.TempJob);
+        NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int sourceStride = Chunk.SizeX * Chunk.SizeZ;
+        BlockTextureMapping[] mappings = blockData.mappings;
+
+        for (int pz = 0; pz < voxelSizeZ; pz++)
+        {
+            int worldZ = chunkMinZ + (pz - borderSize);
+            int sourceChunkZ = Mathf.FloorToInt((float)worldZ / Chunk.SizeZ);
+            int localZ = worldZ - sourceChunkZ * Chunk.SizeZ;
+
+            for (int px = 0; px < voxelSizeX; px++)
+            {
+                int worldX = chunkMinX + (px - borderSize);
+                int sourceChunkX = Mathf.FloorToInt((float)worldX / Chunk.SizeX);
+                int localX = worldX - sourceChunkX * Chunk.SizeX;
+
+                Vector2Int sourceCoord = new Vector2Int(sourceChunkX, sourceChunkZ);
+                if (!activeChunks.TryGetValue(sourceCoord, out Chunk sourceChunk) ||
+                    sourceChunk == null ||
+                    !sourceChunk.hasVoxelData ||
+                    !sourceChunk.voxelData.IsCreated)
+                {
+                    heightCache.Dispose();
+                    blockTypes.Dispose();
+                    solids.Dispose();
+                    light.Dispose();
+                    chunkLightData.Dispose();
+                    nativeBlockMappings.Dispose();
+                    subchunkNonEmpty.Dispose();
+                    return false;
+                }
+
+                int srcColumnBase = localX + localZ * Chunk.SizeX;
+                int dstColumnBase = px + pz * voxelPlaneSize;
+
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    int srcIdx = srcColumnBase + y * sourceStride;
+                    byte voxel = sourceChunk.voxelData[srcIdx];
+                    BlockType blockType = (BlockType)voxel;
+
+                    int dstIdx = dstColumnBase + y * voxelSizeX;
+                    blockTypes[dstIdx] = blockType;
+                    solids[dstIdx] = voxel < mappings.Length && mappings[voxel].isSolid;
+                }
+            }
+        }
+
+        for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
+        {
+            int startY = sub * Chunk.SubchunkHeight;
+            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
+            bool hasBlock = false;
+
+            for (int y = startY; y < endY && !hasBlock; y++)
+            {
+                for (int z = 0; z < Chunk.SizeZ && !hasBlock; z++)
+                {
+                    for (int x = 0; x < Chunk.SizeX; x++)
+                    {
+                        int idx = x + z * Chunk.SizeX + y * sourceStride;
+                        if (chunk.voxelData[idx] != (byte)BlockType.Air)
+                        {
+                            hasBlock = true;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            subchunkNonEmpty[sub] = hasBlock;
+        }
+
+        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+        var lightJob = new ChunkLighting.ChunkLightingJob
+        {
+            blockTypes = blockTypes,
+            blockMappings = nativeBlockMappings,
+            blockLightData = chunkLightData,
+            light = light,
+            voxelSizeX = voxelSizeX,
+            voxelSizeZ = voxelSizeZ,
+            totalVoxels = totalVoxels,
+            voxelPlaneSize = voxelPlaneSize,
+            SizeX = Chunk.SizeX,
+            SizeY = Chunk.SizeY,
+            SizeZ = Chunk.SizeZ
+        };
+
+        JobHandle dataHandle = lightJob.Schedule();
+
+        pendingDataJobs.Add(new PendingData
+        {
+            handle = dataHandle,
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            nativeNoiseLayers = default,
+            nativeWarpLayers = default,
+            nativeCaveLayers = default,
+            nativeBlockMappings = nativeBlockMappings,
+            chunk = chunk,
+            coord = coord,
+            expectedGen = expectedGen,
+            chunkLightData = chunkLightData,
+            edits = default,
+            subchunkNonEmpty = subchunkNonEmpty
+        });
+
+        chunk.currentJob = dataHandle;
+        chunk.jobScheduled = true;
+        return true;
     }
 
     private void RequestChunkRebuildImmediate(Vector2Int coord)
@@ -1112,9 +1296,8 @@ public partial class World : MonoBehaviour
               offsetZ,
               seaLevel,
               caveThreshold,
-              caveSurfaceThickness,
-              caveStride,
               maxCaveDepthMultiplier,
+              caveWormSettings,
               nativeEdits,
               treeMargin,
               borderSize,

@@ -91,12 +91,12 @@ public partial class World : MonoBehaviour
             }
         }
 
-        return GetProceduralBlockFast(worldPos, chunkCoord);
+        return GetProceduralBlockFast(worldPos);
     }
 
 
 
-    private BlockType GetProceduralBlockFast(Vector3Int worldPos, Vector2Int chunkCoord)
+    private BlockType GetProceduralBlockFast(Vector3Int worldPos)
     {
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
@@ -105,66 +105,19 @@ public partial class World : MonoBehaviour
 
         // Cave check (cheap fallback)
         bool isCave = false;
-        if (caveLayers != null && caveLayers.Length > 0 && worldPos.y <= seaLevel * maxCaveDepthMultiplier && enableCave)
+        bool canEvaluateWormCaves = caveWormSettings.enabled && worldPos.y < surfaceHeight;
+        bool canEvaluateClassicCaves = !caveWormSettings.enabled && worldPos.y <= seaLevel * maxCaveDepthMultiplier;
+        if (caveLayers != null && caveLayers.Length > 0 && enableCave && (canEvaluateWormCaves || canEvaluateClassicCaves))
         {
             int maxCaveY = math.min(Chunk.SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
-            if (worldPos.y <= maxCaveY)
+            if (caveWormSettings.enabled)
             {
-                int border = treeSettings.canopyRadius + 2;
-
-                int chunkMinX = chunkCoord.x * Chunk.SizeX;
-                int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
-
-                int minWorldX = chunkMinX - border;
-                int minWorldZ = chunkMinZ - border;
-                int minWorldY = 0;
-
-                int stride = math.max(1, caveStride);
-
-                int cx0 = FloorDiv(worldX - minWorldX, stride);
-                int cy0 = FloorDiv(worldPos.y - minWorldY, stride);
-                int cz0 = FloorDiv(worldZ - minWorldZ, stride);
-
-                int lowWX = minWorldX + cx0 * stride;
-                int highWX = lowWX + stride;
-
-                int lowWY = minWorldY + cy0 * stride;
-                int highWY = lowWY + stride;
-
-                int lowWZ = minWorldZ + cz0 * stride;
-                int highWZ = lowWZ + stride;
-
-                float c000 = ComputeCaveNoise(lowWX, lowWY, lowWZ);
-                float c100 = ComputeCaveNoise(highWX, lowWY, lowWZ);
-                float c010 = ComputeCaveNoise(lowWX, highWY, lowWZ);
-                float c110 = ComputeCaveNoise(highWX, highWY, lowWZ);
-                float c001 = ComputeCaveNoise(lowWX, lowWY, highWZ);
-                float c101 = ComputeCaveNoise(highWX, lowWY, highWZ);
-                float c011 = ComputeCaveNoise(lowWX, highWY, highWZ);
-                float c111 = ComputeCaveNoise(highWX, highWY, highWZ);
-
-                float fx = (float)(worldX - lowWX) / stride;
-                float fy = (float)(worldPos.y - lowWY) / stride;
-                float fz = (float)(worldZ - lowWZ) / stride;
-
-                float x00 = Mathf.Lerp(c000, c100, fx);
-                float x01 = Mathf.Lerp(c001, c101, fx);
-                float x10 = Mathf.Lerp(c010, c110, fx);
-                float x11 = Mathf.Lerp(c011, c111, fx);
-
-                float z0 = Mathf.Lerp(x00, x01, fz);
-                float z1 = Mathf.Lerp(x10, x11, fz);
-
-                float interpolatedCave = Mathf.Lerp(z0, z1, fy);
-
-                float surfaceBias = 0.001f * ((float)worldPos.y / math.max(1f, (float)surfaceHeight));
-                if (worldPos.y < 5) surfaceBias -= 0.08f;
-
-                float adjustedThreshold = caveThreshold - surfaceBias;
-                float signedCave = interpolatedCave - adjustedThreshold;
-                float surfaceThickness = Mathf.Max(1e-4f, caveSurfaceThickness);
-
-                if (Mathf.Abs(signedCave) <= surfaceThickness)
+                isCave = IsWormCarvedAt(worldPos, surfaceHeight, maxCaveY);
+            }
+            else if (worldPos.y <= maxCaveY)
+            {
+                float caveSample = ComputeCaveNoise(worldX, worldPos.y, worldZ);
+                if (caveSample < caveThreshold)
                     isCave = true;
             }
         }
@@ -202,6 +155,11 @@ public partial class World : MonoBehaviour
 
     private float ComputeCaveNoise(int wx, int wy, int wz)
     {
+        return ComputeCaveNoise((float)wx, wy, (float)wz);
+    }
+
+    private float ComputeCaveNoise(float wx, float wy, float wz)
+    {
         float totalCave = 0f;
         float sumCaveAmp = 0f;
 
@@ -211,10 +169,10 @@ public partial class World : MonoBehaviour
             if (!layer.enabled) continue;
 
             float nx = wx + layer.offset.x;
-            float ny = (float)wy;
+            float ny = wy;
             float nz = wz + layer.offset.y;
 
-            float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
+            float finalSample = MyNoise.OctavePerlin3D(nx, ny, nz, layer);
 
             if (layer.redistributionModifier != 1f || layer.exponent != 1f)
             {
@@ -227,6 +185,207 @@ public partial class World : MonoBehaviour
 
         float baseCaveResult = (sumCaveAmp > 0f) ? totalCave / sumCaveAmp : 0f;
         return baseCaveResult;
+    }
+
+    private bool IsWormCarvedAt(Vector3Int worldPos, int surfaceHeight, int maxCaveY)
+    {
+        int minCaveY = math.clamp(caveWormSettings.minY, 11, math.max(11, maxCaveY - 2));
+        if (worldPos.y <= 10 || worldPos.y >= surfaceHeight - 1) return false;
+
+        int cellSize = math.max(8, caveWormSettings.cellSize);
+        int carveStride = math.max(1, caveWormSettings.carveStride);
+        float spawnChance = math.clamp(caveWormSettings.spawnChance, 0f, 1f);
+        int minSteps = math.max(8, caveWormSettings.minSteps);
+        int maxSteps = math.max(minSteps, caveWormSettings.maxSteps);
+        float stepLength = math.max(0.5f, caveWormSettings.stepLength);
+        float minRadius = math.max(0.75f, caveWormSettings.minRadius);
+        float maxRadius = math.max(minRadius, caveWormSettings.maxRadius);
+        float verticalRadiusMultiplier = math.clamp(caveWormSettings.verticalRadiusMultiplier, 0.25f, 1.5f);
+        float directionNoiseScale = math.max(0.001f, caveWormSettings.directionNoiseScale);
+        float boundaryPullStrength = math.max(0.05f, caveWormSettings.boundaryPullStrength);
+        float boundaryBand = math.max(0.005f, caveWormSettings.boundaryBand);
+        float verticalJitter = math.clamp(caveWormSettings.verticalJitter, 0f, 1f);
+        int boundarySearchIters = math.clamp(caveWormSettings.boundarySearchIters, 1, 8);
+
+        float maxReach = maxSteps * stepLength + maxRadius + 4f;
+        int seedPadding = (int)math.ceil(maxReach);
+
+        int cellX0 = FloorDiv(worldPos.x - seedPadding, cellSize);
+        int cellX1 = FloorDiv(worldPos.x + seedPadding, cellSize);
+        int cellZ0 = FloorDiv(worldPos.z - seedPadding, cellSize);
+        int cellZ1 = FloorDiv(worldPos.z + seedPadding, cellSize);
+        int yRange = math.max(1, maxCaveY - minCaveY);
+
+        for (int cellX = cellX0; cellX <= cellX1; cellX++)
+        {
+            for (int cellZ = cellZ0; cellZ <= cellZ1; cellZ++)
+            {
+                uint spawnHash = math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 9127));
+                if (Hash01(spawnHash) > spawnChance) continue;
+
+                float startOffsetX = Hash01(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 1223)));
+                float startOffsetZ = Hash01(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 2141)));
+                float startOffsetY = Hash01(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 3319)));
+
+                float startX = cellX * cellSize + startOffsetX * cellSize;
+                float startZ = cellZ * cellSize + startOffsetZ * cellSize;
+                float startY = minCaveY + startOffsetY * yRange;
+                int startSurfaceY = GetSurfaceHeight((int)math.floor(startX), (int)math.floor(startZ));
+                int cellMaxCaveY = math.min(Chunk.SizeY - 1, math.max(maxCaveY, startSurfaceY - 1));
+                if (cellMaxCaveY <= minCaveY + 1) continue;
+
+                int steps = minSteps + (int)math.floor(Hash01(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 4019))) * (maxSteps - minSteps + 1));
+                float yaw = Hash01(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 5171))) * math.PI * 2f;
+                float pitch = HashSigned(math.hash(new int4(cellX, cellZ, caveWormSettings.seed, 6131))) * verticalJitter;
+
+                float3 pos = new float3(startX, startY, startZ);
+                ProjectToBoundary(ref pos, boundaryBand, boundaryPullStrength, boundarySearchIters, minCaveY, cellMaxCaveY);
+                if (math.abs(ComputeCaveSignedNoise(pos.x, pos.y, pos.z)) > boundaryBand * 5f) continue;
+
+                float3 dir = math.normalizesafe(new float3(math.cos(yaw), pitch, math.sin(yaw)), new float3(1f, 0f, 0f));
+                int stepsSinceLastCheck = 0;
+
+                for (int step = 0; step < steps; step++)
+                {
+                    float t = step / math.max(1f, steps - 1f);
+                    float tunnelShape = math.sin(t * math.PI);
+                    float radiusNoise = HashSigned(math.hash(new int4(cellX ^ step, cellZ + step * 17, caveWormSettings.seed, 7331)));
+                    float radiusBlend = math.saturate(0.35f + 0.65f * tunnelShape + radiusNoise * 0.12f);
+                    float radius = math.lerp(minRadius, maxRadius, radiusBlend);
+                    stepsSinceLastCheck++;
+
+                    bool shouldCheck = step == 0 || stepsSinceLastCheck >= carveStride || step == steps - 1;
+                    if (shouldCheck)
+                    {
+                        float bridgeRadius = stepLength * math.max(0, stepsSinceLastCheck - 1) * 0.35f;
+                        float checkRadius = radius + bridgeRadius;
+
+                        if (IsPointInsideEllipsoid(worldPos, pos, checkRadius, verticalRadiusMultiplier))
+                        {
+                            float radiusY = math.max(0.6f, checkRadius * verticalRadiusMultiplier);
+                            int topLimit = GetWormTopCarveLimit(worldPos.x, worldPos.z, surfaceHeight, pos.y, radiusY);
+                            if (worldPos.y <= math.min(cellMaxCaveY, topLimit))
+                                return true;
+                        }
+
+                        stepsSinceLastCheck = 0;
+                    }
+
+                    float signed = ComputeCaveSignedNoise(pos.x, pos.y, pos.z);
+                    float3 grad = EstimateCaveGradient(pos.x, pos.y, pos.z);
+                    float3 gradDir = math.normalizesafe(grad, new float3(0f, 0f, 0f));
+                    if (math.lengthsq(gradDir) > 1e-5f)
+                    {
+                        pos -= gradDir * signed * boundaryPullStrength * 2f;
+                    }
+
+                    float3 flow = SampleDirectionFlow(pos, directionNoiseScale, caveWormSettings.seed);
+                    flow.y *= verticalJitter;
+                    dir = math.normalizesafe(dir * 0.82f + flow * 0.18f, dir);
+                    pos += dir * stepLength;
+
+                    if (pos.y < minCaveY + 0.5f)
+                    {
+                        pos.y = minCaveY + 0.5f;
+                        dir.y = math.abs(dir.y);
+                    }
+                    else if (pos.y > cellMaxCaveY - 0.5f)
+                    {
+                        pos.y = cellMaxCaveY - 0.5f;
+                        dir.y = -math.abs(dir.y);
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsPointInsideEllipsoid(Vector3Int point, float3 center, float radiusXZ, float verticalRadiusMultiplier)
+    {
+        float radiusY = math.max(0.6f, radiusXZ * verticalRadiusMultiplier);
+        float dx = (point.x + 0.5f - center.x) / math.max(0.001f, radiusXZ);
+        float dy = (point.y + 0.5f - center.y) / math.max(0.001f, radiusY);
+        float dz = (point.z + 0.5f - center.z) / math.max(0.001f, radiusXZ);
+        return dx * dx + dy * dy + dz * dz <= 1f;
+    }
+
+    private void ProjectToBoundary(ref float3 pos, float boundaryBand, float boundaryPullStrength, int searchIters, int minCaveY, int maxCaveY)
+    {
+        for (int i = 0; i < searchIters; i++)
+        {
+            float signed = ComputeCaveSignedNoise(pos.x, pos.y, pos.z);
+            if (math.abs(signed) <= boundaryBand) break;
+
+            float3 grad = EstimateCaveGradient(pos.x, pos.y, pos.z);
+            float3 gradDir = math.normalizesafe(grad, new float3(0f, 0f, 0f));
+            if (math.lengthsq(gradDir) < 1e-5f) break;
+
+            pos -= gradDir * signed * boundaryPullStrength * 2.6f;
+            pos.y = math.clamp(pos.y, minCaveY + 0.5f, maxCaveY - 0.5f);
+        }
+    }
+
+    private float3 SampleDirectionFlow(float3 pos, float scale, int seed)
+    {
+        float sx = seed * 0.00117f;
+        float sy = seed * -0.00091f;
+        float sz = seed * 0.00063f;
+        float3 p = pos * scale;
+
+        float nx = noise.snoise(new float3(p.x + sx + 11.1f, p.y + sy, p.z + sz));
+        float ny = noise.snoise(new float3(p.x + sx - 7.3f, p.y + sy + 21.7f, p.z + sz + 5.9f));
+        float nz = noise.snoise(new float3(p.x + sx + 19.4f, p.y + sy - 13.5f, p.z + sz - 17.2f));
+
+        return math.normalizesafe(new float3(nx, ny, nz), new float3(1f, 0f, 0f));
+    }
+
+    private float3 EstimateCaveGradient(float worldX, float worldY, float worldZ)
+    {
+        const float eps = 1.25f;
+
+        float dx = ComputeCaveSignedNoise(worldX + eps, worldY, worldZ) - ComputeCaveSignedNoise(worldX - eps, worldY, worldZ);
+        float dy = ComputeCaveSignedNoise(worldX, worldY + eps, worldZ) - ComputeCaveSignedNoise(worldX, worldY - eps, worldZ);
+        float dz = ComputeCaveSignedNoise(worldX, worldY, worldZ + eps) - ComputeCaveSignedNoise(worldX, worldY, worldZ - eps);
+
+        return new float3(dx, dy, dz);
+    }
+
+    private float ComputeCaveSignedNoise(float worldX, float worldY, float worldZ)
+    {
+        return ComputeCaveNoise(worldX, worldY, worldZ) - caveThreshold;
+    }
+
+    private int GetWormTopCarveLimit(int worldX, int worldZ, int surfaceY, float centerY, float radiusY)
+    {
+        int closedLimit = surfaceY - 2;
+        bool nearSurface = (surfaceY - centerY) <= (radiusY + 1.2f);
+        if (!nearSurface) return closedLimit;
+
+        float mask = noise.snoise(new float2(
+            (worldX + caveWormSettings.seed * 0.37f) * 0.08f,
+            (worldZ - caveWormSettings.seed * 0.21f) * 0.08f
+        )) * 0.5f + 0.5f;
+
+        return mask > 0.68f ? surfaceY : closedLimit;
+    }
+
+    private static float Hash01(uint hash)
+    {
+        return (hash & 0x00FFFFFFu) / 16777216f;
+    }
+
+    private static float HashSigned(uint hash)
+    {
+        return Hash01(hash) * 2f - 1f;
+    }
+
+    private static int FloorDiv(int a, int b)
+    {
+        int q = a / b;
+        int r = a % b;
+        if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
+        return q;
     }
 
 
@@ -328,16 +487,6 @@ public partial class World : MonoBehaviour
     }
 
 
-
-    private static int FloorDiv(int a, int b)
-    {
-        int q = a / b;
-        int r = a % b;
-        if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
-        return q;
-    }
-
-
     #endregion
 
     #region Lighting System (Global BFS)
@@ -370,6 +519,33 @@ public partial class World : MonoBehaviour
         RequestChunkRebuild(coord);
     }
 
+    private bool TrySetBlockInLoadedChunkCache(Vector3Int worldPos, BlockType type)
+    {
+        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY) return false;
+
+        Vector2Int chunkCoord = new Vector2Int(
+            Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
+            Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
+        );
+
+        if (!activeChunks.TryGetValue(chunkCoord, out Chunk chunk) ||
+            chunk == null ||
+            !chunk.hasVoxelData ||
+            !chunk.voxelData.IsCreated)
+        {
+            return false;
+        }
+
+        int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
+        int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+        if (localX < 0 || localX >= Chunk.SizeX || localZ < 0 || localZ >= Chunk.SizeZ)
+            return false;
+
+        int idx = localX + localZ * Chunk.SizeX + worldPos.y * Chunk.SizeX * Chunk.SizeZ;
+        chunk.voxelData[idx] = (byte)type;
+        return true;
+    }
+
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type)
     {
@@ -399,6 +575,7 @@ public partial class World : MonoBehaviour
         // Keep explicit Air overrides so broken procedural terrain stays removed.
         // Removing the key would make GetBlockAt() fall back to procedural data again.
         blockOverrides[worldPos] = type;
+        TrySetBlockInLoadedChunkCache(worldPos, type);
 
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),
