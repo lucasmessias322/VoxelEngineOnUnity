@@ -98,6 +98,21 @@ public partial class World : MonoBehaviour
     public TreeSettings treeSettings;
     public int CliffTreshold = 2;
 
+    [Header("Cave Settings - Worley 3D")]
+    public WorleyTunnelSettings worleyTunnelSettings = new WorleyTunnelSettings
+    {
+        enabled = true,
+        cellSize = 24f,
+        tunnelDiameter = 4f,
+        tunnelDiameterMin = 3.2f,
+        tunnelDiameterMax = 5.1f,
+        evaluationStride = 2,
+        minY = 6,
+        maxY = 96,
+        minSurfaceDepth = 6,
+        seed = 1337
+    };
+
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
@@ -227,6 +242,43 @@ public partial class World : MonoBehaviour
     {
         int treeBorder = treeSettings.canopyRadius + 1;
         return Mathf.Max(treeBorder, sunlightSmoothingPadding);
+    }
+
+    private WorleyTunnelSettings GetResolvedWorleyTunnelSettings()
+    {
+        WorleyTunnelSettings settings = worleyTunnelSettings;
+
+        settings.cellSize = Mathf.Max(4f, settings.cellSize);
+        settings.tunnelDiameter = Mathf.Max(0.5f, settings.tunnelDiameter);
+        float minDiameter = settings.tunnelDiameterMin > 0f ? settings.tunnelDiameterMin : settings.tunnelDiameter;
+        float maxDiameter = settings.tunnelDiameterMax > 0f ? settings.tunnelDiameterMax : settings.tunnelDiameter;
+        if (maxDiameter < minDiameter)
+        {
+            float tmp = minDiameter;
+            minDiameter = maxDiameter;
+            maxDiameter = tmp;
+        }
+
+        settings.tunnelDiameterMin = Mathf.Max(0.5f, minDiameter);
+        settings.tunnelDiameterMax = Mathf.Max(settings.tunnelDiameterMin, maxDiameter);
+        settings.evaluationStride = Mathf.Clamp(settings.evaluationStride, 1, 8);
+        settings.minSurfaceDepth = Mathf.Max(0, settings.minSurfaceDepth);
+
+        int minY = Mathf.Clamp(settings.minY, 0, Chunk.SizeY - 1);
+        int maxY = Mathf.Clamp(settings.maxY, 0, Chunk.SizeY - 1);
+        if (maxY < minY)
+        {
+            int tmp = minY;
+            minY = maxY;
+            maxY = tmp;
+        }
+
+        settings.minY = minY;
+        settings.maxY = maxY;
+
+        uint mixedSeed = (uint)seed ^ ((uint)settings.seed * 0x9e3779b9u);
+        settings.seed = (int)(mixedSeed & 0x7fffffff);
+        return settings;
     }
 
     #endregion
@@ -897,6 +949,7 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+        WorleyTunnelSettings resolvedWorleyTunnels = GetResolvedWorleyTunnelSettings();
 
         InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         if (chunk.jobScheduled)
@@ -909,6 +962,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
+            resolvedWorleyTunnels,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableTrees,
             chunkLightData,
@@ -1204,6 +1258,7 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+        WorleyTunnelSettings resolvedWorleyTunnels = GetResolvedWorleyTunnelSettings();
 
         InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
@@ -1216,6 +1271,7 @@ public partial class World : MonoBehaviour
               offsetX,
               offsetZ,
               seaLevel,
+              resolvedWorleyTunnels,
               nativeEdits,
               treeMargin,
               borderSize,

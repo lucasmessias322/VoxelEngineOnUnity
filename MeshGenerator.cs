@@ -137,6 +137,7 @@ public static class MeshGenerator
     [BurstCompile]
     struct PopulateTerrainJob : IJobParallelFor
     {
+        public Vector2Int coord;
         [ReadOnly] public NativeArray<int> heightCache;
         [NativeDisableParallelForRestriction]
         [WriteOnly] public NativeArray<BlockType> blockTypes;
@@ -149,6 +150,7 @@ public static class MeshGenerator
         public float seaLevel;
         public int baseHeight;
         public int CliffTreshold;
+        public WorleyTunnelSettings worleyTunnels;
 
         public void Execute(int index)
         {
@@ -184,6 +186,19 @@ public static class MeshGenerator
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
+            int worldX = coord.x * SizeX + (lx - border);
+            int worldZ = coord.y * SizeZ + (lz - border);
+
+            int carveMinY = math.max(3, worleyTunnels.minY);
+            int carveMaxY = math.min(h, worleyTunnels.maxY);
+            carveMaxY = math.min(carveMaxY, h - worleyTunnels.minSurfaceDepth);
+            bool canCarveThisColumn = worleyTunnels.enabled && carveMaxY >= carveMinY;
+
+            int sampleStride = math.max(1, worleyTunnels.evaluationStride);
+            int lastSampleBucket = int.MinValue;
+            int lastSampleBucketStartY = 0;
+            float lastMetricA = 1f;
+            float lastMetricB = 1f;
 
             for (int y = 0; y < SizeY; y++)
             {
@@ -191,6 +206,36 @@ public static class MeshGenerator
 
                 if (y <= h)
                 {
+                    if (canCarveThisColumn && y >= carveMinY && y <= carveMaxY)
+                    {
+                        int sampleBucket = y / sampleStride;
+                        if (sampleBucket != lastSampleBucket)
+                        {
+                            lastSampleBucket = sampleBucket;
+                            lastSampleBucketStartY = sampleBucket * sampleStride;
+
+                            float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
+                            float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
+
+                            lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
+                            lastMetricB = MyNoise.EvaluateWorleyTunnelMetric(samplePosB, worleyTunnels);
+                        }
+
+                        float metric = lastMetricA;
+                        if (sampleStride > 1)
+                        {
+                            float t = math.saturate((y - lastSampleBucketStartY + 0.5f) / (float)sampleStride);
+                            metric = math.lerp(lastMetricA, lastMetricB, t);
+                        }
+
+                        if (metric <= 0f)
+                        {
+                            blockTypes[idx] = BlockType.Air;
+                            solids[idx] = false;
+                            continue;
+                        }
+                    }
+
                     BlockType bt;
                     if (y == h)
                     {
@@ -233,6 +278,7 @@ public static class MeshGenerator
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
+        WorleyTunnelSettings worleyTunnelSettings,
 
 
         NativeArray<BlockEdit> blockEdits,
@@ -304,6 +350,7 @@ public static class MeshGenerator
         // ==========================================
         var populateJob = new PopulateTerrainJob
         {
+            coord = coord,
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
@@ -311,7 +358,8 @@ public static class MeshGenerator
             border = borderSize,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold
+            CliffTreshold = CliffTreshold,
+            worleyTunnels = worleyTunnelSettings
         };
 
         int paddedSize = SizeX + 2 * borderSize;
