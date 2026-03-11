@@ -122,6 +122,9 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Quantidade maxima de jobs de dados concluidos e processados por frame.")]
+    [Min(1)]
+    public int maxDataCompletionsPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
     [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
     [Min(1)]
@@ -226,6 +229,7 @@ public partial class World : MonoBehaviour
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
     private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>();
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
     private Dictionary<Vector2Int, byte[]> globalLightColumns = new Dictionary<Vector2Int, byte[]>();
     // Misc
@@ -496,13 +500,14 @@ public partial class World : MonoBehaviour
         float budgetSeconds = frameTimeBudgetMS / 1000f;
 
         int dataProcessedThisFrame = 0;
+        int dataCompletionsLimit = Mathf.Max(1, maxDataCompletionsPerFrame);
 
         // === STAGE 1: DATA JOBS (voxel generation) ===
         int i = 0;
         while (i < pendingDataJobs.Count)
         {
             if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds) break;
-            if (dataProcessedThisFrame >= 2) break; // small safety limit (tune maxDataCompletionsPerFrame if needed)
+            if (dataProcessedThisFrame >= dataCompletionsLimit) break;
 
             var pd = pendingDataJobs[i];
             if (!pd.handle.IsCompleted)
@@ -534,7 +539,7 @@ public partial class World : MonoBehaviour
                 DisposeDataJobResources(pd);
             }
 
-            pendingDataJobs.RemoveAt(i);
+            RemovePendingDataJobAtSwapBack(i);
         }
 
         // === STAGE 2: MESH JOBS (apply to GPU) ===
@@ -574,7 +579,7 @@ public partial class World : MonoBehaviour
             }
 
             DisposePendingMesh(pm);
-            pendingMeshes.RemoveAt(i);
+            RemovePendingMeshAtSwapBack(i);
             meshesAppliedThisFrame++;
         }
     }
@@ -610,6 +615,9 @@ public partial class World : MonoBehaviour
         int borderSize = GetChunkBorderSize();
         NativeList<JobHandle> meshHandles = new NativeList<JobHandle>(Chunk.SubchunksPerColumn, Allocator.Temp);
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
+        NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
+        for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
+            nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
@@ -627,9 +635,6 @@ public partial class World : MonoBehaviour
             }
 
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-            NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
-            for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
-                nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
             MeshGenerator.ScheduleMeshJob(
                 pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings, nativeSuppressedBillboards,
@@ -680,7 +685,7 @@ public partial class World : MonoBehaviour
                 solids = pd.solids,
                 light = pd.light,
                 nativeBlockMappings = pd.nativeBlockMappings,
-                suppressedBillboards = nativeSuppressedBillboards
+                suppressedBillboards = default
             });
         }
 
@@ -699,32 +704,66 @@ public partial class World : MonoBehaviour
             blockMappings = pd.nativeBlockMappings,
             subchunkNonEmpty = pd.subchunkNonEmpty
         };
-        disposeJob.Schedule(combinedMeshHandle);
+        JobHandle dataDisposeHandle = disposeJob.Schedule(combinedMeshHandle);
 
-        activeChunk.currentJob = combinedMeshHandle;
+        var disposeSuppressedBillboardsJob = new MeshGenerator.DisposeSuppressedBillboardsJob
+        {
+            suppressedGrassBillboards = nativeSuppressedBillboards
+        };
+        JobHandle suppressedDisposeHandle = disposeSuppressedBillboardsJob.Schedule(combinedMeshHandle);
+
+        activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, dataDisposeHandle, suppressedDisposeHandle);
     }
 
     private List<int3> GetSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord)
     {
-        List<int3> result = new List<int3>();
-        if (suppressedGrassBillboards.Count == 0) return result;
+        if (!suppressedGrassBillboardsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> positions) || positions.Count == 0)
+            return new List<int3>(0);
 
-        int minX = chunkCoord.x * Chunk.SizeX;
-        int minZ = chunkCoord.y * Chunk.SizeZ;
-        int maxX = minX + Chunk.SizeX - 1;
-        int maxZ = minZ + Chunk.SizeZ - 1;
-
-        foreach (Vector3Int pos in suppressedGrassBillboards)
+        List<int3> result = new List<int3>(positions.Count);
+        foreach (Vector3Int pos in positions)
         {
-            if (pos.x >= minX && pos.x <= maxX &&
-                pos.z >= minZ && pos.z <= maxZ &&
-                pos.y >= 0 && pos.y < Chunk.SizeY)
-            {
+            if (pos.y >= 0 && pos.y < Chunk.SizeY)
                 result.Add(new int3(pos.x, pos.y, pos.z));
-            }
         }
 
         return result;
+    }
+
+    private static Vector2Int GetChunkCoordFromWorldXZ(int worldX, int worldZ)
+    {
+        return new Vector2Int(
+            Mathf.FloorToInt((float)worldX / Chunk.SizeX),
+            Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
+        );
+    }
+
+    private void IndexSuppressedGrassBillboard(Vector3Int pos)
+    {
+        Vector2Int coord = GetChunkCoordFromWorldXZ(pos.x, pos.z);
+        if (!suppressedGrassBillboardsByChunk.TryGetValue(coord, out HashSet<Vector3Int> set))
+        {
+            set = new HashSet<Vector3Int>();
+            suppressedGrassBillboardsByChunk[coord] = set;
+        }
+
+        set.Add(pos);
+    }
+
+    private bool RemoveSuppressedGrassBillboard(Vector3Int pos)
+    {
+        if (!suppressedGrassBillboards.Remove(pos))
+            return false;
+
+        Vector2Int coord = GetChunkCoordFromWorldXZ(pos.x, pos.z);
+        if (suppressedGrassBillboardsByChunk.TryGetValue(coord, out HashSet<Vector3Int> set))
+        {
+            set.Remove(pos);
+            if (set.Count == 0)
+                suppressedGrassBillboardsByChunk.Remove(coord);
+        }
+
+        return true;
     }
 
     private void InjectGlobalLightColumns(
@@ -870,7 +909,8 @@ public partial class World : MonoBehaviour
         if (pendingChunks.Count > 0)
         {
             int processed = 0;
-            int realPending = pendingDataJobs.Count + Mathf.CeilToInt(pendingMeshes.Count / 6f);
+            int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
+            int realPending = pendingDataJobs.Count + Mathf.CeilToInt(pendingMeshes.Count / (float)subchunksPerChunk);
             bool jobsCongested = realPending > maxChunksPerFrame * 4;
 
             if (!jobsCongested)
@@ -1357,6 +1397,24 @@ public partial class World : MonoBehaviour
                 return true;
 
         return false;
+    }
+
+    private void RemovePendingDataJobAtSwapBack(int index)
+    {
+        int last = pendingDataJobs.Count - 1;
+        if (index < 0 || index > last) return;
+        if (index != last)
+            pendingDataJobs[index] = pendingDataJobs[last];
+        pendingDataJobs.RemoveAt(last);
+    }
+
+    private void RemovePendingMeshAtSwapBack(int index)
+    {
+        int last = pendingMeshes.Count - 1;
+        if (index < 0 || index > last) return;
+        if (index != last)
+            pendingMeshes[index] = pendingMeshes[last];
+        pendingMeshes.RemoveAt(last);
     }
 
     private void HandleBlockColliderToggle()

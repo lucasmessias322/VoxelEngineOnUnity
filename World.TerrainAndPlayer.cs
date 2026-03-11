@@ -265,11 +265,9 @@ public partial class World : MonoBehaviour
     {
         if (billboardPos.y <= 0) return;
         if (!suppressedGrassBillboards.Add(billboardPos)) return;
+        IndexSuppressedGrassBillboard(billboardPos);
 
-        Vector2Int coord = new Vector2Int(
-            Mathf.FloorToInt((float)billboardPos.x / Chunk.SizeX),
-            Mathf.FloorToInt((float)billboardPos.z / Chunk.SizeZ)
-        );
+        Vector2Int coord = GetChunkCoordFromWorldXZ(billboardPos.x, billboardPos.z);
 
         RequestChunkRebuild(coord);
     }
@@ -294,11 +292,11 @@ public partial class World : MonoBehaviour
 
         // If this position gets occupied, it cannot host a billboard anymore.
         if (type != BlockType.Air)
-            suppressedGrassBillboards.Remove(worldPos);
+            RemoveSuppressedGrassBillboard(worldPos);
 
         // If ground changes from grass to anything else, clear suppression above it.
         if (type != BlockType.Grass)
-            suppressedGrassBillboards.Remove(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
+            RemoveSuppressedGrassBillboard(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
 
         // Keep explicit Air overrides so broken procedural terrain stays removed.
         // Removing the key would make GetBlockAt() fall back to procedural data again.

@@ -210,81 +210,74 @@ public static class MeshGenerator
             float lastMetricB = 1f;
             bool hasCachedMetrics = false;
 
-            for (int y = 0; y < SizeY; y++)
+            int maxSolidY = math.min(h, SizeY - 1);
+            int idx = lx + lz * voxelPlaneSize;
+
+            for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
             {
-                int idx = lx + y * voxelSizeX + lz * voxelPlaneSize;
-
-                if (y <= h)
+                if (canCarveThisColumn && y >= carveMinY && y <= carveMaxY)
                 {
-                    if (canCarveThisColumn && y >= carveMinY && y <= carveMaxY)
+                    int sampleBucket = y / sampleStride;
+                    if (sampleBucket != lastSampleBucket)
                     {
-                        int sampleBucket = y / sampleStride;
-                        if (sampleBucket != lastSampleBucket)
+                        int previousBucket = lastSampleBucket;
+                        lastSampleBucket = sampleBucket;
+                        lastSampleBucketStartY = sampleBucket * sampleStride;
+
+                        if (hasCachedMetrics && sampleBucket == previousBucket + 1)
                         {
-                            int previousBucket = lastSampleBucket;
-                            lastSampleBucket = sampleBucket;
-                            lastSampleBucketStartY = sampleBucket * sampleStride;
-
-                            if (hasCachedMetrics && sampleBucket == previousBucket + 1)
-                            {
-                                // Reuse B(n) as A(n+1): avoids one expensive cave metric evaluation per bucket.
-                                lastMetricA = lastMetricB;
-                            }
-                            else
-                            {
-                                float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
-                                lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
-                            }
-
-                            float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
-                            lastMetricB = MyNoise.EvaluateWorleyTunnelMetric(samplePosB, worleyTunnels);
-                            hasCachedMetrics = true;
+                            // Reuse B(n) as A(n+1): avoids one expensive cave metric evaluation per bucket.
+                            lastMetricA = lastMetricB;
+                        }
+                        else
+                        {
+                            float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
+                            lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
                         }
 
-                        float metric = lastMetricA;
-                        if (sampleStride > 1)
-                        {
-                            float t = math.saturate((y - lastSampleBucketStartY + 0.5f) / (float)sampleStride);
-                            metric = math.lerp(lastMetricA, lastMetricB, t);
-                        }
-
-                        if (metric <= 0f)
-                        {
-                            blockTypes[idx] = BlockType.Air;
-                            solids[idx] = false;
-                            continue;
-                        }
+                        float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
+                        lastMetricB = MyNoise.EvaluateWorleyTunnelMetric(samplePosB, worleyTunnels);
+                        hasCachedMetrics = true;
                     }
 
-                    BlockType bt;
-                    if (y == h)
+                    float metric = lastMetricA;
+                    if (sampleStride > 1)
                     {
-                        if (isHighMountain) bt = BlockType.Stone;
-                        else if (isCliff) bt = BlockType.Stone;
-                        else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
-                    }
-                    else if (y > h - 4)
-                    {
-                        if (isCliff) bt = BlockType.Stone;
-                        else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
-                    }
-                    else if (y <= 2)
-                    {
-                        bt = BlockType.Bedrock;
-                    }
-                    else
-                    {
-                        bt = BlockType.Stone;
+                        float t = math.saturate((y - lastSampleBucketStartY + 0.5f) / (float)sampleStride);
+                        metric = math.lerp(lastMetricA, lastMetricB, t);
                     }
 
-                    blockTypes[idx] = bt;
-                    solids[idx] = blockMappings[(int)bt].isSolid;
+                    if (metric <= 0f)
+                    {
+                        blockTypes[idx] = BlockType.Air;
+                        solids[idx] = false;
+                        continue;
+                    }
+                }
+
+                BlockType bt;
+                if (y == h)
+                {
+                    if (isHighMountain) bt = BlockType.Stone;
+                    else if (isCliff) bt = BlockType.Stone;
+                    else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+                }
+                else if (y > h - 4)
+                {
+                    if (isCliff) bt = BlockType.Stone;
+                    else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                }
+                else if (y <= 2)
+                {
+                    bt = BlockType.Bedrock;
                 }
                 else
                 {
-                    blockTypes[idx] = BlockType.Air;
-                    solids[idx] = false;
+                    bt = BlockType.Stone;
                 }
+
+                blockTypes[idx] = bt;
+                solids[idx] = blockMappings[(int)bt].isSolid;
             }
         }
     }
@@ -1090,6 +1083,13 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
         [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ← NOVO
+        public void Execute() { }
+    }
+
+    [BurstCompile]
+    public struct DisposeSuppressedBillboardsJob : IJob
+    {
+        [DeallocateOnJobCompletion] public NativeArray<int3> suppressedGrassBillboards;
         public void Execute() { }
     }
 
