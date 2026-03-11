@@ -38,10 +38,8 @@ public static class ChunkData
         public float offsetZ;
         public float seaLevel;
         public float caveThreshold;
-        public float caveSurfaceThickness;
         public int caveStride;
         public int maxCaveDepthMultiplier;
-        public float caveRarityScale;
 
 
         public int CliffTreshold;
@@ -403,7 +401,7 @@ public static class ChunkData
                                 float nz = worldZ + layer.offset.y;
 
                                 // Usa o nosso novo Worley/Cellular Noise que já cria os formatos de túnel nativamente
-                                float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
+                                float finalSample = MyNoise.OctaveVoronoi3D(nx, ny, nz, layer);
 
                                 // Mantemos o suporte ao Redistribution Modifier para que você
                                 // possa controlar o tamanho/formato dos túneis no seu ScriptableObject/Inspector!
@@ -478,12 +476,12 @@ public static class ChunkData
                             float interpolatedCave = math.lerp(c0, c1, fracZ);
 
                             float maxPossibleY = math.max(1f, h);
-                            float relativeHeight = (float)y / maxPossibleY;
-                            float surfaceBias = 0.001f * relativeHeight;
-                            if (y < 5) surfaceBias -= 0.08f;
+                           
+                       
+                          
 
-                            float adjustedThreshold = caveThreshold - surfaceBias;
-                            if (interpolatedCave > adjustedThreshold)
+                            float adjustedThreshold = caveThreshold;
+                            if (interpolatedCave < adjustedThreshold)
                             {
                                 blockTypes[voxelIdx] = BlockType.Air;
                                 solids[voxelIdx] = false;

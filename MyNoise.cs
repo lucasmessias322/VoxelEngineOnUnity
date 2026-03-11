@@ -202,50 +202,39 @@ public static class MyNoise
         value = math.pow(value, layer.ridgeFactor); // Afiar
         return math.clamp(value, 0f, 1f);
     }
-
     /// <summary>
-    /// Octave Cellular 3D (Worley Noise) projetado para geração de cavernas interconectadas.
-    /// Utiliza a diferença (F2 - F1) invertida para criar redes de túneis.
+    /// Octave Voronoi 3D (Worley) para cavernas.
+    /// Retorna valores baixos nas bordas das celulas para combinar com:
+    /// sample < caveThreshold => escavar.
     /// </summary>
     [BurstCompile]
-    public static float OctaveCellular3D(float nx, float ny, float nz, NoiseLayer layer)
+    public static float OctaveVoronoi3D(float nx, float ny, float nz, NoiseLayer layer)
     {
         float scale = math.max(1e-5f, layer.scale);
-        // Aplica a escala vertical, que é excelente para achatar os túneis ou fazê-los mergulhar
         float verticalScale = layer.verticalScale > 0f ? layer.verticalScale : scale;
-
         int octaves = math.max(1, layer.octaves);
         float persistence = math.clamp(layer.persistence, 0f, 1f);
         float lacunarity = math.max(1f, layer.lacunarity);
+        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
+        float edgeSharpness = 2.5f + math.max(0f, layer.ridgeFactor) * 2f;
 
         float total = 0f;
         float amplitude = 1f;
         float frequency = 1f;
-        float maxAmp = layer.maxAmp > 0f ? layer.maxAmp : 1f;
 
         for (int i = 0; i < octaves; i++)
         {
-            // O Unity.Mathematics cellular retorna float2:
-            // x = F1 (distância para o ponto mais próximo)
-            // y = F2 (distância para o 2º ponto mais próximo)
-            float2 cell = noise.cellular(new float3(
+            float3 p = new float3(
                 (nx * frequency) / scale,
                 (ny * frequency) / verticalScale,
                 (nz * frequency) / scale
-            ));
+            );
 
-            // A MÁGICA DOS TÚNEIS: (F2 - F1) cria paredes de celular ("Voronoi Edges").
-            // Invertemos isso subtraindo de 1f, para que as paredes virem ocos (os túneis).
-            // Escava a partir do centro da célula (F1)
-            // Apaga as bordas (gera ilhas flutuantes)
-            //float sample = 1f - (cell.y - cell.x);
-            float sample = 1f - (cell.x * cell.y);
+            float2 cell = noise.cellular(p);
+            float edgeDistance = math.max(0f, cell.y - cell.x);
+            float sample = math.saturate(edgeDistance * edgeSharpness);
 
-            // Opcional: Elevar o sample ao cubo/quadrado torna as paredes mais espessas e os túneis mais estreitos
-            // sample = sample * sample;
-
-            total += math.clamp(sample, 0f, 1f) * amplitude;
-
+            total += sample * amplitude;
             amplitude *= persistence;
             frequency *= lacunarity;
         }
@@ -253,6 +242,16 @@ public static class MyNoise
         return math.clamp(total / maxAmp, 0f, 1f);
     }
 
+    /// <summary>
+    /// Alias de compatibilidade para chamadas antigas.
+    /// </summary>
+    [BurstCompile]
+    public static float OctaveCellular3D(float nx, float ny, float nz, NoiseLayer layer)
+    {
+        return OctaveVoronoi3D(nx, ny, nz, layer);
+    }
+
 
 
 }
+

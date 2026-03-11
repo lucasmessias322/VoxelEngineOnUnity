@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
@@ -26,13 +26,13 @@ public struct TreeSettings
 
 public static class LightUtils
 {
-    // Junta as duas luzes (0-15) em um único byte
+    // Junta as duas luzes (0-15) em um Ãºnico byte
     public static byte PackLight(byte skyLight, byte blockLight)
     {
         return (byte)((skyLight << 4) | (blockLight & 0x0F));
     }
 
-    // Extrai apenas a luz do céu (bits 4 a 7)
+    // Extrai apenas a luz do cÃ©u (bits 4 a 7)
     public static byte GetSkyLight(byte packedLight)
     {
         return (byte)((packedLight >> 4) & 0x0F);
@@ -84,19 +84,8 @@ public partial class World : MonoBehaviour
     [Header("Cave Settings")]
     public NoiseLayer[] caveLayers;
     public float caveThreshold = 0.58f;
-    [Tooltip("Espessura da borda da caverna ao redor do limiar (isocontorno). Valores maiores deixam tuneis mais grossos.")]
-    [Range(0.001f, 0.5f)]
-    public float caveSurfaceThickness = 0.06f;
     public int caveStride = 4;
     public int maxCaveDepthMultiplier = 1;
-
-    [Header("Cave Rarity Mask")]
-    [Tooltip("Controla o tamanho dos 'bolsões' onde as cavernas podem existir. Valores altos (ex: 200-500) separam mais os sistemas de cavernas.")]
-    public float caveRarityScale = 300f;
-    [Range(-1f, 1f)]
-    [Tooltip("Quanto MAIOR o valor, mais RARAS são as cavernas. Valores negativos geram muitas cavernas.")]
-    public float caveRarityThreshold = 0.3f;
-    public float caveMaskSmoothness = 5f;
 
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
@@ -119,7 +108,7 @@ public partial class World : MonoBehaviour
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
-    [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
+    [Tooltip("Limite de jobs de geraÃ§Ã£o de dados (inclui iluminaÃ§Ã£o) simultÃ¢neos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
     [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
@@ -140,7 +129,7 @@ public partial class World : MonoBehaviour
     [Min(0)]
     public int verticalSubchunkRenderDistanceBelow = 2;
 
-    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical).")]
+    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terÃ£o TODOS os subchunks visÃ­veis (sem culling vertical).")]
     public int horizontalFullVisibilityRadius = 2;
 
     [Header("Features Toggle")]
@@ -201,7 +190,7 @@ public partial class World : MonoBehaviour
     public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
 
     [Header("Lighting")]
-    [Tooltip("Padding horizontal em voxels para propagação de skylight entre chunks. Use 16 para eliminar costura visível na suavização.")]
+    [Tooltip("Padding horizontal em voxels para propagaÃ§Ã£o de skylight entre chunks. Use 16 para eliminar costura visÃ­vel na suavizaÃ§Ã£o.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
 
@@ -809,7 +798,7 @@ public partial class World : MonoBehaviour
                 }
             }
 
-            // B. Limpar pendentes desnecessários
+            // B. Limpar pendentes desnecessÃ¡rios
             for (int i = pendingChunks.Count - 1; i >= 0; i--)
             {
                 if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
@@ -828,7 +817,7 @@ public partial class World : MonoBehaviour
                 pendingChunks.Add((coord, distSq));
             }
 
-            // D. Reordenar fila por distância
+            // D. Reordenar fila por distÃ¢ncia
             for (int i = 0; i < pendingChunks.Count; i++)
             {
                 var item = pendingChunks[i];
@@ -946,7 +935,7 @@ public partial class World : MonoBehaviour
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
 
-        // Injeção da luz global
+        // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
@@ -964,7 +953,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            caveThreshold, caveSurfaceThickness, caveStride, maxCaveDepthMultiplier,
+            caveThreshold, caveStride, maxCaveDepthMultiplier,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
             chunkLightData,
@@ -1112,7 +1101,6 @@ public partial class World : MonoBehaviour
               offsetZ,
               seaLevel,
               caveThreshold,
-              caveSurfaceThickness,
               caveStride,
               maxCaveDepthMultiplier,
               nativeEdits,
@@ -1350,3 +1338,4 @@ public partial class World : MonoBehaviour
 
 
 }
+

@@ -161,10 +161,7 @@ public partial class World : MonoBehaviour
                 if (worldPos.y < 5) surfaceBias -= 0.08f;
 
                 float adjustedThreshold = caveThreshold - surfaceBias;
-                float signedCave = interpolatedCave - adjustedThreshold;
-                float surfaceThickness = Mathf.Max(1e-4f, caveSurfaceThickness);
-
-                if (Mathf.Abs(signedCave) <= surfaceThickness)
+                if (interpolatedCave < adjustedThreshold)
                     isCave = true;
             }
         }
@@ -214,7 +211,7 @@ public partial class World : MonoBehaviour
             float ny = (float)wy;
             float nz = wz + layer.offset.y;
 
-            float finalSample = MyNoise.OctaveCellular3D(nx, ny, nz, layer);
+            float finalSample = MyNoise.OctaveVoronoi3D(nx, ny, nz, layer);
 
             if (layer.redistributionModifier != 1f || layer.exponent != 1f)
             {
