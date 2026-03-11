@@ -237,6 +237,7 @@ public static class MeshGenerator
         float caveThreshold,
         int caveStride,
         int maxCaveDepthMultiplier,
+        WormTunnelSettings wormTunnelSettings,
 
 
         NativeArray<BlockEdit> blockEdits,
@@ -349,6 +350,7 @@ public static class MeshGenerator
             caveThreshold = caveThreshold,
             caveStride = caveStride,
             maxCaveDepthMultiplier = maxCaveDepthMultiplier,
+            wormSettings = wormTunnelSettings,
 
 
             treeMargin = treeMargin,

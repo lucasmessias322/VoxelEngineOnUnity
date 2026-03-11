@@ -87,6 +87,9 @@ public partial class World : MonoBehaviour
     public int caveStride = 4;
     public int maxCaveDepthMultiplier = 1;
 
+    [Header("Worm Tunnel Settings")]
+    public WormTunnelSettings wormTunnelSettings;
+
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
     public int baseHeight = 64;
@@ -310,6 +313,7 @@ public partial class World : MonoBehaviour
         InitializeNoiseLayers();
         InitializeWarpLayers();
         InitializeCaveLayers();
+        InitializeWormTunnelSettings();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -447,6 +451,36 @@ public partial class World : MonoBehaviour
 
             caveLayers[i] = layer;
         }
+    }
+
+    private void InitializeWormTunnelSettings()
+    {
+        bool looksUninitialized =
+            wormTunnelSettings.regionSize <= 0 &&
+            wormTunnelSettings.wormsPerRegion <= 0 &&
+            wormTunnelSettings.minSteps <= 0 &&
+            wormTunnelSettings.maxSteps <= 0 &&
+            wormTunnelSettings.stepLength <= 0f &&
+            wormTunnelSettings.baseRadius <= 0f;
+
+        if (looksUninitialized)
+            wormTunnelSettings.enabled = true;
+
+        if (wormTunnelSettings.seed == 0) wormTunnelSettings.seed = seed * 3 + 17;
+        if (wormTunnelSettings.regionSize <= 0) wormTunnelSettings.regionSize = 64;
+        if (wormTunnelSettings.wormsPerRegion <= 0) wormTunnelSettings.wormsPerRegion = 2;
+        if (wormTunnelSettings.minSteps <= 0) wormTunnelSettings.minSteps = 36;
+        if (wormTunnelSettings.maxSteps <= 0) wormTunnelSettings.maxSteps = 96;
+        if (wormTunnelSettings.maxSteps < wormTunnelSettings.minSteps)
+            wormTunnelSettings.maxSteps = wormTunnelSettings.minSteps;
+        if (wormTunnelSettings.stepLength <= 0f) wormTunnelSettings.stepLength = 2.2f;
+        if (wormTunnelSettings.baseRadius <= 0f) wormTunnelSettings.baseRadius = 2.4f;
+        if (wormTunnelSettings.radiusJitter < 0f) wormTunnelSettings.radiusJitter = 0.8f;
+        if (wormTunnelSettings.edgeAttraction <= 0f) wormTunnelSettings.edgeAttraction = 0.75f;
+        if (wormTunnelSettings.tangentStrength <= 0f) wormTunnelSettings.tangentStrength = 1.15f;
+        if (wormTunnelSettings.noiseStrength <= 0f) wormTunnelSettings.noiseStrength = 0.65f;
+        if (wormTunnelSettings.verticalDamping <= 0f || wormTunnelSettings.verticalDamping > 1f) wormTunnelSettings.verticalDamping = 0.4f;
+        if (wormTunnelSettings.directionSmoothing <= 0f || wormTunnelSettings.directionSmoothing > 1f) wormTunnelSettings.directionSmoothing = 0.65f;
     }
 
     #endregion
@@ -954,6 +988,7 @@ public partial class World : MonoBehaviour
             coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
             caveThreshold, caveStride, maxCaveDepthMultiplier,
+            wormTunnelSettings,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
             chunkLightData,
@@ -994,6 +1029,167 @@ public partial class World : MonoBehaviour
         chunk.gameObject.SetActive(true);
     }
 
+    private bool TryScheduleFastChunkRebuild(Vector2Int coord, Chunk chunk, int expectedGen)
+    {
+        if (blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
+            return false;
+        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated)
+            return false;
+
+        int borderSize = GetChunkBorderSize();
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int totalVoxels = voxelSizeX * Chunk.SizeY * voxelSizeZ;
+        int totalHeightPoints = voxelSizeX * voxelSizeZ;
+
+        NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
+        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
+        NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
+        NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+        NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.TempJob);
+        NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockData.mappings, Allocator.TempJob);
+        NativeArray<byte> blockLightData = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+
+        FillFastRebuildArraysFromLoadedChunks(
+            coord, borderSize,
+            heightCache, blockTypes, solids, subchunkNonEmpty
+        );
+
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+        var lightJob = new ChunkLighting.ChunkLightingJob
+        {
+            blockTypes = blockTypes,
+            light = light,
+            blockLightData = blockLightData,
+            blockMappings = nativeBlockMappings,
+            voxelSizeX = voxelSizeX,
+            voxelSizeZ = voxelSizeZ,
+            totalVoxels = totalVoxels,
+            voxelPlaneSize = voxelPlaneSize,
+            SizeX = Chunk.SizeX,
+            SizeY = Chunk.SizeY,
+            SizeZ = Chunk.SizeZ
+        };
+
+        JobHandle lightHandle = lightJob.Schedule();
+
+        pendingDataJobs.Add(new PendingData
+        {
+            handle = lightHandle,
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            light = light,
+            nativeNoiseLayers = default,
+            nativeWarpLayers = default,
+            nativeCaveLayers = default,
+            nativeBlockMappings = nativeBlockMappings,
+            chunk = chunk,
+            coord = coord,
+            expectedGen = expectedGen,
+            chunkLightData = blockLightData,
+            edits = default,
+            subchunkNonEmpty = subchunkNonEmpty
+        });
+
+        chunk.currentJob = lightHandle;
+        chunk.jobScheduled = true;
+        chunk.state = Chunk.ChunkState.MeshReady;
+        return true;
+    }
+
+    private void FillFastRebuildArraysFromLoadedChunks(
+        Vector2Int coord,
+        int borderSize,
+        NativeArray<int> heightCache,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<bool> subchunkNonEmpty)
+    {
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int heightStride = voxelSizeX;
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        BlockTextureMapping[] mappings = blockData.mappings;
+
+        for (int s = 0; s < Chunk.SubchunksPerColumn; s++)
+            subchunkNonEmpty[s] = false;
+
+        for (int lz = -borderSize; lz < Chunk.SizeZ + borderSize; lz++)
+        {
+            int worldZ = chunkMinZ + lz;
+            int iz = lz + borderSize;
+
+            for (int lx = -borderSize; lx < Chunk.SizeX + borderSize; lx++)
+            {
+                int worldX = chunkMinX + lx;
+                int ix = lx + borderSize;
+
+                bool hasLoadedColumn = TryResolveLoadedColumn(worldX, worldZ, out Chunk srcChunk, out int srcX, out int srcZ);
+                int srcColumnBase = srcX + srcZ * Chunk.SizeX;
+                int highestSolidY = 0;
+
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    BlockType bt;
+                    if (hasLoadedColumn)
+                    {
+                        int srcIdx = srcColumnBase + y * Chunk.SizeX * Chunk.SizeZ;
+                        bt = (BlockType)srcChunk.voxelData[srcIdx];
+                    }
+                    else
+                    {
+                        bt = y <= 2 ? BlockType.Bedrock : BlockType.Air;
+                    }
+
+                    int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
+                    blockTypes[idx] = bt;
+
+                    bool isSolid = mappings[(int)bt].isSolid;
+                    solids[idx] = isSolid;
+                    if (isSolid) highestSolidY = y;
+
+                    if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && bt != BlockType.Air)
+                    {
+                        int subIdx = y / Chunk.SubchunkHeight;
+                        if (subIdx >= 0 && subIdx < Chunk.SubchunksPerColumn)
+                            subchunkNonEmpty[subIdx] = true;
+                    }
+                }
+
+                heightCache[ix + iz * heightStride] = highestSolidY;
+            }
+        }
+    }
+
+    private bool TryResolveLoadedColumn(int worldX, int worldZ, out Chunk chunk, out int localX, out int localZ)
+    {
+        Vector2Int coord = new Vector2Int(
+            Mathf.FloorToInt((float)worldX / Chunk.SizeX),
+            Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
+        );
+
+        if (activeChunks.TryGetValue(coord, out chunk) && chunk.hasVoxelData && chunk.voxelData.IsCreated)
+        {
+            localX = worldX - coord.x * Chunk.SizeX;
+            localZ = worldZ - coord.y * Chunk.SizeZ;
+
+            if (localX >= 0 && localX < Chunk.SizeX && localZ >= 0 && localZ < Chunk.SizeZ)
+                return true;
+        }
+
+        chunk = null;
+        localX = 0;
+        localZ = 0;
+        return false;
+    }
+
     private void RequestChunkRebuild(Vector2Int coord)
     {
         if (!queuedChunkRebuildsSet.Add(coord)) return;
@@ -1030,6 +1226,16 @@ public partial class World : MonoBehaviour
 
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
+
+        if (chunk.jobScheduled)
+        {
+            try { chunk.currentJob.Complete(); } catch { }
+            chunk.jobScheduled = false;
+        }
+
+        if (TryScheduleFastChunkRebuild(coord, chunk, expectedGen))
+            return;
+
         chunk.hasVoxelData = false;
 
         // Build edits similar ao RequestChunk
@@ -1084,12 +1290,6 @@ public partial class World : MonoBehaviour
 
         InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-        if (chunk.jobScheduled)
-        {
-            try { chunk.currentJob.Complete(); } catch { }
-            chunk.jobScheduled = false;
-        }
-
         MeshGenerator.ScheduleDataJob(
               coord,
               noiseLayers,
@@ -1103,6 +1303,7 @@ public partial class World : MonoBehaviour
               caveThreshold,
               caveStride,
               maxCaveDepthMultiplier,
+              wormTunnelSettings,
               nativeEdits,
               treeMargin,
               borderSize,

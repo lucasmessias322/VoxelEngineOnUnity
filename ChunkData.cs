@@ -40,6 +40,7 @@ public static class ChunkData
         public float caveThreshold;
         public int caveStride;
         public int maxCaveDepthMultiplier;
+        public WormTunnelSettings wormSettings;
 
 
         public int CliffTreshold;
@@ -68,7 +69,7 @@ public static class ChunkData
 
             if (enableCave)
             {
-                GenerateCaves(heightCache, blockTypes, solids);
+                GenerateCaves(blockTypes, solids);
             }
 
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
@@ -349,15 +350,23 @@ public static class ChunkData
 
 
 
-        private void GenerateCaves(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
+        private void GenerateCaves(NativeArray<BlockType> blockTypes, NativeArray<bool> solids)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int heightStride = SizeX + 2 * border;
 
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
+
+            // Worm mode: Voronoi vira apenas mascara/guia do trajeto dos worms.
+            // Nao executa escavacao volumetrica por threshold para evitar custo alto.
+            if (wormSettings.enabled)
+            {
+                CarveVoronoiEdgeWormTunnels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, baseWorldX, baseWorldZ);
+                return;
+            }
+
             if (caveLayers.Length > 0 && caveStride >= 1)
             {
                 int stride = math.max(1, caveStride);
@@ -429,8 +438,6 @@ public static class ChunkData
                     {
                         int cacheX = lx + border;
                         int cacheZ = lz + border;
-                        int cacheIdx = cacheX + cacheZ * heightStride;
-                        int h = heightCache[cacheIdx];
 
                         int maxCaveY = math.min(SizeY - 1, (int)seaLevel * maxCaveDepthMultiplier);
 
@@ -475,11 +482,6 @@ public static class ChunkData
 
                             float interpolatedCave = math.lerp(c0, c1, fracZ);
 
-                            float maxPossibleY = math.max(1f, h);
-                           
-                       
-                          
-
                             float adjustedThreshold = caveThreshold;
                             if (interpolatedCave < adjustedThreshold)
                             {
@@ -493,6 +495,316 @@ public static class ChunkData
                 coarseCaveNoise.Dispose();
             }
 
+            CarveVoronoiEdgeWormTunnels(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, baseWorldX, baseWorldZ);
+
+        }
+
+        private void CarveVoronoiEdgeWormTunnels(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int baseWorldX,
+            int baseWorldZ)
+        {
+            if (!wormSettings.enabled) return;
+            if (!TryGetPrimaryCaveLayer(out NoiseLayer guideLayer)) return;
+
+            int maxCaveY = math.min(SizeY - 1, (int)seaLevel * math.max(1, maxCaveDepthMultiplier));
+            if (maxCaveY <= 11) return;
+
+            int minWorldX = baseWorldX - border;
+            int maxWorldX = baseWorldX + SizeX + border - 1;
+            int minWorldZ = baseWorldZ - border;
+            int maxWorldZ = baseWorldZ + SizeZ + border - 1;
+
+            int regionSize = math.max(8, wormSettings.regionSize);
+            int wormsPerRegion = math.max(1, wormSettings.wormsPerRegion);
+            int minSteps = math.max(4, wormSettings.minSteps);
+            int maxSteps = math.max(minSteps, wormSettings.maxSteps);
+            float stepLength = math.max(0.6f, wormSettings.stepLength);
+            float baseRadius = math.max(0.75f, wormSettings.baseRadius);
+            float radiusJitter = math.max(0f, wormSettings.radiusJitter);
+            float maxTravelPerWorm = regionSize * 1.35f;
+            int cappedMaxSteps = math.max(minSteps, math.min(maxSteps, (int)math.ceil(maxTravelPerWorm / stepLength)));
+            int stepRange = cappedMaxSteps - minSteps + 1;
+
+            // Processa somente regioes locais e vizinhas para manter custo previsivel.
+            int regionRing = 1;
+            int regionMinX = FloorDiv(minWorldX, regionSize) - regionRing;
+            int regionMaxX = FloorDiv(maxWorldX, regionSize) + regionRing;
+            int regionMinZ = FloorDiv(minWorldZ, regionSize) - regionRing;
+            int regionMaxZ = FloorDiv(maxWorldZ, regionSize) + regionRing;
+
+            for (int rx = regionMinX; rx <= regionMaxX; rx++)
+            {
+                for (int rz = regionMinZ; rz <= regionMaxZ; rz++)
+                {
+                    for (int wormIndex = 0; wormIndex < wormsPerRegion; wormIndex++)
+                    {
+                        uint state = Hash4((uint)wormSettings.seed, rx, rz, wormIndex);
+                        float3 startPos = SelectVoronoiEdgeSeed(rx, rz, regionSize, maxCaveY, guideLayer, ref state);
+
+                        float radiusRnd = Hash01(NextHash(ref state)) * 2f - 1f;
+                        float radius = math.max(0.75f, baseRadius + radiusRnd * radiusJitter);
+
+                        int steps = minSteps + (int)math.floor(Hash01(NextHash(ref state)) * stepRange);
+
+                        float3 dir = DirectionFromHash(NextHash(ref state));
+                        float verticalDamping = math.clamp(wormSettings.verticalDamping, 0f, 1f);
+                        dir.y *= verticalDamping;
+                        dir = SafeNormalize(dir, new float3(1f, 0f, 0f));
+
+                        CarveSingleWorm(
+                            blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize,
+                            baseWorldX, baseWorldZ, maxCaveY, guideLayer,
+                            startPos, dir, steps, radius, state
+                        );
+
+                        CarveSingleWorm(
+                            blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize,
+                            baseWorldX, baseWorldZ, maxCaveY, guideLayer,
+                            startPos, -dir, steps, radius, state ^ 0x9E3779B9u
+                        );
+                    }
+                }
+            }
+        }
+
+        private void CarveSingleWorm(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int baseWorldX,
+            int baseWorldZ,
+            int maxCaveY,
+            NoiseLayer guideLayer,
+            float3 startPos,
+            float3 startDir,
+            int steps,
+            float radius,
+            uint seedState)
+        {
+            float stepLength = math.max(0.6f, wormSettings.stepLength);
+            float edgeAttraction = math.max(0f, wormSettings.edgeAttraction);
+            float tangentStrength = math.max(0f, wormSettings.tangentStrength);
+            float noiseStrength = math.max(0f, wormSettings.noiseStrength);
+            float verticalDamping = math.clamp(wormSettings.verticalDamping, 0f, 1f);
+            float smoothing = math.clamp(wormSettings.directionSmoothing, 0.05f, 1f);
+
+            float3 pos = startPos;
+            float3 dir = SafeNormalize(startDir, new float3(1f, 0f, 0f));
+
+            float minY = 11f;
+            float maxY = math.max(minY + 1f, maxCaveY - 1f);
+
+            for (int step = 0; step < steps; step++)
+            {
+                CarveSphereAtWorld(
+                    blockTypes, solids,
+                    voxelSizeX, voxelSizeZ, voxelPlaneSize,
+                    baseWorldX, baseWorldZ,
+                    pos, radius, maxCaveY
+                );
+
+                float edgeDistance = SampleVoronoiEdgeDistance(pos, guideLayer);
+                float3 gradient = SampleVoronoiEdgeGradient(pos, guideLayer);
+                float3 gradN = SafeNormalize(gradient, new float3(0f, 1f, 0f));
+
+                float3 tangent = dir - gradN * math.dot(dir, gradN);
+                tangent = SafeNormalize(tangent, Orthogonal(gradN));
+
+                float3 noiseDir = SampleNoiseDirection(pos, seedState, step);
+                float pull = math.saturate(edgeDistance * 3.5f);
+                float3 targetDir = tangent * tangentStrength
+                                 + noiseDir * noiseStrength
+                                 + (-gradN) * edgeAttraction * pull;
+
+                targetDir.y *= verticalDamping;
+                targetDir = SafeNormalize(targetDir, dir);
+
+                dir = SafeNormalize(math.lerp(dir, targetDir, smoothing), targetDir);
+                pos += dir * stepLength;
+                pos.y = math.clamp(pos.y, minY, maxY);
+            }
+        }
+
+        private void CarveSphereAtWorld(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int baseWorldX,
+            int baseWorldZ,
+            float3 center,
+            float radius,
+            int maxCaveY)
+        {
+            int minX = (int)math.floor(center.x - radius);
+            int maxX = (int)math.ceil(center.x + radius);
+            int minY = math.max(11, (int)math.floor(center.y - radius));
+            int maxY = math.min(maxCaveY, (int)math.ceil(center.y + radius));
+            int minZ = (int)math.floor(center.z - radius);
+            int maxZ = (int)math.ceil(center.z + radius);
+
+            float radiusSq = radius * radius;
+
+            for (int wy = minY; wy <= maxY; wy++)
+            {
+                float dy = wy - center.y;
+                float dySq = dy * dy;
+
+                for (int wx = minX; wx <= maxX; wx++)
+                {
+                    int ix = wx - baseWorldX + border;
+                    if (ix < 0 || ix >= voxelSizeX) continue;
+
+                    float dx = wx - center.x;
+                    float dxSq = dx * dx;
+                    if (dxSq + dySq > radiusSq) continue;
+
+                    for (int wz = minZ; wz <= maxZ; wz++)
+                    {
+                        int iz = wz - baseWorldZ + border;
+                        if (iz < 0 || iz >= voxelSizeZ) continue;
+
+                        float dz = wz - center.z;
+                        float distSq = dxSq + dySq + dz * dz;
+                        if (distSq > radiusSq) continue;
+
+                        int idx = ix + wy * voxelSizeX + iz * voxelPlaneSize;
+                        if (!solids[idx]) continue;
+
+                        blockTypes[idx] = BlockType.Air;
+                        solids[idx] = false;
+                    }
+                }
+            }
+        }
+
+        private bool TryGetPrimaryCaveLayer(out NoiseLayer layer)
+        {
+            for (int i = 0; i < caveLayers.Length; i++)
+            {
+                if (!caveLayers[i].enabled) continue;
+                layer = caveLayers[i];
+                return true;
+            }
+
+            layer = default;
+            return false;
+        }
+
+        private float3 SelectVoronoiEdgeSeed(int regionX, int regionZ, int regionSize, int maxCaveY, NoiseLayer guideLayer, ref uint state)
+        {
+            float minY = 11f;
+            float maxY = math.max(minY + 1f, maxCaveY - 1f);
+            float3 best = new float3(regionX * regionSize + regionSize * 0.5f, math.lerp(minY, maxY, 0.5f), regionZ * regionSize + regionSize * 0.5f);
+            float bestEdge = float.MaxValue;
+
+            for (int i = 0; i < 6; i++)
+            {
+                float fx = Hash01(NextHash(ref state));
+                float fy = Hash01(NextHash(ref state));
+                float fz = Hash01(NextHash(ref state));
+
+                float3 candidate = new float3(
+                    regionX * regionSize + fx * regionSize,
+                    math.lerp(minY, maxY, fy),
+                    regionZ * regionSize + fz * regionSize
+                );
+
+                float edge = SampleVoronoiEdgeDistance(candidate, guideLayer);
+                if (edge < bestEdge)
+                {
+                    bestEdge = edge;
+                    best = candidate;
+                }
+            }
+
+            return best;
+        }
+
+        private static float3 SampleNoiseDirection(float3 worldPos, uint seedState, int step)
+        {
+            float seedOffset = (seedState & 0xFFFFu) * 0.00091f;
+            float stepOffset = step * 0.173f;
+
+            float nx = noise.snoise(new float3(worldPos.x * 0.041f + seedOffset, worldPos.y * 0.029f + stepOffset, worldPos.z * 0.041f - seedOffset));
+            float ny = noise.snoise(new float3(worldPos.x * 0.037f - seedOffset, worldPos.y * 0.033f + 13.37f + stepOffset, worldPos.z * 0.037f + seedOffset));
+            float nz = noise.snoise(new float3(worldPos.x * 0.043f + 29.1f + seedOffset, worldPos.y * 0.027f + stepOffset, worldPos.z * 0.043f));
+
+            return SafeNormalize(new float3(nx, ny, nz), new float3(0.707f, 0f, 0.707f));
+        }
+
+        private static float SampleVoronoiEdgeDistance(float3 worldPos, NoiseLayer guideLayer)
+        {
+            float scale = math.max(1e-4f, guideLayer.scale);
+            float verticalScale = guideLayer.verticalScale > 0f ? guideLayer.verticalScale : scale;
+
+            float3 p = new float3(
+                (worldPos.x + guideLayer.offset.x) / scale,
+                worldPos.y / verticalScale,
+                (worldPos.z + guideLayer.offset.y) / scale
+            );
+
+            float2 cell = noise.cellular(p);
+            return math.max(0f, cell.y - cell.x);
+        }
+
+        private static float3 SampleVoronoiEdgeGradient(float3 worldPos, NoiseLayer guideLayer)
+        {
+            const float delta = 1.25f;
+            float3 dx = new float3(delta, 0f, 0f);
+            float3 dy = new float3(0f, delta, 0f);
+            float3 dz = new float3(0f, 0f, delta);
+
+            float gx = SampleVoronoiEdgeDistance(worldPos + dx, guideLayer) - SampleVoronoiEdgeDistance(worldPos - dx, guideLayer);
+            float gy = SampleVoronoiEdgeDistance(worldPos + dy, guideLayer) - SampleVoronoiEdgeDistance(worldPos - dy, guideLayer);
+            float gz = SampleVoronoiEdgeDistance(worldPos + dz, guideLayer) - SampleVoronoiEdgeDistance(worldPos - dz, guideLayer);
+
+            return new float3(gx, gy, gz) * (0.5f / delta);
+        }
+
+        private static float3 DirectionFromHash(uint hash)
+        {
+            float x = Hash01(math.hash(new uint2(hash, 0xA341316Cu))) * 2f - 1f;
+            float y = Hash01(math.hash(new uint2(hash, 0xC8013EA4u))) * 2f - 1f;
+            float z = Hash01(math.hash(new uint2(hash, 0xAD90777Du))) * 2f - 1f;
+            return SafeNormalize(new float3(x, y, z), new float3(1f, 0f, 0f));
+        }
+
+        private static float3 Orthogonal(float3 v)
+        {
+            float3 axis = math.abs(v.y) < 0.95f ? new float3(0f, 1f, 0f) : new float3(1f, 0f, 0f);
+            return SafeNormalize(math.cross(v, axis), new float3(1f, 0f, 0f));
+        }
+
+        private static float3 SafeNormalize(float3 v, float3 fallback)
+        {
+            float lenSq = math.lengthsq(v);
+            if (lenSq <= 1e-8f) return fallback;
+            return v * math.rsqrt(lenSq);
+        }
+
+        private static uint Hash4(uint seed, int a, int b, int c)
+        {
+            return math.hash(new uint4(seed, (uint)a, (uint)b, (uint)c));
+        }
+
+        private static uint NextHash(ref uint state)
+        {
+            state = math.hash(new uint2(state, 0x9E3779B9u));
+            return state;
+        }
+
+        private static float Hash01(uint h)
+        {
+            return (h & 0x00FFFFFFu) * (1f / 16777215f);
         }
 
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)

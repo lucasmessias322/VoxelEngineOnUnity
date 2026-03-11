@@ -255,3 +255,22 @@ public static class MyNoise
 
 }
 
+[Serializable]
+public struct WormTunnelSettings
+{
+    public bool enabled;
+    public int seed;
+    public int regionSize;
+    public int wormsPerRegion;
+    public int minSteps;
+    public int maxSteps;
+    public float stepLength;
+    public float baseRadius;
+    public float radiusJitter;
+    public float edgeAttraction;
+    public float tangentStrength;
+    public float noiseStrength;
+    public float verticalDamping;
+    public float directionSmoothing;
+}
+
