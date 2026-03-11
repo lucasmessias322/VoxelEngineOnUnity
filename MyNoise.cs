@@ -42,10 +42,16 @@ public struct WorleyTunnelSettings
     public float tunnelDiameterMin;
     public float tunnelDiameterMax;
     public int evaluationStride;
+    public int carvePadding;
     public int minY;
     public int maxY;
     public int minSurfaceDepth;
     public int seed;
+    public bool perlinEnabled;
+    public float perlinScale;
+    public float perlinWarpStrength;
+    public float perlinRadiusJitter;
+    public int perlinOctaves;
 }
 
 public static class MyNoise
@@ -71,7 +77,8 @@ public static class MyNoise
         if (!settings.enabled) return false;
         if (worldY <= 2) return false;
         if (worldY < settings.minY || worldY > settings.maxY) return false;
-        if (worldY > surfaceHeight - settings.minSurfaceDepth) return false;
+        int surfaceDepth = ResolveSurfaceCarveDepth(worldX, worldZ, settings);
+        if (worldY > surfaceHeight - surfaceDepth) return false;
 
         int sampleStride = math.max(1, settings.evaluationStride);
         int bucketY = FloorDiv(worldY, sampleStride);
@@ -99,6 +106,33 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    public static int ResolveSurfaceCarveDepth(int worldX, int worldZ, WorleyTunnelSettings settings)
+    {
+        int baselineDepth = math.max(0, settings.minSurfaceDepth);
+        if (baselineDepth <= 1)
+            return baselineDepth;
+
+        float scale = math.max(12f, settings.cellSize * 2.4f);
+        float seedOffset = settings.seed * 0.00107f;
+        float2 maskPos = new float2(
+            (worldX + seedOffset * 173.3f) / scale,
+            (worldZ - seedOffset * 149.7f) / scale
+        );
+
+        // Keep most columns capped, but allow sparse natural entrances and a wider shallow band.
+        float entranceMask = noise.snoise(maskPos) * 0.5f + 0.5f;
+        float openChance = math.clamp(0.025f + baselineDepth * 0.005f, 0.025f, 0.12f);
+        if (entranceMask >= 1f - openChance)
+            return 0;
+
+        float shallowChance = math.clamp(openChance * 2.6f, openChance, 0.4f);
+        if (entranceMask >= 1f - shallowChance)
+            return math.max(1, baselineDepth / 2);
+
+        return baselineDepth;
+    }
+
+    [BurstCompile]
     public static float3 GetStrideSamplePosition(int worldX, int worldZ, int bucketY, WorleyTunnelSettings settings)
     {
         int sampleStride = math.max(1, settings.evaluationStride);
@@ -112,8 +146,24 @@ public static class MyNoise
     [BurstCompile]
     public static float EvaluateWorleyTunnelMetric(float3 worldPos, WorleyTunnelSettings settings)
     {
+        return EvaluateWorleyPerlinTunnelMetric(worldPos, settings);
+    }
+
+    [BurstCompile]
+    public static float EvaluateWorleyPerlinTunnelMetric(float3 worldPos, WorleyTunnelSettings settings)
+    {
+        float rawMetric = EvaluateRawWorleyTunnelMetric(worldPos, settings);
+        if (rawMetric > EstimateMaxPerlinDetailReach(settings))
+            return rawMetric;
+
+        return ApplyPerlinDetailToRawMetric(rawMetric, worldPos, settings);
+    }
+
+    [BurstCompile]
+    private static float EvaluateRawWorleyTunnelMetric(float3 worldPos, WorleyTunnelSettings settings)
+    {
         float safeCellSize = math.max(1f, settings.cellSize);
-        WorleyNearestAndThirdSq3D(worldPos / safeCellSize, out float d1, out float d3);
+        WorleyNearestAndThirdSq3D(worldPos / safeCellSize, settings.seed, out float d1, out float d3);
 
         float edgeDistance = (math.sqrt(d3) - math.sqrt(d1)) * safeCellSize;
         float tunnelDiameter = SampleTunnelDiameter(worldPos, safeCellSize, settings);
@@ -123,15 +173,51 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    private static float ApplyPerlinDetailToRawMetric(float rawMetric, float3 worldPos, WorleyTunnelSettings settings)
+    {
+        if (!settings.perlinEnabled)
+            return rawMetric;
+
+        float metric = rawMetric;
+        if (settings.perlinWarpStrength > 0f)
+        {
+            float3 samplePos = worldPos + SamplePerlinWarpOffset(worldPos, settings);
+            metric = EvaluateRawWorleyTunnelMetric(samplePos, settings);
+        }
+
+        if (settings.perlinRadiusJitter > 0f)
+        {
+            metric -= SamplePerlinRadiusJitter(worldPos, settings);
+        }
+
+        return metric;
+    }
+
+    [BurstCompile]
+    private static float EstimateMaxPerlinDetailReach(WorleyTunnelSettings settings)
+    {
+        float reach = 0.5f;
+
+        if (settings.perlinEnabled)
+        {
+            // Conservative bound: spatial warp can pull samples closer to tunnel edges.
+            reach += math.max(0f, settings.perlinWarpStrength) * 2.2f;
+            reach += math.max(0f, settings.perlinRadiusJitter);
+        }
+
+        return reach;
+    }
+
+    [BurstCompile]
     public static float WorleyEdgeDistance3D(float3 worldPos, float cellSize, int seed)
     {
         float safeCellSize = math.max(1f, cellSize);
-        WorleyNearestAndThirdSq3D(worldPos / safeCellSize, out float d1, out float d3);
+        WorleyNearestAndThirdSq3D(worldPos / safeCellSize, seed, out float d1, out float d3);
         return (math.sqrt(d3) - math.sqrt(d1)) * safeCellSize;
     }
 
     [BurstCompile]
-    private static void WorleyNearestAndThirdSq3D(float3 p, out float d1, out float d3)
+    private static void WorleyNearestAndThirdSq3D(float3 p, int seed, out float d1, out float d3)
     {
         int3 baseCell = (int3)math.floor(p);
 
@@ -146,7 +232,7 @@ public static class MyNoise
                 for (int dx = -1; dx <= 1; dx++)
                 {
                     int3 cell = baseCell + new int3(dx, dy, dz);
-                    float3 feature = (float3)cell + new float3(0.5f);
+                    float3 feature = GetWorleyFeaturePoint(cell, seed);
                     float distSq = math.lengthsq(feature - p);
 
                     if (distSq < d1)
@@ -170,6 +256,52 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    private static float3 GetWorleyFeaturePoint(int3 cell, int seed)
+    {
+        uint seedU = (uint)seed;
+        float x = HashToFloat01(HashInt3(cell, seedU ^ 0xA511E9B3u));
+        float y = HashToFloat01(HashInt3(cell, seedU ^ 0x63D83595u));
+        float z = HashToFloat01(HashInt3(cell, seedU ^ 0xB5297A4Du));
+
+        // Avoids clustering right on cell borders and reduces visible axis artifacts.
+        const float pad = 0.08f;
+        return (float3)cell + new float3(
+            math.lerp(pad, 1f - pad, x),
+            math.lerp(pad, 1f - pad, y),
+            math.lerp(pad, 1f - pad, z)
+        );
+    }
+
+    [BurstCompile]
+    private static uint HashInt3(int3 v, uint seed)
+    {
+        uint h = seed;
+        h ^= (uint)v.x * 0x9E3779B9u;
+        h = HashUInt(h);
+        h ^= (uint)v.y * 0x85EBCA6Bu;
+        h = HashUInt(h);
+        h ^= (uint)v.z * 0xC2B2AE35u;
+        return HashUInt(h);
+    }
+
+    [BurstCompile]
+    private static uint HashUInt(uint x)
+    {
+        x ^= x >> 16;
+        x *= 0x7FEB352Du;
+        x ^= x >> 15;
+        x *= 0x846CA68Bu;
+        x ^= x >> 16;
+        return x;
+    }
+
+    [BurstCompile]
+    private static float HashToFloat01(uint h)
+    {
+        return (h & 0x00FFFFFFu) * (1f / 16777215f);
+    }
+
+    [BurstCompile]
     private static float SampleTunnelDiameter(float3 worldPos, float safeCellSize, WorleyTunnelSettings settings)
     {
         float fallbackDiameter = math.max(0.1f, settings.tunnelDiameter);
@@ -185,8 +317,65 @@ public static class MyNoise
         float frequency = 1f / math.max(8f, safeCellSize * 2.2f);
         float seedOffset = settings.seed * 0.00127f;
         float3 diameterPos = worldPos * frequency + new float3(seedOffset + 13.1f, seedOffset - 7.3f, seedOffset + 29.7f);
-        float noiseSample = noise.snoise(diameterPos) * 0.5f + 0.5f;
+        float noiseSample = noise.cnoise(diameterPos) * 0.5f + 0.5f;
         return math.lerp(minDiameter, maxDiameter, noiseSample);
+    }
+
+    [BurstCompile]
+    private static float3 SamplePerlinWarpOffset(float3 worldPos, WorleyTunnelSettings settings)
+    {
+        float scale = math.max(4f, settings.perlinScale);
+        int octaves = math.clamp(settings.perlinOctaves, 1, 4);
+        float strength = math.max(0f, settings.perlinWarpStrength);
+        if (strength <= 0f) return float3.zero;
+
+        float frequency = 1f / scale;
+        float seedOffset = settings.seed * 0.00191f;
+        float3 p = worldPos * frequency + new float3(seedOffset + 19.3f, seedOffset - 27.1f, seedOffset + 41.7f);
+
+        float3 warp = new float3(
+            SamplePerlinFbm3D(p + new float3(13.7f, -3.1f, 7.9f), octaves),
+            SamplePerlinFbm3D(p + new float3(-5.3f, 29.4f, -17.2f), octaves),
+            SamplePerlinFbm3D(p + new float3(31.8f, -11.6f, 23.5f), octaves)
+        );
+
+        return warp * strength;
+    }
+
+    [BurstCompile]
+    private static float SamplePerlinRadiusJitter(float3 worldPos, WorleyTunnelSettings settings)
+    {
+        if (!settings.perlinEnabled || settings.perlinRadiusJitter <= 0f)
+            return 0f;
+
+        float scale = math.max(4f, settings.perlinScale);
+        int octaves = math.clamp(settings.perlinOctaves, 1, 4);
+        float frequency = 1f / scale;
+        float seedOffset = settings.seed * 0.00271f;
+
+        float3 p = worldPos * frequency + new float3(seedOffset + 71.3f, seedOffset - 43.9f, seedOffset + 12.5f);
+        float n = SamplePerlinFbm3D(p, octaves) * 0.5f + 0.5f;
+        return n * settings.perlinRadiusJitter;
+    }
+
+    [BurstCompile]
+    private static float SamplePerlinFbm3D(float3 p, int octaves)
+    {
+        int safeOctaves = math.clamp(octaves, 1, 4);
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f;
+        float maxAmp = 0f;
+
+        for (int i = 0; i < safeOctaves; i++)
+        {
+            total += noise.cnoise(p * frequency) * amplitude;
+            maxAmp += amplitude;
+            amplitude *= 0.5f;
+            frequency *= 2f;
+        }
+
+        return maxAmp > 0f ? total / maxAmp : 0f;
     }
 
     [BurstCompile]

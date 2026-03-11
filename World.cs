@@ -106,11 +106,17 @@ public partial class World : MonoBehaviour
         tunnelDiameter = 4f,
         tunnelDiameterMin = 3.2f,
         tunnelDiameterMax = 5.1f,
-        evaluationStride = 2,
+        evaluationStride = 3,
+        carvePadding = 1,
         minY = 6,
         maxY = 96,
         minSurfaceDepth = 6,
-        seed = 1337
+        seed = 1337,
+        perlinEnabled = true,
+        perlinScale = 42f,
+        perlinWarpStrength = 5.2f,
+        perlinRadiusJitter = 0.75f,
+        perlinOctaves = 2
     };
 
     [Header("Performance Settings")]
@@ -262,7 +268,30 @@ public partial class World : MonoBehaviour
         settings.tunnelDiameterMin = Mathf.Max(0.5f, minDiameter);
         settings.tunnelDiameterMax = Mathf.Max(settings.tunnelDiameterMin, maxDiameter);
         settings.evaluationStride = Mathf.Clamp(settings.evaluationStride, 1, 8);
+        settings.carvePadding = Mathf.Clamp(settings.carvePadding, 1, 4);
         settings.minSurfaceDepth = Mathf.Max(0, settings.minSurfaceDepth);
+
+        bool looksLegacyPerlinConfig =
+            settings.perlinScale <= 0f &&
+            settings.perlinWarpStrength <= 0f &&
+            settings.perlinRadiusJitter <= 0f &&
+            settings.perlinOctaves == 0;
+
+        if (looksLegacyPerlinConfig)
+        {
+            settings.perlinEnabled = true;
+            settings.perlinScale = settings.cellSize * 1.9f;
+            settings.perlinWarpStrength = Mathf.Max(1.5f, settings.tunnelDiameter * 1.05f);
+            settings.perlinRadiusJitter = Mathf.Max(0.25f, settings.tunnelDiameter * 0.18f);
+            settings.perlinOctaves = 2;
+        }
+        else
+        {
+            settings.perlinScale = Mathf.Max(4f, settings.perlinScale);
+            settings.perlinWarpStrength = Mathf.Max(0f, settings.perlinWarpStrength);
+            settings.perlinRadiusJitter = Mathf.Max(0f, settings.perlinRadiusJitter);
+            settings.perlinOctaves = Mathf.Clamp(settings.perlinOctaves, 1, 4);
+        }
 
         int minY = Mathf.Clamp(settings.minY, 0, Chunk.SizeY - 1);
         int maxY = Mathf.Clamp(settings.maxY, 0, Chunk.SizeY - 1);

@@ -190,15 +190,25 @@ public static class MeshGenerator
             int worldZ = coord.y * SizeZ + (lz - border);
 
             int carveMinY = math.max(3, worleyTunnels.minY);
+            int carveSurfaceDepth = MyNoise.ResolveSurfaceCarveDepth(worldX, worldZ, worleyTunnels);
             int carveMaxY = math.min(h, worleyTunnels.maxY);
-            carveMaxY = math.min(carveMaxY, h - worleyTunnels.minSurfaceDepth);
-            bool canCarveThisColumn = worleyTunnels.enabled && carveMaxY >= carveMinY;
+            carveMaxY = math.min(carveMaxY, h - carveSurfaceDepth);
+
+            int carvePadding = math.max(0, worleyTunnels.carvePadding);
+            int carveMinX = border - carvePadding;
+            int carveMaxX = border + SizeX + carvePadding - 1;
+            int carveMinZ = border - carvePadding;
+            int carveMaxZ = border + SizeZ + carvePadding - 1;
+
+            bool inCarveFootprint = lx >= carveMinX && lx <= carveMaxX && lz >= carveMinZ && lz <= carveMaxZ;
+            bool canCarveThisColumn = worleyTunnels.enabled && inCarveFootprint && carveMaxY >= carveMinY;
 
             int sampleStride = math.max(1, worleyTunnels.evaluationStride);
             int lastSampleBucket = int.MinValue;
             int lastSampleBucketStartY = 0;
             float lastMetricA = 1f;
             float lastMetricB = 1f;
+            bool hasCachedMetrics = false;
 
             for (int y = 0; y < SizeY; y++)
             {
@@ -211,14 +221,24 @@ public static class MeshGenerator
                         int sampleBucket = y / sampleStride;
                         if (sampleBucket != lastSampleBucket)
                         {
+                            int previousBucket = lastSampleBucket;
                             lastSampleBucket = sampleBucket;
                             lastSampleBucketStartY = sampleBucket * sampleStride;
 
-                            float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
-                            float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
+                            if (hasCachedMetrics && sampleBucket == previousBucket + 1)
+                            {
+                                // Reuse B(n) as A(n+1): avoids one expensive cave metric evaluation per bucket.
+                                lastMetricA = lastMetricB;
+                            }
+                            else
+                            {
+                                float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
+                                lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
+                            }
 
-                            lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
+                            float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
                             lastMetricB = MyNoise.EvaluateWorleyTunnelMetric(samplePosB, worleyTunnels);
+                            hasCachedMetrics = true;
                         }
 
                         float metric = lastMetricA;
