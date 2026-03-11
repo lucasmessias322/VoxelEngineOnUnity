@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
@@ -26,13 +26,13 @@ public struct TreeSettings
 
 public static class LightUtils
 {
-    // Junta as duas luzes (0-15) em um Ãºnico byte
+    // Junta as duas luzes (0-15) em um único byte
     public static byte PackLight(byte skyLight, byte blockLight)
     {
         return (byte)((skyLight << 4) | (blockLight & 0x0F));
     }
 
-    // Extrai apenas a luz do cÃ©u (bits 4 a 7)
+    // Extrai apenas a luz do céu (bits 4 a 7)
     public static byte GetSkyLight(byte packedLight)
     {
         return (byte)((packedLight >> 4) & 0x0F);
@@ -81,15 +81,6 @@ public partial class World : MonoBehaviour
     [Header("Noise Settings")]
     public NoiseLayer[] noiseLayers;
 
-    [Header("Cave Settings")]
-    public NoiseLayer[] caveLayers;
-    public float caveThreshold = 0.58f;
-    public int caveStride = 4;
-    public int maxCaveDepthMultiplier = 1;
-
-    [Header("Worm Tunnel Settings")]
-    public WormTunnelSettings wormTunnelSettings;
-
     [Header("Domain Warping Settings")]
     public WarpLayer[] warpLayers;
     public int baseHeight = 64;
@@ -111,7 +102,7 @@ public partial class World : MonoBehaviour
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
-    [Tooltip("Limite de jobs de geraÃ§Ã£o de dados (inclui iluminaÃ§Ã£o) simultÃ¢neos para evitar queda brusca de FPS.")]
+    [Tooltip("Limite de jobs de geração de dados (inclui iluminação) simultâneos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
     [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
@@ -132,11 +123,10 @@ public partial class World : MonoBehaviour
     [Min(0)]
     public int verticalSubchunkRenderDistanceBelow = 2;
 
-    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terÃ£o TODOS os subchunks visÃ­veis (sem culling vertical).")]
+    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical).")]
     public int horizontalFullVisibilityRadius = 2;
 
     [Header("Features Toggle")]
-    public bool enableCave = true;
     public bool enableTrees = true;
 
     [Header("Billboard Grass")]
@@ -193,7 +183,7 @@ public partial class World : MonoBehaviour
     public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
 
     [Header("Lighting")]
-    [Tooltip("Padding horizontal em voxels para propagaÃ§Ã£o de skylight entre chunks. Use 16 para eliminar costura visÃ­vel na suavizaÃ§Ã£o.")]
+    [Tooltip("Padding horizontal em voxels para propagação de skylight entre chunks. Use 16 para eliminar costura visível na suavização.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
 
@@ -283,7 +273,6 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> light;
         public NativeArray<NoiseLayer> nativeNoiseLayers;
         public NativeArray<WarpLayer> nativeWarpLayers;
-        public NativeArray<NoiseLayer> nativeCaveLayers;
         public NativeArray<BlockTextureMapping> nativeBlockMappings;
 
         public Chunk chunk;
@@ -312,8 +301,6 @@ public partial class World : MonoBehaviour
 
         InitializeNoiseLayers();
         InitializeWarpLayers();
-        InitializeCaveLayers();
-        InitializeWormTunnelSettings();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -416,71 +403,6 @@ public partial class World : MonoBehaviour
 
             warpLayers[i] = layer;
         }
-    }
-
-    private void InitializeCaveLayers()
-    {
-        if (caveLayers == null) return;
-
-        for (int i = 0; i < caveLayers.Length; i++)
-        {
-            NoiseLayer layer = caveLayers[i];
-            if (!layer.enabled) continue;
-
-            if (layer.redistributionModifier == 0f) layer.redistributionModifier = 1f;
-            if (layer.exponent == 0f) layer.exponent = 1f;
-
-            if (layer.scale <= 0f) layer.scale = 0.03f;
-            if (layer.octaves <= 0) layer.octaves = 4;
-            if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
-            if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
-
-            if (layer.offset == Vector2.zero)
-                layer.offset = new Vector2(offsetX + i * 19.87f, offsetZ + i * 8.76f);
-            else
-                layer.offset += new Vector2(offsetX, offsetZ);
-
-            float amp = 1f;
-            layer.maxAmp = 0f;
-            for (int o = 0; o < layer.octaves; o++)
-            {
-                layer.maxAmp += amp;
-                amp *= layer.persistence;
-            }
-            if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
-
-            caveLayers[i] = layer;
-        }
-    }
-
-    private void InitializeWormTunnelSettings()
-    {
-        bool looksUninitialized =
-            wormTunnelSettings.regionSize <= 0 &&
-            wormTunnelSettings.wormsPerRegion <= 0 &&
-            wormTunnelSettings.minSteps <= 0 &&
-            wormTunnelSettings.maxSteps <= 0 &&
-            wormTunnelSettings.stepLength <= 0f &&
-            wormTunnelSettings.baseRadius <= 0f;
-
-        if (looksUninitialized)
-            wormTunnelSettings.enabled = true;
-
-        if (wormTunnelSettings.seed == 0) wormTunnelSettings.seed = seed * 3 + 17;
-        if (wormTunnelSettings.regionSize <= 0) wormTunnelSettings.regionSize = 64;
-        if (wormTunnelSettings.wormsPerRegion <= 0) wormTunnelSettings.wormsPerRegion = 2;
-        if (wormTunnelSettings.minSteps <= 0) wormTunnelSettings.minSteps = 36;
-        if (wormTunnelSettings.maxSteps <= 0) wormTunnelSettings.maxSteps = 96;
-        if (wormTunnelSettings.maxSteps < wormTunnelSettings.minSteps)
-            wormTunnelSettings.maxSteps = wormTunnelSettings.minSteps;
-        if (wormTunnelSettings.stepLength <= 0f) wormTunnelSettings.stepLength = 2.2f;
-        if (wormTunnelSettings.baseRadius <= 0f) wormTunnelSettings.baseRadius = 2.4f;
-        if (wormTunnelSettings.radiusJitter < 0f) wormTunnelSettings.radiusJitter = 0.8f;
-        if (wormTunnelSettings.edgeAttraction <= 0f) wormTunnelSettings.edgeAttraction = 0.75f;
-        if (wormTunnelSettings.tangentStrength <= 0f) wormTunnelSettings.tangentStrength = 1.15f;
-        if (wormTunnelSettings.noiseStrength <= 0f) wormTunnelSettings.noiseStrength = 0.65f;
-        if (wormTunnelSettings.verticalDamping <= 0f || wormTunnelSettings.verticalDamping > 1f) wormTunnelSettings.verticalDamping = 0.4f;
-        if (wormTunnelSettings.directionSmoothing <= 0f || wormTunnelSettings.directionSmoothing > 1f) wormTunnelSettings.directionSmoothing = 0.65f;
     }
 
     #endregion
@@ -832,7 +754,7 @@ public partial class World : MonoBehaviour
                 }
             }
 
-            // B. Limpar pendentes desnecessÃ¡rios
+            // B. Limpar pendentes desnecessários
             for (int i = pendingChunks.Count - 1; i >= 0; i--)
             {
                 if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
@@ -851,7 +773,7 @@ public partial class World : MonoBehaviour
                 pendingChunks.Add((coord, distSq));
             }
 
-            // D. Reordenar fila por distÃ¢ncia
+            // D. Reordenar fila por distância
             for (int i = 0; i < pendingChunks.Count; i++)
             {
                 var item = pendingChunks[i];
@@ -969,7 +891,7 @@ public partial class World : MonoBehaviour
 
         int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
 
-        // InjeÃ§Ã£o da luz global
+        // Injeção da luz global
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
@@ -985,12 +907,10 @@ public partial class World : MonoBehaviour
 
         // Agendamento do data job
         MeshGenerator.ScheduleDataJob(
-            coord, noiseLayers, warpLayers, caveLayers, blockData.mappings,
+            coord, noiseLayers, warpLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            caveThreshold, caveStride, maxCaveDepthMultiplier,
-            wormTunnelSettings,
             nativeEdits, treeMargin, borderSize,
-            treeSettings.canopyRadius, CliffTreshold, enableCave, enableTrees,
+            treeSettings.canopyRadius, CliffTreshold, enableTrees,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -999,7 +919,6 @@ public partial class World : MonoBehaviour
             out NativeArray<byte> light,
             out NativeArray<NoiseLayer> nativeNoiseLayers,
             out NativeArray<WarpLayer> nativeWarpLayers,
-            out NativeArray<NoiseLayer> nativeCaveLayers,
             out NativeArray<BlockTextureMapping> nativeBlockMappings,
             out NativeArray<bool> subchunkNonEmpty,
             treeSettings
@@ -1014,7 +933,6 @@ public partial class World : MonoBehaviour
             light = light,
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
-            nativeCaveLayers = nativeCaveLayers,
             nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
             coord = coord,
@@ -1086,7 +1004,6 @@ public partial class World : MonoBehaviour
             light = light,
             nativeNoiseLayers = default,
             nativeWarpLayers = default,
-            nativeCaveLayers = default,
             nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
             coord = coord,
@@ -1294,22 +1211,16 @@ public partial class World : MonoBehaviour
               coord,
               noiseLayers,
               warpLayers,
-              caveLayers,
               blockData.mappings,
               baseHeight,
               offsetX,
               offsetZ,
               seaLevel,
-              caveThreshold,
-              caveStride,
-              maxCaveDepthMultiplier,
-              wormTunnelSettings,
               nativeEdits,
               treeMargin,
               borderSize,
               treeSettings.canopyRadius,
               CliffTreshold,
-              enableCave,
               enableTrees,
               chunkLightData,
               out JobHandle dataHandle,
@@ -1319,7 +1230,6 @@ public partial class World : MonoBehaviour
               out NativeArray<byte> light,
               out NativeArray<NoiseLayer> nativeNoiseLayers,
               out NativeArray<WarpLayer> nativeWarpLayers,
-              out NativeArray<NoiseLayer> nativeCaveLayers,
               out NativeArray<BlockTextureMapping> nativeBlockMappings,
               out NativeArray<bool> subchunkNonEmpty,
               treeSettings
@@ -1334,7 +1244,6 @@ public partial class World : MonoBehaviour
             light = light,
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
-            nativeCaveLayers = nativeCaveLayers,
             nativeBlockMappings = nativeBlockMappings,
             chunk = chunk,
             coord = coord,
@@ -1511,7 +1420,6 @@ public partial class World : MonoBehaviour
         if (pd.light.IsCreated) pd.light.Dispose();
         if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
         if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
-        if (pd.nativeCaveLayers.IsCreated) pd.nativeCaveLayers.Dispose();
         if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
         if (pd.edits.IsCreated) pd.edits.Dispose();
@@ -1539,4 +1447,5 @@ public partial class World : MonoBehaviour
 
 
 }
+
 

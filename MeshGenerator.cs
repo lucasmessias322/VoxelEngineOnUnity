@@ -228,16 +228,11 @@ public static class MeshGenerator
         Vector2Int coord,
         NoiseLayer[] noiseLayersArr,
         WarpLayer[] warpLayersArr,
-        NoiseLayer[] caveLayersArr,
         BlockTextureMapping[] blockMappingsArr,
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
-        float caveThreshold,
-        int caveStride,
-        int maxCaveDepthMultiplier,
-        WormTunnelSettings wormTunnelSettings,
 
 
         NativeArray<BlockEdit> blockEdits,
@@ -246,7 +241,6 @@ public static class MeshGenerator
         int borderSize,
         int maxTreeRadius,
         int CliffTreshold,
-        bool enableCave,
         bool enableTrees,
         NativeArray<byte> lightData, // <--- NOVA INJEÇÃO DE DEPENDÊNCIA DE LUZ
         out JobHandle dataHandle,
@@ -256,7 +250,6 @@ public static class MeshGenerator
         out NativeArray<byte> light,
         out NativeArray<NoiseLayer> nativeNoiseLayers,
         out NativeArray<WarpLayer> nativeWarpLayers,
-        out NativeArray<NoiseLayer> nativeCaveLayers,
         out NativeArray<BlockTextureMapping> nativeBlockMappings,
         out NativeArray<bool> subchunkNonEmpty,
         TreeSettings treeSettings
@@ -267,7 +260,6 @@ public static class MeshGenerator
         // 2. Alocações Iniciais de Configuração
         nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
-        nativeCaveLayers = new NativeArray<NoiseLayer>(caveLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
@@ -338,7 +330,6 @@ public static class MeshGenerator
             coord = coord,
             noiseLayers = nativeNoiseLayers,
             warpLayers = nativeWarpLayers,
-            caveLayers = nativeCaveLayers,
             blockMappings = nativeBlockMappings,
             blockEdits = blockEdits,
 
@@ -347,10 +338,6 @@ public static class MeshGenerator
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,
-            caveThreshold = caveThreshold,
-            caveStride = caveStride,
-            maxCaveDepthMultiplier = maxCaveDepthMultiplier,
-            wormSettings = wormTunnelSettings,
 
 
             treeMargin = treeMargin,
@@ -364,7 +351,6 @@ public static class MeshGenerator
             treeSettings = treeSettings,
 
             enableTrees = enableTrees,
-            enableCave = enableCave,
             subchunkNonEmpty = subchunkNonEmpty
         };
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // Dependência no heightHandle
@@ -1063,5 +1049,6 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
 
 
