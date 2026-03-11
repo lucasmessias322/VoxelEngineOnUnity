@@ -4,7 +4,6 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.Serialization;
 
 
 [Serializable]
@@ -133,23 +132,6 @@ public partial class World : MonoBehaviour
     [Min(1)]
     public int maxChunkRebuildsPerFrame = 1;
 
-    [Header("Frustum Culling")]
-    public bool enableFrustumCulling = true;
-    public Camera mainCamera;
-
-    [Header("Vertical Render Distance + Full Visibility")]
-    [FormerlySerializedAs("verticalSubchunkRenderDistance")]
-    [Tooltip("Quantos subchunks acima do jogador serao renderizados")]
-    [Min(0)]
-    public int verticalSubchunkRenderDistanceAbove = 4;
-
-    [Tooltip("Quantos subchunks abaixo do jogador serao renderizados")]
-    [Min(0)]
-    public int verticalSubchunkRenderDistanceBelow = 2;
-
-    [Tooltip("Chunks dentro deste raio horizontal (Chebyshev) terão TODOS os subchunks visíveis (sem culling vertical).")]
-    public int horizontalFullVisibilityRadius = 2;
-
     [Header("Features Toggle")]
     public bool enableTrees = true;
 
@@ -245,8 +227,96 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
 
-    // Chunks that need recull
-    private HashSet<Vector2Int> chunksToRecull = new HashSet<Vector2Int>();
+    private Vector2Int GetCurrentPlayerChunkCoord()
+    {
+        if (player == null)
+            return _lastChunkCoord;
+
+        return new Vector2Int(
+            Mathf.FloorToInt(player.position.x / Chunk.SizeX),
+            Mathf.FloorToInt(player.position.z / Chunk.SizeZ)
+        );
+    }
+
+    private float GetChunkDistanceSqToPlayer(Vector2Int coord)
+    {
+        if (player == null)
+        {
+            float fallbackDx = coord.x - _lastChunkCoord.x;
+            float fallbackDz = coord.y - _lastChunkCoord.y;
+            return fallbackDx * fallbackDx + fallbackDz * fallbackDz;
+        }
+
+        // Usa distancia em coordenadas de chunk com posicao fracionaria do player.
+        float playerChunkX = player.position.x / Chunk.SizeX;
+        float playerChunkZ = player.position.z / Chunk.SizeZ;
+        float centerX = coord.x + 0.5f;
+        float centerZ = coord.y + 0.5f;
+        float dx = centerX - playerChunkX;
+        float dz = centerZ - playerChunkZ;
+        return dx * dx + dz * dz;
+    }
+
+    private bool IsCoordInsideRenderDistance(Vector2Int coord, Vector2Int center)
+    {
+        int dx = Mathf.Abs(coord.x - center.x);
+        int dz = Mathf.Abs(coord.y - center.y);
+        return dx <= renderDistance && dz <= renderDistance;
+    }
+
+    private int CountPendingDataJobsInRenderDistance(Vector2Int center)
+    {
+        int count = 0;
+        for (int i = 0; i < pendingDataJobs.Count; i++)
+        {
+            if (IsCoordInsideRenderDistance(pendingDataJobs[i].coord, center))
+                count++;
+        }
+
+        return count;
+    }
+
+    private int CountPendingMeshesInRenderDistance(Vector2Int center)
+    {
+        int count = 0;
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            if (IsCoordInsideRenderDistance(pendingMeshes[i].coord, center))
+                count++;
+        }
+
+        return count;
+    }
+
+    private void RefreshPendingChunkPriorities()
+    {
+        for (int i = 0; i < pendingChunks.Count; i++)
+        {
+            var item = pendingChunks[i];
+            pendingChunks[i] = (item.coord, GetChunkDistanceSqToPlayer(item.coord));
+        }
+
+        pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+    }
+
+    private void PrioritizePendingJobsByDistance()
+    {
+        if (pendingDataJobs.Count > 1)
+        {
+            pendingDataJobs.Sort((a, b) =>
+                GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord)));
+        }
+
+        if (pendingMeshes.Count > 1)
+        {
+            pendingMeshes.Sort((a, b) =>
+            {
+                int distCmp = GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
+                if (distCmp != 0) return distCmp;
+                return a.subchunkIndex.CompareTo(b.subchunkIndex);
+            });
+        }
+    }
 
     private int GetChunkBorderSize()
     {
@@ -375,10 +445,6 @@ public partial class World : MonoBehaviour
 
     private void Start()
     {
-        // Camera fallback
-        if (mainCamera == null)
-            mainCamera = Camera.main ?? FindObjectOfType<Camera>();
-
         if (blockData != null) blockData.InitializeDictionary();
 
         offsetX = seed * 17.123f;
@@ -409,12 +475,6 @@ public partial class World : MonoBehaviour
         UpdateChunks();
         UpdateDistantTerrainLod();
         ProcessChunkQueue();
-    }
-
-    private void LateUpdate()
-    {
-        if (!enableFrustumCulling) return;
-        UpdateVerticalSubchunkVisibility();
     }
 
     #endregion
@@ -498,6 +558,7 @@ public partial class World : MonoBehaviour
     {
         float frameStartTime = Time.realtimeSinceStartup;
         float budgetSeconds = frameTimeBudgetMS / 1000f;
+        PrioritizePendingJobsByDistance();
 
         int dataProcessedThisFrame = 0;
         int dataCompletionsLimit = Mathf.Max(1, maxDataCompletionsPerFrame);
@@ -531,6 +592,7 @@ public partial class World : MonoBehaviour
                 activeChunk.state = Chunk.ChunkState.MeshReady;
 
                 CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData);
+               
 
                 ScheduleSubchunkMeshJobs(pd, activeChunk);
             }
@@ -575,7 +637,6 @@ public partial class World : MonoBehaviour
                 }
 
                 activeChunk.state = Chunk.ChunkState.Active;
-                chunksToRecull.Add(pm.coord);
             }
 
             DisposePendingMesh(pm);
@@ -836,10 +897,7 @@ public partial class World : MonoBehaviour
     {
         if (player == null) return;
 
-        Vector2Int currentChunkCoord = new Vector2Int(
-            Mathf.FloorToInt(player.position.x / Chunk.SizeX),
-            Mathf.FloorToInt(player.position.z / Chunk.SizeZ)
-        );
+        Vector2Int currentChunkCoord = GetCurrentPlayerChunkCoord();
 
         if (currentChunkCoord != _lastChunkCoord)
         {
@@ -870,6 +928,7 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
+                    
                     RemoveHighBuildMesh(coord);
                 }
             }
@@ -887,37 +946,33 @@ public partial class World : MonoBehaviour
                 if (activeChunks.ContainsKey(coord)) continue;
                 if (IsChunkJobPending(coord)) continue;
 
-                float dx = coord.x - currentChunkCoord.x;
-                float dz = coord.y - currentChunkCoord.y;
-                float distSq = dx * dx + dz * dz;
+                float distSq = GetChunkDistanceSqToPlayer(coord);
                 pendingChunks.Add((coord, distSq));
             }
 
             // D. Reordenar fila por distância
-            for (int i = 0; i < pendingChunks.Count; i++)
-            {
-                var item = pendingChunks[i];
-                float dx = item.coord.x - currentChunkCoord.x;
-                float dz = item.coord.y - currentChunkCoord.y;
-                pendingChunks[i] = (item.coord, dx * dx + dz * dz);
-            }
-
-            pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+            RefreshPendingChunkPriorities();
         }
+
+        if (pendingChunks.Count > 1)
+            RefreshPendingChunkPriorities();
 
         // Processa alguns itens da fila por frame
         if (pendingChunks.Count > 0)
         {
             int processed = 0;
             int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
-            int realPending = pendingDataJobs.Count + Mathf.CeilToInt(pendingMeshes.Count / (float)subchunksPerChunk);
+            int pendingDataInRange = CountPendingDataJobsInRenderDistance(currentChunkCoord);
+            int pendingMeshesInRange = CountPendingMeshesInRenderDistance(currentChunkCoord);
+            int realPending = pendingDataInRange + Mathf.CeilToInt(pendingMeshesInRange / (float)subchunksPerChunk);
+            int hardPendingDataLimit = Mathf.Max(maxPendingDataJobs, maxPendingDataJobs * 3);
             bool jobsCongested = realPending > maxChunksPerFrame * 4;
 
             if (!jobsCongested)
             {
                 while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
                 {
-                    if (pendingDataJobs.Count >= maxPendingDataJobs)
+                    if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
                         break;
 
                     var item = pendingChunks[0];
@@ -926,6 +981,7 @@ public partial class World : MonoBehaviour
                     if (!activeChunks.ContainsKey(item.coord))
                     {
                         RequestChunk(item.coord);
+                        pendingDataInRange++;
                         processed++;
                     }
                 }
@@ -955,7 +1011,7 @@ public partial class World : MonoBehaviour
         chunk.transform.position = pos;
         chunk.UpdateWorldBounds(); // garante bounds atualizado
         chunk.SetCoord(coord);
-
+      
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
 

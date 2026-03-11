@@ -402,52 +402,5 @@ public partial class World : MonoBehaviour
 
     #endregion
 
-    #region Frustum / Vertical Culling
-
-
-    private void UpdateVerticalSubchunkVisibility()
-    {
-        if (player == null) return;
-
-        Vector2Int playerChunkCoord = new Vector2Int(
-            Mathf.FloorToInt(player.position.x / Chunk.SizeX),
-            Mathf.FloorToInt(player.position.z / Chunk.SizeZ)
-        );
-
-        int playerSubchunkY = Mathf.FloorToInt(player.position.y / Chunk.SubchunkHeight);
-
-        foreach (var kvp in activeChunks)
-        {
-            Chunk chunk = kvp.Value;
-            if (chunk.state != Chunk.ChunkState.Active || chunk.subchunks == null) continue;
-
-            Vector2Int chunkCoord = kvp.Key;
-
-            bool isWithinFullVisibilityRadius =
-                Mathf.Abs(chunkCoord.x - playerChunkCoord.x) <= horizontalFullVisibilityRadius &&
-                Mathf.Abs(chunkCoord.y - playerChunkCoord.y) <= horizontalFullVisibilityRadius;
-
-            for (int subIdx = 0; subIdx < Chunk.SubchunksPerColumn; subIdx++)
-            {
-                if (isWithinFullVisibilityRadius)
-                {
-                    chunk.subchunks[subIdx].SetVisible(true);
-                }
-                else
-                {
-                    int verticalDelta = subIdx - playerSubchunkY;
-                    bool shouldBeVisible = verticalDelta >= 0
-                        ? verticalDelta <= verticalSubchunkRenderDistanceAbove
-                        : (-verticalDelta) <= verticalSubchunkRenderDistanceBelow;
-                    chunk.subchunks[subIdx].SetVisible(shouldBeVisible);
-                }
-            }
-        }
-    }
-
-
-    #endregion
-
-
 }
 
