@@ -49,10 +49,21 @@ public class BlockDrop : MonoBehaviour
         new FaceDef { normal3 = Vector3.back, v0 = new Vector3(0,0,0), v1 = new Vector3(0,1,0), v2 = new Vector3(1,1,0), v3 = new Vector3(1,0,0) }
     };
 
-    public static void Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
+    private static Material fallbackDropMaterial;
+
+    public static bool Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
     {
-        if (world == null || world.blockData == null || world.Material == null || world.Material.Length == 0)
-            return;
+        if (world == null)
+        {
+            Debug.LogWarning("[BlockDrop] Spawn cancelado: World.Instance nulo.");
+            return false;
+        }
+
+        if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
+            return false;
+
+        if (world.blockData != null && (world.blockData.mappings == null || world.blockData.mappings.Length == 0))
+            world.blockData.InitializeDictionary();
 
         GameObject go = new GameObject($"Drop_{blockType}");
         go.transform.position = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
@@ -61,33 +72,84 @@ public class BlockDrop : MonoBehaviour
         drop.blockType = blockType;
         drop.stackAmount = 1;
         go.transform.localScale = Vector3.one * drop.dropScale;
-        drop.BuildVisual(world, blockType);
+        if (!drop.BuildVisual(world, blockType))
+        {
+            Destroy(go);
+            return false;
+        }
+
         drop.SetupPhysics(throwDirection);
+        return true;
     }
 
-    private void BuildVisual(World world, BlockType blockType)
+    private bool BuildVisual(World world, BlockType blockType)
     {
         MeshFilter mf = gameObject.AddComponent<MeshFilter>();
         MeshRenderer mr = gameObject.AddComponent<MeshRenderer>();
 
-        Mesh mesh = BuildBlockMesh(world, blockType, out int submeshIndex);
+        Mesh mesh = BuildBlockMesh(world, blockType, out int materialIndex);
         if (mesh == null)
-            return;
+            return false;
 
         mf.sharedMesh = mesh;
+        CollapseToSingleSubmesh(mesh, materialIndex);
 
-        mr.materials = world.Material;
+        Material mat = ResolveMaterial(world, materialIndex);
+        if (mat == null)
+            return false;
+
+        mr.sharedMaterial = mat;
         mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
         mr.receiveShadows = true;
+        return true;
+    }
 
-        if (submeshIndex != 0)
+    private static void CollapseToSingleSubmesh(Mesh mesh, int submeshIndex)
+    {
+        if (mesh == null || mesh.subMeshCount <= 1)
+            return;
+
+        int clamped = Mathf.Clamp(submeshIndex, 0, mesh.subMeshCount - 1);
+        int[] tris = mesh.GetTriangles(clamped);
+
+        mesh.subMeshCount = 1;
+        mesh.SetTriangles(tris, 0, false);
+    }
+
+    private static Material ResolveMaterial(World world, int preferredMaterialIndex)
+    {
+        if (world != null && world.Material != null && world.Material.Length > 0)
         {
-            // Keep renderer using the correct pipeline submesh (opaque/transparent/water).
-            int[] empty = new int[0];
-            if (submeshIndex != 0) mesh.SetTriangles(empty, 0, false);
-            if (submeshIndex != 1) mesh.SetTriangles(empty, 1, false);
-            if (submeshIndex != 2) mesh.SetTriangles(empty, 2, false);
+            int clamped = Mathf.Clamp(preferredMaterialIndex, 0, world.Material.Length - 1);
+            if (world.Material[clamped] != null)
+                return world.Material[clamped];
+
+            for (int i = 0; i < world.Material.Length; i++)
+            {
+                if (world.Material[i] != null)
+                    return world.Material[i];
+            }
         }
+
+        return GetFallbackMaterial();
+    }
+
+    private static Material GetFallbackMaterial()
+    {
+        if (fallbackDropMaterial != null)
+            return fallbackDropMaterial;
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null)
+            shader = Shader.Find("Standard");
+        if (shader == null)
+            return null;
+
+        fallbackDropMaterial = new Material(shader)
+        {
+            name = "BlockDrop_FallbackMaterial"
+        };
+        return fallbackDropMaterial;
     }
 
     public static Mesh BuildBlockMesh(World world, BlockType blockType, out int submeshIndex)

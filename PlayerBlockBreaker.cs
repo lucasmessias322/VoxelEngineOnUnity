@@ -103,10 +103,18 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
 
         Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
-        BlockDrop.Spawn(World.Instance, sel, current, throwDir);
+        bool spawnedDrop = BlockDrop.Spawn(World.Instance, sel, current, throwDir);
         World.Instance.SetBlockAt(sel, BlockType.Air);
-        Debug.Log($"Break request at {sel} -> success");
-        Debug.Log($"Break request at {sel} -> queued");
+
+        if (!spawnedDrop)
+        {
+            bool addedToInventory = PlayerInventory.Instance != null &&
+                                    PlayerInventory.Instance.TryAddBlockDrop(current, 1);
+            if (!addedToInventory)
+            {
+                Debug.LogWarning($"[PlayerBlockBreaker] Falha ao gerar drop de {current} em {sel}.");
+            }
+        }
 
         if (breakBlockClip != null)
             audioSource.PlayOneShot(breakBlockClip);
