@@ -10,9 +10,10 @@ public partial class World
         public GameObject root;
         public MeshFilter meshFilter;
         public MeshRenderer meshRenderer;
-        public MeshCollider meshCollider;
         public Mesh mesh;
-        public Mesh colliderMesh;
+        public readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
+        public int activeBoxColliderCount;
+        public bool hasColliderData;
     }
 
     // Key: (chunkX, highSectionY, chunkZ)
@@ -252,33 +253,24 @@ public partial class World
         data.root.SetActive(true);
 
         if (enableBlockColliders && (opaqueTris.Count > 0 || transparentTris.Count > 0))
-        {
-            List<int> colliderTris = new List<int>(opaqueTris.Count + transparentTris.Count);
-            colliderTris.AddRange(opaqueTris);
-            colliderTris.AddRange(transparentTris);
-
-            data.colliderMesh.Clear();
-            data.colliderMesh.SetVertices(vertices);
-            data.colliderMesh.SetTriangles(colliderTris, 0, true);
-            data.colliderMesh.RecalculateBounds();
-
-            data.meshCollider.sharedMesh = null;
-            data.meshCollider.sharedMesh = data.colliderMesh;
-            data.meshCollider.enabled = true;
-        }
+            BuildHighBuildSectionColliders(data, coord, section, positions);
         else
-        {
-            data.meshCollider.sharedMesh = null;
-            data.meshCollider.enabled = false;
-        }
+            DisableHighBuildColliders(data, true);
     }
 
     private void SetHighBuildCollidersEnabled(bool enabled)
     {
         foreach (var kv in highBuildMeshes)
         {
-            if (kv.Value == null || kv.Value.meshCollider == null) continue;
-            kv.Value.meshCollider.enabled = enabled && kv.Value.meshCollider.sharedMesh != null;
+            HighBuildMeshData data = kv.Value;
+            if (data == null) continue;
+
+            bool shouldEnable = enabled && data.hasColliderData;
+            for (int i = 0; i < data.activeBoxColliderCount; i++)
+            {
+                BoxCollider box = data.boxColliders[i];
+                if (box != null) box.enabled = shouldEnable;
+            }
         }
     }
 
@@ -301,9 +293,8 @@ public partial class World
     private void DisableHighBuildMesh(Vector3Int key)
     {
         if (!highBuildMeshes.TryGetValue(key, out HighBuildMeshData data)) return;
-        if (data.meshCollider != null) data.meshCollider.sharedMesh = null;
+        DisableHighBuildColliders(data, true);
         if (data.mesh != null) data.mesh.Clear();
-        if (data.colliderMesh != null) data.colliderMesh.Clear();
         if (data.root != null) data.root.SetActive(false);
     }
 
@@ -320,15 +311,10 @@ public partial class World
 
         MeshFilter mf = go.AddComponent<MeshFilter>();
         MeshRenderer mr = go.AddComponent<MeshRenderer>();
-        MeshCollider mc = go.AddComponent<MeshCollider>();
-        mc.convex = false;
         mr.materials = Material;
 
         Mesh mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-        Mesh colliderMesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
-
         mf.sharedMesh = mesh;
-        mc.sharedMesh = null;
         go.SetActive(false);
 
         HighBuildMeshData created = new HighBuildMeshData
@@ -336,19 +322,190 @@ public partial class World
             root = go,
             meshFilter = mf,
             meshRenderer = mr,
-            meshCollider = mc,
             mesh = mesh,
-            colliderMesh = colliderMesh
+            activeBoxColliderCount = 0,
+            hasColliderData = false
         };
 
         highBuildMeshes[key] = created;
         return created;
     }
 
+    private void BuildHighBuildSectionColliders(HighBuildMeshData data, Vector2Int coord, int section, List<Vector3Int> positions)
+    {
+        int sizeX = Chunk.SizeX;
+        int sizeY = HighBuildSectionHeight;
+        int sizeZ = Chunk.SizeZ;
+        int volume = sizeX * sizeY * sizeZ;
+
+        bool[] solids = new bool[volume];
+        bool[] visited = new bool[volume];
+
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int sectionMinY = Chunk.SizeY + section * HighBuildSectionHeight;
+
+        for (int i = 0; i < positions.Count; i++)
+        {
+            Vector3Int pos = positions[i];
+            if (!blockOverrides.TryGetValue(pos, out BlockType type))
+                continue;
+
+            BlockTextureMapping mapping = GetMappingSafe(type);
+            if (!IsHighBuildColliderBlock(type, mapping))
+                continue;
+
+            int localX = pos.x - chunkMinX;
+            int localY = pos.y - sectionMinY;
+            int localZ = pos.z - chunkMinZ;
+
+            if (localX < 0 || localX >= sizeX || localY < 0 || localY >= sizeY || localZ < 0 || localZ >= sizeZ)
+                continue;
+
+            int idx = GetHighBuildVoxelIndex(localX, localY, localZ, sizeX, sizeY);
+            solids[idx] = true;
+        }
+
+        int colliderCount = 0;
+        for (int y = 0; y < sizeY; y++)
+        {
+            for (int z = 0; z < sizeZ; z++)
+            {
+                for (int x = 0; x < sizeX; x++)
+                {
+                    int startIndex = GetHighBuildVoxelIndex(x, y, z, sizeX, sizeY);
+                    if (!solids[startIndex] || visited[startIndex])
+                        continue;
+
+                    int width = 1;
+                    while (x + width < sizeX)
+                    {
+                        int idx = GetHighBuildVoxelIndex(x + width, y, z, sizeX, sizeY);
+                        if (!solids[idx] || visited[idx]) break;
+                        width++;
+                    }
+
+                    int depth = 1;
+                    while (z + depth < sizeZ)
+                    {
+                        bool canGrowDepth = true;
+                        for (int ix = 0; ix < width; ix++)
+                        {
+                            int idx = GetHighBuildVoxelIndex(x + ix, y, z + depth, sizeX, sizeY);
+                            if (!solids[idx] || visited[idx])
+                            {
+                                canGrowDepth = false;
+                                break;
+                            }
+                        }
+                        if (!canGrowDepth) break;
+                        depth++;
+                    }
+
+                    int boxHeight = 1;
+                    while (y + boxHeight < sizeY)
+                    {
+                        bool canGrowHeight = true;
+                        for (int iz = 0; iz < depth && canGrowHeight; iz++)
+                        {
+                            for (int ix = 0; ix < width; ix++)
+                            {
+                                int idx = GetHighBuildVoxelIndex(x + ix, y + boxHeight, z + iz, sizeX, sizeY);
+                                if (!solids[idx] || visited[idx])
+                                {
+                                    canGrowHeight = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!canGrowHeight) break;
+                        boxHeight++;
+                    }
+
+                    for (int iy = 0; iy < boxHeight; iy++)
+                    {
+                        for (int iz = 0; iz < depth; iz++)
+                        {
+                            for (int ix = 0; ix < width; ix++)
+                            {
+                                int idx = GetHighBuildVoxelIndex(x + ix, y + iy, z + iz, sizeX, sizeY);
+                                visited[idx] = true;
+                            }
+                        }
+                    }
+
+                    BoxCollider box = GetOrCreateHighBuildBoxCollider(data, colliderCount++);
+                    box.center = new Vector3(
+                        chunkMinX + x + width * 0.5f,
+                        sectionMinY + y + boxHeight * 0.5f,
+                        chunkMinZ + z + depth * 0.5f);
+                    box.size = new Vector3(width, boxHeight, depth);
+                    box.enabled = true;
+                }
+            }
+        }
+
+        data.activeBoxColliderCount = colliderCount;
+        data.hasColliderData = colliderCount > 0;
+
+        for (int i = colliderCount; i < data.boxColliders.Count; i++)
+        {
+            BoxCollider box = data.boxColliders[i];
+            if (box != null) box.enabled = false;
+        }
+    }
+
+    private BoxCollider GetOrCreateHighBuildBoxCollider(HighBuildMeshData data, int index)
+    {
+        if (index < data.boxColliders.Count && data.boxColliders[index] != null)
+            return data.boxColliders[index];
+
+        BoxCollider created = data.root.AddComponent<BoxCollider>();
+        created.isTrigger = false;
+
+        if (index < data.boxColliders.Count)
+            data.boxColliders[index] = created;
+        else
+            data.boxColliders.Add(created);
+
+        return created;
+    }
+
+    private void DisableHighBuildColliders(HighBuildMeshData data, bool clearData)
+    {
+        if (data == null) return;
+
+        int count = clearData ? data.boxColliders.Count : data.activeBoxColliderCount;
+        for (int i = 0; i < count; i++)
+        {
+            BoxCollider box = data.boxColliders[i];
+            if (box != null) box.enabled = false;
+        }
+
+        if (clearData)
+        {
+            data.activeBoxColliderCount = 0;
+            data.hasColliderData = false;
+        }
+    }
+
+    private static int GetHighBuildVoxelIndex(int x, int y, int z, int sizeX, int sizeY)
+    {
+        return x + y * sizeX + z * sizeX * sizeY;
+    }
+
     private static int GetHighSectionIndex(int y)
     {
         if (y < Chunk.SizeY) return -1;
         return (y - Chunk.SizeY) / HighBuildSectionHeight;
+    }
+
+    private static bool IsHighBuildColliderBlock(BlockType type, BlockTextureMapping mapping)
+    {
+        if (type == BlockType.Air || type == BlockType.Water)
+            return false;
+
+        return mapping.isSolid && !mapping.isEmpty;
     }
 
     private BlockType GetBlockForHighMesh(Vector3Int pos)

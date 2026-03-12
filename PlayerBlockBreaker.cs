@@ -9,8 +9,15 @@ public class PlayerBlockBreaker : MonoBehaviour
     public BlockSelector selector;
     public Camera cam;
     public HotbarMirror hotbar;
+    [Header("Interaction")]
+    [SerializeField] private CraftingStationUIController craftingStationUI;
+    [SerializeField] private bool rightClickOpensCrafter = true;
+
     [Header("Place settings")]
     public BlockType placeBlockType = BlockType.Stone; // fallback se nao houver hotbar configurada
+    [SerializeField] private bool preventPlaceInsidePlayer = true;
+    [SerializeField] private float fallbackPlayerRadius = 0.35f;
+    [SerializeField] private float fallbackPlayerHeight = 1.8f;
 
     private AudioSource audioSource;
     public AudioClip placeBlockClip;
@@ -36,7 +43,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         audioSource = GetComponent<AudioSource>();
         if (selector == null) selector = GetComponent<BlockSelector>();
         if (cam == null && selector != null) cam = selector.cam;
-        if (hotbar == null) hotbar = FindObjectOfType<HotbarMirror>();
+        if (hotbar == null) hotbar = FindAnyObjectByType<HotbarMirror>();
+        if (craftingStationUI == null) craftingStationUI = FindAnyObjectByType<CraftingStationUIController>();
 
         CreateCrackOverlay();
     }
@@ -217,14 +225,26 @@ public class PlayerBlockBreaker : MonoBehaviour
         {
             CancelBreak();
 
-            BlockType selectedBlockType = placeBlockType;
-            if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
-                return;
-
             if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
                 return;
 
             BlockType targetType = World.Instance.GetBlockAt(targetBlock);
+
+            if (rightClickOpensCrafter && !selector.IsBillboardHit && targetType == BlockType.Crafter)
+            {
+                if (craftingStationUI == null)
+                    craftingStationUI = FindAnyObjectByType<CraftingStationUIController>();
+
+                if (craftingStationUI != null)
+                    craftingStationUI.TryOpenCraftingTableFromSelection();
+
+                return;
+            }
+
+            BlockType selectedBlockType = placeBlockType;
+            if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
+                return;
+
             bool replaceTarget = selector.IsBillboardHit || IsLiquid(targetType);
 
             // Billboard e liquidos: substitui exatamente a celula alvo (estilo Minecraft).
@@ -237,18 +257,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos))
                 return;
 
-            Vector3 blockCenter = placePos + Vector3.one * 0.5f;
-            Vector3 halfExtents = Vector3.one * 0.5f;
-
-            Collider[] hits = Physics.OverlapBox(blockCenter, halfExtents);
-
-            foreach (var col in hits)
-            {
-                if (col.transform == transform)
-                {
-                    return;
-                }
-            }
+            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos))
+                return;
 
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
@@ -257,5 +267,26 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
+    }
+
+    private bool IsBlockIntersectingPlayer(Vector3Int placePos)
+    {
+        Bounds blockBounds = new Bounds(placePos + Vector3.one * 0.5f, Vector3.one);
+
+        CharacterController characterController = GetComponent<CharacterController>();
+        if (characterController != null)
+        {
+            Vector3 worldCenter = transform.TransformPoint(characterController.center);
+            float height = Mathf.Max(characterController.height, 0.1f);
+            float diameter = Mathf.Max(characterController.radius * 2f, 0.1f);
+            Bounds playerBounds = new Bounds(worldCenter, new Vector3(diameter, height, diameter));
+            return playerBounds.Intersects(blockBounds);
+        }
+
+        float clampedRadius = Mathf.Max(0.1f, fallbackPlayerRadius);
+        float clampedHeight = Mathf.Max(0.5f, fallbackPlayerHeight);
+        Vector3 fallbackCenter = transform.position + Vector3.up * (clampedHeight * 0.5f);
+        Bounds fallbackBounds = new Bounds(fallbackCenter, new Vector3(clampedRadius * 2f, clampedHeight, clampedRadius * 2f));
+        return fallbackBounds.Intersects(blockBounds);
     }
 }

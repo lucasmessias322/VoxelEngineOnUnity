@@ -731,8 +731,12 @@ public partial class World : MonoBehaviour
                 if (pm.vertices.Length > 0)
                 {
                     sub.gameObject.SetActive(true);
+                    int startY = pm.subchunkIndex * Chunk.SubchunkHeight;
+                    int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
                     sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
-                                      pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs, enableBlockColliders);
+                                      pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
+                                      activeChunk.voxelData, blockData != null ? blockData.mappings : null,
+                                      startY, endY, enableBlockColliders);
                 }
                 else
                 {
