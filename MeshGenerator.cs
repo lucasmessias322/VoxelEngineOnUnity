@@ -273,7 +273,7 @@ public static class MeshGenerator
                 }
                 else
                 {
-                    bt = BlockType.Stone;
+                    bt = y > h - 50 ? BlockType.Stone : BlockType.Deepslate;
                 }
 
                 blockTypes[idx] = bt;
@@ -301,7 +301,8 @@ public static class MeshGenerator
         int maxTreeRadius,
         int CliffTreshold,
         bool enableTrees,
-        NativeArray<byte> lightData, // <--- NOVA INJEÇÃO DE DEPENDÊNCIA DE LUZ
+        OreSpawnSettings[] oreSettingsArr,
+        NativeArray<byte> lightData, // <--- NOVA INJECAO DE DEPENDENCIA DE LUZ
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
         out NativeArray<BlockType> blockTypes,
@@ -310,6 +311,7 @@ public static class MeshGenerator
         out NativeArray<NoiseLayer> nativeNoiseLayers,
         out NativeArray<WarpLayer> nativeWarpLayers,
         out NativeArray<BlockTextureMapping> nativeBlockMappings,
+        out NativeArray<OreSpawnSettings> nativeOreSettings,
         out NativeArray<bool> subchunkNonEmpty,
         TreeSettings treeSettings
     )
@@ -320,6 +322,10 @@ public static class MeshGenerator
         nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
+        if (oreSettingsArr != null && oreSettingsArr.Length > 0)
+            nativeOreSettings = new NativeArray<OreSpawnSettings>(oreSettingsArr, Allocator.TempJob);
+        else
+            nativeOreSettings = new NativeArray<OreSpawnSettings>(0, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
         // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
@@ -410,6 +416,8 @@ public static class MeshGenerator
             blockTypes = blockTypes,
             solids = solids,
             treeSettings = treeSettings,
+            oreSettings = nativeOreSettings,
+            oreSeed = worleyTunnelSettings.seed,
 
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
@@ -1117,6 +1125,7 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
 
 
 

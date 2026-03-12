@@ -587,6 +587,12 @@ public partial class World
             case BlockType.oak_planks: return new Color32(170, 128, 78, 255);
             case BlockType.short_grass4: return new Color32(97, 156, 62, 255);
             case BlockType.birch_log: return new Color32(198, 186, 148, 255);
+            case BlockType.CoalOre: return new Color32(85, 85, 85, 255);
+            case BlockType.IronOre: return new Color32(177, 147, 122, 255);
+            case BlockType.GoldOre: return new Color32(212, 170, 66, 255);
+            case BlockType.RedstoneOre: return new Color32(176, 52, 52, 255);
+            case BlockType.DiamondOre: return new Color32(76, 195, 219, 255);
+            case BlockType.EmeraldOre: return new Color32(55, 173, 91, 255);
             default: return new Color32(200, 200, 200, 255);
         }
     }

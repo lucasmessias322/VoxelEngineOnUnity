@@ -19,6 +19,21 @@ public struct TreeSettings
     public int seed;
 }
 
+[Serializable]
+public struct OreSpawnSettings
+{
+    public bool enabled;
+    public BlockType blockType;
+    [Min(0)] public int minY;
+    [Min(0)] public int maxY;
+    [Min(0)] public int veinsPerChunk;
+    [Min(1)] public int minVeinSize;
+    [Min(1)] public int maxVeinSize;
+    [Min(0)] public int minSurfaceDepth;
+    public bool replaceStone;
+    public bool replaceDeepslate;
+}
+
 
 
 #region Utilities
@@ -96,6 +111,89 @@ public partial class World : MonoBehaviour
     [Header("Tree Settings")]
     public TreeSettings treeSettings;
     public int CliffTreshold = 2;
+
+    [Header("Ore Settings")]
+    public OreSpawnSettings[] oreSettings = new OreSpawnSettings[]
+    {
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.CoalOre,
+            minY = 8,
+            maxY = 160,
+            veinsPerChunk = 18,
+            minVeinSize = 6,
+            maxVeinSize = 18,
+            minSurfaceDepth = 4,
+            replaceStone = true,
+            replaceDeepslate = true
+        },
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.IronOre,
+            minY = 8,
+            maxY = 96,
+            veinsPerChunk = 12,
+            minVeinSize = 4,
+            maxVeinSize = 11,
+            minSurfaceDepth = 5,
+            replaceStone = true,
+            replaceDeepslate = true
+        },
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.GoldOre,
+            minY = 6,
+            maxY = 48,
+            veinsPerChunk = 7,
+            minVeinSize = 3,
+            maxVeinSize = 9,
+            minSurfaceDepth = 6,
+            replaceStone = true,
+            replaceDeepslate = true
+        },
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.RedstoneOre,
+            minY = 4,
+            maxY = 24,
+            veinsPerChunk = 7,
+            minVeinSize = 3,
+            maxVeinSize = 8,
+            minSurfaceDepth = 7,
+            replaceStone = true,
+            replaceDeepslate = true
+        },
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.DiamondOre,
+            minY = 4,
+            maxY = 20,
+            veinsPerChunk = 4,
+            minVeinSize = 3,
+            maxVeinSize = 7,
+            minSurfaceDepth = 8,
+            replaceStone = true,
+            replaceDeepslate = true
+        },
+        new OreSpawnSettings
+        {
+            enabled = true,
+            blockType = BlockType.EmeraldOre,
+            minY = 16,
+            maxY = 80,
+            veinsPerChunk = 2,
+            minVeinSize = 2,
+            maxVeinSize = 5,
+            minSurfaceDepth = 6,
+            replaceStone = true,
+            replaceDeepslate = false
+        }
+    };
 
     [Header("Cave Settings - Worley 3D")]
     public WorleyTunnelSettings worleyTunnelSettings = new WorleyTunnelSettings
@@ -429,6 +527,7 @@ public partial class World : MonoBehaviour
         public NativeArray<NoiseLayer> nativeNoiseLayers;
         public NativeArray<WarpLayer> nativeWarpLayers;
         public NativeArray<BlockTextureMapping> nativeBlockMappings;
+        public NativeArray<OreSpawnSettings> nativeOreSettings;
 
         public Chunk chunk;
         public Vector2Int coord;
@@ -595,6 +694,10 @@ public partial class World : MonoBehaviour
                
 
                 ScheduleSubchunkMeshJobs(pd, activeChunk);
+
+                if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
+                if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
+                if (pd.nativeOreSettings.IsCreated) pd.nativeOreSettings.Dispose();
             }
             else
             {
@@ -1090,6 +1193,7 @@ public partial class World : MonoBehaviour
             resolvedWorleyTunnels,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableTrees,
+            oreSettings,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -1099,6 +1203,7 @@ public partial class World : MonoBehaviour
             out NativeArray<NoiseLayer> nativeNoiseLayers,
             out NativeArray<WarpLayer> nativeWarpLayers,
             out NativeArray<BlockTextureMapping> nativeBlockMappings,
+            out NativeArray<OreSpawnSettings> nativeOreSettings,
             out NativeArray<bool> subchunkNonEmpty,
             treeSettings
         );
@@ -1113,6 +1218,7 @@ public partial class World : MonoBehaviour
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
             nativeBlockMappings = nativeBlockMappings,
+            nativeOreSettings = nativeOreSettings,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1184,6 +1290,7 @@ public partial class World : MonoBehaviour
             nativeNoiseLayers = default,
             nativeWarpLayers = default,
             nativeBlockMappings = nativeBlockMappings,
+            nativeOreSettings = default,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1403,6 +1510,7 @@ public partial class World : MonoBehaviour
               treeSettings.canopyRadius,
               CliffTreshold,
               enableTrees,
+              oreSettings,
               chunkLightData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
@@ -1412,6 +1520,7 @@ public partial class World : MonoBehaviour
               out NativeArray<NoiseLayer> nativeNoiseLayers,
               out NativeArray<WarpLayer> nativeWarpLayers,
               out NativeArray<BlockTextureMapping> nativeBlockMappings,
+              out NativeArray<OreSpawnSettings> nativeOreSettings,
               out NativeArray<bool> subchunkNonEmpty,
               treeSettings
           );
@@ -1426,6 +1535,7 @@ public partial class World : MonoBehaviour
             nativeNoiseLayers = nativeNoiseLayers,
             nativeWarpLayers = nativeWarpLayers,
             nativeBlockMappings = nativeBlockMappings,
+            nativeOreSettings = nativeOreSettings,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1620,6 +1730,7 @@ public partial class World : MonoBehaviour
         if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
         if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
         if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
+        if (pd.nativeOreSettings.IsCreated) pd.nativeOreSettings.Dispose();
         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
         if (pd.edits.IsCreated) pd.edits.Dispose();
         if (pd.subchunkNonEmpty.IsCreated) pd.subchunkNonEmpty.Dispose();

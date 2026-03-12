@@ -17,5 +17,10 @@ public enum BlockType
     short_grass4 = 14,
     birch_log = 15,
     Crafter = 16,
-    
+    CoalOre = 17,
+    IronOre = 18,
+    GoldOre = 19,
+    RedstoneOre = 20,
+    DiamondOre = 21,
+    EmeraldOre = 22,
 }

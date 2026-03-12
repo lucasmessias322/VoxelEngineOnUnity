@@ -27,8 +27,10 @@ public static class ChunkData
 
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
+        [ReadOnly] public NativeArray<OreSpawnSettings> oreSettings;
         //[ReadOnly] public NativeArray<TreeInstance> treeInstances;
         public TreeSettings treeSettings;
+        public int oreSeed;
         public int treeMargin;
         public int border;
         public int maxTreeRadius;
@@ -49,7 +51,6 @@ public static class ChunkData
         public void Execute()
         {
             int heightSize = SizeX + 2 * border;
-            int totalHeightPoints = heightSize * heightSize;
             int heightStride = heightSize;
 
             int voxelSizeX = SizeX + 2 * border;
@@ -61,6 +62,7 @@ public static class ChunkData
             // 2. Popular voxels (terreno, água)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
+            GenerateOreVeins(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             if (enableTrees)
@@ -305,6 +307,238 @@ public static class ChunkData
 
             float centered = totalNoise - sumAmp * 0.5f;
             return math.clamp(baseHeight + (int)math.floor(centered), 1, SizeY - 1);
+        }
+
+        private void GenerateOreVeins(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride)
+        {
+            if (oreSettings.Length == 0)
+                return;
+
+            int chunkMinX = coord.x * SizeX;
+            int chunkMinZ = coord.y * SizeZ;
+
+            for (int ruleIndex = 0; ruleIndex < oreSettings.Length; ruleIndex++)
+            {
+                OreSpawnSettings rule = oreSettings[ruleIndex];
+                if (!rule.enabled || rule.veinsPerChunk <= 0)
+                    continue;
+
+                int oreBlockIndex = (int)rule.blockType;
+                if (oreBlockIndex < 0 || oreBlockIndex >= blockMappings.Length)
+                    continue;
+                bool oreIsSolid = blockMappings[oreBlockIndex].isSolid;
+
+                int minY = math.clamp(math.min(rule.minY, rule.maxY), 3, SizeY - 1);
+                int maxY = math.clamp(math.max(rule.minY, rule.maxY), 3, SizeY - 1);
+                if (maxY < minY)
+                    continue;
+
+                int minVeinSize = math.max(1, math.min(rule.minVeinSize, rule.maxVeinSize));
+                int maxVeinSize = math.max(minVeinSize, math.max(rule.minVeinSize, rule.maxVeinSize));
+                int minSurfaceDepth = math.max(0, rule.minSurfaceDepth);
+                int veinsPerChunk = math.max(0, rule.veinsPerChunk);
+
+                for (int sourceChunkZ = coord.y - 1; sourceChunkZ <= coord.y + 1; sourceChunkZ++)
+                {
+                    int sourceChunkMinZ = sourceChunkZ * SizeZ;
+                    for (int sourceChunkX = coord.x - 1; sourceChunkX <= coord.x + 1; sourceChunkX++)
+                    {
+                        int sourceChunkMinX = sourceChunkX * SizeX;
+                        for (int vein = 0; vein < veinsPerChunk; vein++)
+                        {
+                            uint state = SeedState(sourceChunkX, sourceChunkZ, oreSeed, ruleIndex, vein);
+
+                            float px = sourceChunkMinX + NextInt(ref state, 0, SizeX - 1) + 0.5f;
+                            float py = NextInt(ref state, minY, maxY) + 0.5f;
+                            float pz = sourceChunkMinZ + NextInt(ref state, 0, SizeZ - 1) + 0.5f;
+
+                            int steps = NextInt(ref state, minVeinSize, maxVeinSize);
+                            float dirX = NextSignedFloat(ref state);
+                            float dirY = NextSignedFloat(ref state) * 0.55f;
+                            float dirZ = NextSignedFloat(ref state);
+                            NormalizeDirection(ref dirX, ref dirY, ref dirZ);
+
+                            for (int step = 0; step < steps; step++)
+                            {
+                                int radius = 1;
+                                if ((step & 1) == 0 && NextFloat01(ref state) < 0.28f)
+                                    radius = 2;
+
+                                PlaceOreBlob(
+                                    rule,
+                                    minY,
+                                    maxY,
+                                    minSurfaceDepth,
+                                    px,
+                                    py,
+                                    pz,
+                                    radius,
+                                    chunkMinX,
+                                    chunkMinZ,
+                                    voxelSizeX,
+                                    voxelSizeZ,
+                                    voxelPlaneSize,
+                                    heightStride,
+                                    oreIsSolid,
+                                    blockTypes,
+                                    solids,
+                                    ref state
+                                );
+
+                                px += dirX * (0.65f + NextFloat01(ref state) * 0.65f);
+                                py += dirY * (0.40f + NextFloat01(ref state) * 0.45f);
+                                pz += dirZ * (0.65f + NextFloat01(ref state) * 0.65f);
+
+                                dirX = math.lerp(dirX, NextSignedFloat(ref state), 0.34f);
+                                dirY = math.lerp(dirY, NextSignedFloat(ref state) * 0.55f, 0.34f);
+                                dirZ = math.lerp(dirZ, NextSignedFloat(ref state), 0.34f);
+                                NormalizeDirection(ref dirX, ref dirY, ref dirZ);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        private void PlaceOreBlob(
+            OreSpawnSettings rule,
+            int minY,
+            int maxY,
+            int minSurfaceDepth,
+            float centerWorldX,
+            float centerWorldY,
+            float centerWorldZ,
+            int radius,
+            int chunkMinX,
+            int chunkMinZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride,
+            bool oreIsSolid,
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            ref uint state)
+        {
+            int worldCenterX = (int)math.floor(centerWorldX);
+            int worldCenterY = (int)math.floor(centerWorldY);
+            int worldCenterZ = (int)math.floor(centerWorldZ);
+            int radiusSq = radius * radius;
+
+            for (int oz = -radius; oz <= radius; oz++)
+            {
+                int worldZ = worldCenterZ + oz;
+                int localZ = worldZ - chunkMinZ + border;
+                if (localZ < 0 || localZ >= voxelSizeZ)
+                    continue;
+
+                for (int ox = -radius; ox <= radius; ox++)
+                {
+                    int worldX = worldCenterX + ox;
+                    int localX = worldX - chunkMinX + border;
+                    if (localX < 0 || localX >= voxelSizeX)
+                        continue;
+
+                    int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                    int maxAllowedY = columnSurfaceY - minSurfaceDepth;
+
+                    for (int oy = -radius; oy <= radius; oy++)
+                    {
+                        int worldY = worldCenterY + oy;
+                        if (worldY < minY || worldY > maxY || worldY < 3 || worldY >= SizeY)
+                            continue;
+                        if (worldY > maxAllowedY)
+                            continue;
+
+                        int distSq = ox * ox + oy * oy + oz * oz;
+                        if (distSq > radiusSq)
+                            continue;
+
+                        // Deixa os blobs menos esfericos e reduz custo de overdraw de minerio.
+                        if (radius > 1 && NextFloat01(ref state) < (distSq / (float)(radiusSq + 1)))
+                            continue;
+
+                        int idx = localX + worldY * voxelSizeX + localZ * voxelPlaneSize;
+                        BlockType existing = blockTypes[idx];
+                        if (!CanReplaceForRule(existing, rule))
+                            continue;
+
+                        blockTypes[idx] = rule.blockType;
+                        solids[idx] = oreIsSolid;
+                    }
+                }
+            }
+        }
+
+        private static bool CanReplaceForRule(BlockType existing, OreSpawnSettings rule)
+        {
+            return (existing == BlockType.Stone && rule.replaceStone) ||
+                   (existing == BlockType.Deepslate && rule.replaceDeepslate);
+        }
+
+        private static void NormalizeDirection(ref float x, ref float y, ref float z)
+        {
+            float lenSq = x * x + y * y + z * z;
+            if (lenSq <= 1e-5f)
+            {
+                x = 1f;
+                y = 0f;
+                z = 0f;
+                return;
+            }
+
+            float invLen = math.rsqrt(lenSq);
+            x *= invLen;
+            y *= invLen;
+            z *= invLen;
+        }
+
+        private static uint SeedState(int chunkX, int chunkZ, int seed, int ruleIndex, int veinIndex)
+        {
+            uint h = 2166136261u;
+            h = (h ^ (uint)chunkX) * 16777619u;
+            h = (h ^ (uint)chunkZ) * 16777619u;
+            h = (h ^ (uint)seed) * 16777619u;
+            h = (h ^ (uint)ruleIndex) * 16777619u;
+            h = (h ^ (uint)veinIndex) * 16777619u;
+            return Hash(h);
+        }
+
+        private static uint Hash(uint v)
+        {
+            v ^= v >> 16;
+            v *= 0x7feb352du;
+            v ^= v >> 15;
+            v *= 0x846ca68bu;
+            v ^= v >> 16;
+            return v;
+        }
+
+        private static float NextFloat01(ref uint state)
+        {
+            state = Hash(state + 0x9e3779b9u);
+            return (state & 0x00ffffffu) / 16777215f;
+        }
+
+        private static float NextSignedFloat(ref uint state)
+        {
+            return NextFloat01(ref state) * 2f - 1f;
+        }
+
+        private static int NextInt(ref uint state, int minInclusive, int maxInclusive)
+        {
+            if (maxInclusive <= minInclusive)
+                return minInclusive;
+
+            state = Hash(state + 0x68bc21ebu);
+            uint range = (uint)(maxInclusive - minInclusive + 1);
+            return minInclusive + (int)(state % range);
         }
 
 
