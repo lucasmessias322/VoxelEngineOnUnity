@@ -34,6 +34,74 @@ public struct OreSpawnSettings
     public bool replaceDeepslate;
 }
 
+[Serializable]
+public struct WormCaveSettings
+{
+    public bool enabled;
+    [Range(0f, 1f)] public float spawnChance;
+    [Min(0)] public int minY;
+    [Min(0)] public int maxY;
+    [Min(1)] public int minWormsPerChunk;
+    [Min(1)] public int maxWormsPerChunk;
+    [Min(1)] public int minLength;
+    [Min(1)] public int maxLength;
+    [Range(0.1f, 4f)] public float stepSize;
+    [Range(0.5f, 8f)] public float minRadius;
+    [Range(0.5f, 8f)] public float maxRadius;
+    [Range(0f, 2f)] public float radiusJitter;
+    [Range(0f, 1f)] public float initialVerticalRange;
+    [Range(0f, 1f)] public float verticalClamp;
+    [Range(0f, 1f)] public float turnRate;
+    [Range(0f, 1f)] public float verticalTurnRate;
+    [Range(0f, 1f)] public float forkChance;
+    [Min(0)] public int maxForksPerWorm;
+    [Min(0)] public int minSurfaceDepth;
+    [Range(0f, 1f)] public float surfaceEntranceChance;
+    [Range(0f, 1f)] public float surfaceEntranceUpwardBias;
+    [Min(0)] public int sourceChunkRadius;
+    public int seedOffset;
+
+    public static WormCaveSettings Default => new WormCaveSettings
+    {
+        enabled = true,
+        spawnChance = 0.26f,
+        minY = 8,
+        maxY = 112,
+        minWormsPerChunk = 1,
+        maxWormsPerChunk = 2,
+        minLength = 30,
+        maxLength = 72,
+        stepSize = 1.15f,
+        minRadius = 1.3f,
+        maxRadius = 2.8f,
+        radiusJitter = 0.30f,
+        initialVerticalRange = 0.2f,
+        verticalClamp = 0.36f,
+        turnRate = 0.17f,
+        verticalTurnRate = 0.09f,
+        forkChance = 0.06f,
+        maxForksPerWorm = 1,
+        minSurfaceDepth = 4,
+        surfaceEntranceChance = 0.16f,
+        surfaceEntranceUpwardBias = 0.35f,
+        sourceChunkRadius = 1,
+        seedOffset = 13391
+    };
+
+    public bool LooksUninitialized =>
+        !enabled &&
+        spawnChance == 0f &&
+        minY == 0 &&
+        maxY == 0 &&
+        minWormsPerChunk == 0 &&
+        maxWormsPerChunk == 0 &&
+        minLength == 0 &&
+        maxLength == 0 &&
+        stepSize == 0f &&
+        minRadius == 0f &&
+        maxRadius == 0f;
+}
+
 
 
 #region Utilities
@@ -75,6 +143,9 @@ public partial class World : MonoBehaviour
             return;
         }
         Instance = this;
+
+        if (caveWormSettings.LooksUninitialized)
+            caveWormSettings = WormCaveSettings.Default;
     }
 
     #endregion
@@ -195,26 +266,8 @@ public partial class World : MonoBehaviour
         }
     };
 
-    [Header("Cave Settings - Worley 3D")]
-    public WorleyTunnelSettings worleyTunnelSettings = new WorleyTunnelSettings
-    {
-        enabled = true,
-        cellSize = 24f,
-        tunnelDiameter = 4f,
-        tunnelDiameterMin = 3.2f,
-        tunnelDiameterMax = 5.1f,
-        evaluationStride = 3,
-        carvePadding = 1,
-        minY = 6,
-        maxY = 96,
-        minSurfaceDepth = 6,
-        seed = 1337,
-        perlinEnabled = true,
-        perlinScale = 42f,
-        perlinWarpStrength = 5.2f,
-        perlinRadiusJitter = 0.75f,
-        perlinOctaves = 2
-    };
+    [Header("Worm Cave Settings")]
+    public WormCaveSettings caveWormSettings = WormCaveSettings.Default;
 
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
@@ -420,66 +473,6 @@ public partial class World : MonoBehaviour
     {
         int treeBorder = treeSettings.canopyRadius + 1;
         return Mathf.Max(treeBorder, sunlightSmoothingPadding);
-    }
-
-    private WorleyTunnelSettings GetResolvedWorleyTunnelSettings()
-    {
-        WorleyTunnelSettings settings = worleyTunnelSettings;
-
-        settings.cellSize = Mathf.Max(4f, settings.cellSize);
-        settings.tunnelDiameter = Mathf.Max(0.5f, settings.tunnelDiameter);
-        float minDiameter = settings.tunnelDiameterMin > 0f ? settings.tunnelDiameterMin : settings.tunnelDiameter;
-        float maxDiameter = settings.tunnelDiameterMax > 0f ? settings.tunnelDiameterMax : settings.tunnelDiameter;
-        if (maxDiameter < minDiameter)
-        {
-            float tmp = minDiameter;
-            minDiameter = maxDiameter;
-            maxDiameter = tmp;
-        }
-
-        settings.tunnelDiameterMin = Mathf.Max(0.5f, minDiameter);
-        settings.tunnelDiameterMax = Mathf.Max(settings.tunnelDiameterMin, maxDiameter);
-        settings.evaluationStride = Mathf.Clamp(settings.evaluationStride, 1, 8);
-        settings.carvePadding = Mathf.Clamp(settings.carvePadding, 1, 4);
-        settings.minSurfaceDepth = Mathf.Max(0, settings.minSurfaceDepth);
-
-        bool looksLegacyPerlinConfig =
-            settings.perlinScale <= 0f &&
-            settings.perlinWarpStrength <= 0f &&
-            settings.perlinRadiusJitter <= 0f &&
-            settings.perlinOctaves == 0;
-
-        if (looksLegacyPerlinConfig)
-        {
-            settings.perlinEnabled = true;
-            settings.perlinScale = settings.cellSize * 1.9f;
-            settings.perlinWarpStrength = Mathf.Max(1.5f, settings.tunnelDiameter * 1.05f);
-            settings.perlinRadiusJitter = Mathf.Max(0.25f, settings.tunnelDiameter * 0.18f);
-            settings.perlinOctaves = 2;
-        }
-        else
-        {
-            settings.perlinScale = Mathf.Max(4f, settings.perlinScale);
-            settings.perlinWarpStrength = Mathf.Max(0f, settings.perlinWarpStrength);
-            settings.perlinRadiusJitter = Mathf.Max(0f, settings.perlinRadiusJitter);
-            settings.perlinOctaves = Mathf.Clamp(settings.perlinOctaves, 1, 4);
-        }
-
-        int minY = Mathf.Clamp(settings.minY, 0, Chunk.SizeY - 1);
-        int maxY = Mathf.Clamp(settings.maxY, 0, Chunk.SizeY - 1);
-        if (maxY < minY)
-        {
-            int tmp = minY;
-            minY = maxY;
-            maxY = tmp;
-        }
-
-        settings.minY = minY;
-        settings.maxY = maxY;
-
-        uint mixedSeed = (uint)seed ^ ((uint)settings.seed * 0x9e3779b9u);
-        settings.seed = (int)(mixedSeed & 0x7fffffff);
-        return settings;
     }
 
     #endregion
@@ -1181,7 +1174,6 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
-        WorleyTunnelSettings resolvedWorleyTunnels = GetResolvedWorleyTunnelSettings();
 
         InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         if (chunk.jobScheduled)
@@ -1194,10 +1186,11 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
-            resolvedWorleyTunnels,
+            seed,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableTrees,
             oreSettings,
+            caveWormSettings,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -1494,7 +1487,6 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
-        WorleyTunnelSettings resolvedWorleyTunnels = GetResolvedWorleyTunnelSettings();
 
         InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
@@ -1507,7 +1499,7 @@ public partial class World : MonoBehaviour
               offsetX,
               offsetZ,
               seaLevel,
-              resolvedWorleyTunnels,
+              seed,
               nativeEdits,
               treeMargin,
               borderSize,
@@ -1515,6 +1507,7 @@ public partial class World : MonoBehaviour
               CliffTreshold,
               enableTrees,
               oreSettings,
+              caveWormSettings,
               chunkLightData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,

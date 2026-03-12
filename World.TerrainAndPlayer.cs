@@ -102,13 +102,9 @@ public partial class World : MonoBehaviour
         int worldZ = worldPos.z;
 
         int surfaceHeight = GetSurfaceHeight(worldX, worldZ);
-        WorleyTunnelSettings resolvedWorleyTunnels = GetResolvedWorleyTunnelSettings();
 
         if (worldPos.y > surfaceHeight)
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
-
-        if (MyNoise.ShouldCarveWorleyEdgeTunnel(worldX, worldPos.y, worldZ, surfaceHeight, resolvedWorleyTunnels))
-            return BlockType.Air;
 
         bool isBeachArea = (surfaceHeight <= seaLevel + 2);
         bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);

@@ -150,7 +150,6 @@ public static class MeshGenerator
         public float seaLevel;
         public int baseHeight;
         public int CliffTreshold;
-        public WorleyTunnelSettings worleyTunnels;
 
         public void Execute(int index)
         {
@@ -186,75 +185,12 @@ public static class MeshGenerator
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int worldX = coord.x * SizeX + (lx - border);
-            int worldZ = coord.y * SizeZ + (lz - border);
-
-            int carveMinY = math.max(3, worleyTunnels.minY);
-            int carveSurfaceDepth = MyNoise.ResolveSurfaceCarveDepth(worldX, worldZ, worleyTunnels);
-            int carveMaxY = math.min(h, worleyTunnels.maxY);
-            carveMaxY = math.min(carveMaxY, h - carveSurfaceDepth);
-
-            int carvePadding = math.max(0, worleyTunnels.carvePadding);
-            int carveMinX = border - carvePadding;
-            int carveMaxX = border + SizeX + carvePadding - 1;
-            int carveMinZ = border - carvePadding;
-            int carveMaxZ = border + SizeZ + carvePadding - 1;
-
-            bool inCarveFootprint = lx >= carveMinX && lx <= carveMaxX && lz >= carveMinZ && lz <= carveMaxZ;
-            bool canCarveThisColumn = worleyTunnels.enabled && inCarveFootprint && carveMaxY >= carveMinY;
-
-            int sampleStride = math.max(1, worleyTunnels.evaluationStride);
-            int lastSampleBucket = int.MinValue;
-            int lastSampleBucketStartY = 0;
-            float lastMetricA = 1f;
-            float lastMetricB = 1f;
-            bool hasCachedMetrics = false;
 
             int maxSolidY = math.min(h, SizeY - 1);
             int idx = lx + lz * voxelPlaneSize;
 
             for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
             {
-                if (canCarveThisColumn && y >= carveMinY && y <= carveMaxY)
-                {
-                    int sampleBucket = y / sampleStride;
-                    if (sampleBucket != lastSampleBucket)
-                    {
-                        int previousBucket = lastSampleBucket;
-                        lastSampleBucket = sampleBucket;
-                        lastSampleBucketStartY = sampleBucket * sampleStride;
-
-                        if (hasCachedMetrics && sampleBucket == previousBucket + 1)
-                        {
-                            // Reuse B(n) as A(n+1): avoids one expensive cave metric evaluation per bucket.
-                            lastMetricA = lastMetricB;
-                        }
-                        else
-                        {
-                            float3 samplePosA = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket, worleyTunnels);
-                            lastMetricA = MyNoise.EvaluateWorleyTunnelMetric(samplePosA, worleyTunnels);
-                        }
-
-                        float3 samplePosB = MyNoise.GetStrideSamplePosition(worldX, worldZ, sampleBucket + 1, worleyTunnels);
-                        lastMetricB = MyNoise.EvaluateWorleyTunnelMetric(samplePosB, worleyTunnels);
-                        hasCachedMetrics = true;
-                    }
-
-                    float metric = lastMetricA;
-                    if (sampleStride > 1)
-                    {
-                        float t = math.saturate((y - lastSampleBucketStartY + 0.5f) / (float)sampleStride);
-                        metric = math.lerp(lastMetricA, lastMetricB, t);
-                    }
-
-                    if (metric <= 0f)
-                    {
-                        blockTypes[idx] = BlockType.Air;
-                        solids[idx] = false;
-                        continue;
-                    }
-                }
-
                 BlockType bt;
                 if (y == h)
                 {
@@ -291,7 +227,7 @@ public static class MeshGenerator
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
-        WorleyTunnelSettings worleyTunnelSettings,
+        int oreSeed,
 
 
         NativeArray<BlockEdit> blockEdits,
@@ -302,6 +238,7 @@ public static class MeshGenerator
         int CliffTreshold,
         bool enableTrees,
         OreSpawnSettings[] oreSettingsArr,
+        WormCaveSettings caveSettings,
         NativeArray<byte> lightData, // <--- NOVA INJECAO DE DEPENDENCIA DE LUZ
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
@@ -377,8 +314,7 @@ public static class MeshGenerator
             border = borderSize,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            worleyTunnels = worleyTunnelSettings
+            CliffTreshold = CliffTreshold
         };
 
         int paddedSize = SizeX + 2 * borderSize;
@@ -417,7 +353,8 @@ public static class MeshGenerator
             solids = solids,
             treeSettings = treeSettings,
             oreSettings = nativeOreSettings,
-            oreSeed = worleyTunnelSettings.seed,
+            oreSeed = oreSeed,
+            caveSettings = caveSettings,
 
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
