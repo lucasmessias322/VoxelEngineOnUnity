@@ -35,6 +35,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     private MeshRenderer crackOverlayRenderer;
     private Material crackOverlayRuntimeMaterial;
     private Vector3Int breakingBlock = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+    private bool breakingIsBillboard;
     private float breakProgress01;
     private int lastCrackStage = -1;
 
@@ -77,14 +78,24 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         if (selector.IsBillboardHit)
         {
-            // Billboard de grama nao existe como voxel real.
-            // Suprime apenas o billboard nessa celula, mantendo o bloco de grama-base.
-            if (Input.GetMouseButtonDown(0))
+            // Billboard de grama nao existe como voxel real, mas usa o mesmo fluxo de "minerar".
+            if (sel != breakingBlock || !breakingIsBillboard)
             {
-                World.Instance.SuppressGrassBillboardAt(sel);
-                if (breakBlockClip != null)
-                    audioSource.PlayOneShot(breakBlockClip);
+                breakingBlock = sel;
+                breakingIsBillboard = true;
+                breakProgress01 = 0f;
+                lastCrackStage = -1;
             }
+
+            breakProgress01 += Time.deltaTime / Mathf.Max(0.05f, breakDurationSeconds);
+            UpdateCrackOverlay(sel, breakProgress01);
+
+            if (breakProgress01 < 1f)
+                return;
+
+            World.Instance.SuppressGrassBillboardAt(sel);
+            if (breakBlockClip != null)
+                audioSource.PlayOneShot(breakBlockClip);
 
             CancelBreak();
             return;
@@ -97,9 +108,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
         }
 
-        if (sel != breakingBlock)
+        if (sel != breakingBlock || breakingIsBillboard)
         {
             breakingBlock = sel;
+            breakingIsBillboard = false;
             breakProgress01 = 0f;
             lastCrackStage = -1;
         }
@@ -200,6 +212,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         breakProgress01 = 0f;
         lastCrackStage = -1;
         breakingBlock = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+        breakingIsBillboard = false;
 
         if (crackOverlayObject != null && crackOverlayObject.activeSelf)
             crackOverlayObject.SetActive(false);
