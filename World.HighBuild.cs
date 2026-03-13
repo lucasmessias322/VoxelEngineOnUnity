@@ -249,6 +249,7 @@ public partial class World
         data.mesh.SetTriangles(waterTris, 2, true);
         data.mesh.RecalculateBounds();
         data.meshFilter.sharedMesh = data.mesh;
+        ApplyBiomeTintToRenderer(data.meshRenderer, coord);
         data.meshRenderer.enabled = true;
         data.root.SetActive(true);
 

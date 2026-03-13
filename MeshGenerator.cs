@@ -150,6 +150,7 @@ public static class MeshGenerator
         public float seaLevel;
         public int baseHeight;
         public int CliffTreshold;
+        public BiomeNoiseSettings biomeNoiseSettings;
 
         public void Execute(int index)
         {
@@ -158,10 +159,17 @@ public static class MeshGenerator
 
             int lx = index % paddedSize;   // cacheX
             int lz = index / paddedSize;   // cacheZ
+            int realLx = lx - border;
+            int realLz = lz - border;
+            int worldX = coord.x * SizeX + realLx;
+            int worldZ = coord.y * SizeZ + realLz;
 
             int h = heightCache[lx + lz * heightStride];
 
             bool isBeachArea = h <= seaLevel + 2f;
+            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome);
+            BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(biome);
 
             // === IsCliff local (corrigido - não precisa de coord) ===
             bool isCliff = false;
@@ -196,12 +204,12 @@ public static class MeshGenerator
                 {
                     if (isHighMountain) bt = BlockType.Stone;
                     else if (isCliff) bt = BlockType.Stone;
-                    else bt = isBeachArea ? BlockType.Sand : BlockType.Grass;
+                    else bt = isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
                 }
                 else if (y > h - 4)
                 {
                     if (isCliff) bt = BlockType.Stone;
-                    else bt = isBeachArea ? BlockType.Sand : BlockType.Dirt;
+                    else bt = isBeachArea ? BlockType.Sand : biomeSubsurfaceBlock;
                 }
                 else if (y <= 2)
                 {
@@ -227,6 +235,7 @@ public static class MeshGenerator
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
+        BiomeNoiseSettings biomeNoiseSettings,
         int oreSeed,
 
 
@@ -314,7 +323,8 @@ public static class MeshGenerator
             border = borderSize,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold
+            CliffTreshold = CliffTreshold,
+            biomeNoiseSettings = biomeNoiseSettings
         };
 
         int paddedSize = SizeX + 2 * borderSize;
@@ -341,6 +351,7 @@ public static class MeshGenerator
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,
+            biomeNoiseSettings = biomeNoiseSettings,
 
 
             treeMargin = treeMargin,

@@ -109,15 +109,17 @@ public partial class World : MonoBehaviour
         bool isBeachArea = (surfaceHeight <= seaLevel + 2);
         bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
         bool isHighMountain = surfaceHeight >= baseHeight + 70;
+        BlockType biomeSurfaceBlock = GetBiomeSurfaceBlock(worldX, worldZ);
+        BlockType biomeSubsurfaceBlock = GetBiomeSubsurfaceBlock(worldX, worldZ);
 
         if (worldPos.y == surfaceHeight)
         {
             if (isHighMountain || isCliff) return BlockType.Stone;
-            return isBeachArea ? BlockType.Sand : BlockType.Grass;
+            return isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
         }
         else if (worldPos.y > surfaceHeight - 4)
         {
-            return (isCliff || isHighMountain) ? BlockType.Stone : (isBeachArea ? BlockType.Sand : BlockType.Dirt);
+            return (isCliff || isHighMountain) ? BlockType.Stone : (isBeachArea ? BlockType.Sand : biomeSubsurfaceBlock);
         }
         else if (worldPos.y <= 2)
             return BlockType.Bedrock;

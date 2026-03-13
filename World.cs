@@ -542,6 +542,7 @@ public partial class World : MonoBehaviour
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
 
+        InitializeBiomeNoiseOffsets();
         InitializeNoiseLayers();
         InitializeWarpLayers();
 
@@ -680,6 +681,7 @@ public partial class World : MonoBehaviour
                 activeChunk.generation == pd.expectedGen)
             {
                 activeChunk.InitializeSubchunks(Material);
+                ApplyChunkBiomeTint(activeChunk, pd.coord);
                 activeChunk.hasVoxelData = true;
                 activeChunk.state = Chunk.ChunkState.MeshReady;
 
@@ -1186,6 +1188,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ScheduleDataJob(
             coord, noiseLayers, warpLayers, blockData.mappings,
             baseHeight, offsetX, offsetZ, seaLevel,
+            GetBiomeNoiseSettings(),
             seed,
             nativeEdits, treeMargin, borderSize,
             treeSettings.canopyRadius, CliffTreshold, enableTrees,
@@ -1499,6 +1502,7 @@ public partial class World : MonoBehaviour
               offsetX,
               offsetZ,
               seaLevel,
+              GetBiomeNoiseSettings(),
               seed,
               nativeEdits,
               treeMargin,

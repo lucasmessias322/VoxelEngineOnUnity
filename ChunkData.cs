@@ -39,6 +39,7 @@ public static class ChunkData
         public float offsetX;
         public float offsetZ;
         public float seaLevel;
+        public BiomeNoiseSettings biomeNoiseSettings;
 
 
         public int CliffTreshold;
@@ -191,10 +192,12 @@ public static class ChunkData
             bool isCliff = IsCliffInternal(worldX, worldZ, CliffTreshold);
             int mountainStoneHeight = baseHeight + 70;
             bool isHighMountain = h >= mountainStoneHeight;
+            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome);
 
             if (isHighMountain) return BlockType.Stone;
             else if (isCliff) return BlockType.Stone;
-            else return isBeachArea ? BlockType.Sand : BlockType.Grass;
+            else return isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
         }
 
         // NOVO: Versão interna de IsCliff (usa heightCache, ajuste coords locais)
