@@ -171,7 +171,16 @@ public static class ChunkData
                     if (biome != rule.biome) continue;
 
                     BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);
-                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow) continue;
+                    bool isCactus = rule.treeStyle == TreeStyle.Cactus;
+                    if (isCactus)
+                    {
+                        if (groundType != BlockType.Sand) continue;
+                    }
+                    else if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
+                    {
+                        continue;
+                    }
+
                     if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;
                     if (HasNearbyTreeXZ(in trees, worldX, worldZ, proximitySpacing)) continue;
 

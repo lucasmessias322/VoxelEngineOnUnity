@@ -32,11 +32,20 @@ public static class TreePlacement
         {
             TreeInstance t = treeInstances[i];
             bool isTaigaSpruce = t.treeStyle == TreeStyle.TaigaSpruce;
+            bool isCactus = t.treeStyle == TreeStyle.Cactus;
 
             int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791);
-            BlockType trunkType = isTaigaSpruce
-                ? BlockType.Log
-                : ((treeHash & 3) == 0 ? BlockType.birch_log : BlockType.Log);
+            BlockType trunkType;
+            if (isCactus)
+            {
+                trunkType = GetCactusBlockType(blockMappings);
+            }
+            else
+            {
+                trunkType = isTaigaSpruce
+                    ? BlockType.Log
+                    : ((treeHash & 3) == 0 ? BlockType.birch_log : BlockType.Log);
+            }
 
             int localX = t.worldX - baseWorldX;
             int localZ = t.worldZ - baseWorldZ;
@@ -59,8 +68,15 @@ public static class TreePlacement
 
             int groundIdx = ix + surfaceY * voxelSizeX + iz * voxelPlaneSize;
             BlockType groundType = blockTypes[groundIdx];
-            if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
+            if (isCactus)
+            {
+                if (groundType != BlockType.Sand)
+                    continue;
+            }
+            else if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
+            {
                 continue;
+            }
 
             int leafBottom = surfaceY + t.trunkHeight - 1;
             int canopyH = math.max(1, t.canopyHeight);
@@ -90,7 +106,7 @@ public static class TreePlacement
             if (skipTree)
                 continue;
 
-            int extraTop = isTaigaSpruce ? 1 : 0;
+            int extraTop = isTaigaSpruce ? 1 : (isCactus ? 2 : 0);
             int maxCheckY = math.min(chunkSizeY - 1, surfaceY + t.trunkHeight + canopyH + extraTop);
             for (int yy = surfaceY + 1; yy <= maxCheckY && !skipTree; yy++)
             {
@@ -131,7 +147,16 @@ public static class TreePlacement
                 }
             }
 
-            if (isTaigaSpruce)
+            if (isCactus)
+            {
+                int armReach = math.clamp(math.max(1, canopyR), 1, 2);
+                PlaceCactusStructure(
+                    ix, iz, surfaceY, t.trunkHeight, armReach, treeHash,
+                    blockTypes, solids, blockMappings,
+                    chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, trunkType
+                );
+            }
+            else if (isTaigaSpruce)
             {
                 PlaceTaigaSpruceCanopy(
                     ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
@@ -147,6 +172,9 @@ public static class TreePlacement
                     chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize
                 );
             }
+
+            if (isCactus)
+                continue;
 
             for (int dy = 1; dy <= t.trunkHeight; dy++)
             {
@@ -165,6 +193,120 @@ public static class TreePlacement
                 }
             }
         }
+    }
+
+    private static BlockType GetCactusBlockType(NativeArray<BlockTextureMapping> blockMappings)
+    {
+        return (int)BlockType.Cactus < blockMappings.Length
+            ? BlockType.Cactus
+            : BlockType.Log;
+    }
+
+    private static void PlaceCactusStructure(
+        int ix,
+        int iz,
+        int surfaceY,
+        int trunkHeight,
+        int armReach,
+        int treeHash,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        BlockType cactusType)
+    {
+        int minArmY = surfaceY + math.max(2, trunkHeight / 2);
+        int maxArmY = surfaceY + math.max(2, trunkHeight - 1);
+        int primaryDir = treeHash & 3;
+        int secondaryDir = (primaryDir + (((treeHash >> 2) & 1) == 0 ? 1 : 3)) & 3;
+        int armCount = trunkHeight >= 5 ? 2 : (trunkHeight >= 3 ? 1 : 0);
+
+        for (int arm = 0; arm < armCount; arm++)
+        {
+            int dir = arm == 0 ? primaryDir : secondaryDir;
+            int dirX;
+            int dirZ;
+            GetCardinalDirection(dir, out dirX, out dirZ);
+
+            int armBaseYOffset = 1 + ((treeHash >> (8 + arm * 3)) & 0x1);
+            int armBaseY = math.clamp(minArmY + armBaseYOffset, minArmY, maxArmY);
+            int length = math.clamp(1 + ((treeHash >> (14 + arm * 2)) & 0x1), 1, math.max(1, armReach));
+
+            int tipX = ix;
+            int tipZ = iz;
+            for (int step = 1; step <= length; step++)
+            {
+                int lx = ix + dirX * step;
+                int lz = iz + dirZ * step;
+                if (!TryPlaceCactusBlock(lx, armBaseY, lz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, cactusType))
+                    break;
+
+                tipX = lx;
+                tipZ = lz;
+            }
+
+            bool raiseTip = ((treeHash >> (20 + arm)) & 1) == 1;
+            if (raiseTip)
+                TryPlaceCactusBlock(tipX, armBaseY + 1, tipZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, cactusType);
+        }
+    }
+
+    private static void GetCardinalDirection(int dir, out int dx, out int dz)
+    {
+        switch (dir & 3)
+        {
+            case 0:
+                dx = 1;
+                dz = 0;
+                break;
+            case 1:
+                dx = -1;
+                dz = 0;
+                break;
+            case 2:
+                dx = 0;
+                dz = 1;
+                break;
+            default:
+                dx = 0;
+                dz = -1;
+                break;
+        }
+    }
+
+    private static bool TryPlaceCactusBlock(
+        int lx,
+        int ly,
+        int lz,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY,
+        BlockType cactusType)
+    {
+        if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ)
+            return false;
+        if (ly < 0 || ly >= chunkSizeY)
+            return false;
+
+        int mappingIndex = (int)cactusType;
+        if (mappingIndex < 0 || mappingIndex >= blockMappings.Length)
+            return false;
+
+        int idx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
+        BlockType existing = blockTypes[idx];
+        if (!(existing == BlockType.Air || existing == BlockType.Leaves))
+            return false;
+
+        blockTypes[idx] = cactusType;
+        solids[idx] = blockMappings[mappingIndex].isSolid;
+        return true;
     }
 
     private static void PlaceOakBroadleafCanopy(

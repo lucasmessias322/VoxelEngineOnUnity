@@ -593,6 +593,7 @@ public partial class World
             case BlockType.RedstoneOre: return new Color32(176, 52, 52, 255);
             case BlockType.DiamondOre: return new Color32(76, 195, 219, 255);
             case BlockType.EmeraldOre: return new Color32(55, 173, 91, 255);
+            case BlockType.Cactus: return new Color32(70, 152, 68, 255);
             default: return new Color32(200, 200, 200, 255);
         }
     }

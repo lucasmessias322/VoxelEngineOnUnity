@@ -9,7 +9,8 @@ using Unity.Mathematics;
 public enum TreeStyle : byte
 {
     OakBroadleaf = 0,
-    TaigaSpruce = 1
+    TaigaSpruce = 1,
+    Cactus = 2
 }
 
 public struct TreeInstance

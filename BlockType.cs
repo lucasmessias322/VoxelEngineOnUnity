@@ -23,4 +23,5 @@ public enum BlockType
     RedstoneOre = 20,
     DiamondOre = 21,
     EmeraldOre = 22,
+    Cactus = 23,
 }
