@@ -20,6 +20,15 @@ public struct TreeSettings
 }
 
 [Serializable]
+public struct BiomeTreeTypeConfig
+{
+    public bool enabled;
+    public BiomeType biome;
+    public TreeStyle treeStyle;
+    public TreeSettings settings;
+}
+
+[Serializable]
 public struct OreSpawnSettings
 {
     public bool enabled;
@@ -181,6 +190,9 @@ public partial class World : MonoBehaviour
 
     [Header("Tree Settings")]
     public TreeSettings treeSettings;
+    [Header("Tree Rules By Biome/Type")]
+    [Tooltip("If this list has enabled entries, tree generation uses these rules instead of the single Tree Settings.")]
+    public BiomeTreeTypeConfig[] biomeTreeTypeConfigs;
     public int CliffTreshold = 2;
 
     [Header("Ore Settings")]
@@ -371,6 +383,8 @@ public partial class World : MonoBehaviour
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
+    private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
+    private bool treeSpawnRulesDirty = true;
 
 
     // Optimization temporaries
@@ -471,8 +485,96 @@ public partial class World : MonoBehaviour
 
     private int GetChunkBorderSize()
     {
-        int treeBorder = treeSettings.canopyRadius + 1;
+        int treeBorder = GetMaxTreeCanopyRadiusForGeneration() + 1;
         return Mathf.Max(treeBorder, sunlightSmoothingPadding);
+    }
+
+    private TreeSpawnRuleData[] GetActiveTreeSpawnRules()
+    {
+        if (treeSpawnRulesDirty)
+            RebuildTreeSpawnRuleCache();
+
+        return cachedTreeSpawnRules;
+    }
+
+    private int GetMaxTreeCanopyRadiusForGeneration()
+    {
+        TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
+        if (rules.Length == 0)
+            return Mathf.Max(0, treeSettings.canopyRadius);
+
+        int maxRadius = 0;
+        for (int i = 0; i < rules.Length; i++)
+            maxRadius = Mathf.Max(maxRadius, Mathf.Max(0, rules[i].settings.canopyRadius));
+
+        return maxRadius;
+    }
+
+    private int GetMaxTreeRadiusForGeneration()
+    {
+        return GetMaxTreeCanopyRadiusForGeneration();
+    }
+
+    private int GetMaxTreeMarginForGeneration()
+    {
+        TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
+        if (rules.Length == 0)
+            return Mathf.Max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+
+        int maxMargin = 1;
+        for (int i = 0; i < rules.Length; i++)
+        {
+            TreeSettings s = rules[i].settings;
+            maxMargin = Mathf.Max(maxMargin, Mathf.Max(1, s.maxHeight + s.canopyHeight + 2));
+        }
+
+        return maxMargin;
+    }
+
+    private void RebuildTreeSpawnRuleCache()
+    {
+        treeSpawnRulesDirty = false;
+
+        if (biomeTreeTypeConfigs == null || biomeTreeTypeConfigs.Length == 0)
+        {
+            cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
+            return;
+        }
+
+        List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(biomeTreeTypeConfigs.Length);
+        for (int i = 0; i < biomeTreeTypeConfigs.Length; i++)
+        {
+            BiomeTreeTypeConfig cfg = biomeTreeTypeConfigs[i];
+            if (!cfg.enabled)
+                continue;
+
+            TreeSettings sanitized = SanitizeTreeSettings(cfg.settings);
+            rules.Add(new TreeSpawnRuleData
+            {
+                biome = cfg.biome,
+                treeStyle = cfg.treeStyle,
+                settings = sanitized
+            });
+        }
+
+        cachedTreeSpawnRules = rules.Count > 0 ? rules.ToArray() : Array.Empty<TreeSpawnRuleData>();
+    }
+
+    private TreeSettings SanitizeTreeSettings(TreeSettings raw)
+    {
+        TreeSettings s = raw;
+        s.minHeight = Mathf.Max(1, s.minHeight);
+        s.maxHeight = Mathf.Max(s.minHeight, s.maxHeight);
+        s.canopyRadius = Mathf.Max(0, s.canopyRadius);
+        s.canopyHeight = Mathf.Max(1, s.canopyHeight);
+        s.minSpacing = Mathf.Max(1, s.minSpacing);
+        s.density = Mathf.Clamp01(s.density);
+        s.noiseScale = Mathf.Max(0.0001f, s.noiseScale);
+
+        if (s.seed == 0)
+            s.seed = seed;
+
+        return s;
     }
 
     #endregion
@@ -521,6 +623,7 @@ public partial class World : MonoBehaviour
         public NativeArray<WarpLayer> nativeWarpLayers;
         public NativeArray<BlockTextureMapping> nativeBlockMappings;
         public NativeArray<OreSpawnSettings> nativeOreSettings;
+        public NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules;
 
         public Chunk chunk;
         public Vector2Int coord;
@@ -534,6 +637,11 @@ public partial class World : MonoBehaviour
     #endregion
 
     #region Unity Callbacks
+
+    private void OnValidate()
+    {
+        treeSpawnRulesDirty = true;
+    }
 
     private void Start()
     {
@@ -1168,7 +1276,8 @@ public partial class World : MonoBehaviour
             nativeEdits = new NativeArray<BlockEdit>(0, Allocator.Persistent);
         }
 
-        int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+        int treeMargin = GetMaxTreeMarginForGeneration();
+        TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
 
         // Injeção da luz global
         // Light injection corrected for rebuild (uses borderSize)
@@ -1191,8 +1300,9 @@ public partial class World : MonoBehaviour
             GetBiomeNoiseSettings(),
             seed,
             nativeEdits, treeMargin, borderSize,
-            treeSettings.canopyRadius, CliffTreshold, enableTrees,
+            GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,
             oreSettings,
+            activeTreeSpawnRules,
             caveWormSettings,
             chunkLightData,
             out JobHandle dataHandle,
@@ -1204,6 +1314,7 @@ public partial class World : MonoBehaviour
             out NativeArray<WarpLayer> nativeWarpLayers,
             out NativeArray<BlockTextureMapping> nativeBlockMappings,
             out NativeArray<OreSpawnSettings> nativeOreSettings,
+            out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
             out NativeArray<bool> subchunkNonEmpty,
             treeSettings
         );
@@ -1219,6 +1330,7 @@ public partial class World : MonoBehaviour
             nativeWarpLayers = nativeWarpLayers,
             nativeBlockMappings = nativeBlockMappings,
             nativeOreSettings = nativeOreSettings,
+            nativeTreeSpawnRules = nativeTreeSpawnRules,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1291,6 +1403,7 @@ public partial class World : MonoBehaviour
             nativeWarpLayers = default,
             nativeBlockMappings = nativeBlockMappings,
             nativeOreSettings = default,
+            nativeTreeSpawnRules = default,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1483,7 +1596,8 @@ public partial class World : MonoBehaviour
             nativeEdits = new NativeArray<BlockEdit>(0, Allocator.Persistent);
         }
 
-        int treeMargin = math.max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+        int treeMargin = GetMaxTreeMarginForGeneration();
+        TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
@@ -1507,10 +1621,11 @@ public partial class World : MonoBehaviour
               nativeEdits,
               treeMargin,
               borderSize,
-              treeSettings.canopyRadius,
+              GetMaxTreeRadiusForGeneration(),
               CliffTreshold,
               enableTrees,
               oreSettings,
+              activeTreeSpawnRules,
               caveWormSettings,
               chunkLightData,
               out JobHandle dataHandle,
@@ -1522,6 +1637,7 @@ public partial class World : MonoBehaviour
               out NativeArray<WarpLayer> nativeWarpLayers,
               out NativeArray<BlockTextureMapping> nativeBlockMappings,
               out NativeArray<OreSpawnSettings> nativeOreSettings,
+              out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
               out NativeArray<bool> subchunkNonEmpty,
               treeSettings
           );
@@ -1537,6 +1653,7 @@ public partial class World : MonoBehaviour
             nativeWarpLayers = nativeWarpLayers,
             nativeBlockMappings = nativeBlockMappings,
             nativeOreSettings = nativeOreSettings,
+            nativeTreeSpawnRules = nativeTreeSpawnRules,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1732,6 +1849,7 @@ public partial class World : MonoBehaviour
         if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
         if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
         if (pd.nativeOreSettings.IsCreated) pd.nativeOreSettings.Dispose();
+        if (pd.nativeTreeSpawnRules.IsCreated) pd.nativeTreeSpawnRules.Dispose();
         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
         if (pd.edits.IsCreated) pd.edits.Dispose();
         if (pd.subchunkNonEmpty.IsCreated) pd.subchunkNonEmpty.Dispose();

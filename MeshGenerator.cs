@@ -5,6 +5,13 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Burst;
 using Unity.Mathematics;
+
+public enum TreeStyle : byte
+{
+    OakBroadleaf = 0,
+    TaigaSpruce = 1
+}
+
 public struct TreeInstance
 {
     public int worldX;
@@ -12,6 +19,14 @@ public struct TreeInstance
     public int trunkHeight;
     public int canopyRadius;
     public int canopyHeight;
+    public TreeStyle treeStyle;
+}
+
+public struct TreeSpawnRuleData
+{
+    public BiomeType biome;
+    public TreeStyle treeStyle;
+    public TreeSettings settings;
 }
 
 public struct BlockEdit
@@ -247,6 +262,7 @@ public static class MeshGenerator
         int CliffTreshold,
         bool enableTrees,
         OreSpawnSettings[] oreSettingsArr,
+        TreeSpawnRuleData[] treeSpawnRulesArr,
         WormCaveSettings caveSettings,
         NativeArray<byte> lightData, // <--- NOVA INJECAO DE DEPENDENCIA DE LUZ
         out JobHandle dataHandle,
@@ -258,6 +274,7 @@ public static class MeshGenerator
         out NativeArray<WarpLayer> nativeWarpLayers,
         out NativeArray<BlockTextureMapping> nativeBlockMappings,
         out NativeArray<OreSpawnSettings> nativeOreSettings,
+        out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
         out NativeArray<bool> subchunkNonEmpty,
         TreeSettings treeSettings
     )
@@ -272,6 +289,10 @@ public static class MeshGenerator
             nativeOreSettings = new NativeArray<OreSpawnSettings>(oreSettingsArr, Allocator.TempJob);
         else
             nativeOreSettings = new NativeArray<OreSpawnSettings>(0, Allocator.TempJob);
+        if (treeSpawnRulesArr != null && treeSpawnRulesArr.Length > 0)
+            nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(treeSpawnRulesArr, Allocator.TempJob);
+        else
+            nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(0, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
         // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
@@ -363,6 +384,7 @@ public static class MeshGenerator
             blockTypes = blockTypes,
             solids = solids,
             treeSettings = treeSettings,
+            treeSpawnRules = nativeTreeSpawnRules,
             oreSettings = nativeOreSettings,
             oreSeed = oreSeed,
             caveSettings = caveSettings,

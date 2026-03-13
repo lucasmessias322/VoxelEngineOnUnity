@@ -13,7 +13,7 @@ public partial class World : MonoBehaviour
         int sizeX = Chunk.SizeX;
         int sizeY = Chunk.SizeY;
         int sizeZ = Chunk.SizeZ;
-        int border = treeSettings.canopyRadius + 1;
+        int border = GetMaxTreeCanopyRadiusForGeneration() + 1;
         int padX = sizeX + border;
         int padZ = sizeZ + border;
 

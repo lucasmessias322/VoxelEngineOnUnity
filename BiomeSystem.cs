@@ -5,7 +5,8 @@ public enum BiomeType : byte
 {
     Desert = 0,
     Savanna = 1,
-    Meadow = 2
+    Meadow = 2,
+    Taiga = 3
 }
 
 public struct BiomeNoiseSettings
@@ -17,6 +18,8 @@ public struct BiomeNoiseSettings
     public float desertMinTemperature;
     public float desertMaxHumidity;
     public float savannaMinTemperature;
+    public float taigaMaxTemperature;
+    public float taigaMinHumidity;
 }
 
 public static class BiomeUtility
@@ -35,6 +38,9 @@ public static class BiomeUtility
         if (temperature >= settings.desertMinTemperature && humidity <= settings.desertMaxHumidity)
             return BiomeType.Desert;
 
+        if (temperature <= settings.taigaMaxTemperature && humidity >= settings.taigaMinHumidity)
+            return BiomeType.Taiga;
+
         if (temperature >= settings.savannaMinTemperature)
             return BiomeType.Savanna;
 
@@ -48,6 +54,8 @@ public static class BiomeUtility
         {
             case BiomeType.Desert:
                 return BlockType.Sand;
+            case BiomeType.Taiga:
+
             case BiomeType.Savanna:
             case BiomeType.Meadow:
             default:
@@ -62,6 +70,8 @@ public static class BiomeUtility
         {
             case BiomeType.Desert:
                 return BlockType.Sand;
+            case BiomeType.Taiga:
+                return BlockType.Dirt;
             case BiomeType.Savanna:
             case BiomeType.Meadow:
             default:

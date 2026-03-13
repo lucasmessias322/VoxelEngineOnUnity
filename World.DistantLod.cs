@@ -429,7 +429,7 @@ public partial class World
         if (isHighMountain || isCliff)
             return BlockType.Stone;
 
-        return isBeachArea ? BlockType.Sand : BlockType.Grass;
+        return isBeachArea ? BlockType.Sand : GetBiomeSurfaceBlock(worldX, worldZ);
     }
 
     private Color GetBlockSurfaceColor(BlockType blockType)

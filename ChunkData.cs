@@ -30,6 +30,7 @@ public static class ChunkData
         [ReadOnly] public NativeArray<OreSpawnSettings> oreSettings;
         //[ReadOnly] public NativeArray<TreeInstance> treeInstances;
         public TreeSettings treeSettings;
+        [ReadOnly] public NativeArray<TreeSpawnRuleData> treeSpawnRules;
         public int oreSeed;
         public WormCaveSettings caveSettings;
         public int treeMargin;
@@ -117,6 +118,22 @@ public static class ChunkData
 
         private NativeList<TreeInstance> GenerateTreeInstances()
         {
+            NativeList<TreeInstance> trees = new NativeList<TreeInstance>(128, Allocator.Temp);
+
+            if (treeSpawnRules.Length > 0)
+            {
+                for (int i = 0; i < treeSpawnRules.Length; i++)
+                    GenerateTreeInstancesForRule(treeSpawnRules[i], ref trees);
+
+                return trees;
+            }
+
+            GenerateLegacyTreeInstances(ref trees);
+            return trees;
+        }
+
+        private void GenerateLegacyTreeInstances(ref NativeList<TreeInstance> trees)
+        {
             int cellSize = math.max(1, treeSettings.minSpacing);
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
@@ -129,11 +146,8 @@ public static class ChunkData
             int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
             int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
 
-            float freq = treeSettings.noiseScale;
-
-            // Estime capacidade máxima: número de cells possíveis
-            int maxTrees = (cellX1 - cellX0 + 1) * (cellZ1 - cellZ0 + 1);
-            NativeList<TreeInstance> trees = new NativeList<TreeInstance>(maxTrees, Allocator.Temp);
+            float freq = math.max(1e-4f, treeSettings.noiseScale);
+            float density = math.saturate(treeSettings.density);
 
             for (int cx = cellX0; cx <= cellX1; cx++)
             {
@@ -141,47 +155,137 @@ public static class ChunkData
                 {
                     float noiseX = (cx * 12.9898f + treeSettings.seed) * freq;
                     float noiseZ = (cz * 78.233f + treeSettings.seed) * freq;
-
-                    // Substitua Mathf.PerlinNoise por noise.cnoise (normalizado para [0,1])
                     float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
+                    if (sample > density) continue;
 
-                    if (sample > treeSettings.density) continue;
-
-                    // Offsets dentro da cell (novamente com noise)
                     float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
                     float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
-
                     int worldX = cx * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
                     int worldZ = cz * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
 
                     if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
                         worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
 
-                    // Use GetSurfaceHeight (já existe no job, mas ajuste para coords locais se necessário)
                     int surfaceY = GetCachedHeight(worldX, worldZ);
                     if (surfaceY <= 0 || surfaceY >= SizeY) continue;
 
-                    // Cheque groundType e cliff (implemente GetSurfaceBlockType e IsCliff usando heightCache)
-                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);  // NOVO método (ver abaixo)
-                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt) continue;
-                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;  // NOVO método (ver abaixo)
+                    BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+                    bool isTaiga = biome == BiomeType.Taiga;
 
-                    // Height noise
+                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);
+                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow) continue;
+                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;
+
                     float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + treeSettings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + treeSettings.seed * 0.001f)) * 0.5f + 0.5f;
-                    int trunkH = treeSettings.minHeight + (int)math.round(heightNoise * (treeSettings.maxHeight - treeSettings.minHeight + 1));
+                    int minTrunk = treeSettings.minHeight;
+                    int maxTrunk = treeSettings.maxHeight;
+                    int canopyRadius = treeSettings.canopyRadius;
+                    int canopyHeight = treeSettings.canopyHeight;
+
+                    if (isTaiga)
+                    {
+                        minTrunk = math.max(6, treeSettings.minHeight + 2);
+                        maxTrunk = math.max(minTrunk, treeSettings.maxHeight + 4);
+                        canopyRadius = math.max(2, treeSettings.canopyRadius);
+                        canopyHeight = math.max(5, treeSettings.canopyHeight + 2);
+                    }
+
+                    int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
 
                     trees.Add(new TreeInstance
                     {
                         worldX = worldX,
                         worldZ = worldZ,
                         trunkHeight = trunkH,
-                        canopyRadius = treeSettings.canopyRadius,
-                        canopyHeight = treeSettings.canopyHeight
+                        canopyRadius = canopyRadius,
+                        canopyHeight = canopyHeight,
+                        treeStyle = isTaiga ? TreeStyle.TaigaSpruce : TreeStyle.OakBroadleaf
                     });
                 }
             }
+        }
 
-            return trees;
+        private void GenerateTreeInstancesForRule(in TreeSpawnRuleData rule, ref NativeList<TreeInstance> trees)
+        {
+            TreeSettings settings = rule.settings;
+            int cellSize = math.max(1, settings.minSpacing);
+            int chunkMinX = coord.x * SizeX;
+            int chunkMinZ = coord.y * SizeZ;
+            int chunkMaxX = chunkMinX + SizeX - 1;
+            int chunkMaxZ = chunkMinZ + SizeZ - 1;
+
+            int searchMargin = settings.canopyRadius + settings.minSpacing;
+            int cellX0 = FloorDiv(chunkMinX - searchMargin, cellSize);
+            int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
+            int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
+            int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
+
+            float freq = math.max(1e-4f, settings.noiseScale);
+            float density = math.saturate(settings.density);
+            int ruleSeed = settings.seed != 0 ? settings.seed : treeSettings.seed;
+            int minTrunk = math.max(1, settings.minHeight);
+            int maxTrunk = math.max(minTrunk, settings.maxHeight);
+            int canopyRadius = math.max(0, settings.canopyRadius);
+            int canopyHeight = math.max(1, settings.canopyHeight);
+            int proximitySpacing = math.max(1, settings.minSpacing / 2);
+
+            for (int cx = cellX0; cx <= cellX1; cx++)
+            {
+                for (int cz = cellZ0; cz <= cellZ1; cz++)
+                {
+                    float noiseX = (cx * 12.9898f + ruleSeed) * freq;
+                    float noiseZ = (cz * 78.233f + ruleSeed) * freq;
+                    float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
+                    if (sample > density) continue;
+
+                    float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
+                    float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
+                    int worldX = cx * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
+                    int worldZ = cz * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
+
+                    if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
+                        worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
+
+                    int surfaceY = GetCachedHeight(worldX, worldZ);
+                    if (surfaceY <= 0 || surfaceY >= SizeY) continue;
+
+                    BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+                    if (biome != rule.biome) continue;
+
+                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);
+                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow) continue;
+                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;
+                    if (HasNearbyTreeXZ(in trees, worldX, worldZ, proximitySpacing)) continue;
+
+                    float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + ruleSeed * 0.001f, (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
+                    int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
+
+                    trees.Add(new TreeInstance
+                    {
+                        worldX = worldX,
+                        worldZ = worldZ,
+                        trunkHeight = trunkH,
+                        canopyRadius = canopyRadius,
+                        canopyHeight = canopyHeight,
+                        treeStyle = rule.treeStyle
+                    });
+                }
+            }
+        }
+
+        private static bool HasNearbyTreeXZ(in NativeList<TreeInstance> trees, int worldX, int worldZ, int minDistance)
+        {
+            int minDistSq = minDistance * minDistance;
+            for (int i = 0; i < trees.Length; i++)
+            {
+                TreeInstance t = trees[i];
+                int dx = t.worldX - worldX;
+                int dz = t.worldZ - worldZ;
+                if (dx * dx + dz * dz <= minDistSq)
+                    return true;
+            }
+
+            return false;
         }
 
         // NOVO: Versão interna de GetSurfaceBlockType (usa heightCache e coords world)

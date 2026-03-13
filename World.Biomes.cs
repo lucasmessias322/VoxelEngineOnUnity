@@ -16,11 +16,16 @@ public partial class World : MonoBehaviour
     public float desertMaxHumidity = 0.42f;
     [Range(0f, 1f)]
     public float savannaMinTemperature = 0.55f;
+    [Range(0f, 1f)]
+    public float taigaMaxTemperature = 0.34f;
+    [Range(0f, 1f)]
+    public float taigaMinHumidity = 0.52f;
 
     [Header("Biome Grass Tint")]
     public Color desertGrassTint = new Color(0.84f, 0.79f, 0.40f, 1f);
     public Color savannaGrassTint = new Color(0.66f, 0.73f, 0.33f, 1f);
     public Color meadowGrassTint = new Color(0.38039216f, 0.5176471f, 0.24705882f, 1f);
+    public Color taigaGrassTint = new Color(0.31f, 0.44f, 0.34f, 1f);
     [Min(0)]
     public int biomeTintBlendRadius = 16;
     [Min(1)]
@@ -50,7 +55,9 @@ public partial class World : MonoBehaviour
             humidityOffset = new float2(biomeHumidityOffset.x, biomeHumidityOffset.y),
             desertMinTemperature = math.saturate(desertMinTemperature),
             desertMaxHumidity = math.saturate(desertMaxHumidity),
-            savannaMinTemperature = math.saturate(savannaMinTemperature)
+            savannaMinTemperature = math.saturate(savannaMinTemperature),
+            taigaMaxTemperature = math.saturate(taigaMaxTemperature),
+            taigaMinHumidity = math.saturate(taigaMinHumidity)
         };
     }
 
@@ -79,6 +86,8 @@ public partial class World : MonoBehaviour
                 return desertGrassTint;
             case BiomeType.Savanna:
                 return savannaGrassTint;
+            case BiomeType.Taiga:
+                return taigaGrassTint;
             case BiomeType.Meadow:
             default:
                 return meadowGrassTint;
