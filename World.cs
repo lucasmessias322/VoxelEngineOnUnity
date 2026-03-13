@@ -163,11 +163,17 @@ public partial class World : MonoBehaviour
     public int atlasTilesX = 4;
     public int atlasTilesY = 4;
 
-    [Header("Noise Settings")]
-    public NoiseLayer[] noiseLayers;
+    [Header("Terrain Layer Profile")]
+    [Tooltip("Perfil com as camadas de terreno. Quando atribuido, o World usa as layers desse asset.")]
+    public TerrainLayerProfileSO terrainLayerProfile;
 
-    [Header("Domain Warping Settings")]
-    public WarpLayer[] warpLayers;
+    [Header("Noise Settings (Runtime)")]
+    [Tooltip("Preenchido a partir do Terrain Layer Profile durante validacao/execucao.")]
+    [SerializeField, HideInInspector] public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
+
+    [Header("Domain Warping Settings (Runtime)")]
+    [Tooltip("Preenchido a partir do Terrain Layer Profile durante validacao/execucao.")]
+    [SerializeField, HideInInspector] public WarpLayer[] warpLayers = Array.Empty<WarpLayer>();
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
@@ -638,12 +644,16 @@ public partial class World : MonoBehaviour
 
     private void OnValidate()
     {
+        ApplyTerrainLayerProfileIfAssigned();
+        EnsureTerrainLayerArraysInitialized();
         MarkBiomeCachesDirty();
     }
 
     private void Start()
     {
         if (blockData != null) blockData.InitializeDictionary();
+        ApplyTerrainLayerProfileIfAssigned();
+        EnsureTerrainLayerArraysInitialized();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
@@ -679,6 +689,24 @@ public partial class World : MonoBehaviour
     #endregion
 
     #region Initialization Helpers
+
+    private void ApplyTerrainLayerProfileIfAssigned()
+    {
+        if (terrainLayerProfile == null)
+            return;
+
+        noiseLayers = terrainLayerProfile.CloneNoiseLayers();
+        warpLayers = terrainLayerProfile.CloneWarpLayers();
+    }
+
+    private void EnsureTerrainLayerArraysInitialized()
+    {
+        if (noiseLayers == null)
+            noiseLayers = Array.Empty<NoiseLayer>();
+
+        if (warpLayers == null)
+            warpLayers = Array.Empty<WarpLayer>();
+    }
 
     private void InitializeNoiseLayers()
     {
