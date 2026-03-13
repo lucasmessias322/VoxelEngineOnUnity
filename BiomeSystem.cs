@@ -20,6 +20,15 @@ public struct BiomeNoiseSettings
     public float savannaMinTemperature;
     public float taigaMaxTemperature;
     public float taigaMinHumidity;
+
+    public BlockType desertSurfaceBlock;
+    public BlockType desertSubsurfaceBlock;
+    public BlockType savannaSurfaceBlock;
+    public BlockType savannaSubsurfaceBlock;
+    public BlockType meadowSurfaceBlock;
+    public BlockType meadowSubsurfaceBlock;
+    public BlockType taigaSurfaceBlock;
+    public BlockType taigaSubsurfaceBlock;
 }
 
 public static class BiomeUtility
@@ -50,6 +59,52 @@ public static class BiomeUtility
     [BurstCompile]
     public static BlockType GetSurfaceBlock(BiomeType biome)
     {
+        return GetDefaultSurfaceBlock(biome);
+    }
+
+    [BurstCompile]
+    public static BlockType GetSurfaceBlock(BiomeType biome, in BiomeNoiseSettings settings)
+    {
+        switch (biome)
+        {
+            case BiomeType.Desert:
+                return UseConfiguredOrDefault(settings.desertSurfaceBlock, GetDefaultSurfaceBlock(BiomeType.Desert));
+            case BiomeType.Taiga:
+                return UseConfiguredOrDefault(settings.taigaSurfaceBlock, GetDefaultSurfaceBlock(BiomeType.Taiga));
+            case BiomeType.Savanna:
+                return UseConfiguredOrDefault(settings.savannaSurfaceBlock, GetDefaultSurfaceBlock(BiomeType.Savanna));
+            case BiomeType.Meadow:
+            default:
+                return UseConfiguredOrDefault(settings.meadowSurfaceBlock, GetDefaultSurfaceBlock(BiomeType.Meadow));
+        }
+    }
+
+    [BurstCompile]
+    public static BlockType GetSubsurfaceBlock(BiomeType biome)
+    {
+        return GetDefaultSubsurfaceBlock(biome);
+    }
+
+    [BurstCompile]
+    public static BlockType GetSubsurfaceBlock(BiomeType biome, in BiomeNoiseSettings settings)
+    {
+        switch (biome)
+        {
+            case BiomeType.Desert:
+                return UseConfiguredOrDefault(settings.desertSubsurfaceBlock, GetDefaultSubsurfaceBlock(BiomeType.Desert));
+            case BiomeType.Taiga:
+                return UseConfiguredOrDefault(settings.taigaSubsurfaceBlock, GetDefaultSubsurfaceBlock(BiomeType.Taiga));
+            case BiomeType.Savanna:
+                return UseConfiguredOrDefault(settings.savannaSubsurfaceBlock, GetDefaultSubsurfaceBlock(BiomeType.Savanna));
+            case BiomeType.Meadow:
+            default:
+                return UseConfiguredOrDefault(settings.meadowSubsurfaceBlock, GetDefaultSubsurfaceBlock(BiomeType.Meadow));
+        }
+    }
+
+    [BurstCompile]
+    public static BlockType GetDefaultSurfaceBlock(BiomeType biome)
+    {
         switch (biome)
         {
             case BiomeType.Desert:
@@ -64,7 +119,7 @@ public static class BiomeUtility
     }
 
     [BurstCompile]
-    public static BlockType GetSubsurfaceBlock(BiomeType biome)
+    public static BlockType GetDefaultSubsurfaceBlock(BiomeType biome)
     {
         switch (biome)
         {
@@ -77,6 +132,12 @@ public static class BiomeUtility
             default:
                 return BlockType.Dirt;
         }
+    }
+
+    [BurstCompile]
+    private static BlockType UseConfiguredOrDefault(BlockType configured, BlockType fallback)
+    {
+        return configured == BlockType.Air ? fallback : configured;
     }
 
     [BurstCompile]

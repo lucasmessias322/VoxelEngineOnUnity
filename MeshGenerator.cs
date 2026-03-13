@@ -183,8 +183,8 @@ public static class MeshGenerator
 
             bool isBeachArea = h <= seaLevel + 2f;
             BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome);
-            BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(biome);
+            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome, biomeNoiseSettings);
+            BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(biome, biomeNoiseSettings);
 
             // === IsCliff local (corrigido - não precisa de coord) ===
             bool isCliff = false;
@@ -275,8 +275,7 @@ public static class MeshGenerator
         out NativeArray<BlockTextureMapping> nativeBlockMappings,
         out NativeArray<OreSpawnSettings> nativeOreSettings,
         out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
-        out NativeArray<bool> subchunkNonEmpty,
-        TreeSettings treeSettings
+        out NativeArray<bool> subchunkNonEmpty
     )
     {
         // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
@@ -383,7 +382,6 @@ public static class MeshGenerator
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
-            treeSettings = treeSettings,
             treeSpawnRules = nativeTreeSpawnRules,
             oreSettings = nativeOreSettings,
             oreSeed = oreSeed,

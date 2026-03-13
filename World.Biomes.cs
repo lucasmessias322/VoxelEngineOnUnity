@@ -1,8 +1,14 @@
+using System;
+using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
 
 public partial class World : MonoBehaviour
 {
+    [Header("Biome Definitions")]
+    [Tooltip("Dados do bioma via ScriptableObject. Se vazio, o World tenta carregar automaticamente de Resources/Biomes.")]
+    public BiomeDefinitionSO[] biomeDefinitions;
+
     [Header("Biome Settings")]
     [Min(0.0001f)]
     public float biomeTemperatureScale = 0.0024f;
@@ -21,11 +27,6 @@ public partial class World : MonoBehaviour
     [Range(0f, 1f)]
     public float taigaMinHumidity = 0.52f;
 
-    [Header("Biome Grass Tint")]
-    public Color desertGrassTint = new Color(0.84f, 0.79f, 0.40f, 1f);
-    public Color savannaGrassTint = new Color(0.66f, 0.73f, 0.33f, 1f);
-    public Color meadowGrassTint = new Color(0.38039216f, 0.5176471f, 0.24705882f, 1f);
-    public Color taigaGrassTint = new Color(0.31f, 0.44f, 0.34f, 1f);
     [Min(0)]
     public int biomeTintBlendRadius = 16;
     [Min(1)]
@@ -35,6 +36,91 @@ public partial class World : MonoBehaviour
 
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
     private MaterialPropertyBlock biomeTintPropertyBlock;
+    private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
+    private BiomeDefinitionSO[] cachedBiomeDefinitions = Array.Empty<BiomeDefinitionSO>();
+    private bool biomeDefinitionsDirty = true;
+    private bool biomeNoiseSettingsDirty = true;
+    private BiomeNoiseSettings cachedBiomeNoiseSettings;
+
+    private void MarkBiomeCachesDirty()
+    {
+        biomeDefinitionsDirty = true;
+        biomeNoiseSettingsDirty = true;
+        treeSpawnRulesDirty = true;
+    }
+
+    private void EnsureBiomeDefinitionCache()
+    {
+        if (!biomeDefinitionsDirty)
+            return;
+
+        RebuildBiomeDefinitionCache();
+    }
+
+    private void RebuildBiomeDefinitionCache()
+    {
+        biomeDefinitionsDirty = false;
+        biomeDefinitionsByType.Clear();
+
+        BiomeDefinitionSO[] source = biomeDefinitions;
+        if (source == null || source.Length == 0)
+            source = Resources.LoadAll<BiomeDefinitionSO>("Biomes");
+
+        if (source == null || source.Length == 0)
+        {
+            cachedBiomeDefinitions = Array.Empty<BiomeDefinitionSO>();
+            return;
+        }
+
+        List<BiomeDefinitionSO> uniqueDefinitions = new List<BiomeDefinitionSO>(source.Length);
+        for (int i = 0; i < source.Length; i++)
+        {
+            BiomeDefinitionSO definition = source[i];
+            if (definition == null)
+                continue;
+
+            if (biomeDefinitionsByType.ContainsKey(definition.biomeType))
+            {
+                Debug.LogWarning($"BiomeDefinition duplicado para {definition.biomeType}. Mantendo o primeiro.", this);
+                continue;
+            }
+
+            biomeDefinitionsByType.Add(definition.biomeType, definition);
+            uniqueDefinitions.Add(definition);
+        }
+
+        cachedBiomeDefinitions = uniqueDefinitions.Count > 0
+            ? uniqueDefinitions.ToArray()
+            : Array.Empty<BiomeDefinitionSO>();
+    }
+
+    private bool TryGetBiomeDefinition(BiomeType biome, out BiomeDefinitionSO definition)
+    {
+        EnsureBiomeDefinitionCache();
+        return biomeDefinitionsByType.TryGetValue(biome, out definition);
+    }
+
+    private BiomeDefinitionSO[] GetConfiguredBiomeDefinitions()
+    {
+        EnsureBiomeDefinitionCache();
+        return cachedBiomeDefinitions;
+    }
+
+    private BlockType GetSurfaceBlockForBiome(BiomeType biome)
+    {
+        if (TryGetBiomeDefinition(biome, out BiomeDefinitionSO definition))
+            return definition.surfaceBlock;
+
+        return BiomeUtility.GetDefaultSurfaceBlock(biome);
+    }
+
+    private BlockType GetSubsurfaceBlockForBiome(BiomeType biome)
+    {
+        if (TryGetBiomeDefinition(biome, out BiomeDefinitionSO definition))
+            return definition.subsurfaceBlock;
+
+        return BiomeUtility.GetDefaultSubsurfaceBlock(biome);
+    }
 
     private void InitializeBiomeNoiseOffsets()
     {
@@ -47,7 +133,10 @@ public partial class World : MonoBehaviour
 
     private BiomeNoiseSettings GetBiomeNoiseSettings()
     {
-        return new BiomeNoiseSettings
+        if (!biomeNoiseSettingsDirty)
+            return cachedBiomeNoiseSettings;
+
+        cachedBiomeNoiseSettings = new BiomeNoiseSettings
         {
             temperatureScale = math.max(0.0001f, biomeTemperatureScale),
             humidityScale = math.max(0.0001f, biomeHumidityScale),
@@ -57,8 +146,19 @@ public partial class World : MonoBehaviour
             desertMaxHumidity = math.saturate(desertMaxHumidity),
             savannaMinTemperature = math.saturate(savannaMinTemperature),
             taigaMaxTemperature = math.saturate(taigaMaxTemperature),
-            taigaMinHumidity = math.saturate(taigaMinHumidity)
+            taigaMinHumidity = math.saturate(taigaMinHumidity),
+            desertSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Desert),
+            desertSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Desert),
+            savannaSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Savanna),
+            savannaSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Savanna),
+            meadowSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Meadow),
+            meadowSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Meadow),
+            taigaSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Taiga),
+            taigaSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Taiga)
         };
+
+        biomeNoiseSettingsDirty = false;
+        return cachedBiomeNoiseSettings;
     }
 
     private BiomeType GetBiomeAt(int worldX, int worldZ)
@@ -69,29 +169,21 @@ public partial class World : MonoBehaviour
     private BlockType GetBiomeSurfaceBlock(int worldX, int worldZ)
     {
         BiomeType biome = GetBiomeAt(worldX, worldZ);
-        return BiomeUtility.GetSurfaceBlock(biome);
+        return GetSurfaceBlockForBiome(biome);
     }
 
     private BlockType GetBiomeSubsurfaceBlock(int worldX, int worldZ)
     {
         BiomeType biome = GetBiomeAt(worldX, worldZ);
-        return BiomeUtility.GetSubsurfaceBlock(biome);
+        return GetSubsurfaceBlockForBiome(biome);
     }
 
     private Color GetGrassTintForBiome(BiomeType biome)
     {
-        switch (biome)
-        {
-            case BiomeType.Desert:
-                return desertGrassTint;
-            case BiomeType.Savanna:
-                return savannaGrassTint;
-            case BiomeType.Taiga:
-                return taigaGrassTint;
-            case BiomeType.Meadow:
-            default:
-                return meadowGrassTint;
-        }
+        if (TryGetBiomeDefinition(biome, out BiomeDefinitionSO definition))
+            return definition.grassTint;
+
+        return Color.white;
     }
 
     private void ApplyChunkBiomeTint(Chunk chunk, Vector2Int coord)

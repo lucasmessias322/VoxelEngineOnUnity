@@ -20,15 +20,6 @@ public struct TreeSettings
 }
 
 [Serializable]
-public struct BiomeTreeTypeConfig
-{
-    public bool enabled;
-    public BiomeType biome;
-    public TreeStyle treeStyle;
-    public TreeSettings settings;
-}
-
-[Serializable]
 public struct OreSpawnSettings
 {
     public bool enabled;
@@ -188,11 +179,6 @@ public partial class World : MonoBehaviour
     public int seaLevel = 62;
     public BlockType waterBlock = BlockType.Water;
 
-    [Header("Tree Settings")]
-    public TreeSettings treeSettings;
-    [Header("Tree Rules By Biome/Type")]
-    [Tooltip("If this list has enabled entries, tree generation uses these rules instead of the single Tree Settings.")]
-    public BiomeTreeTypeConfig[] biomeTreeTypeConfigs;
     public int CliffTreshold = 2;
 
     [Header("Ore Settings")]
@@ -501,7 +487,7 @@ public partial class World : MonoBehaviour
     {
         TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
         if (rules.Length == 0)
-            return Mathf.Max(0, treeSettings.canopyRadius);
+            return 0;
 
         int maxRadius = 0;
         for (int i = 0; i < rules.Length; i++)
@@ -519,7 +505,7 @@ public partial class World : MonoBehaviour
     {
         TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
         if (rules.Length == 0)
-            return Mathf.Max(1, treeSettings.maxHeight + treeSettings.canopyHeight + 2);
+            return 1;
 
         int maxMargin = 1;
         for (int i = 0; i < rules.Length; i++)
@@ -535,29 +521,41 @@ public partial class World : MonoBehaviour
     {
         treeSpawnRulesDirty = false;
 
-        if (biomeTreeTypeConfigs == null || biomeTreeTypeConfigs.Length == 0)
-        {
-            cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
-            return;
-        }
-
-        List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(biomeTreeTypeConfigs.Length);
-        for (int i = 0; i < biomeTreeTypeConfigs.Length; i++)
-        {
-            BiomeTreeTypeConfig cfg = biomeTreeTypeConfigs[i];
-            if (!cfg.enabled)
-                continue;
-
-            TreeSettings sanitized = SanitizeTreeSettings(cfg.settings);
-            rules.Add(new TreeSpawnRuleData
-            {
-                biome = cfg.biome,
-                treeStyle = cfg.treeStyle,
-                settings = sanitized
-            });
-        }
+        List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(12);
+        AddTreeRulesFromBiomeDefinitions(rules);
 
         cachedTreeSpawnRules = rules.Count > 0 ? rules.ToArray() : Array.Empty<TreeSpawnRuleData>();
+    }
+
+    private void AddTreeRulesFromBiomeDefinitions(List<TreeSpawnRuleData> rules)
+    {
+        BiomeDefinitionSO[] definitions = GetConfiguredBiomeDefinitions();
+        if (definitions == null || definitions.Length == 0)
+            return;
+
+        for (int i = 0; i < definitions.Length; i++)
+        {
+            BiomeDefinitionSO definition = definitions[i];
+            if (definition == null || !definition.hasTrees)
+                continue;
+            if (definition.treeConfigs == null || definition.treeConfigs.Length == 0)
+                continue;
+
+            for (int j = 0; j < definition.treeConfigs.Length; j++)
+            {
+                BiomeTreeConfig treeConfig = definition.treeConfigs[j];
+                if (!treeConfig.enabled)
+                    continue;
+
+                TreeSettings sanitized = SanitizeTreeSettings(treeConfig.settings);
+                rules.Add(new TreeSpawnRuleData
+                {
+                    biome = definition.biomeType,
+                    treeStyle = treeConfig.treeStyle,
+                    settings = sanitized
+                });
+            }
+        }
     }
 
     private TreeSettings SanitizeTreeSettings(TreeSettings raw)
@@ -640,7 +638,7 @@ public partial class World : MonoBehaviour
 
     private void OnValidate()
     {
-        treeSpawnRulesDirty = true;
+        MarkBiomeCachesDirty();
     }
 
     private void Start()
@@ -1315,8 +1313,7 @@ public partial class World : MonoBehaviour
             out NativeArray<BlockTextureMapping> nativeBlockMappings,
             out NativeArray<OreSpawnSettings> nativeOreSettings,
             out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
-            out NativeArray<bool> subchunkNonEmpty,
-            treeSettings
+            out NativeArray<bool> subchunkNonEmpty
         );
 
         pendingDataJobs.Add(new PendingData
@@ -1638,8 +1635,7 @@ public partial class World : MonoBehaviour
               out NativeArray<BlockTextureMapping> nativeBlockMappings,
               out NativeArray<OreSpawnSettings> nativeOreSettings,
               out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
-              out NativeArray<bool> subchunkNonEmpty,
-              treeSettings
+              out NativeArray<bool> subchunkNonEmpty
           );
 
         pendingDataJobs.Add(new PendingData

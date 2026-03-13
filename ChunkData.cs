@@ -28,8 +28,6 @@ public static class ChunkData
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
         [ReadOnly] public NativeArray<OreSpawnSettings> oreSettings;
-        //[ReadOnly] public NativeArray<TreeInstance> treeInstances;
-        public TreeSettings treeSettings;
         [ReadOnly] public NativeArray<TreeSpawnRuleData> treeSpawnRules;
         public int oreSeed;
         public WormCaveSettings caveSettings;
@@ -119,90 +117,10 @@ public static class ChunkData
         private NativeList<TreeInstance> GenerateTreeInstances()
         {
             NativeList<TreeInstance> trees = new NativeList<TreeInstance>(128, Allocator.Temp);
+            for (int i = 0; i < treeSpawnRules.Length; i++)
+                GenerateTreeInstancesForRule(treeSpawnRules[i], ref trees);
 
-            if (treeSpawnRules.Length > 0)
-            {
-                for (int i = 0; i < treeSpawnRules.Length; i++)
-                    GenerateTreeInstancesForRule(treeSpawnRules[i], ref trees);
-
-                return trees;
-            }
-
-            GenerateLegacyTreeInstances(ref trees);
             return trees;
-        }
-
-        private void GenerateLegacyTreeInstances(ref NativeList<TreeInstance> trees)
-        {
-            int cellSize = math.max(1, treeSettings.minSpacing);
-            int chunkMinX = coord.x * SizeX;
-            int chunkMinZ = coord.y * SizeZ;
-            int chunkMaxX = chunkMinX + SizeX - 1;
-            int chunkMaxZ = chunkMinZ + SizeZ - 1;
-
-            int searchMargin = treeSettings.canopyRadius + treeSettings.minSpacing;
-            int cellX0 = FloorDiv(chunkMinX - searchMargin, cellSize);
-            int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
-            int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
-            int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
-
-            float freq = math.max(1e-4f, treeSettings.noiseScale);
-            float density = math.saturate(treeSettings.density);
-
-            for (int cx = cellX0; cx <= cellX1; cx++)
-            {
-                for (int cz = cellZ0; cz <= cellZ1; cz++)
-                {
-                    float noiseX = (cx * 12.9898f + treeSettings.seed) * freq;
-                    float noiseZ = (cz * 78.233f + treeSettings.seed) * freq;
-                    float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
-                    if (sample > density) continue;
-
-                    float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
-                    float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
-                    int worldX = cx * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
-                    int worldZ = cz * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
-
-                    if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
-                        worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
-
-                    int surfaceY = GetCachedHeight(worldX, worldZ);
-                    if (surfaceY <= 0 || surfaceY >= SizeY) continue;
-
-                    BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-                    bool isTaiga = biome == BiomeType.Taiga;
-
-                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);
-                    if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow) continue;
-                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;
-
-                    float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + treeSettings.seed * 0.001f, (worldZ + 0.1f) * 0.243f + treeSettings.seed * 0.001f)) * 0.5f + 0.5f;
-                    int minTrunk = treeSettings.minHeight;
-                    int maxTrunk = treeSettings.maxHeight;
-                    int canopyRadius = treeSettings.canopyRadius;
-                    int canopyHeight = treeSettings.canopyHeight;
-
-                    if (isTaiga)
-                    {
-                        minTrunk = math.max(6, treeSettings.minHeight + 2);
-                        maxTrunk = math.max(minTrunk, treeSettings.maxHeight + 4);
-                        canopyRadius = math.max(2, treeSettings.canopyRadius);
-                        canopyHeight = math.max(5, treeSettings.canopyHeight + 2);
-                    }
-
-                    int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
-
-                    trees.Add(new TreeInstance
-                    {
-                        worldX = worldX,
-                        worldZ = worldZ,
-                        trunkHeight = trunkH,
-                        canopyRadius = canopyRadius,
-                        canopyHeight = canopyHeight,
-                        treeStyle = isTaiga ? TreeStyle.TaigaSpruce : TreeStyle.OakBroadleaf
-                    });
-                }
-            }
         }
 
         private void GenerateTreeInstancesForRule(in TreeSpawnRuleData rule, ref NativeList<TreeInstance> trees)
@@ -222,7 +140,7 @@ public static class ChunkData
 
             float freq = math.max(1e-4f, settings.noiseScale);
             float density = math.saturate(settings.density);
-            int ruleSeed = settings.seed != 0 ? settings.seed : treeSettings.seed;
+            int ruleSeed = settings.seed != 0 ? settings.seed : oreSeed;
             int minTrunk = math.max(1, settings.minHeight);
             int maxTrunk = math.max(minTrunk, settings.maxHeight);
             int canopyRadius = math.max(0, settings.canopyRadius);
@@ -297,7 +215,7 @@ public static class ChunkData
             int mountainStoneHeight = baseHeight + 70;
             bool isHighMountain = h >= mountainStoneHeight;
             BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome);
+            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome, biomeNoiseSettings);
 
             if (isHighMountain) return BlockType.Stone;
             else if (isCliff) return BlockType.Stone;
