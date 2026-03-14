@@ -1,4 +1,4 @@
-﻿using Unity.Burst;
+using Unity.Burst;
 using Unity.Collections;
 
 public struct TerrainColumnContext
@@ -73,11 +73,11 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
-        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
+        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
 
         return CreateFromNeighborHeights(
             worldX,
@@ -106,11 +106,11 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
-        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
-        int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight);
+        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
 
         return CreateFromNeighborHeights(
             worldX,

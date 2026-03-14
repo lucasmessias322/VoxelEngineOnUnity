@@ -1,4 +1,4 @@
-﻿using Unity.Burst;
+using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
 
@@ -34,9 +34,10 @@ public static class TerrainHeightSampler
         int baseHeight,
         float offsetX,
         float offsetZ,
-        int worldHeight)
+        int worldHeight,
+        in BiomeNoiseSettings biomeNoiseSettings)
     {
-        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ);
+        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ, biomeNoiseSettings);
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
 
@@ -48,9 +49,10 @@ public static class TerrainHeightSampler
         int baseHeight,
         float offsetX,
         float offsetZ,
-        int worldHeight)
+        int worldHeight,
+        in BiomeNoiseSettings biomeNoiseSettings)
     {
-        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ);
+        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ, biomeNoiseSettings);
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
 
@@ -61,7 +63,8 @@ public static class TerrainHeightSampler
         NativeArray<NoiseLayer> noiseLayers,
         NativeArray<WarpLayer> warpLayers,
         float offsetX,
-        float offsetZ)
+        float offsetZ,
+        in BiomeNoiseSettings biomeNoiseSettings)
     {
         ComputeWarpOffset(worldX, worldZ, warpLayers, out float warpX, out float warpZ);
         TerrainNoiseSampleState sampleState = default;
@@ -69,7 +72,7 @@ public static class TerrainHeightSampler
         for (int i = 0; i < noiseLayers.Length; i++)
             SampleNoiseLayer(worldX, worldZ, warpX, warpZ, noiseLayers[i], ref sampleState);
 
-        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, ref sampleState);
+        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, biomeNoiseSettings, ref sampleState);
     }
 
     public static float SampleTerrainSignal(
@@ -78,7 +81,8 @@ public static class TerrainHeightSampler
         NoiseLayer[] noiseLayers,
         WarpLayer[] warpLayers,
         float offsetX,
-        float offsetZ)
+        float offsetZ,
+        in BiomeNoiseSettings biomeNoiseSettings)
     {
         ComputeWarpOffset(worldX, worldZ, warpLayers, out float warpX, out float warpZ);
         TerrainNoiseSampleState sampleState = default;
@@ -89,7 +93,7 @@ public static class TerrainHeightSampler
                 SampleNoiseLayer(worldX, worldZ, warpX, warpZ, noiseLayers[i], ref sampleState);
         }
 
-        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, ref sampleState);
+        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, biomeNoiseSettings, ref sampleState);
     }
 
     [BurstCompile]
@@ -216,6 +220,7 @@ public static class TerrainHeightSampler
         float warpZ,
         float offsetX,
         float offsetZ,
+        in BiomeNoiseSettings biomeNoiseSettings,
         ref TerrainNoiseSampleState sampleState)
     {
         if (!sampleState.hasActiveLayers)
@@ -227,6 +232,7 @@ public static class TerrainHeightSampler
             sampleState.hasTypedRoles = false;
         }
 
+        BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(worldX, worldZ, biomeNoiseSettings);
         return sampleState.hasTypedRoles
             ? MyNoise.ComposeMinecraftLikeTerrainSignal(
                 sampleState.continentalTotal,
@@ -240,7 +246,10 @@ public static class TerrainHeightSampler
                 sampleState.mountainTotal,
                 sampleState.mountainWeight,
                 sampleState.legacyNoiseTotal,
-                sampleState.legacyNoiseWeight)
-            : MyNoise.GetLegacyCenteredNoise(sampleState.legacyNoiseTotal, sampleState.legacyNoiseWeight);
+                sampleState.legacyNoiseWeight,
+                terrainSettings)
+            : MyNoise.ShapeLegacyTerrainSignal(
+                MyNoise.GetLegacyCenteredNoise(sampleState.legacyNoiseTotal, sampleState.legacyNoiseWeight),
+                terrainSettings);
     }
 }

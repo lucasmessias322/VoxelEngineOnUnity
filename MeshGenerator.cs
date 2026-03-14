@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -63,6 +63,7 @@ public static class MeshGenerator
         public float offsetX;
         public float offsetZ;
         public int border;
+        public BiomeNoiseSettings biomeNoiseSettings;
 
         public NativeArray<int> heightCache;
         public int heightStride;
@@ -88,7 +89,8 @@ public static class MeshGenerator
                 baseHeight,
                 offsetX,
                 offsetZ,
-                SizeY);
+                SizeY,
+                biomeNoiseSettings);
         }
     }
 
@@ -197,9 +199,9 @@ public static class MeshGenerator
         out NativeArray<bool> subchunkNonEmpty
     )
     {
-        // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
+        // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
 
-        // 2. AlocaÃ§Ãµes Iniciais de ConfiguraÃ§Ã£o
+        // 2. Alocações Iniciais de Configuração
         nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
@@ -213,7 +215,7 @@ public static class MeshGenerator
             nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(0, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
-        // 3. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
+        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -230,7 +232,7 @@ public static class MeshGenerator
 
 
         // ==========================================
-        // JOB 0: GeraÃ§Ã£o do Heightmap (Paralelo)
+        // JOB 0: Geração do Heightmap (Paralelo)
         // ==========================================
         var heightJob = new HeightmapJob
         {
@@ -241,10 +243,11 @@ public static class MeshGenerator
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             border = borderSize,
+            biomeNoiseSettings = biomeNoiseSettings,
             heightCache = heightCache,
             heightStride = heightSize
         };
-        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessário)
 
 
 
@@ -269,13 +272,13 @@ public static class MeshGenerator
         int paddedSize = SizeX + 2 * borderSize;
         int totalColumns = paddedSize * paddedSize;
 
-        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 Ã© Ã³timo
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 é ótimo
 
 
 
 
         // ==========================================
-        // JOB 1: GeraÃ§Ã£o de Dados (Terreno)
+        // JOB 1: Geração de Dados (Terreno)
         // ==========================================
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
@@ -309,7 +312,7 @@ public static class MeshGenerator
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
         };
-        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
+        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // Dependência no heightHandle
         JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
         var lightJob = new ChunkLighting.ChunkLightingJob
@@ -368,7 +371,7 @@ public static class MeshGenerator
         out NativeList<Vector4> extraUVs
     )
     {
-        // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
+        // 1. Alocações das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
@@ -383,7 +386,7 @@ public static class MeshGenerator
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
 
         // ==========================================
-        // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
+        // JOB 2: Geração da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
@@ -391,7 +394,7 @@ public static class MeshGenerator
             endY = endY,
             blockTypes = blockTypes,
             solids = solids,
-            light = light, // Usa a luz previamente calculada e passada por parÃ¢metro
+            light = light, // Usa a luz previamente calculada e passada por parâmetro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
@@ -425,7 +428,7 @@ public static class MeshGenerator
             tintFlags = tintFlags,
             vertexAO = vertexAO
         };
-        // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
+        // O MeshJob agora é agendado independentemente, assumindo que os dados intermediários já estão prontos
         meshHandle = meshJob.Schedule();
     }
 
@@ -708,7 +711,7 @@ public static class MeshGenerator
                     int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
                     int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
 
-                    // AQUI ACONTECE A MÃGICA DE RESTRIÃ‡ÃƒO PARA SUBCHUNKS (Limites de Y controlados)
+                    // AQUI ACONTECE A MÁGICA DE RESTRIÇÃO PARA SUBCHUNKS (Limites de Y controlados)
                     int minN = (axis == 1) ? startY : border;
                     int maxN = (axis == 1) ? endY : border + chunkSize;
 
@@ -849,7 +852,7 @@ public static class MeshGenerator
                                 byte finalLight = (byte)((packedData >> 12) & 0xF);
                                 int packedAO = (packedData >> 16) & 0xFF;
 
-                                // Desempacota o AO do quad gigante (ele serÃ¡ idÃªntico por toda a superfÃ­cie mesclada)
+                                // Desempacota o AO do quad gigante (ele será idêntico por toda a superfície mesclada)
                                 byte ao0 = (byte)(packedAO & 0x3);
                                 byte ao1 = (byte)((packedAO >> 2) & 0x3);
                                 byte ao2 = (byte)((packedAO >> 4) & 0x3);
@@ -977,7 +980,7 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
-        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // â† NOVO
+        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ← NOVO
         public void Execute() { }
     }
 
@@ -1012,6 +1015,8 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
+
 
 
 

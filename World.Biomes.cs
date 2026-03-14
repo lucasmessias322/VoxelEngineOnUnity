@@ -5,6 +5,15 @@ using UnityEngine;
 
 public partial class World : MonoBehaviour
 {
+    private const float DefaultBiomeTerrainBlendRange = 0.08f;
+    private const float DefaultAltitudeTemperatureFalloff = 0.0045f;
+    private const float DefaultColdStoneStartHeightOffset = 24f;
+    private const float DefaultColdStoneBlendRange = 18f;
+    private const float DefaultColdSnowStartHeightOffset = 34f;
+    private const float DefaultColdSnowBlendRange = 22f;
+    private const float DefaultColdSnowTemperatureThreshold = 0.30f;
+    private const float DefaultColdSurfaceNoiseScale = 0.045f;
+
     [Header("Biome Definitions")]
     [Tooltip("Dados do bioma via ScriptableObject. Se vazio, o World tenta carregar automaticamente de Resources/Biomes.")]
     public BiomeDefinitionSO[] biomeDefinitions;
@@ -26,6 +35,28 @@ public partial class World : MonoBehaviour
     public float taigaMaxTemperature = 0.34f;
     [Range(0f, 1f)]
     public float taigaMinHumidity = 0.52f;
+
+    [Header("Biome Relief")]
+    [Range(0.01f, 0.25f)]
+    public float biomeTerrainBlendRange = DefaultBiomeTerrainBlendRange;
+    public BiomeTerrainSettings desertTerrain = BiomeTerrainSettings.DesertDefault;
+    public BiomeTerrainSettings savannaTerrain = BiomeTerrainSettings.SavannaDefault;
+    public BiomeTerrainSettings meadowTerrain = BiomeTerrainSettings.MeadowDefault;
+    public BiomeTerrainSettings taigaTerrain = BiomeTerrainSettings.TaigaDefault;
+
+    [Header("Cold Mountain Surface")]
+    [Min(0.0001f)]
+    public float altitudeTemperatureFalloff = DefaultAltitudeTemperatureFalloff;
+    public float coldStoneStartHeightOffset = DefaultColdStoneStartHeightOffset;
+    [Min(1f)]
+    public float coldStoneBlendRange = DefaultColdStoneBlendRange;
+    public float coldSnowStartHeightOffset = DefaultColdSnowStartHeightOffset;
+    [Min(1f)]
+    public float coldSnowBlendRange = DefaultColdSnowBlendRange;
+    [Range(0f, 1f)]
+    public float coldSnowTemperatureThreshold = DefaultColdSnowTemperatureThreshold;
+    [Min(0.001f)]
+    public float coldSurfaceNoiseScale = DefaultColdSurfaceNoiseScale;
 
     [Min(0)]
     public int biomeTintBlendRadius = 16;
@@ -136,17 +167,35 @@ public partial class World : MonoBehaviour
         if (!biomeNoiseSettingsDirty)
             return cachedBiomeNoiseSettings;
 
+        BiomeTerrainSettings desertTerrainSettings = SanitizeBiomeTerrainSettings(desertTerrain, BiomeTerrainSettings.DesertDefault);
+        BiomeTerrainSettings savannaTerrainSettings = SanitizeBiomeTerrainSettings(savannaTerrain, BiomeTerrainSettings.SavannaDefault);
+        BiomeTerrainSettings meadowTerrainSettings = SanitizeBiomeTerrainSettings(meadowTerrain, BiomeTerrainSettings.MeadowDefault);
+        BiomeTerrainSettings taigaTerrainSettings = SanitizeBiomeTerrainSettings(taigaTerrain, BiomeTerrainSettings.TaigaDefault);
+
+        bool coldSettingsUninitialized = AreColdMountainSettingsUninitialized();
         cachedBiomeNoiseSettings = new BiomeNoiseSettings
         {
             temperatureScale = math.max(0.0001f, biomeTemperatureScale),
             humidityScale = math.max(0.0001f, biomeHumidityScale),
             temperatureOffset = new float2(biomeTemperatureOffset.x, biomeTemperatureOffset.y),
             humidityOffset = new float2(biomeHumidityOffset.x, biomeHumidityOffset.y),
+            terrainBlendRange = math.max(0.01f, coldSettingsUninitialized ? DefaultBiomeTerrainBlendRange : biomeTerrainBlendRange),
             desertMinTemperature = math.saturate(desertMinTemperature),
             desertMaxHumidity = math.saturate(desertMaxHumidity),
             savannaMinTemperature = math.saturate(savannaMinTemperature),
             taigaMaxTemperature = math.saturate(taigaMaxTemperature),
             taigaMinHumidity = math.saturate(taigaMinHumidity),
+            desertTerrain = desertTerrainSettings,
+            savannaTerrain = savannaTerrainSettings,
+            meadowTerrain = meadowTerrainSettings,
+            taigaTerrain = taigaTerrainSettings,
+            altitudeTemperatureFalloff = coldSettingsUninitialized ? DefaultAltitudeTemperatureFalloff : math.max(0.0001f, altitudeTemperatureFalloff),
+            coldStoneStartHeightOffset = coldSettingsUninitialized ? DefaultColdStoneStartHeightOffset : coldStoneStartHeightOffset,
+            coldStoneBlendRange = coldSettingsUninitialized ? DefaultColdStoneBlendRange : math.max(1f, coldStoneBlendRange),
+            coldSnowStartHeightOffset = coldSettingsUninitialized ? DefaultColdSnowStartHeightOffset : coldSnowStartHeightOffset,
+            coldSnowBlendRange = coldSettingsUninitialized ? DefaultColdSnowBlendRange : math.max(1f, coldSnowBlendRange),
+            coldSnowTemperatureThreshold = coldSettingsUninitialized ? DefaultColdSnowTemperatureThreshold : math.saturate(coldSnowTemperatureThreshold),
+            coldSurfaceNoiseScale = coldSettingsUninitialized ? DefaultColdSurfaceNoiseScale : math.max(0.001f, coldSurfaceNoiseScale),
             desertSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Desert),
             desertSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Desert),
             savannaSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Savanna),
@@ -159,6 +208,44 @@ public partial class World : MonoBehaviour
 
         biomeNoiseSettingsDirty = false;
         return cachedBiomeNoiseSettings;
+    }
+
+    private static BiomeTerrainSettings SanitizeBiomeTerrainSettings(BiomeTerrainSettings raw, BiomeTerrainSettings fallback)
+    {
+        if (IsBiomeTerrainSettingsUninitialized(raw))
+            raw = fallback;
+
+        raw.reliefMultiplier = Mathf.Max(0.05f, raw.reliefMultiplier);
+        raw.hillsMultiplier = Mathf.Max(0f, raw.hillsMultiplier);
+        raw.mountainMultiplier = Mathf.Max(0f, raw.mountainMultiplier);
+        raw.erosionBias = Mathf.Clamp(raw.erosionBias, -0.45f, 0.45f);
+        raw.erosionPower = Mathf.Max(0.1f, raw.erosionPower);
+        raw.flattenStrength = Mathf.Clamp01(raw.flattenStrength);
+        raw.heightOffset = Mathf.Clamp(raw.heightOffset, -12f, 12f);
+        return raw;
+    }
+
+    private static bool IsBiomeTerrainSettingsUninitialized(BiomeTerrainSettings settings)
+    {
+        return settings.reliefMultiplier == 0f &&
+               settings.hillsMultiplier == 0f &&
+               settings.mountainMultiplier == 0f &&
+               settings.erosionBias == 0f &&
+               settings.erosionPower == 0f &&
+               settings.flattenStrength == 0f &&
+               settings.heightOffset == 0f;
+    }
+
+    private bool AreColdMountainSettingsUninitialized()
+    {
+        return biomeTerrainBlendRange == 0f &&
+               altitudeTemperatureFalloff == 0f &&
+               coldStoneStartHeightOffset == 0f &&
+               coldStoneBlendRange == 0f &&
+               coldSnowStartHeightOffset == 0f &&
+               coldSnowBlendRange == 0f &&
+               coldSnowTemperatureThreshold == 0f &&
+               coldSurfaceNoiseScale == 0f;
     }
 
     private BiomeType GetBiomeAt(int worldX, int worldZ)
@@ -259,3 +346,4 @@ public partial class World : MonoBehaviour
         return sum / weightSum;
     }
 }
+

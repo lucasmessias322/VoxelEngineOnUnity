@@ -1,4 +1,4 @@
-﻿using Unity.Burst;
+using Unity.Burst;
 using Unity.Mathematics;
 
 public struct TerrainSurfaceData
@@ -46,17 +46,34 @@ public static class TerrainSurfaceRules
         bool isBeach = surfaceHeight <= seaLevel + BeachHeightMargin;
         bool isHighMountain = surfaceHeight >= baseHeight + HighMountainHeightOffset;
 
-        BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-        BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome, biomeNoiseSettings);
-        BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(biome, biomeNoiseSettings);
+        BiomeClimateSample climate = BiomeUtility.SampleClimate(worldX, worldZ, biomeNoiseSettings);
+        BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(climate.biome, biomeNoiseSettings);
+        BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(climate.biome, biomeNoiseSettings);
 
-        BlockType surfaceBlock = (isHighMountain || isCliff)
-            ? BlockType.Stone
-            : (isBeach ? BlockType.Sand : biomeSurfaceBlock);
+        BlockType surfaceBlock = isBeach ? BlockType.Sand : biomeSurfaceBlock;
+        BlockType subsurfaceBlock = isBeach ? BlockType.Sand : biomeSubsurfaceBlock;
 
-        BlockType subsurfaceBlock = (isHighMountain || isCliff)
-            ? BlockType.Stone
-            : (isBeach ? BlockType.Sand : biomeSubsurfaceBlock);
+        if (!isBeach && (isHighMountain || isCliff))
+        {
+            surfaceBlock = BlockType.Stone;
+            subsurfaceBlock = BlockType.Stone;
+        }
+
+        if (!isBeach)
+        {
+            ApplyColdMountainSurface(
+                worldX,
+                worldZ,
+                surfaceHeight,
+                isCliff,
+                isHighMountain,
+                baseHeight,
+                climate.temperature,
+                climate.humidity,
+                biomeNoiseSettings,
+                ref surfaceBlock,
+                ref subsurfaceBlock);
+        }
 
         return new TerrainSurfaceData
         {
@@ -84,5 +101,56 @@ public static class TerrainSurfaceRules
         return y > surface.surfaceHeight - StoneTransitionDepth
             ? BlockType.Stone
             : BlockType.Deepslate;
+    }
+
+    [BurstCompile]
+    private static void ApplyColdMountainSurface(
+        int worldX,
+        int worldZ,
+        int surfaceHeight,
+        bool isCliff,
+        bool isHighMountain,
+        int baseHeight,
+        float temperature,
+        float humidity,
+        in BiomeNoiseSettings biomeNoiseSettings,
+        ref BlockType surfaceBlock,
+        ref BlockType subsurfaceBlock)
+    {
+        BiomeTerrainBlendWeights weights = BiomeUtility.GetTerrainBlendWeights(temperature, humidity, biomeNoiseSettings);
+        float coldMask = weights.taiga;
+        if (coldMask <= 1e-3f)
+            return;
+
+        float adjustedTemperature = BiomeUtility.GetAltitudeAdjustedTemperature(temperature, surfaceHeight, baseHeight, biomeNoiseSettings);
+        float stoneAltitudeMask = math.saturate((surfaceHeight - (baseHeight + biomeNoiseSettings.coldStoneStartHeightOffset))
+            / math.max(1f, biomeNoiseSettings.coldStoneBlendRange));
+        float snowAltitudeMask = math.saturate((surfaceHeight - (baseHeight + biomeNoiseSettings.coldSnowStartHeightOffset))
+            / math.max(1f, biomeNoiseSettings.coldSnowBlendRange));
+        float snowTemperatureMask = math.saturate((biomeNoiseSettings.coldSnowTemperatureThreshold - adjustedTemperature) / 0.18f);
+        float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, biomeNoiseSettings.coldSurfaceNoiseScale);
+
+        float stoneMask = math.saturate(coldMask * (stoneAltitudeMask * 0.85f + (isCliff ? 0.35f : 0f) + (isHighMountain ? 0.18f : 0f)));
+        float snowMask = math.saturate(coldMask * snowAltitudeMask * snowTemperatureMask * (isCliff ? 0.25f : 1f));
+        float stoneThreshold = 0.54f + (surfaceNoise - 0.5f) * 0.18f;
+        float snowThreshold = 0.50f + (surfaceNoise - 0.5f) * 0.22f;
+
+        if (stoneMask >= stoneThreshold)
+        {
+            surfaceBlock = BlockType.Stone;
+            subsurfaceBlock = BlockType.Stone;
+        }
+
+        if (!isCliff && snowMask >= snowThreshold)
+            surfaceBlock = BlockType.Snow;
+    }
+
+    [BurstCompile]
+    private static float SampleSurfaceNoise01(int worldX, int worldZ, float scale)
+    {
+        float safeScale = math.max(0.001f, scale);
+        float nx = worldX * safeScale + 17.213f;
+        float nz = worldZ * safeScale - 9.371f;
+        return math.saturate(noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f);
     }
 }

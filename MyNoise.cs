@@ -164,8 +164,16 @@ public static class MyNoise
         float mountainTotal,
         float mountainWeight,
         float legacyTotal,
-        float legacyWeight)
+        float legacyWeight,
+        in BiomeTerrainSettings biomeTerrain)
     {
+        float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);
+        float hillsMultiplier = math.max(0f, biomeTerrain.hillsMultiplier);
+        float mountainMultiplier = math.max(0f, biomeTerrain.mountainMultiplier);
+        float flattenStrength = math.saturate(biomeTerrain.flattenStrength);
+        float erosionBias = biomeTerrain.erosionBias;
+        float erosionPower = math.max(0.1f, biomeTerrain.erosionPower);
+
         float continentalness01 = GetWeightedRoleSample(continentalTotal, continentalWeight, 0.5f);
         float erosion01 = GetWeightedRoleSample(erosionTotal, erosionWeight, 1f);
         float hillsNoise01 = GetWeightedRoleSample(hillsTotal, hillsWeight, 0.5f);
@@ -173,7 +181,7 @@ public static class MyNoise
         float mountainNoise01 = GetWeightedRoleSample(mountainTotal, mountainWeight, 0.5f);
 
         float continentalness = (continentalness01 - 0.5f) * math.max(1f, continentalWeight);
-        float erosion = math.saturate(erosion01);
+        float erosion = math.saturate(math.pow(math.saturate(erosion01 + erosionBias), erosionPower));
         float erosionInv = 1f - erosion;
         float hillsNoise = hillsNoise01 * 2f - 1f;
         float peakSignal = peaksValleysWeight > 0f ? math.abs(peaksValleys01 * 2f - 1f) : 0f;
@@ -187,38 +195,49 @@ public static class MyNoise
             * SmoothThreshold(mountainNoise01, 0.6f, 0.88f)
             * SmoothThreshold(peakSignal, 0.6f, 0.9f);
 
-        float hills = hillsNoise * math.max(1f, hillsWeight) * math.lerp(0.22f, 0.82f, erosion);
-        float foothills = math.max(0f, hillsNoise) * math.max(1f, hillsWeight) * 0.7f * foothillMask;
+        float hills = hillsNoise * math.max(1f, hillsWeight) * math.lerp(0.22f, 0.82f, erosion) * hillsMultiplier;
+        float foothills = math.max(0f, hillsNoise) * math.max(1f, hillsWeight) * 0.7f * foothillMask * math.lerp(0.55f, 1f, hillsMultiplier);
         float mountainShoulders = math.pow(math.saturate((mountainNoise01 - 0.38f) / 0.62f), 1.35f) * 0.4f;
         float cliffAccent = math.pow(math.saturate((mountainNoise01 - 0.64f) / 0.36f), 2.8f)
             * math.max(1f, mountainWeight)
             * cliffMask
-            * 1.15f;
+            * 1.15f
+            * mountainMultiplier;
         float mountains = (math.pow(mountainSignal, 2.4f) * 1.9f + mountainShoulders)
             * math.max(1f, mountainWeight)
-            * mountainMask;
-        float terrain = continentalness
-             + hills
-             + foothills
-             + mountains
-             + cliffAccent
-             + GetLegacyCenteredNoise(legacyTotal, legacyWeight);
+            * mountainMask
+            * mountainMultiplier;
+
+        float baseline = continentalness + GetLegacyCenteredNoise(legacyTotal, legacyWeight);
+        float terrain = baseline + hills + foothills + mountains + cliffAccent;
+        float flattenedBaseline = baseline + math.max(0f, continentalness) * 0.12f;
+        terrain = math.lerp(terrain, flattenedBaseline, flattenStrength);
+        terrain = baseline + (terrain - baseline) * reliefMultiplier;
+        terrain += biomeTerrain.heightOffset;
 
         float hillsSteepnessMask = SmoothThreshold(math.abs(hillsNoise), 0.16f, 0.68f);
         float hillsElevationMask = SmoothThreshold(terrain, 3f, 18f);
         float hillsTerraceMask = math.saturate(
             foothillMask * 0.85f +
             mountainMask * 0.45f +
-            inlandMask * hillsSteepnessMask * 0.35f) * hillsElevationMask;
+            inlandMask * hillsSteepnessMask * 0.35f) * hillsElevationMask * math.lerp(1f, 0.42f, flattenStrength);
 
-        // First harden hillsides into 2-block steps before larger mountain terraces.
         terrain = ApplyTerracing(terrain, 2f, hillsTerraceMask);
 
         float mountainElevationMask = SmoothThreshold(terrain, 10f, 42f);
-        float mountainTerraceMask = math.saturate(mountainMask * 0.18f + cliffMask * 0.42f) * mountainElevationMask;
+        float mountainTerraceMask = math.saturate(mountainMask * 0.18f + cliffMask * 0.42f)
+            * mountainElevationMask
+            * math.lerp(1f, 0.68f, flattenStrength);
         float mountainTerraceStep = math.lerp(3.25f, 4.5f, cliffMask);
 
         return ApplyTerracing(terrain, mountainTerraceStep, mountainTerraceMask);
+    }
+
+    [BurstCompile]
+    public static float ShapeLegacyTerrainSignal(float legacyTerrain, in BiomeTerrainSettings biomeTerrain)
+    {
+        float flattened = math.lerp(legacyTerrain, legacyTerrain * 0.4f, math.saturate(biomeTerrain.flattenStrength));
+        return flattened * math.max(0.05f, biomeTerrain.reliefMultiplier) + biomeTerrain.heightOffset;
     }
 
     [BurstCompile]

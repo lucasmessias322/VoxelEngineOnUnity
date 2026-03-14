@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -1586,6 +1586,7 @@ public partial class World
             hash = hash * 31 + CliffTreshold;
             hash = hash * 31 + HashNoiseLayers(noiseLayers);
             hash = hash * 31 + HashWarpLayers(warpLayers);
+            hash = hash * 31 + HashBiomeNoiseSettings(GetBiomeNoiseSettings());
             return hash;
         }
     }
@@ -1647,6 +1648,62 @@ public partial class World
         }
     }
 
+    private static int HashBiomeNoiseSettings(BiomeNoiseSettings settings)
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + settings.temperatureScale.GetHashCode();
+            hash = hash * 31 + settings.humidityScale.GetHashCode();
+            hash = hash * 31 + settings.temperatureOffset.x.GetHashCode();
+            hash = hash * 31 + settings.temperatureOffset.y.GetHashCode();
+            hash = hash * 31 + settings.humidityOffset.x.GetHashCode();
+            hash = hash * 31 + settings.humidityOffset.y.GetHashCode();
+            hash = hash * 31 + settings.terrainBlendRange.GetHashCode();
+            hash = hash * 31 + settings.desertMinTemperature.GetHashCode();
+            hash = hash * 31 + settings.desertMaxHumidity.GetHashCode();
+            hash = hash * 31 + settings.savannaMinTemperature.GetHashCode();
+            hash = hash * 31 + settings.taigaMaxTemperature.GetHashCode();
+            hash = hash * 31 + settings.taigaMinHumidity.GetHashCode();
+            hash = hash * 31 + HashBiomeTerrainSettings(settings.desertTerrain);
+            hash = hash * 31 + HashBiomeTerrainSettings(settings.savannaTerrain);
+            hash = hash * 31 + HashBiomeTerrainSettings(settings.meadowTerrain);
+            hash = hash * 31 + HashBiomeTerrainSettings(settings.taigaTerrain);
+            hash = hash * 31 + settings.altitudeTemperatureFalloff.GetHashCode();
+            hash = hash * 31 + settings.coldStoneStartHeightOffset.GetHashCode();
+            hash = hash * 31 + settings.coldStoneBlendRange.GetHashCode();
+            hash = hash * 31 + settings.coldSnowStartHeightOffset.GetHashCode();
+            hash = hash * 31 + settings.coldSnowBlendRange.GetHashCode();
+            hash = hash * 31 + settings.coldSnowTemperatureThreshold.GetHashCode();
+            hash = hash * 31 + settings.coldSurfaceNoiseScale.GetHashCode();
+            hash = hash * 31 + (int)settings.desertSurfaceBlock;
+            hash = hash * 31 + (int)settings.desertSubsurfaceBlock;
+            hash = hash * 31 + (int)settings.savannaSurfaceBlock;
+            hash = hash * 31 + (int)settings.savannaSubsurfaceBlock;
+            hash = hash * 31 + (int)settings.meadowSurfaceBlock;
+            hash = hash * 31 + (int)settings.meadowSubsurfaceBlock;
+            hash = hash * 31 + (int)settings.taigaSurfaceBlock;
+            hash = hash * 31 + (int)settings.taigaSubsurfaceBlock;
+            return hash;
+        }
+    }
+
+    private static int HashBiomeTerrainSettings(BiomeTerrainSettings settings)
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + settings.reliefMultiplier.GetHashCode();
+            hash = hash * 31 + settings.hillsMultiplier.GetHashCode();
+            hash = hash * 31 + settings.mountainMultiplier.GetHashCode();
+            hash = hash * 31 + settings.erosionBias.GetHashCode();
+            hash = hash * 31 + settings.erosionPower.GetHashCode();
+            hash = hash * 31 + settings.flattenStrength.GetHashCode();
+            hash = hash * 31 + settings.heightOffset.GetHashCode();
+            return hash;
+        }
+    }
+
     private static Color GetFallbackBlockColor(BlockType blockType)
     {
         switch (blockType)
@@ -1702,6 +1759,8 @@ public partial class World
             UnityEngine.Object.DestroyImmediate(obj);
     }
 }
+
+
 
 
 

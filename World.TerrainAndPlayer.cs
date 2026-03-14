@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -133,7 +133,8 @@ public partial class World : MonoBehaviour
             baseHeight,
             offsetX,
             offsetZ,
-            Chunk.SizeY);
+            Chunk.SizeY,
+            GetBiomeNoiseSettings());
     }
 
 
@@ -312,6 +313,8 @@ public partial class World : MonoBehaviour
     #endregion
 
 }
+
+
 
 
 
