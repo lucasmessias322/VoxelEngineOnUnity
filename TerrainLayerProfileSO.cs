@@ -91,6 +91,8 @@ public class TerrainLayerProfileSO : ScriptableObject
                 ridgeFactor: 2.55f
             ),
         };
+
+        ApplyDefaultWarpPreset();
     }
 
     [ContextMenu("Apply Preset/Legacy Additive")]
@@ -130,6 +132,30 @@ public class TerrainLayerProfileSO : ScriptableObject
                 redistributionModifier: 1f,
                 exponent: 1f,
                 ridgeFactor: 1f
+            ),
+        };
+    }
+
+    [ContextMenu("Apply Preset/Default Warp Layers")]
+    public void ApplyDefaultWarpPreset()
+    {
+        warpLayers = new[]
+        {
+            CreateWarpLayer(
+                scale: 960f,
+                amplitude: 32f,
+                octaves: 2,
+                persistence: 0.5f,
+                lacunarity: 2f,
+                offset: new Vector2(0f, 0f)
+            ),
+            CreateWarpLayer(
+                scale: 280f,
+                amplitude: 14f,
+                octaves: 3,
+                persistence: 0.55f,
+                lacunarity: 2.15f,
+                offset: new Vector2(173.4f, -91.2f)
             ),
         };
     }
@@ -178,6 +204,27 @@ public class TerrainLayerProfileSO : ScriptableObject
             exponent = exponent,
             verticalScale = 1f,
             ridgeFactor = ridgeFactor
+        };
+    }
+
+    private static WarpLayer CreateWarpLayer(
+        float scale,
+        float amplitude,
+        int octaves,
+        float persistence,
+        float lacunarity,
+        Vector2 offset)
+    {
+        return new WarpLayer
+        {
+            enabled = true,
+            scale = scale,
+            amplitude = amplitude,
+            octaves = octaves,
+            persistence = persistence,
+            lacunarity = lacunarity,
+            offset = offset,
+            maxAmp = 0f
         };
     }
 }

@@ -132,6 +132,10 @@ public static class MeshGenerator
             int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
             int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
             int hW = lx > 0 ? heightCache[centerIdx - 1] : h;
+            int hNE = lx + 1 < paddedSize && lz + 1 < paddedSize ? heightCache[centerIdx + 1 + heightStride] : h;
+            int hNW = lx > 0 && lz + 1 < paddedSize ? heightCache[centerIdx - 1 + heightStride] : h;
+            int hSE = lx + 1 < paddedSize && lz > 0 ? heightCache[centerIdx + 1 - heightStride] : h;
+            int hSW = lx > 0 && lz > 0 ? heightCache[centerIdx - 1 - heightStride] : h;
 
             TerrainColumnContext columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
                 worldX,
@@ -141,6 +145,10 @@ public static class MeshGenerator
                 hS,
                 hE,
                 hW,
+                hNE,
+                hNW,
+                hSE,
+                hSW,
                 CliffTreshold,
                 baseHeight,
                 seaLevel,

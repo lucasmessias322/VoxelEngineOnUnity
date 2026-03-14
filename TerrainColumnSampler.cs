@@ -10,6 +10,12 @@ public struct TerrainColumnContext
     public int southHeight;
     public int eastHeight;
     public int westHeight;
+    public int northEastHeight;
+    public int northWestHeight;
+    public int southEastHeight;
+    public int southWestHeight;
+    public float slope;
+    public float slope01;
     public TerrainSurfaceData surface;
 }
 
@@ -24,23 +30,33 @@ public static class TerrainColumnSampler
         int southHeight,
         int eastHeight,
         int westHeight,
+        int northEastHeight,
+        int northWestHeight,
+        int southEastHeight,
+        int southWestHeight,
         int cliffThreshold,
         int baseHeight,
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
-        bool isCliff = TerrainSurfaceRules.IsCliffFromNeighborHeights(
-            surfaceHeight,
+        float slope = TerrainSurfaceRules.GetSlopeFromNeighborHeights(
             northHeight,
             southHeight,
             eastHeight,
             westHeight,
-            cliffThreshold);
+            northEastHeight,
+            northWestHeight,
+            southEastHeight,
+            southWestHeight);
+        float slope01 = TerrainSurfaceRules.NormalizeSlope(slope, cliffThreshold);
+        bool isCliff = TerrainSurfaceRules.IsSteepSlope(slope, cliffThreshold);
 
         TerrainSurfaceData surfaceData = TerrainSurfaceRules.EvaluateColumnSurface(
             worldX,
             worldZ,
             surfaceHeight,
+            slope,
+            slope01,
             isCliff,
             baseHeight,
             seaLevel,
@@ -55,6 +71,12 @@ public static class TerrainColumnSampler
             southHeight = southHeight,
             eastHeight = eastHeight,
             westHeight = westHeight,
+            northEastHeight = northEastHeight,
+            northWestHeight = northWestHeight,
+            southEastHeight = southEastHeight,
+            southWestHeight = southWestHeight,
+            slope = slope,
+            slope01 = slope01,
             surface = surfaceData
         };
     }
@@ -78,6 +100,10 @@ public static class TerrainColumnSampler
         int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northEastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northWestHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southEastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southWestHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
 
         return CreateFromNeighborHeights(
             worldX,
@@ -87,6 +113,10 @@ public static class TerrainColumnSampler
             southHeight,
             eastHeight,
             westHeight,
+            northEastHeight,
+            northWestHeight,
+            southEastHeight,
+            southWestHeight,
             cliffThreshold,
             baseHeight,
             seaLevel,
@@ -111,6 +141,10 @@ public static class TerrainColumnSampler
         int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int westHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northEastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int northWestHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southEastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        int southWestHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX - 1, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
 
         return CreateFromNeighborHeights(
             worldX,
@@ -120,6 +154,10 @@ public static class TerrainColumnSampler
             southHeight,
             eastHeight,
             westHeight,
+            northEastHeight,
+            northWestHeight,
+            southEastHeight,
+            southWestHeight,
             cliffThreshold,
             baseHeight,
             seaLevel,
@@ -161,6 +199,10 @@ public static class TerrainColumnSampler
         int southHeight = cacheZ > 0 ? heightCache[centerIdx - heightStride] : surfaceHeight;
         int eastHeight = cacheX + 1 < heightStride ? heightCache[centerIdx + 1] : surfaceHeight;
         int westHeight = cacheX > 0 ? heightCache[centerIdx - 1] : surfaceHeight;
+        int northEastHeight = cacheX + 1 < heightStride && cacheZ + 1 < heightDepth ? heightCache[centerIdx + 1 + heightStride] : surfaceHeight;
+        int northWestHeight = cacheX > 0 && cacheZ + 1 < heightDepth ? heightCache[centerIdx - 1 + heightStride] : surfaceHeight;
+        int southEastHeight = cacheX + 1 < heightStride && cacheZ > 0 ? heightCache[centerIdx + 1 - heightStride] : surfaceHeight;
+        int southWestHeight = cacheX > 0 && cacheZ > 0 ? heightCache[centerIdx - 1 - heightStride] : surfaceHeight;
 
         columnContext = CreateFromNeighborHeights(
             worldX,
@@ -170,6 +212,10 @@ public static class TerrainColumnSampler
             southHeight,
             eastHeight,
             westHeight,
+            northEastHeight,
+            northWestHeight,
+            southEastHeight,
+            southWestHeight,
             cliffThreshold,
             baseHeight,
             seaLevel,

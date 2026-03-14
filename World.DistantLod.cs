@@ -1550,6 +1550,10 @@ public partial class World
         int hS = GetCachedDistantTerrainHeight(worldX, worldZ - 1);
         int hE = GetCachedDistantTerrainHeight(worldX + 1, worldZ);
         int hW = GetCachedDistantTerrainHeight(worldX - 1, worldZ);
+        int hNE = GetCachedDistantTerrainHeight(worldX + 1, worldZ + 1);
+        int hNW = GetCachedDistantTerrainHeight(worldX - 1, worldZ + 1);
+        int hSE = GetCachedDistantTerrainHeight(worldX + 1, worldZ - 1);
+        int hSW = GetCachedDistantTerrainHeight(worldX - 1, worldZ - 1);
 
         columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
             worldX,
@@ -1559,6 +1563,10 @@ public partial class World
             hS,
             hE,
             hW,
+            hNE,
+            hNW,
+            hSE,
+            hSW,
             CliffTreshold,
             baseHeight,
             seaLevel,
@@ -1700,6 +1708,8 @@ public partial class World
             hash = hash * 31 + settings.erosionPower.GetHashCode();
             hash = hash * 31 + settings.flattenStrength.GetHashCode();
             hash = hash * 31 + settings.heightOffset.GetHashCode();
+            hash = hash * 31 + settings.surfaceDepth.GetHashCode();
+            hash = hash * 31 + settings.steepSurfaceDepth.GetHashCode();
             return hash;
         }
     }

@@ -117,7 +117,7 @@ public static class TerrainHeightSampler
         for (int i = 0; i < warpLayers.Length; i++)
             AccumulateWarpLayer(worldX, worldZ, warpLayers[i], ref warpX, ref warpZ, ref sumWarpAmp);
 
-        NormalizeWarp(ref warpX, ref warpZ, sumWarpAmp);
+        ClampWarp(ref warpX, ref warpZ, sumWarpAmp);
     }
 
     private static void ComputeWarpOffset(
@@ -137,7 +137,7 @@ public static class TerrainHeightSampler
                 AccumulateWarpLayer(worldX, worldZ, warpLayers[i], ref warpX, ref warpZ, ref sumWarpAmp);
         }
 
-        NormalizeWarp(ref warpX, ref warpZ, sumWarpAmp);
+        ClampWarp(ref warpX, ref warpZ, sumWarpAmp);
     }
 
     [BurstCompile]
@@ -164,13 +164,14 @@ public static class TerrainHeightSampler
     }
 
     [BurstCompile]
-    private static void NormalizeWarp(ref float warpX, ref float warpZ, float sumWarpAmp)
+    private static void ClampWarp(ref float warpX, ref float warpZ, float sumWarpAmp)
     {
         if (sumWarpAmp <= 0f)
             return;
 
-        warpX /= sumWarpAmp;
-        warpZ /= sumWarpAmp;
+        float maxDisplacement = math.max(1f, sumWarpAmp);
+        warpX = math.clamp(warpX, -maxDisplacement, maxDisplacement);
+        warpZ = math.clamp(warpZ, -maxDisplacement, maxDisplacement);
     }
 
     [BurstCompile]

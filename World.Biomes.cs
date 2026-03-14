@@ -222,6 +222,10 @@ public partial class World : MonoBehaviour
         raw.erosionPower = Mathf.Max(0.1f, raw.erosionPower);
         raw.flattenStrength = Mathf.Clamp01(raw.flattenStrength);
         raw.heightOffset = Mathf.Clamp(raw.heightOffset, -12f, 12f);
+        raw.surfaceDepth = raw.surfaceDepth > 0f ? raw.surfaceDepth : fallback.surfaceDepth;
+        raw.steepSurfaceDepth = raw.steepSurfaceDepth > 0f ? raw.steepSurfaceDepth : fallback.steepSurfaceDepth;
+        raw.surfaceDepth = Mathf.Clamp(raw.surfaceDepth, 1f, 12f);
+        raw.steepSurfaceDepth = Mathf.Clamp(raw.steepSurfaceDepth, 1f, raw.surfaceDepth);
         return raw;
     }
 
@@ -233,7 +237,9 @@ public partial class World : MonoBehaviour
                settings.erosionBias == 0f &&
                settings.erosionPower == 0f &&
                settings.flattenStrength == 0f &&
-               settings.heightOffset == 0f;
+               settings.heightOffset == 0f &&
+               settings.surfaceDepth == 0f &&
+               settings.steepSurfaceDepth == 0f;
     }
 
     private bool AreColdMountainSettingsUninitialized()

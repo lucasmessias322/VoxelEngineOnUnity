@@ -4,33 +4,54 @@ using Unity.Mathematics;
 public struct TerrainSurfaceData
 {
     public int surfaceHeight;
+    public int surfaceLayerDepth;
     public BlockType surfaceBlock;
     public BlockType subsurfaceBlock;
     public bool isBeach;
     public bool isCliff;
     public bool isHighMountain;
+    public float slope;
+    public float slope01;
 }
 
 public static class TerrainSurfaceRules
 {
     public const int BeachHeightMargin = 2;
-    public const int SurfaceLayerDepth = 4;
+    public const int DefaultSurfaceLayerDepth = 4;
     public const int StoneTransitionDepth = 50;
     public const int HighMountainHeightOffset = 70;
 
+    private const float SlopeStoneStart01 = 0.24f;
+    private const float SlopeStoneFull01 = 0.86f;
+    private const int MaxSurfaceLayerDepth = 12;
+
     [BurstCompile]
-    public static bool IsCliffFromNeighborHeights(
-        int centerHeight,
+    public static float GetSlopeFromNeighborHeights(
         int northHeight,
         int southHeight,
         int eastHeight,
         int westHeight,
-        int threshold)
+        int northEastHeight,
+        int northWestHeight,
+        int southEastHeight,
+        int southWestHeight)
     {
-        int maxDiff = math.max(math.abs(centerHeight - northHeight), math.abs(centerHeight - southHeight));
-        maxDiff = math.max(maxDiff, math.abs(centerHeight - eastHeight));
-        maxDiff = math.max(maxDiff, math.abs(centerHeight - westHeight));
-        return maxDiff >= threshold;
+        float gradientX = (northEastHeight + 2f * eastHeight + southEastHeight) - (northWestHeight + 2f * westHeight + southWestHeight);
+        float gradientZ = (southWestHeight + 2f * southHeight + southEastHeight) - (northWestHeight + 2f * northHeight + northEastHeight);
+        return math.sqrt(gradientX * gradientX + gradientZ * gradientZ) * 0.125f;
+    }
+
+    [BurstCompile]
+    public static float NormalizeSlope(float slope, int threshold)
+    {
+        float safeThreshold = math.max(1f, threshold);
+        return math.saturate(slope / (safeThreshold * 2.5f));
+    }
+
+    [BurstCompile]
+    public static bool IsSteepSlope(float slope, int threshold)
+    {
+        return slope >= math.max(1f, threshold);
     }
 
     [BurstCompile]
@@ -38,6 +59,8 @@ public static class TerrainSurfaceRules
         int worldX,
         int worldZ,
         int surfaceHeight,
+        float slope,
+        float slope01,
         bool isCliff,
         int baseHeight,
         float seaLevel,
@@ -45,27 +68,42 @@ public static class TerrainSurfaceRules
     {
         bool isBeach = surfaceHeight <= seaLevel + BeachHeightMargin;
         bool isHighMountain = surfaceHeight >= baseHeight + HighMountainHeightOffset;
+        float highMountain01 = math.saturate((surfaceHeight - (baseHeight + HighMountainHeightOffset - 12f)) / 20f);
 
         BiomeClimateSample climate = BiomeUtility.SampleClimate(worldX, worldZ, biomeNoiseSettings);
+        BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(climate.temperature, climate.humidity, biomeNoiseSettings);
         BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(climate.biome, biomeNoiseSettings);
         BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(climate.biome, biomeNoiseSettings);
 
         BlockType surfaceBlock = isBeach ? BlockType.Sand : biomeSurfaceBlock;
         BlockType subsurfaceBlock = isBeach ? BlockType.Sand : biomeSubsurfaceBlock;
 
-        if (!isBeach && (isHighMountain || isCliff))
-        {
-            surfaceBlock = BlockType.Stone;
-            subsurfaceBlock = BlockType.Stone;
-        }
+        float surfaceNoiseScale = math.max(0.018f, biomeNoiseSettings.coldSurfaceNoiseScale * 0.75f);
+        float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, surfaceNoiseScale);
+        float slopeStoneMask = math.saturate((slope01 - SlopeStoneStart01) / math.max(0.01f, SlopeStoneFull01 - SlopeStoneStart01));
+        float exposedStoneMask = math.saturate(math.max(highMountain01, slopeStoneMask * 0.92f + highMountain01 * 0.25f));
+        float stoneThreshold = 0.60f + (surfaceNoise - 0.5f) * 0.16f;
+        int surfaceLayerDepth = ResolveSurfaceLayerDepth(terrainSettings, slope01, isBeach, highMountain01, exposedStoneMask);
 
         if (!isBeach)
         {
+            if (exposedStoneMask >= stoneThreshold)
+            {
+                surfaceBlock = BlockType.Stone;
+                subsurfaceBlock = BlockType.Stone;
+                surfaceLayerDepth = 1;
+            }
+            else if (exposedStoneMask >= stoneThreshold - 0.22f)
+            {
+                subsurfaceBlock = BlockType.Stone;
+                surfaceLayerDepth = math.min(surfaceLayerDepth, 2);
+            }
+
             ApplyColdMountainSurface(
                 worldX,
                 worldZ,
                 surfaceHeight,
-                isCliff,
+                slope01,
                 isHighMountain,
                 baseHeight,
                 climate.temperature,
@@ -73,16 +111,22 @@ public static class TerrainSurfaceRules
                 biomeNoiseSettings,
                 ref surfaceBlock,
                 ref subsurfaceBlock);
+
+            if (subsurfaceBlock == BlockType.Stone)
+                surfaceLayerDepth = math.min(surfaceLayerDepth, surfaceBlock == BlockType.Stone ? 1 : 2);
         }
 
         return new TerrainSurfaceData
         {
             surfaceHeight = surfaceHeight,
+            surfaceLayerDepth = surfaceLayerDepth,
             surfaceBlock = surfaceBlock,
             subsurfaceBlock = subsurfaceBlock,
             isBeach = isBeach,
             isCliff = isCliff,
-            isHighMountain = isHighMountain
+            isHighMountain = isHighMountain,
+            slope = slope,
+            slope01 = slope01
         };
     }
 
@@ -92,7 +136,8 @@ public static class TerrainSurfaceRules
         if (y == surface.surfaceHeight)
             return surface.surfaceBlock;
 
-        if (y > surface.surfaceHeight - SurfaceLayerDepth)
+        int surfaceLayerDepth = math.max(1, surface.surfaceLayerDepth);
+        if (y > surface.surfaceHeight - surfaceLayerDepth)
             return surface.subsurfaceBlock;
 
         if (y <= 2)
@@ -104,11 +149,31 @@ public static class TerrainSurfaceRules
     }
 
     [BurstCompile]
+    private static int ResolveSurfaceLayerDepth(
+        in BiomeTerrainSettings terrainSettings,
+        float slope01,
+        bool isBeach,
+        float highMountain01,
+        float exposedStoneMask)
+    {
+        float flatDepth = terrainSettings.surfaceDepth > 0f ? terrainSettings.surfaceDepth : DefaultSurfaceLayerDepth;
+        float steepDepth = terrainSettings.steepSurfaceDepth > 0f ? terrainSettings.steepSurfaceDepth : math.min(flatDepth, 2f);
+        float steepness = math.saturate(math.max(slope01, highMountain01 * 0.75f));
+        float depth = math.lerp(flatDepth, steepDepth, steepness);
+        depth = math.lerp(depth, math.max(1f, steepDepth - 0.5f), math.saturate(exposedStoneMask * 0.8f));
+
+        if (isBeach)
+            depth = math.max(depth, 4f);
+
+        return math.clamp((int)math.round(depth), 1, MaxSurfaceLayerDepth);
+    }
+
+    [BurstCompile]
     private static void ApplyColdMountainSurface(
         int worldX,
         int worldZ,
         int surfaceHeight,
-        bool isCliff,
+        float slope01,
         bool isHighMountain,
         int baseHeight,
         float temperature,
@@ -130,8 +195,8 @@ public static class TerrainSurfaceRules
         float snowTemperatureMask = math.saturate((biomeNoiseSettings.coldSnowTemperatureThreshold - adjustedTemperature) / 0.18f);
         float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, biomeNoiseSettings.coldSurfaceNoiseScale);
 
-        float stoneMask = math.saturate(coldMask * (stoneAltitudeMask * 0.85f + (isCliff ? 0.35f : 0f) + (isHighMountain ? 0.18f : 0f)));
-        float snowMask = math.saturate(coldMask * snowAltitudeMask * snowTemperatureMask * (isCliff ? 0.25f : 1f));
+        float stoneMask = math.saturate(coldMask * (stoneAltitudeMask * 0.85f + slope01 * 0.42f + (isHighMountain ? 0.18f : 0f)));
+        float snowMask = math.saturate(coldMask * snowAltitudeMask * snowTemperatureMask * math.lerp(1f, 0.32f, slope01));
         float stoneThreshold = 0.54f + (surfaceNoise - 0.5f) * 0.18f;
         float snowThreshold = 0.50f + (surfaceNoise - 0.5f) * 0.22f;
 
@@ -141,7 +206,7 @@ public static class TerrainSurfaceRules
             subsurfaceBlock = BlockType.Stone;
         }
 
-        if (!isCliff && snowMask >= snowThreshold)
+        if (slope01 <= 0.72f && snowMask >= snowThreshold)
             surfaceBlock = BlockType.Snow;
     }
 

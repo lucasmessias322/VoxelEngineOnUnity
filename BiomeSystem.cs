@@ -20,6 +20,8 @@ public struct BiomeTerrainSettings
     public float erosionPower;
     public float flattenStrength;
     public float heightOffset;
+    public float surfaceDepth;
+    public float steepSurfaceDepth;
 
     public static BiomeTerrainSettings DesertDefault => new BiomeTerrainSettings
     {
@@ -29,7 +31,9 @@ public struct BiomeTerrainSettings
         erosionBias = 0.22f,
         erosionPower = 0.80f,
         flattenStrength = 0.50f,
-        heightOffset = -1.25f
+        heightOffset = -1.25f,
+        surfaceDepth = 6.5f,
+        steepSurfaceDepth = 2.5f
     };
 
     public static BiomeTerrainSettings SavannaDefault => new BiomeTerrainSettings
@@ -40,7 +44,9 @@ public struct BiomeTerrainSettings
         erosionBias = 0.08f,
         erosionPower = 0.95f,
         flattenStrength = 0.22f,
-        heightOffset = 0.35f
+        heightOffset = 0.35f,
+        surfaceDepth = 4.75f,
+        steepSurfaceDepth = 2.5f
     };
 
     public static BiomeTerrainSettings MeadowDefault => new BiomeTerrainSettings
@@ -51,7 +57,9 @@ public struct BiomeTerrainSettings
         erosionBias = 0.12f,
         erosionPower = 0.90f,
         flattenStrength = 0.35f,
-        heightOffset = 0f
+        heightOffset = 0f,
+        surfaceDepth = 5.5f,
+        steepSurfaceDepth = 3f
     };
 
     public static BiomeTerrainSettings TaigaDefault => new BiomeTerrainSettings
@@ -62,7 +70,9 @@ public struct BiomeTerrainSettings
         erosionBias = -0.12f,
         erosionPower = 1.18f,
         flattenStrength = 0.06f,
-        heightOffset = 1.4f
+        heightOffset = 1.4f,
+        surfaceDepth = 6.25f,
+        steepSurfaceDepth = 2.25f
     };
 }
 
@@ -307,7 +317,17 @@ public static class BiomeUtility
                 settings.desertTerrain.heightOffset * weights.desert +
                 settings.savannaTerrain.heightOffset * weights.savanna +
                 settings.meadowTerrain.heightOffset * weights.meadow +
-                settings.taigaTerrain.heightOffset * weights.taiga
+                settings.taigaTerrain.heightOffset * weights.taiga,
+            surfaceDepth =
+                settings.desertTerrain.surfaceDepth * weights.desert +
+                settings.savannaTerrain.surfaceDepth * weights.savanna +
+                settings.meadowTerrain.surfaceDepth * weights.meadow +
+                settings.taigaTerrain.surfaceDepth * weights.taiga,
+            steepSurfaceDepth =
+                settings.desertTerrain.steepSurfaceDepth * weights.desert +
+                settings.savannaTerrain.steepSurfaceDepth * weights.savanna +
+                settings.meadowTerrain.steepSurfaceDepth * weights.meadow +
+                settings.taigaTerrain.steepSurfaceDepth * weights.taiga
         };
     }
 

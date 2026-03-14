@@ -646,6 +646,7 @@ public partial class World : MonoBehaviour
     {
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
+        EnsureDefaultWarpLayersConfigured();
         MarkBiomeCachesDirty();
     }
 
@@ -654,6 +655,7 @@ public partial class World : MonoBehaviour
         if (blockData != null) blockData.InitializeDictionary();
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
+        EnsureDefaultWarpLayersConfigured();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
@@ -706,6 +708,38 @@ public partial class World : MonoBehaviour
 
         if (warpLayers == null)
             warpLayers = Array.Empty<WarpLayer>();
+    }
+
+    private void EnsureDefaultWarpLayersConfigured()
+    {
+        if (warpLayers != null && warpLayers.Length > 0)
+            return;
+
+        warpLayers = new[]
+        {
+            new WarpLayer
+            {
+                enabled = true,
+                scale = 960f,
+                amplitude = 32f,
+                octaves = 2,
+                persistence = 0.5f,
+                lacunarity = 2f,
+                offset = Vector2.zero,
+                maxAmp = 0f
+            },
+            new WarpLayer
+            {
+                enabled = true,
+                scale = 280f,
+                amplitude = 14f,
+                octaves = 3,
+                persistence = 0.55f,
+                lacunarity = 2.15f,
+                offset = new Vector2(173.4f, -91.2f),
+                maxAmp = 0f
+            }
+        };
     }
 
     private void InitializeNoiseLayers()
