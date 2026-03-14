@@ -110,9 +110,21 @@ public static class MeshGenerator
             warpZ = (warpZ - 0.5f) * 2f;
 
             // === Noise layers ===
-            float totalNoise = 0f;
-            float sumAmp = 0f;
+            float legacyNoiseTotal = 0f;
+            float legacyNoiseWeight = 0f;
             bool hasActiveLayers = false;
+            bool hasTypedRoles = false;
+
+            float continentalTotal = 0f;
+            float continentalWeight = 0f;
+            float erosionTotal = 0f;
+            float erosionWeight = 0f;
+            float hillsTotal = 0f;
+            float hillsWeight = 0f;
+            float peaksValleysTotal = 0f;
+            float peaksValleysWeight = 0f;
+            float mountainTotal = 0f;
+            float mountainWeight = 0f;
 
             for (int j = 0; j < noiseLayers.Length; j++)
             {
@@ -131,20 +143,51 @@ public static class MeshGenerator
                     sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
                 }
 
-                totalNoise += sample * layer.amplitude;
-                sumAmp += math.max(1e-5f, layer.amplitude);
+                MyNoise.AccumulateLayerByRole(
+                    layer,
+                    sample,
+                    ref hasTypedRoles,
+                    ref legacyNoiseTotal,
+                    ref legacyNoiseWeight,
+                    ref continentalTotal,
+                    ref continentalWeight,
+                    ref erosionTotal,
+                    ref erosionWeight,
+                    ref hillsTotal,
+                    ref hillsWeight,
+                    ref peaksValleysTotal,
+                    ref peaksValleysWeight,
+                    ref mountainTotal,
+                    ref mountainWeight
+                );
             }
 
-            if (!hasActiveLayers || sumAmp <= 0f)
+            if (!hasActiveLayers)
             {
                 float nx = (worldX + warpX) * 0.05f + offsetX;
                 float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-                totalNoise = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-                sumAmp = 1f;
+                legacyNoiseTotal = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
+                legacyNoiseWeight = 1f;
+                hasTypedRoles = false;
             }
 
-            float centered = totalNoise - sumAmp * 0.5f;
-            return math.clamp(baseHeight + (int)math.floor(centered), 1, SizeY - 1);
+            float terrainSignal = hasTypedRoles
+                ? MyNoise.ComposeMinecraftLikeTerrainSignal(
+                    continentalTotal,
+                    continentalWeight,
+                    erosionTotal,
+                    erosionWeight,
+                    hillsTotal,
+                    hillsWeight,
+                    peaksValleysTotal,
+                    peaksValleysWeight,
+                    mountainTotal,
+                    mountainWeight,
+                    legacyNoiseTotal,
+                    legacyNoiseWeight)
+                : MyNoise.GetLegacyCenteredNoise(legacyNoiseTotal, legacyNoiseWeight);
+
+            return math.clamp(baseHeight + (int)math.floor(terrainSignal), 1, SizeY - 1);
         }
     }
 
