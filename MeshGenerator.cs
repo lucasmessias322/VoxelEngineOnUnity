@@ -10,7 +10,9 @@ public enum TreeStyle : byte
 {
     OakBroadleaf = 0,
     TaigaSpruce = 1,
-    Cactus = 2
+    Cactus = 2,
+    BirchBroadleaf = 3,
+    SavannaAcacia = 4
 }
 
 public struct TreeInstance
@@ -1023,6 +1025,7 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
 
 
 

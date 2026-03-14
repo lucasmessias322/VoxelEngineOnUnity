@@ -33,25 +33,18 @@ public static class TreePlacement
             TreeInstance t = treeInstances[i];
             bool isTaigaSpruce = t.treeStyle == TreeStyle.TaigaSpruce;
             bool isCactus = t.treeStyle == TreeStyle.Cactus;
+            bool isSavannaAcacia = t.treeStyle == TreeStyle.SavannaAcacia;
 
-            int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791);
-            BlockType trunkType;
-            if (isCactus)
-            {
-                trunkType = GetCactusBlockType(blockMappings);
-            }
-            else
-            {
-                trunkType = isTaigaSpruce
-                    ? BlockType.Log
-                    : ((treeHash & 3) == 0 ? BlockType.birch_log : BlockType.Log);
-            }
+            int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791) ^ ((int)t.treeStyle * 26544357);
+            BlockType trunkType = GetTrunkBlockType(t.treeStyle, blockMappings);
 
             int localX = t.worldX - baseWorldX;
             int localZ = t.worldZ - baseWorldZ;
+            int canopyH = math.max(1, t.canopyHeight);
+            int canopyR = math.max(0, t.canopyRadius);
 
-            if (localX < -t.canopyRadius || localX >= chunkSizeX + t.canopyRadius ||
-                localZ < -t.canopyRadius || localZ >= chunkSizeZ + t.canopyRadius)
+            if (localX < -canopyR || localX >= chunkSizeX + canopyR ||
+                localZ < -canopyR || localZ >= chunkSizeZ + canopyR)
                 continue;
 
             int ix = localX + border;
@@ -79,14 +72,6 @@ public static class TreePlacement
             }
 
             int leafBottom = surfaceY + t.trunkHeight - 1;
-            int canopyH = math.max(1, t.canopyHeight);
-            int canopyR = math.max(0, t.canopyRadius);
-            if (isTaigaSpruce)
-            {
-                canopyH = math.max(5, canopyH);
-                canopyR = math.max(2, canopyR);
-            }
-
             bool skipTree = false;
 
             for (int dy = 1; dy <= t.trunkHeight; dy++)
@@ -106,7 +91,7 @@ public static class TreePlacement
             if (skipTree)
                 continue;
 
-            int extraTop = isTaigaSpruce ? 1 : (isCactus ? 2 : 0);
+            int extraTop = isSavannaAcacia ? 3 : (isTaigaSpruce ? 2 : (isCactus ? 2 : 1));
             int maxCheckY = math.min(chunkSizeY - 1, surfaceY + t.trunkHeight + canopyH + extraTop);
             for (int yy = surfaceY + 1; yy <= maxCheckY && !skipTree; yy++)
             {
@@ -138,13 +123,7 @@ public static class TreePlacement
                 if (ty >= chunkSizeY)
                     break;
 
-                int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                BlockType existing = blockTypes[tidx];
-                if (existing == BlockType.Air || existing == BlockType.Leaves)
-                {
-                    blockTypes[tidx] = trunkType;
-                    solids[tidx] = blockMappings[(int)trunkType].isSolid;
-                }
+                TryPlaceWoodBlock(ix, ty, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType);
             }
 
             if (isCactus)
@@ -162,6 +141,14 @@ public static class TreePlacement
                     ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
                     blockTypes, solids, blockMappings,
                     chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize
+                );
+            }
+            else if (isSavannaAcacia)
+            {
+                PlaceSavannaAcaciaCanopy(
+                    ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
+                    blockTypes, solids, blockMappings,
+                    chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, trunkType
                 );
             }
             else
@@ -183,15 +170,32 @@ public static class TreePlacement
                     break;
 
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                if (blockTypes[tidx] != BlockType.Log && blockTypes[tidx] != BlockType.birch_log)
+                if (!IsWoodBlock(blockTypes[tidx]) &&
+                    (blockTypes[tidx] == BlockType.Air || blockTypes[tidx] == BlockType.Leaves))
                 {
-                    if (blockTypes[tidx] == BlockType.Air || blockTypes[tidx] == BlockType.Leaves)
-                    {
-                        blockTypes[tidx] = trunkType;
-                        solids[tidx] = blockMappings[(int)trunkType].isSolid;
-                    }
+                    blockTypes[tidx] = trunkType;
+                    solids[tidx] = blockMappings[(int)trunkType].isSolid;
                 }
             }
+        }
+    }
+
+    private static BlockType GetTrunkBlockType(TreeStyle treeStyle, NativeArray<BlockTextureMapping> blockMappings)
+    {
+        switch (treeStyle)
+        {
+            case TreeStyle.Cactus:
+                return GetCactusBlockType(blockMappings);
+            case TreeStyle.BirchBroadleaf:
+                return (int)BlockType.birch_log < blockMappings.Length
+                    ? BlockType.birch_log
+                    : BlockType.Log;
+            case TreeStyle.SavannaAcacia:
+                return (int)BlockType.acacia_log < blockMappings.Length
+                    ? BlockType.acacia_log
+                    : BlockType.Log;
+            default:
+                return BlockType.Log;
         }
     }
 
@@ -200,6 +204,49 @@ public static class TreePlacement
         return (int)BlockType.Cactus < blockMappings.Length
             ? BlockType.Cactus
             : BlockType.Log;
+    }
+
+    private static bool IsWoodBlock(BlockType blockType)
+    {
+        return blockType == BlockType.Log ||
+               blockType == BlockType.birch_log ||
+               blockType == BlockType.Cactus;
+    }
+
+    private static bool TryPlaceWoodBlock(
+        int lx,
+        int ly,
+        int lz,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY,
+        BlockType trunkType)
+    {
+        if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ)
+            return false;
+        if (ly < 0 || ly >= chunkSizeY)
+            return false;
+
+        int mappingIndex = (int)trunkType;
+        if (mappingIndex < 0 || mappingIndex >= blockMappings.Length)
+            return false;
+
+        int idx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
+        BlockType existing = blockTypes[idx];
+        if (existing == trunkType)
+            return true;
+        if (IsWoodBlock(existing))
+            return false;
+        if (!(existing == BlockType.Air || existing == BlockType.Leaves))
+            return false;
+
+        blockTypes[idx] = trunkType;
+        solids[idx] = blockMappings[mappingIndex].isSolid;
+        return true;
     }
 
     private static void PlaceCactusStructure(
@@ -367,6 +414,176 @@ public static class TreePlacement
         }
     }
 
+    private static void PlaceSavannaAcaciaCanopy(
+        int ix,
+        int iz,
+        int surfaceY,
+        int trunkHeight,
+        int canopyH,
+        int canopyR,
+        int treeHash,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        BlockType trunkType)
+    {
+        int trunkTopY = surfaceY + trunkHeight;
+        int primaryDir = treeHash & 3;
+        int dirX;
+        int dirZ;
+        GetCardinalDirection(primaryDir, out dirX, out dirZ);
+
+        int branchStartY = surfaceY + math.max(3, trunkHeight - 2);
+        int primaryBranchLength = math.clamp(1 + ((treeHash >> 3) & 0x1), 1, math.max(1, canopyR - 2));
+        int mainCanopyX = ix;
+        int mainCanopyZ = iz;
+        int mainCanopyY = trunkTopY;
+
+        for (int step = 1; step <= primaryBranchLength; step++)
+        {
+            mainCanopyX += dirX;
+            mainCanopyZ += dirZ;
+            mainCanopyY = math.min(chunkSizeY - 1, branchStartY + step);
+            TryPlaceWoodBlock(mainCanopyX, mainCanopyY, mainCanopyZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType);
+        }
+
+        int mainRadius = math.max(2, canopyR - 1);
+        PlaceSavannaCanopyPlatform(mainCanopyX, mainCanopyZ, mainCanopyY, mainRadius, treeHash, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        PlaceSavannaCanopyPlatform(mainCanopyX, mainCanopyZ, mainCanopyY + 1, math.max(1, mainRadius - 1), treeHash ^ 2038074743, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        PlaceSavannaLowerFringe(mainCanopyX, mainCanopyZ, mainCanopyY, mainRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        TryPlaceLeaf(mainCanopyX, mainCanopyY + 2, mainCanopyZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+
+        if (trunkHeight >= 6)
+        {
+            int secondaryDir = (primaryDir + (((treeHash >> 6) & 1) == 0 ? 1 : 3)) & 3;
+            int secondaryDirX;
+            int secondaryDirZ;
+            GetCardinalDirection(secondaryDir, out secondaryDirX, out secondaryDirZ);
+
+            int secondaryLength = math.min(1 + ((treeHash >> 8) & 1), math.max(1, canopyR - 2));
+            int secondaryBaseY = math.min(chunkSizeY - 1, surfaceY + math.max(3, trunkHeight - 3));
+            int secondaryX = ix;
+            int secondaryZ = iz;
+            int secondaryY = secondaryBaseY;
+
+            for (int step = 1; step <= secondaryLength; step++)
+            {
+                secondaryX += secondaryDirX;
+                secondaryZ += secondaryDirZ;
+                secondaryY = math.min(chunkSizeY - 1, secondaryBaseY + (step > 1 ? 1 : 0));
+                TryPlaceWoodBlock(secondaryX, secondaryY, secondaryZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType);
+            }
+
+            int secondaryRadius = math.max(1, mainRadius - 1);
+            PlaceSavannaCanopyPlatform(secondaryX, secondaryZ, secondaryY + 1, secondaryRadius, treeHash ^ 461845907, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            TryPlaceLeaf(secondaryX, secondaryY + 2, secondaryZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        }
+
+        PlaceLeafCross(ix, iz, trunkTopY, math.max(1, canopyH - 2), blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+    }
+
+    private static void PlaceSavannaCanopyPlatform(
+        int centerX,
+        int centerZ,
+        int layerY,
+        int radius,
+        int layerHash,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        if (radius <= 0)
+        {
+            TryPlaceLeaf(centerX, layerY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            return;
+        }
+
+        int manhattanLimit = radius + (radius > 2 ? 1 : 0);
+        for (int dx = -radius; dx <= radius; dx++)
+        {
+            for (int dz = -radius; dz <= radius; dz++)
+            {
+                int absDx = math.abs(dx);
+                int absDz = math.abs(dz);
+                if (absDx + absDz > manhattanLimit)
+                    continue;
+                if (radius >= 2 && absDx == radius && absDz == radius)
+                    continue;
+                if (radius >= 3 && absDx == radius && absDz >= radius - 1)
+                {
+                    int bit = (absDz + layerHash + dx * dx) & 3;
+                    if (((layerHash >> bit) & 1) == 1)
+                        continue;
+                }
+
+                TryPlaceLeaf(centerX + dx, layerY, centerZ + dz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            }
+        }
+    }
+
+    private static void PlaceSavannaLowerFringe(
+        int centerX,
+        int centerZ,
+        int canopyY,
+        int radius,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        int fringeY = canopyY - 1;
+        if (fringeY < 0 || radius <= 0)
+            return;
+
+        int fringeRadius = math.max(1, radius - 1);
+        TryPlaceLeaf(centerX + fringeRadius, fringeY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        TryPlaceLeaf(centerX - fringeRadius, fringeY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        TryPlaceLeaf(centerX, fringeY, centerZ + fringeRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        TryPlaceLeaf(centerX, fringeY, centerZ - fringeRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+
+        if (radius >= 3)
+        {
+            TryPlaceLeaf(centerX + 1, fringeY, centerZ + fringeRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            TryPlaceLeaf(centerX - 1, fringeY, centerZ - fringeRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        }
+    }
+
+    private static void PlaceLeafCross(
+        int centerX,
+        int centerZ,
+        int layerY,
+        int radius,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        if (radius <= 0)
+        {
+            TryPlaceLeaf(centerX, layerY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            return;
+        }
+
+        for (int step = 1; step <= radius; step++)
+        {
+            TryPlaceLeaf(centerX - step, layerY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            TryPlaceLeaf(centerX + step, layerY, centerZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            TryPlaceLeaf(centerX, layerY, centerZ - step, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            TryPlaceLeaf(centerX, layerY, centerZ + step, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        }
+    }
+
     private static void PlaceTaigaSpruceCanopy(
         int ix,
         int iz,
@@ -422,7 +639,6 @@ public static class TreePlacement
         int largeRingRadius = math.min(3, maxRadius);
         int smallRingRadius = 1;
 
-        // Alterna de baixo para cima: grande -> pequeno -> grande -> pequeno...
         int layerFromBottom = (foliageLayers - 1) - layerFromTop;
         bool useLargeRing = (layerFromBottom & 1) == 0;
         int radius = useLargeRing ? largeRingRadius : smallRingRadius;
@@ -441,11 +657,9 @@ public static class TreePlacement
         int voxelSizeZ,
         int voxelPlaneSize)
     {
-        // Ponta da spruce.
         TryPlaceLeaf(ix, trunkTopY + 1, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
         TryPlaceLeaf(ix, trunkTopY + 2, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
 
-        // Folhas extras no topo para nao ficar com apenas um bloco.
         PlaceSpruceTopCross(ix, iz, trunkTopY, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         PlaceSpruceTopCross(ix, iz, trunkTopY + 1, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
     }
@@ -486,7 +700,6 @@ public static class TreePlacement
                 int absDx = math.abs(dx);
                 int absDz = math.abs(dz);
 
-                // Remove os cantos em raios grandes para evitar canopy quadrado.
                 if (radius >= 2 && absDx == radius && absDz == radius)
                     continue;
 
@@ -518,7 +731,7 @@ public static class TreePlacement
 
         int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
         BlockType existing = blockTypes[lidx];
-        if (existing == BlockType.Log || existing == BlockType.birch_log)
+        if (IsWoodBlock(existing))
             return;
         if (!(existing == BlockType.Air || existing == BlockType.Leaves))
             return;
@@ -527,3 +740,6 @@ public static class TreePlacement
         solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
     }
 }
+
+
+

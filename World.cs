@@ -553,7 +553,7 @@ public partial class World : MonoBehaviour
                 if (!treeConfig.enabled)
                     continue;
 
-                TreeSettings sanitized = SanitizeTreeSettings(treeConfig.settings);
+                TreeSettings sanitized = SanitizeTreeSettings(treeConfig.treeStyle, treeConfig.settings);
                 rules.Add(new TreeSpawnRuleData
                 {
                     biome = definition.biomeType,
@@ -564,7 +564,7 @@ public partial class World : MonoBehaviour
         }
     }
 
-    private TreeSettings SanitizeTreeSettings(TreeSettings raw)
+    private TreeSettings SanitizeTreeSettings(TreeStyle treeStyle, TreeSettings raw)
     {
         TreeSettings s = raw;
         s.minHeight = Mathf.Max(1, s.minHeight);
@@ -574,6 +574,23 @@ public partial class World : MonoBehaviour
         s.minSpacing = Mathf.Max(1, s.minSpacing);
         s.density = Mathf.Clamp01(s.density);
         s.noiseScale = Mathf.Max(0.0001f, s.noiseScale);
+
+        switch (treeStyle)
+        {
+            case TreeStyle.TaigaSpruce:
+                s.canopyRadius = Mathf.Max(2, s.canopyRadius);
+                s.canopyHeight = Mathf.Max(5, s.canopyHeight);
+                break;
+
+            case TreeStyle.SavannaAcacia:
+                s.canopyRadius = Mathf.Max(4, s.canopyRadius);
+                s.canopyHeight = Mathf.Max(3, s.canopyHeight);
+                s.minSpacing = Mathf.Max(6, s.minSpacing);
+                break;
+            case TreeStyle.Cactus:
+                s.canopyRadius = Mathf.Max(1, s.canopyRadius);
+                break;
+        }
 
         if (s.seed == 0)
             s.seed = seed;
@@ -1934,5 +1951,7 @@ public partial class World : MonoBehaviour
 
 
 }
+
+
 
 
