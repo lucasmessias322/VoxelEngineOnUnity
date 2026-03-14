@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -60,7 +60,7 @@ public static class ChunkData
 
 
 
-            // 2. Popular voxels (terreno, água)
+            // 2. Popular voxels (terreno, Ã¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
             GenerateWormCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
@@ -69,10 +69,10 @@ public static class ChunkData
 
             if (enableTrees)
             {
-                // NOVO: Gere as árvores aqui
+                // NOVO: Gere as Ã¡rvores aqui
                 NativeList<TreeInstance> trees = GenerateTreeInstances();
 
-                // Aplicação existente (agora com trees local)
+                // AplicaÃ§Ã£o existente (agora com trees local)
                 TreePlacement.ApplyTreeInstancesToVoxels(
                     blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
                     SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
@@ -83,7 +83,7 @@ public static class ChunkData
 
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            // === NOVO: pré-calcula quais subchunks têm blocos ===
+            // === NOVO: prÃ©-calcula quais subchunks tÃªm blocos ===
             for (int s = 0; s < SubchunksPerColumn; s++)
                 subchunkNonEmpty[s] = false;
 
@@ -164,13 +164,14 @@ public static class ChunkData
                     if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
                         worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
 
-                    int surfaceY = GetCachedHeight(worldX, worldZ);
+                    TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
+                    int surfaceY = columnContext.surfaceHeight;
                     if (surfaceY <= 0 || surfaceY >= SizeY) continue;
 
                     BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
                     if (biome != rule.biome) continue;
 
-                    BlockType groundType = GetSurfaceBlockTypeInternal(worldX, worldZ);
+                    BlockType groundType = columnContext.surface.surfaceBlock;
                     bool isCactus = rule.treeStyle == TreeStyle.Cactus;
                     if (isCactus)
                     {
@@ -181,7 +182,7 @@ public static class ChunkData
                         continue;
                     }
 
-                    if (IsCliffInternal(worldX, worldZ, CliffTreshold)) continue;
+                    if (columnContext.surface.isCliff) continue;
                     if (HasNearbyTreeXZ(in trees, worldX, worldZ, proximitySpacing)) continue;
 
                     float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + ruleSeed * 0.001f, (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
@@ -215,175 +216,38 @@ public static class ChunkData
             return false;
         }
 
-        // NOVO: Versão interna de GetSurfaceBlockType (usa heightCache e coords world)
-        private BlockType GetSurfaceBlockTypeInternal(int worldX, int worldZ)
+        private TerrainColumnContext GetColumnContextInternal(int worldX, int worldZ)
         {
-            int h = GetSurfaceHeight(worldX, worldZ);
-            bool isBeachArea = (h <= seaLevel + 2);
-            bool isCliff = IsCliffInternal(worldX, worldZ, CliffTreshold);
-            int mountainStoneHeight = baseHeight + 70;
-            bool isHighMountain = h >= mountainStoneHeight;
-            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome, biomeNoiseSettings);
-
-            if (isHighMountain) return BlockType.Stone;
-            else if (isCliff) return BlockType.Stone;
-            else return isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
-        }
-
-        // NOVO: Versão interna de IsCliff (usa heightCache, ajuste coords locais)
-        private bool IsCliffInternal(int worldX, int worldZ, int threshold = 2)
-        {
-            int realLx = worldX - coord.x * SizeX;
-            int realLz = worldZ - coord.y * SizeZ;
-            int cacheX = realLx + border;
-            int cacheZ = realLz + border;
-            int heightStride = SizeX + 2 * border;
-
-            if (cacheX <= 0 || cacheZ <= 0 || cacheX >= heightStride - 1 || cacheZ >= heightCache.Length / heightStride - 1)
-                return false;
-
-            int centerIdx = cacheX + cacheZ * heightStride;
-            int h = heightCache[centerIdx];
-
-            int hN = heightCache[centerIdx + heightStride];
-            int hS = heightCache[centerIdx - heightStride];
-            int hE = heightCache[centerIdx + 1];
-            int hW = heightCache[centerIdx - 1];
-
-            int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
-            maxDiff = math.max(maxDiff, math.abs(h - hE));
-            maxDiff = math.max(maxDiff, math.abs(h - hW));
-
-            return maxDiff >= threshold;
-        }
-
-
-        // Lookup rápido no heightCache (usando o border já calculado)
-        private int GetCachedHeight(int worldX, int worldZ)
-        {
-            int realLx = worldX - coord.x * SizeX;
-            int realLz = worldZ - coord.y * SizeZ;
-            int cacheX = realLx + border;
-            int cacheZ = realLz + border;
-            int heightStride = SizeX + 2 * border;
-
-            // Segurança (nunca deve cair aqui se o border estiver correto)
-            if (cacheX < 0 || cacheX >= heightStride || cacheZ < 0 || cacheZ >= heightStride)
-                return GetSurfaceHeight(worldX, worldZ); // fallback raro
-
-            return heightCache[cacheX + cacheZ * heightStride];
-        }
-
-
-        private int GetSurfaceHeight(int worldX, int worldZ)
-        {
-            // === Domain Warping ===
-            float warpX = 0f;
-            float warpZ = 0f;
-            float sumWarpAmp = 0f;
-
-            for (int i = 0; i < warpLayers.Length; i++)
+            if (TerrainColumnSampler.TryCreateFromHeightCache(
+                worldX,
+                worldZ,
+                coord.x,
+                coord.y,
+                SizeX,
+                SizeZ,
+                border,
+                heightCache,
+                CliffTreshold,
+                baseHeight,
+                seaLevel,
+                biomeNoiseSettings,
+                out TerrainColumnContext columnContext))
             {
-                var layer = warpLayers[i];
-                if (!layer.enabled) continue;
-
-                float baseNx = worldX + layer.offset.x;
-                float baseNz = worldZ + layer.offset.y;
-
-                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
-
-                warpX += (sampleX * 2f - 1f) * layer.amplitude;
-                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
-                sumWarpAmp += layer.amplitude;
+                return columnContext;
             }
 
-            if (sumWarpAmp > 0f)
-            {
-                warpX /= sumWarpAmp;
-                warpZ /= sumWarpAmp;
-            }
-
-            // === Noise layers ===
-            float legacyNoiseTotal = 0f;
-            float legacyNoiseWeight = 0f;
-            bool hasActiveLayers = false;
-            bool hasTypedRoles = false;
-
-            float continentalTotal = 0f;
-            float continentalWeight = 0f;
-            float erosionTotal = 0f;
-            float erosionWeight = 0f;
-            float hillsTotal = 0f;
-            float hillsWeight = 0f;
-            float peaksValleysTotal = 0f;
-            float peaksValleysWeight = 0f;
-            float mountainTotal = 0f;
-            float mountainWeight = 0f;
-
-            for (int i = 0; i < noiseLayers.Length; i++)
-            {
-                var layer = noiseLayers[i];
-                if (!layer.enabled) continue;
-
-                hasActiveLayers = true;
-
-                float nx = (worldX + warpX) + layer.offset.x;
-                float nz = (worldZ + warpZ) + layer.offset.y;
-
-                float sample = MyNoise.OctavePerlin(nx, nz, layer);
-
-                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                {
-                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-                }
-
-                MyNoise.AccumulateLayerByRole(
-                    layer,
-                    sample,
-                    ref hasTypedRoles,
-                    ref legacyNoiseTotal,
-                    ref legacyNoiseWeight,
-                    ref continentalTotal,
-                    ref continentalWeight,
-                    ref erosionTotal,
-                    ref erosionWeight,
-                    ref hillsTotal,
-                    ref hillsWeight,
-                    ref peaksValleysTotal,
-                    ref peaksValleysWeight,
-                    ref mountainTotal,
-                    ref mountainWeight
-                );
-            }
-
-            if (!hasActiveLayers)
-            {
-                float nx = (worldX + warpX) * 0.05f + offsetX;
-                float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-                legacyNoiseTotal = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-                legacyNoiseWeight = 1f;
-                hasTypedRoles = false;
-            }
-
-            float terrainSignal = hasTypedRoles
-                ? MyNoise.ComposeMinecraftLikeTerrainSignal(
-                    continentalTotal,
-                    continentalWeight,
-                    erosionTotal,
-                    erosionWeight,
-                    hillsTotal,
-                    hillsWeight,
-                    peaksValleysTotal,
-                    peaksValleysWeight,
-                    mountainTotal,
-                    mountainWeight,
-                    legacyNoiseTotal,
-                    legacyNoiseWeight)
-                : MyNoise.GetLegacyCenteredNoise(legacyNoiseTotal, legacyNoiseWeight);
-
-            return math.clamp(baseHeight + (int)math.floor(terrainSignal), 1, SizeY - 1);
+            return TerrainColumnSampler.SampleFromNoise(
+                worldX,
+                worldZ,
+                noiseLayers,
+                warpLayers,
+                baseHeight,
+                offsetX,
+                offsetZ,
+                SizeY,
+                CliffTreshold,
+                seaLevel,
+                biomeNoiseSettings);
         }
 
         private void GenerateWormCaves(
@@ -1156,6 +1020,11 @@ public static class ChunkData
     }
 
 }
+
+
+
+
+
 
 
 

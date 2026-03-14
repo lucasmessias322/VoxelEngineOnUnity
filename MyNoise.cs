@@ -204,11 +204,21 @@ public static class MyNoise
              + cliffAccent
              + GetLegacyCenteredNoise(legacyTotal, legacyWeight);
 
-        float elevationMask = SmoothThreshold(terrain, 10f, 42f);
-        float terraceMask = math.saturate(mountainMask * 0.22f + cliffMask * 0.38f) * elevationMask;
-        float terraceStep = math.lerp(2.5f, 4.25f, cliffMask);
+        float hillsSteepnessMask = SmoothThreshold(math.abs(hillsNoise), 0.16f, 0.68f);
+        float hillsElevationMask = SmoothThreshold(terrain, 3f, 18f);
+        float hillsTerraceMask = math.saturate(
+            foothillMask * 0.85f +
+            mountainMask * 0.45f +
+            inlandMask * hillsSteepnessMask * 0.35f) * hillsElevationMask;
 
-        return ApplyTerracing(terrain, terraceStep, terraceMask);
+        // First harden hillsides into 2-block steps before larger mountain terraces.
+        terrain = ApplyTerracing(terrain, 2f, hillsTerraceMask);
+
+        float mountainElevationMask = SmoothThreshold(terrain, 10f, 42f);
+        float mountainTerraceMask = math.saturate(mountainMask * 0.18f + cliffMask * 0.42f) * mountainElevationMask;
+        float mountainTerraceStep = math.lerp(3.25f, 4.5f, cliffMask);
+
+        return ApplyTerracing(terrain, mountainTerraceStep, mountainTerraceMask);
     }
 
     [BurstCompile]

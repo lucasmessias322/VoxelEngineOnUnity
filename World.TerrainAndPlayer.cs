@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -91,42 +91,33 @@ public partial class World : MonoBehaviour
             }
         }
 
-        return GetProceduralBlockFast(worldPos, chunkCoord);
+        return GetProceduralBlockFast(worldPos);
     }
 
 
 
-    private BlockType GetProceduralBlockFast(Vector3Int worldPos, Vector2Int chunkCoord)
+    private BlockType GetProceduralBlockFast(Vector3Int worldPos)
     {
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
 
-        int surfaceHeight = GetSurfaceHeight(worldX, worldZ);
+        TerrainColumnContext columnContext = TerrainColumnSampler.SampleFromNoise(
+            worldX,
+            worldZ,
+            noiseLayers,
+            warpLayers,
+            baseHeight,
+            offsetX,
+            offsetZ,
+            Chunk.SizeY,
+            CliffTreshold,
+            seaLevel,
+            GetBiomeNoiseSettings());
 
-        if (worldPos.y > surfaceHeight)
+        if (worldPos.y > columnContext.surfaceHeight)
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
 
-        bool isBeachArea = (surfaceHeight <= seaLevel + 2);
-        bool isCliff = IsCliff(worldX, worldZ, CliffTreshold);
-        bool isHighMountain = surfaceHeight >= baseHeight + 70;
-        BlockType biomeSurfaceBlock = GetBiomeSurfaceBlock(worldX, worldZ);
-        BlockType biomeSubsurfaceBlock = GetBiomeSubsurfaceBlock(worldX, worldZ);
-
-        if (worldPos.y == surfaceHeight)
-        {
-            if (isHighMountain || isCliff) return BlockType.Stone;
-            return isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
-        }
-        else if (worldPos.y > surfaceHeight - 4)
-        {
-            return (isCliff || isHighMountain) ? BlockType.Stone : (isBeachArea ? BlockType.Sand : biomeSubsurfaceBlock);
-        }
-        else if (worldPos.y <= 2)
-            return BlockType.Bedrock;
-        else if (worldPos.y > surfaceHeight - 50)
-            return BlockType.Stone;
-        else
-            return BlockType.Deepslate;
+        return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, columnContext.surface);
     }
 
     #endregion
@@ -134,141 +125,20 @@ public partial class World : MonoBehaviour
     #region Noise & Height Helpers
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
-        float warpX = 0f;
-        float warpZ = 0f;
-        float sumWarpAmp = 0f;
-        if (warpLayers != null)
-        {
-            for (int i = 0; i < warpLayers.Length; i++)
-            {
-                var layer = warpLayers[i];
-                if (!layer.enabled) continue;
-
-                float baseNx = worldX + layer.offset.x;
-                float baseNz = worldZ + layer.offset.y;
-
-                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
-
-                warpX += (sampleX * 2f - 1f) * layer.amplitude;
-                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
-                sumWarpAmp += layer.amplitude;
-            }
-        }
-        if (sumWarpAmp > 0f)
-        {
-            warpX /= sumWarpAmp;
-            warpZ /= sumWarpAmp;
-        }
-
-        float legacyNoiseTotal = 0f;
-        float legacyNoiseWeight = 0f;
-        bool hasActiveLayers = false;
-        bool hasTypedRoles = false;
-
-        float continentalTotal = 0f;
-        float continentalWeight = 0f;
-        float erosionTotal = 0f;
-        float erosionWeight = 0f;
-        float hillsTotal = 0f;
-        float hillsWeight = 0f;
-        float peaksValleysTotal = 0f;
-        float peaksValleysWeight = 0f;
-        float mountainTotal = 0f;
-        float mountainWeight = 0f;
-        if (noiseLayers != null)
-        {
-            for (int i = 0; i < noiseLayers.Length; i++)
-            {
-                var layer = noiseLayers[i];
-                if (!layer.enabled) continue;
-
-                hasActiveLayers = true;
-
-                float nx = (worldX + warpX) + layer.offset.x;
-                float nz = (worldZ + warpZ) + layer.offset.y;
-
-                float sample = MyNoise.OctavePerlin(nx, nz, layer);
-
-                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                {
-                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-                }
-
-                MyNoise.AccumulateLayerByRole(
-                    layer,
-                    sample,
-                    ref hasTypedRoles,
-                    ref legacyNoiseTotal,
-                    ref legacyNoiseWeight,
-                    ref continentalTotal,
-                    ref continentalWeight,
-                    ref erosionTotal,
-                    ref erosionWeight,
-                    ref hillsTotal,
-                    ref hillsWeight,
-                    ref peaksValleysTotal,
-                    ref peaksValleysWeight,
-                    ref mountainTotal,
-                    ref mountainWeight
-                );
-            }
-        }
-
-        if (!hasActiveLayers)
-        {
-            float nx = (worldX + warpX) * 0.05f + offsetX;
-            float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-            legacyNoiseTotal = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-            legacyNoiseWeight = 1f;
-            hasTypedRoles = false;
-        }
-
-        float terrainSignal = hasTypedRoles
-            ? MyNoise.ComposeMinecraftLikeTerrainSignal(
-                continentalTotal,
-                continentalWeight,
-                erosionTotal,
-                erosionWeight,
-                hillsTotal,
-                hillsWeight,
-                peaksValleysTotal,
-                peaksValleysWeight,
-                mountainTotal,
-                mountainWeight,
-                legacyNoiseTotal,
-                legacyNoiseWeight)
-            : MyNoise.GetLegacyCenteredNoise(legacyNoiseTotal, legacyNoiseWeight);
-
-        return GetHeightFromTerrainSignal(terrainSignal);
-    }
-
-
-    private int GetHeightFromTerrainSignal(float terrainSignal)
-    {
-        return math.clamp(baseHeight + (int)math.floor(terrainSignal), 1, Chunk.SizeY - 1);
+        return TerrainHeightSampler.SampleSurfaceHeight(
+            worldX,
+            worldZ,
+            noiseLayers,
+            warpLayers,
+            baseHeight,
+            offsetX,
+            offsetZ,
+            Chunk.SizeY);
     }
 
 
 
 
-    private bool IsCliff(int worldX, int worldZ, int threshold = 2)
-    {
-        int h = GetSurfaceHeight(worldX, worldZ);
-
-        int hN = GetSurfaceHeight(worldX, worldZ + 1);
-        int hS = GetSurfaceHeight(worldX, worldZ - 1);
-        int hE = GetSurfaceHeight(worldX + 1, worldZ);
-        int hW = GetSurfaceHeight(worldX - 1, worldZ);
-
-        int maxDiff = 0;
-        maxDiff = math.max(maxDiff, math.abs(h - hN));
-        maxDiff = math.max(maxDiff, math.abs(h - hS));
-        maxDiff = math.max(maxDiff, math.abs(h - hE));
-        maxDiff = math.max(maxDiff, math.abs(h - hW));
-
-        return maxDiff >= threshold;
-    }
 
 
 
@@ -442,4 +312,11 @@ public partial class World : MonoBehaviour
     #endregion
 
 }
+
+
+
+
+
+
+
 

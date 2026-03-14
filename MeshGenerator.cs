@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -80,112 +80,15 @@ public static class MeshGenerator
 
         private int GetSurfaceHeight(int worldX, int worldZ)
         {
-            // === Domain Warping ===
-            float warpX = 0f;
-            float warpZ = 0f;
-            float sumWarpAmp = 0f;
-
-            for (int j = 0; j < warpLayers.Length; j++)
-            {
-                var layer = warpLayers[j];
-                if (!layer.enabled) continue;
-
-                float baseNx = worldX + layer.offset.x;
-                float baseNz = worldZ + layer.offset.y;
-
-                float sampleX = MyNoise.OctavePerlin(baseNx + 100f, baseNz, layer);
-                float sampleZ = MyNoise.OctavePerlin(baseNx, baseNz + 100f, layer);
-
-                warpX += (sampleX * 2f - 1f) * layer.amplitude;
-                warpZ += (sampleZ * 2f - 1f) * layer.amplitude;
-                sumWarpAmp += layer.amplitude;
-            }
-
-            if (sumWarpAmp > 0f)
-            {
-                warpX /= sumWarpAmp;
-                warpZ /= sumWarpAmp;
-            }
-
-            // === Noise layers ===
-            float legacyNoiseTotal = 0f;
-            float legacyNoiseWeight = 0f;
-            bool hasActiveLayers = false;
-            bool hasTypedRoles = false;
-
-            float continentalTotal = 0f;
-            float continentalWeight = 0f;
-            float erosionTotal = 0f;
-            float erosionWeight = 0f;
-            float hillsTotal = 0f;
-            float hillsWeight = 0f;
-            float peaksValleysTotal = 0f;
-            float peaksValleysWeight = 0f;
-            float mountainTotal = 0f;
-            float mountainWeight = 0f;
-
-            for (int j = 0; j < noiseLayers.Length; j++)
-            {
-                var layer = noiseLayers[j];
-                if (!layer.enabled) continue;
-
-                hasActiveLayers = true;
-
-                float nx = (worldX + warpX) + layer.offset.x;
-                float nz = (worldZ + warpZ) + layer.offset.y;
-
-                float sample = MyNoise.OctavePerlin(nx, nz, layer);
-
-                if (layer.redistributionModifier != 1f || layer.exponent != 1f)
-                {
-                    sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
-                }
-
-                MyNoise.AccumulateLayerByRole(
-                    layer,
-                    sample,
-                    ref hasTypedRoles,
-                    ref legacyNoiseTotal,
-                    ref legacyNoiseWeight,
-                    ref continentalTotal,
-                    ref continentalWeight,
-                    ref erosionTotal,
-                    ref erosionWeight,
-                    ref hillsTotal,
-                    ref hillsWeight,
-                    ref peaksValleysTotal,
-                    ref peaksValleysWeight,
-                    ref mountainTotal,
-                    ref mountainWeight
-                );
-            }
-
-            if (!hasActiveLayers)
-            {
-                float nx = (worldX + warpX) * 0.05f + offsetX;
-                float nz = (worldZ + warpZ) * 0.05f + offsetZ;
-                legacyNoiseTotal = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
-                legacyNoiseWeight = 1f;
-                hasTypedRoles = false;
-            }
-
-            float terrainSignal = hasTypedRoles
-                ? MyNoise.ComposeMinecraftLikeTerrainSignal(
-                    continentalTotal,
-                    continentalWeight,
-                    erosionTotal,
-                    erosionWeight,
-                    hillsTotal,
-                    hillsWeight,
-                    peaksValleysTotal,
-                    peaksValleysWeight,
-                    mountainTotal,
-                    mountainWeight,
-                    legacyNoiseTotal,
-                    legacyNoiseWeight)
-                : MyNoise.GetLegacyCenteredNoise(legacyNoiseTotal, legacyNoiseWeight);
-
-            return math.clamp(baseHeight + (int)math.floor(terrainSignal), 1, SizeY - 1);
+            return TerrainHeightSampler.SampleSurfaceHeight(
+                worldX,
+                worldZ,
+                noiseLayers,
+                warpLayers,
+                baseHeight,
+                offsetX,
+                offsetZ,
+                SizeY);
         }
     }
 
@@ -222,31 +125,25 @@ public static class MeshGenerator
             int worldZ = coord.y * SizeZ + realLz;
 
             int h = heightCache[lx + lz * heightStride];
+            int centerIdx = lx + lz * heightStride;
+            int hN = lz + 1 < paddedSize ? heightCache[centerIdx + heightStride] : h;
+            int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
+            int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
+            int hW = lx > 0 ? heightCache[centerIdx - 1] : h;
 
-            bool isBeachArea = h <= seaLevel + 2f;
-            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-            BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(biome, biomeNoiseSettings);
-            BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(biome, biomeNoiseSettings);
-
-            // === IsCliff local (corrigido - não precisa de coord) ===
-            bool isCliff = false;
-            if (lx > 0 && lx < paddedSize - 1 && lz > 0 && lz < paddedSize - 1)
-            {
-                int centerIdx = lx + lz * heightStride;
-                int hN = heightCache[centerIdx + heightStride];
-                int hS = heightCache[centerIdx - heightStride];
-                int hE = heightCache[centerIdx + 1];
-                int hW = heightCache[centerIdx - 1];
-
-                int maxDiff = math.max(math.abs(h - hN), math.abs(h - hS));
-                maxDiff = math.max(maxDiff, math.abs(h - hE));
-                maxDiff = math.max(maxDiff, math.abs(h - hW));
-
-                isCliff = maxDiff >= CliffTreshold;
-            }
-
-            int mountainStoneHeight = baseHeight + 80;
-            bool isHighMountain = h >= mountainStoneHeight;
+            TerrainColumnContext columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
+                worldX,
+                worldZ,
+                h,
+                hN,
+                hS,
+                hE,
+                hW,
+                CliffTreshold,
+                baseHeight,
+                seaLevel,
+                biomeNoiseSettings);
+            TerrainSurfaceData surfaceData = columnContext.surface;
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
@@ -256,27 +153,7 @@ public static class MeshGenerator
 
             for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
             {
-                BlockType bt;
-                if (y == h)
-                {
-                    if (isHighMountain) bt = BlockType.Stone;
-                    else if (isCliff) bt = BlockType.Stone;
-                    else bt = isBeachArea ? BlockType.Sand : biomeSurfaceBlock;
-                }
-                else if (y > h - 4)
-                {
-                    if (isCliff) bt = BlockType.Stone;
-                    else bt = isBeachArea ? BlockType.Sand : biomeSubsurfaceBlock;
-                }
-                else if (y <= 2)
-                {
-                    bt = BlockType.Bedrock;
-                }
-                else
-                {
-                    bt = y > h - 50 ? BlockType.Stone : BlockType.Deepslate;
-                }
-
+                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
                 blockTypes[idx] = bt;
                 solids[idx] = blockMappings[(int)bt].isSolid;
             }
@@ -320,9 +197,9 @@ public static class MeshGenerator
         out NativeArray<bool> subchunkNonEmpty
     )
     {
-        // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
+        // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
-        // 2. Alocações Iniciais de Configuração
+        // 2. AlocaÃ§Ãµes Iniciais de ConfiguraÃ§Ã£o
         nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
@@ -336,7 +213,7 @@ public static class MeshGenerator
             nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(0, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
-        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
+        // 3. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -353,7 +230,7 @@ public static class MeshGenerator
 
 
         // ==========================================
-        // JOB 0: Geração do Heightmap (Paralelo)
+        // JOB 0: GeraÃ§Ã£o do Heightmap (Paralelo)
         // ==========================================
         var heightJob = new HeightmapJob
         {
@@ -367,7 +244,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             heightStride = heightSize
         };
-        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessário)
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
 
 
 
@@ -392,13 +269,13 @@ public static class MeshGenerator
         int paddedSize = SizeX + 2 * borderSize;
         int totalColumns = paddedSize * paddedSize;
 
-        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 é ótimo
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 Ã© Ã³timo
 
 
 
 
         // ==========================================
-        // JOB 1: Geração de Dados (Terreno)
+        // JOB 1: GeraÃ§Ã£o de Dados (Terreno)
         // ==========================================
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
@@ -432,7 +309,7 @@ public static class MeshGenerator
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
         };
-        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // Dependência no heightHandle
+        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
         JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
         var lightJob = new ChunkLighting.ChunkLightingJob
@@ -491,7 +368,7 @@ public static class MeshGenerator
         out NativeList<Vector4> extraUVs
     )
     {
-        // 1. Alocações das Listas de Mesh (Output)
+        // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
@@ -506,7 +383,7 @@ public static class MeshGenerator
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
 
         // ==========================================
-        // JOB 2: Geração da Malha (Mesh)
+        // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
@@ -514,7 +391,7 @@ public static class MeshGenerator
             endY = endY,
             blockTypes = blockTypes,
             solids = solids,
-            light = light, // Usa a luz previamente calculada e passada por parâmetro
+            light = light, // Usa a luz previamente calculada e passada por parÃ¢metro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
@@ -548,7 +425,7 @@ public static class MeshGenerator
             tintFlags = tintFlags,
             vertexAO = vertexAO
         };
-        // O MeshJob agora é agendado independentemente, assumindo que os dados intermediários já estão prontos
+        // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
         meshHandle = meshJob.Schedule();
     }
 
@@ -831,7 +708,7 @@ public static class MeshGenerator
                     int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
                     int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
 
-                    // AQUI ACONTECE A MÁGICA DE RESTRIÇÃO PARA SUBCHUNKS (Limites de Y controlados)
+                    // AQUI ACONTECE A MÃGICA DE RESTRIÃ‡ÃƒO PARA SUBCHUNKS (Limites de Y controlados)
                     int minN = (axis == 1) ? startY : border;
                     int maxN = (axis == 1) ? endY : border + chunkSize;
 
@@ -972,7 +849,7 @@ public static class MeshGenerator
                                 byte finalLight = (byte)((packedData >> 12) & 0xF);
                                 int packedAO = (packedData >> 16) & 0xFF;
 
-                                // Desempacota o AO do quad gigante (ele será idêntico por toda a superfície mesclada)
+                                // Desempacota o AO do quad gigante (ele serÃ¡ idÃªntico por toda a superfÃ­cie mesclada)
                                 byte ao0 = (byte)(packedAO & 0x3);
                                 byte ao1 = (byte)((packedAO >> 2) & 0x3);
                                 byte ao2 = (byte)((packedAO >> 4) & 0x3);
@@ -1100,7 +977,7 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
-        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ← NOVO
+        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // â† NOVO
         public void Execute() { }
     }
 
@@ -1135,6 +1012,10 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
+
+
+
 
 
 
