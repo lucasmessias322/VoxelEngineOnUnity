@@ -137,6 +137,21 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    private static float SmoothThreshold(float value, float min, float max)
+    {
+        float t = math.saturate((value - min) / math.max(1e-5f, max - min));
+        return t * t * (3f - 2f * t);
+    }
+
+    [BurstCompile]
+    private static float ApplyTerracing(float value, float stepHeight, float blend)
+    {
+        float safeStep = math.max(0.25f, stepHeight);
+        float terracedValue = math.round(value / safeStep) * safeStep;
+        return math.lerp(value, terracedValue, math.saturate(blend));
+    }
+
+    [BurstCompile]
     public static float ComposeMinecraftLikeTerrainSignal(
         float continentalTotal,
         float continentalWeight,
@@ -159,14 +174,41 @@ public static class MyNoise
 
         float continentalness = (continentalness01 - 0.5f) * math.max(1f, continentalWeight);
         float erosion = math.saturate(erosion01);
-        float hillsNoise = (hillsNoise01 - 0.5f) * math.max(1f, hillsWeight);
-        float peaksValleys = peaksValleysWeight > 0f ? math.abs(peaksValleys01 * 2f - 1f) : 0f;
-        float mountainNoise = (mountainNoise01 - 0.5f) * math.max(1f, mountainWeight);
+        float erosionInv = 1f - erosion;
+        float hillsNoise = hillsNoise01 * 2f - 1f;
+        float peakSignal = peaksValleysWeight > 0f ? math.abs(peaksValleys01 * 2f - 1f) : 0f;
+        float mountainSignal = math.saturate((mountainNoise01 - 0.52f) / 0.48f);
 
-        return continentalness
-             + erosion * hillsNoise
-             + peaksValleys * mountainNoise
+        float inlandMask = SmoothThreshold(continentalness01, 0.46f, 0.62f);
+        float foothillMask = SmoothThreshold(continentalness01, 0.41f, 0.58f) * math.pow(erosionInv, 0.85f);
+        float peakMask = SmoothThreshold(peakSignal, 0.52f, 0.82f);
+        float mountainMask = inlandMask * peakMask * math.pow(erosionInv, 1.35f);
+        float cliffMask = mountainMask
+            * SmoothThreshold(mountainNoise01, 0.6f, 0.88f)
+            * SmoothThreshold(peakSignal, 0.6f, 0.9f);
+
+        float hills = hillsNoise * math.max(1f, hillsWeight) * math.lerp(0.22f, 0.82f, erosion);
+        float foothills = math.max(0f, hillsNoise) * math.max(1f, hillsWeight) * 0.7f * foothillMask;
+        float mountainShoulders = math.pow(math.saturate((mountainNoise01 - 0.38f) / 0.62f), 1.35f) * 0.4f;
+        float cliffAccent = math.pow(math.saturate((mountainNoise01 - 0.64f) / 0.36f), 2.8f)
+            * math.max(1f, mountainWeight)
+            * cliffMask
+            * 1.15f;
+        float mountains = (math.pow(mountainSignal, 2.4f) * 1.9f + mountainShoulders)
+            * math.max(1f, mountainWeight)
+            * mountainMask;
+        float terrain = continentalness
+             + hills
+             + foothills
+             + mountains
+             + cliffAccent
              + GetLegacyCenteredNoise(legacyTotal, legacyWeight);
+
+        float elevationMask = SmoothThreshold(terrain, 10f, 42f);
+        float terraceMask = math.saturate(mountainMask * 0.22f + cliffMask * 0.38f) * elevationMask;
+        float terraceStep = math.lerp(2.5f, 4.25f, cliffMask);
+
+        return ApplyTerracing(terrain, terraceStep, terraceMask);
     }
 
     [BurstCompile]

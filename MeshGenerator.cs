@@ -106,8 +106,6 @@ public static class MeshGenerator
                 warpX /= sumWarpAmp;
                 warpZ /= sumWarpAmp;
             }
-            warpX = (warpX - 0.5f) * 2f;
-            warpZ = (warpZ - 0.5f) * 2f;
 
             // === Noise layers ===
             float legacyNoiseTotal = 0f;

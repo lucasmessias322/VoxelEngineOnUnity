@@ -160,8 +160,6 @@ public partial class World : MonoBehaviour
             warpX /= sumWarpAmp;
             warpZ /= sumWarpAmp;
         }
-        warpX = (warpX - 0.5f) * 2f;
-        warpZ = (warpZ - 0.5f) * 2f;
 
         float legacyNoiseTotal = 0f;
         float legacyNoiseWeight = 0f;

@@ -37,8 +37,8 @@ public class TerrainLayerProfileSO : ScriptableObject
         {
             CreateNoiseLayer(
                 role: TerrainNoiseRole.Continentalness,
-                scale: 1400f,
-                amplitude: 42f,
+                scale: 1500f,
+                amplitude: 44f,
                 octaves: 4,
                 persistence: 0.5f,
                 lacunarity: 2f,
@@ -48,7 +48,7 @@ public class TerrainLayerProfileSO : ScriptableObject
             ),
             CreateNoiseLayer(
                 role: TerrainNoiseRole.Erosion,
-                scale: 420f,
+                scale: 360f,
                 amplitude: 1f,
                 octaves: 3,
                 persistence: 0.5f,
@@ -59,36 +59,36 @@ public class TerrainLayerProfileSO : ScriptableObject
             ),
             CreateNoiseLayer(
                 role: TerrainNoiseRole.HillsNoise,
-                scale: 150f,
-                amplitude: 24f,
+                scale: 170f,
+                amplitude: 16f,
                 octaves: 4,
-                persistence: 0.52f,
-                lacunarity: 2.1f,
-                redistributionModifier: 1.05f,
-                exponent: 1.05f,
+                persistence: 0.5f,
+                lacunarity: 2.05f,
+                redistributionModifier: 1.02f,
+                exponent: 1.02f,
                 ridgeFactor: 1f
             ),
             CreateNoiseLayer(
                 role: TerrainNoiseRole.PeaksValleys,
-                scale: 260f,
+                scale: 220f,
                 amplitude: 1f,
                 octaves: 3,
-                persistence: 0.52f,
-                lacunarity: 2.05f,
-                redistributionModifier: 1f,
-                exponent: 1f,
+                persistence: 0.55f,
+                lacunarity: 2.1f,
+                redistributionModifier: 1.15f,
+                exponent: 1.22f,
                 ridgeFactor: 1f
             ),
             CreateNoiseLayer(
                 role: TerrainNoiseRole.MountainNoise,
-                scale: 95f,
-                amplitude: 34f,
+                scale: 76f,
+                amplitude: 48f,
                 octaves: 5,
-                persistence: 0.55f,
-                lacunarity: 2.2f,
-                redistributionModifier: 1.1f,
-                exponent: 1.08f,
-                ridgeFactor: 1.7f
+                persistence: 0.6f,
+                lacunarity: 2.3f,
+                redistributionModifier: 1.28f,
+                exponent: 1.28f,
+                ridgeFactor: 2.55f
             ),
         };
     }
@@ -132,6 +132,18 @@ public class TerrainLayerProfileSO : ScriptableObject
                 ridgeFactor: 1f
             ),
         };
+    }
+
+    [ContextMenu("Apply Preset/Minecraft Density 3D")]
+    public void ApplyMinecraftDensityPreset()
+    {
+        Debug.LogWarning("Minecraft Density 3D preset ainda nao foi implementado neste perfil. Mantendo a configuracao atual.");
+    }
+
+    [ContextMenu("Disable Density 3D")]
+    public void DisableDensityFunction()
+    {
+        Debug.LogWarning("Nao ha density function 3D configurada neste perfil para desativar.");
     }
 
     [ContextMenu("Apply Preset/Clear Noise Layers")]
