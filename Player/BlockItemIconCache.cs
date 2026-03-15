@@ -8,6 +8,11 @@ public static class BlockItemIconCache
     private const float TopShade = 1f;
 
     private static readonly Dictionary<BlockType, Sprite> Cache = new Dictionary<BlockType, Sprite>();
+    private static int cachedBlockDataInstanceId;
+    private static int cachedAtlasTextureInstanceId;
+    private static Vector2Int cachedAtlasTiles = Vector2Int.zero;
+    private static Vector2Int cachedConfiguredTileSize = Vector2Int.zero;
+    private static bool cachedAtlasCoordinatesStartTopLeft = true;
 
     private struct FaceVertex
     {
@@ -28,6 +33,8 @@ public static class BlockItemIconCache
         if (blockType == BlockType.Air)
             return false;
 
+        InvalidateCacheIfAtlasChanged();
+
         if (Cache.TryGetValue(blockType, out Sprite cached) && cached != null)
         {
             sprite = cached;
@@ -45,23 +52,33 @@ public static class BlockItemIconCache
 
     private static Sprite BuildIsometricIcon(BlockType blockType)
     {
-        if (!TryResolveBlockContext(out BlockDataSO blockData, out Texture atlasTexture))
+        if (!TryResolveBlockContext(blockType, out BlockDataSO blockData, out Texture atlasTexture, out Vector2Int atlasTiles))
             return null;
 
         blockData.InitializeDictionary();
-
-        Vector2Int atlasTiles = new Vector2Int(
-            Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.x)),
-            Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.y))
-        );
+        bool atlasCoordinatesStartTopLeft = blockData.atlasCoordinatesStartTopLeft;
 
         Vector2Int topCoord = blockData.GetTileCoord(blockType, BlockFace.Top);
         Vector2Int sideCoord = blockData.GetTileCoord(blockType, BlockFace.Side);
 
-        if (!TryExtractTilePixels(atlasTexture, atlasTiles, topCoord, out Color32[] topPixels, out int tileWidth, out int tileHeight))
+        if (!TryExtractTilePixels(
+                atlasTexture,
+                atlasTiles,
+                topCoord,
+                atlasCoordinatesStartTopLeft,
+                out Color32[] topPixels,
+                out int tileWidth,
+                out int tileHeight))
             return null;
 
-        if (!TryExtractTilePixels(atlasTexture, atlasTiles, sideCoord, out Color32[] sidePixels, out int sideWidth, out int sideHeight))
+        if (!TryExtractTilePixels(
+                atlasTexture,
+                atlasTiles,
+                sideCoord,
+                atlasCoordinatesStartTopLeft,
+                out Color32[] sidePixels,
+                out int sideWidth,
+                out int sideHeight))
             return null;
 
         int faceSize = Mathf.Max(1, Mathf.Min(Mathf.Min(tileWidth, tileHeight), Mathf.Min(sideWidth, sideHeight)));
@@ -93,10 +110,11 @@ public static class BlockItemIconCache
         return sprite;
     }
 
-    private static bool TryResolveBlockContext(out BlockDataSO blockData, out Texture atlasTexture)
+    private static bool TryResolveBlockContext(BlockType blockType, out BlockDataSO blockData, out Texture atlasTexture, out Vector2Int atlasTiles)
     {
         blockData = null;
         atlasTexture = null;
+        atlasTiles = Vector2Int.one;
 
         World world = World.Instance;
         if (world == null)
@@ -106,38 +124,72 @@ public static class BlockItemIconCache
         if (blockData == null)
             return false;
 
+        blockData.InitializeDictionary();
+
+        if (world.atlasTilesX > 0 && world.atlasTilesY > 0)
+        {
+            atlasTiles = new Vector2Int(world.atlasTilesX, world.atlasTilesY);
+        }
+        else if (blockData != null)
+        {
+            atlasTiles = new Vector2Int(
+                Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.x)),
+                Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.y))
+            );
+        }
+
+        if (world.blockItemIconAtlasTexture != null)
+        {
+            atlasTexture = world.blockItemIconAtlasTexture;
+            return true;
+        }
+
         Material[] materials = world.Material;
         if (materials == null || materials.Length == 0)
             return false;
 
+        int preferredMaterialIndex = 0;
+        BlockTextureMapping? mapping = blockData.GetMapping(blockType);
+        if (mapping != null)
+            preferredMaterialIndex = Mathf.Clamp(mapping.Value.materialIndex, 0, materials.Length - 1);
+
+        if (TryGetAtlasTextureFromMaterial(materials[preferredMaterialIndex], out atlasTexture))
+            return true;
+
         for (int i = 0; i < materials.Length; i++)
         {
-            Material material = materials[i];
-            if (material == null)
+            if (i == preferredMaterialIndex)
                 continue;
 
-            Texture candidate = material.HasProperty("_Atlas") ? material.GetTexture("_Atlas") : null;
-            if (candidate == null && material.HasProperty("_BaseMap"))
-                candidate = material.GetTexture("_BaseMap");
-            if (candidate == null && material.HasProperty("_MainTex"))
-                candidate = material.GetTexture("_MainTex");
-            if (candidate == null)
-                candidate = material.mainTexture;
-
-            if (candidate != null)
-            {
-                atlasTexture = candidate;
+            if (TryGetAtlasTextureFromMaterial(materials[i], out atlasTexture))
                 return true;
-            }
         }
 
         return false;
+    }
+
+    private static bool TryGetAtlasTextureFromMaterial(Material material, out Texture atlasTexture)
+    {
+        atlasTexture = null;
+        if (material == null)
+            return false;
+
+        atlasTexture = material.HasProperty("_Atlas") ? material.GetTexture("_Atlas") : null;
+        if (atlasTexture == null && material.HasProperty("_BaseMap"))
+            atlasTexture = material.GetTexture("_BaseMap");
+        if (atlasTexture == null && material.HasProperty("_MainTex"))
+            atlasTexture = material.GetTexture("_MainTex");
+        if (atlasTexture == null)
+            atlasTexture = material.mainTexture;
+
+        return atlasTexture != null;
     }
 
     private static bool TryExtractTilePixels(
         Texture atlasTexture,
         Vector2Int atlasTiles,
         Vector2Int tileCoord,
+        bool atlasCoordinatesStartTopLeft,
         out Color32[] tilePixels,
         out int tileWidth,
         out int tileHeight)
@@ -146,23 +198,65 @@ public static class BlockItemIconCache
         tileWidth = 0;
         tileHeight = 0;
 
-        if (atlasTexture == null || atlasTiles.x <= 0 || atlasTiles.y <= 0)
+        if (!TryResolveAtlasLayout(atlasTexture, atlasTiles, out Vector2Int resolvedAtlasTiles, out tileWidth, out tileHeight))
             return false;
 
-        tileWidth = atlasTexture.width / atlasTiles.x;
-        tileHeight = atlasTexture.height / atlasTiles.y;
-        if (tileWidth <= 0 || tileHeight <= 0)
-            return false;
+        int safeTileX = Mathf.Clamp(tileCoord.x, 0, resolvedAtlasTiles.x - 1);
+        int safeTileY = Mathf.Clamp(tileCoord.y, 0, resolvedAtlasTiles.y - 1);
+        if (atlasCoordinatesStartTopLeft)
+            safeTileY = resolvedAtlasTiles.y - 1 - safeTileY;
 
-        int safeTileX = Mathf.Clamp(tileCoord.x, 0, atlasTiles.x - 1);
-        int safeTileY = Mathf.Clamp(tileCoord.y, 0, atlasTiles.y - 1);
         int pixelX = safeTileX * tileWidth;
         int pixelY = safeTileY * tileHeight;
 
         if (atlasTexture is Texture2D readableAtlas && readableAtlas.isReadable)
             return TryExtractFromReadableTexture(readableAtlas, pixelX, pixelY, tileWidth, tileHeight, out tilePixels);
 
-        return TryExtractFromGpu(atlasTexture, atlasTiles, safeTileX, safeTileY, tileWidth, tileHeight, out tilePixels);
+        return TryExtractFromGpu(atlasTexture, resolvedAtlasTiles, safeTileX, safeTileY, tileWidth, tileHeight, out tilePixels);
+    }
+
+    private static bool TryResolveAtlasLayout(
+        Texture atlasTexture,
+        Vector2Int atlasSetting,
+        out Vector2Int resolvedAtlasTiles,
+        out int tileWidth,
+        out int tileHeight)
+    {
+        resolvedAtlasTiles = atlasSetting;
+        tileWidth = 0;
+        tileHeight = 0;
+
+        if (atlasTexture == null || atlasSetting.x <= 0 || atlasSetting.y <= 0)
+            return false;
+
+        int interpretedTileWidth = atlasTexture.width / atlasSetting.x;
+        int interpretedTileHeight = atlasTexture.height / atlasSetting.y;
+        if (interpretedTileWidth <= 0 || interpretedTileHeight <= 0)
+            return false;
+
+        bool canInterpretAsTilePixelSize =
+            atlasTexture.width % atlasSetting.x == 0 &&
+            atlasTexture.height % atlasSetting.y == 0;
+
+        bool configuredTileSizeIsSquare = atlasSetting.x == atlasSetting.y;
+        bool interpretedTilesAreNonSquare = interpretedTileWidth != interpretedTileHeight;
+
+        // Some atlases store atlasSize as tile pixel size (e.g. 32x32 pixels per block),
+        // not as the number of tiles in the atlas. In those cases, dividing the texture by
+        // atlasSize produces distorted non-square cells; derive the tile count from the texture.
+        if (canInterpretAsTilePixelSize && configuredTileSizeIsSquare && interpretedTilesAreNonSquare)
+        {
+            tileWidth = atlasSetting.x;
+            tileHeight = atlasSetting.y;
+            resolvedAtlasTiles = new Vector2Int(
+                Mathf.Max(1, atlasTexture.width / tileWidth),
+                Mathf.Max(1, atlasTexture.height / tileHeight));
+            return true;
+        }
+
+        tileWidth = interpretedTileWidth;
+        tileHeight = interpretedTileHeight;
+        return true;
     }
 
     private static bool TryExtractFromReadableTexture(
@@ -213,10 +307,19 @@ public static class BlockItemIconCache
         tilePixels = null;
 
         RenderTexture rt = RenderTexture.GetTemporary(tileWidth, tileHeight, 0, RenderTextureFormat.ARGB32);
+        rt.filterMode = FilterMode.Point;
         RenderTexture previous = RenderTexture.active;
 
-        Vector2 scale = new Vector2(1f / atlasTiles.x, 1f / atlasTiles.y);
-        Vector2 offset = new Vector2((float)safeTileX / atlasTiles.x, (float)safeTileY / atlasTiles.y);
+        float tileScaleX = tileWidth / (float)atlasTexture.width;
+        float tileScaleY = tileHeight / (float)atlasTexture.height;
+        float texelInsetX = 0.5f / atlasTexture.width;
+        float texelInsetY = 0.5f / atlasTexture.height;
+        Vector2 scale = new Vector2(
+            Mathf.Max(0f, tileScaleX - texelInsetX * 2f),
+            Mathf.Max(0f, tileScaleY - texelInsetY * 2f));
+        Vector2 offset = new Vector2(
+            safeTileX * tileScaleX + texelInsetX,
+            safeTileY * tileScaleY + texelInsetY);
 
         try
         {
@@ -224,6 +327,8 @@ public static class BlockItemIconCache
             RenderTexture.active = rt;
 
             Texture2D cpuReadable = new Texture2D(tileWidth, tileHeight, TextureFormat.RGBA32, false, false);
+            cpuReadable.filterMode = FilterMode.Point;
+            cpuReadable.wrapMode = TextureWrapMode.Clamp;
             cpuReadable.ReadPixels(new Rect(0f, 0f, tileWidth, tileHeight), 0, 0, false);
             cpuReadable.Apply(false, false);
             tilePixels = cpuReadable.GetPixels32();
@@ -450,5 +555,97 @@ public static class BlockItemIconCache
             Object.Destroy(texture);
         else
             Object.DestroyImmediate(texture);
+    }
+
+    private static void InvalidateCacheIfAtlasChanged()
+    {
+        if (!TryResolveCacheContext(
+            out int blockDataInstanceId,
+            out int atlasTextureInstanceId,
+            out Vector2Int atlasTiles,
+            out Vector2Int configuredTileSize,
+            out bool atlasCoordinatesStartTopLeft))
+            return;
+
+        if (cachedBlockDataInstanceId == blockDataInstanceId &&
+            cachedAtlasTextureInstanceId == atlasTextureInstanceId &&
+            cachedAtlasTiles == atlasTiles &&
+            cachedConfiguredTileSize == configuredTileSize &&
+            cachedAtlasCoordinatesStartTopLeft == atlasCoordinatesStartTopLeft)
+        {
+            return;
+        }
+
+        ClearCache();
+        cachedBlockDataInstanceId = blockDataInstanceId;
+        cachedAtlasTextureInstanceId = atlasTextureInstanceId;
+        cachedAtlasTiles = atlasTiles;
+        cachedConfiguredTileSize = configuredTileSize;
+        cachedAtlasCoordinatesStartTopLeft = atlasCoordinatesStartTopLeft;
+    }
+
+    private static bool TryResolveCacheContext(
+        out int blockDataInstanceId,
+        out int atlasTextureInstanceId,
+        out Vector2Int atlasTiles,
+        out Vector2Int configuredTileSize,
+        out bool atlasCoordinatesStartTopLeft)
+    {
+        blockDataInstanceId = 0;
+        atlasTextureInstanceId = 0;
+        atlasTiles = Vector2Int.zero;
+        configuredTileSize = Vector2Int.zero;
+        atlasCoordinatesStartTopLeft = true;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        blockDataInstanceId = world.blockData.GetInstanceID();
+        atlasCoordinatesStartTopLeft = world.blockData.atlasCoordinatesStartTopLeft;
+        configuredTileSize = new Vector2Int(
+            Mathf.Max(1, Mathf.RoundToInt(world.blockData.atlasSize.x)),
+            Mathf.Max(1, Mathf.RoundToInt(world.blockData.atlasSize.y))
+        );
+        atlasTiles = new Vector2Int(
+            Mathf.Max(1, world.atlasTilesX > 0 ? world.atlasTilesX : configuredTileSize.x),
+            Mathf.Max(1, world.atlasTilesY > 0 ? world.atlasTilesY : configuredTileSize.y)
+        );
+
+        if (world.blockItemIconAtlasTexture != null)
+        {
+            atlasTextureInstanceId = world.blockItemIconAtlasTexture.GetInstanceID();
+            return true;
+        }
+
+        Material[] materials = world.Material;
+        if (materials == null || materials.Length == 0)
+            return true;
+
+        for (int i = 0; i < materials.Length; i++)
+        {
+            if (!TryGetAtlasTextureFromMaterial(materials[i], out Texture texture) || texture == null)
+                continue;
+
+            atlasTextureInstanceId = texture.GetInstanceID();
+            break;
+        }
+
+        return true;
+    }
+
+    private static void ClearCache()
+    {
+        foreach (KeyValuePair<BlockType, Sprite> pair in Cache)
+        {
+            if (pair.Value == null)
+                continue;
+
+            Texture texture = pair.Value.texture;
+            DestroyTempTexture(pair.Value);
+            DestroyTempTexture(texture);
+        }
+
+        Cache.Clear();
     }
 }

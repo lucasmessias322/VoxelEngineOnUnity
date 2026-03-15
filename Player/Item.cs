@@ -11,6 +11,10 @@ public class Item : ScriptableObject
     [Header("Stack")]
     [Min(1)] public int maxStack = 64;
 
+    [Header("Tool")]
+    public ToolType toolType = ToolType.None;
+    [Min(1f)] public float toolEfficiency = 1f;
+
     [Header("Held Visual")]
     [Tooltip("Optional prefab shown in the player's hand when this item is selected.")]
     public GameObject heldPrefab;

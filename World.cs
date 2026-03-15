@@ -163,6 +163,10 @@ public partial class World : MonoBehaviour
     public int atlasTilesX = 4;
     public int atlasTilesY = 4;
 
+    [Header("Inventory Block Icons")]
+    [Tooltip("Atlas opcional usado apenas para gerar os icones isometricos dos blocos no inventario. Se vazio, usa o atlas encontrado nos materiais do mundo.")]
+    public Texture blockItemIconAtlasTexture;
+
     [Header("Terrain Layer Profile")]
     [Tooltip("Perfil com as camadas de terreno. Quando atribuido, o World usa as layers desse asset.")]
     public TerrainLayerProfileSO terrainLayerProfile;

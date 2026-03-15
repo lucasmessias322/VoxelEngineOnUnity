@@ -83,7 +83,8 @@ public class PlayerBlockBreaker : MonoBehaviour
                 lastCrackStage = -1;
             }
 
-            breakProgress01 += Time.deltaTime / Mathf.Max(0.05f, breakDurationSeconds);
+            float breakDuration = GetBreakDurationSeconds(GetBillboardBreakType());
+            breakProgress01 += Time.deltaTime / breakDuration;
             UpdateCrackOverlay(sel, breakProgress01);
 
             if (breakProgress01 < 1f)
@@ -112,7 +113,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             lastCrackStage = -1;
         }
 
-        breakProgress01 += Time.deltaTime / Mathf.Max(0.05f, breakDurationSeconds);
+        float currentBreakDuration = GetBreakDurationSeconds(current);
+        breakProgress01 += Time.deltaTime / currentBreakDuration;
         UpdateCrackOverlay(sel, breakProgress01);
 
         if (breakProgress01 < 1f)
@@ -155,6 +157,146 @@ public class PlayerBlockBreaker : MonoBehaviour
             return blockType == BlockType.Water;
 
         return world.blockData.IsLiquid(blockType);
+    }
+
+    float GetBreakDurationSeconds(BlockType blockType)
+    {
+        float duration = Mathf.Max(0.05f, breakDurationSeconds);
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return duration;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        if (mapping == null)
+            return duration;
+
+        BlockTextureMapping blockMapping = mapping.Value;
+        float hardnessMultiplier = ResolveBreakTimeMultiplier(blockType, blockMapping);
+        ToolType preferredTool = ResolvePreferredTool(blockType, blockMapping);
+
+        duration *= hardnessMultiplier;
+
+        if (preferredTool == ToolType.None)
+            return Mathf.Max(0.05f, duration);
+
+        if (!TryGetSelectedTool(out ToolType selectedTool, out float toolEfficiency))
+            return Mathf.Max(0.05f, duration);
+
+        if (selectedTool != preferredTool)
+            return Mathf.Max(0.05f, duration);
+
+        return Mathf.Max(0.05f, duration / Mathf.Max(1f, toolEfficiency));
+    }
+
+    bool TryGetSelectedTool(out ToolType toolType, out float toolEfficiency)
+    {
+        toolType = ToolType.None;
+        toolEfficiency = 1f;
+
+        if (hotbar == null || !hotbar.TryGetSelectedItem(out Item selectedItem) || selectedItem == null)
+            return false;
+
+        toolType = selectedItem.toolType;
+        toolEfficiency = Mathf.Max(1f, selectedItem.toolEfficiency);
+        return toolType != ToolType.None;
+    }
+
+    BlockType GetBillboardBreakType()
+    {
+        if (World.Instance != null)
+            return World.Instance.grassBillboardBlockType;
+
+        return BlockType.Leaves;
+    }
+
+    ToolType ResolvePreferredTool(BlockType blockType, BlockTextureMapping mapping)
+    {
+        if (mapping.preferredTool != ToolType.None)
+            return mapping.preferredTool;
+
+        return GetDefaultPreferredTool(blockType);
+    }
+
+    float ResolveBreakTimeMultiplier(BlockType blockType, BlockTextureMapping mapping)
+    {
+        if (mapping.breakTimeMultiplier > 0f)
+            return mapping.breakTimeMultiplier;
+
+        return GetDefaultBreakTimeMultiplier(blockType);
+    }
+
+    ToolType GetDefaultPreferredTool(BlockType blockType)
+    {
+        switch (blockType)
+        {
+            case BlockType.Stone:
+            case BlockType.Deepslate:
+            case BlockType.CoalOre:
+            case BlockType.IronOre:
+            case BlockType.GoldOre:
+            case BlockType.RedstoneOre:
+            case BlockType.DiamondOre:
+            case BlockType.EmeraldOre:
+            case BlockType.glass:
+            case BlockType.glowstone:
+            case BlockType.Crafter:
+                return ToolType.Pickaxe;
+
+            case BlockType.Log:
+            case BlockType.birch_log:
+            case BlockType.acacia_log:
+            case BlockType.oak_planks:
+            case BlockType.Cactus:
+                return ToolType.Axe;
+
+            case BlockType.Grass:
+            case BlockType.Dirt:
+            case BlockType.Sand:
+            case BlockType.Snow:
+                return ToolType.Shovel;
+
+            case BlockType.Leaves:
+            case BlockType.short_grass4:
+                return ToolType.Hoe;
+
+            default:
+                return ToolType.None;
+        }
+    }
+
+    float GetDefaultBreakTimeMultiplier(BlockType blockType)
+    {
+        switch (blockType)
+        {
+            case BlockType.Stone:
+                return 1.25f;
+            case BlockType.Deepslate:
+                return 1.75f;
+            case BlockType.CoalOre:
+            case BlockType.IronOre:
+            case BlockType.GoldOre:
+            case BlockType.RedstoneOre:
+            case BlockType.DiamondOre:
+            case BlockType.EmeraldOre:
+                return 1.5f;
+            case BlockType.Log:
+            case BlockType.birch_log:
+            case BlockType.acacia_log:
+            case BlockType.oak_planks:
+            case BlockType.Cactus:
+                return 1.1f;
+            case BlockType.Grass:
+            case BlockType.Dirt:
+            case BlockType.Sand:
+            case BlockType.Snow:
+                return 0.85f;
+            case BlockType.Leaves:
+            case BlockType.short_grass4:
+                return 0.35f;
+            default:
+                return 1f;
+        }
     }
 
     void CreateCrackOverlay()
@@ -232,6 +374,13 @@ public class PlayerBlockBreaker : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(1))
         {
+            if (CraftingStationUIController.Instance != null &&
+                CraftingStationUIController.Instance.TryHandleCrafterInteraction(selector))
+            {
+                CancelBreak();
+                return;
+            }
+
             CancelBreak();
 
             if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
