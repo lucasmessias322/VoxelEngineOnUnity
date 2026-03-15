@@ -6,6 +6,7 @@ using UnityEngine.UI;
 public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler, IDropHandler
 {
     public delegate bool BeforeTakeFromSlotHandler(Slot slot, Item currentItem, int currentAmount, int amountToTake);
+    public delegate bool QuickTransferRequestedHandler(Slot slot);
 
     private const string IconChildName = "IconImage";
     private const string AmountChildName = "amount";
@@ -30,6 +31,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     public event System.Action<Slot> SlotChanged;
     public event BeforeTakeFromSlotHandler BeforeTakeFromSlot;
     public event System.Action<Slot, Item, int> AfterTakeFromSlot;
+    public event QuickTransferRequestedHandler QuickTransferRequested;
 
     private static Item carriedItem;
     private static int carriedAmount;
@@ -190,6 +192,12 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         if (eventData.button == PointerEventData.InputButton.Left)
         {
+            if (IsQuickTransferModifierHeld())
+            {
+                HandleQuickTransferClick();
+                return;
+            }
+
             HandleLeftClick();
             return;
         }
@@ -285,6 +293,22 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
             return;
 
         PlaceCarriedStackWithLeftClick();
+    }
+
+    private void HandleQuickTransferClick()
+    {
+        if (HasCarriedStack || IsEmpty)
+            return;
+
+        if (TryHandleQuickTransfer())
+            return;
+
+        if (!allowManualPickup)
+            return;
+
+        PlayerInventory inventory = PlayerInventory.Instance;
+        if (inventory != null && inventory.TryQuickMoveSlot(this))
+            return;
     }
 
     private void HandleRightClick()
@@ -426,25 +450,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
             return;
         }
 
-        int remaining = carriedAmount;
-
-        for (int i = 0; i < invSlots.Length && remaining > 0; i++)
-        {
-            Slot slot = invSlots[i];
-            if (slot == null || slot.IsEmpty || slot.item != carriedItem)
-                continue;
-
-            remaining = slot.Add(carriedItem, remaining);
-        }
-
-        for (int i = 0; i < invSlots.Length && remaining > 0; i++)
-        {
-            Slot slot = invSlots[i];
-            if (slot == null || !slot.IsEmpty)
-                continue;
-
-            remaining = slot.Add(carriedItem, remaining);
-        }
+        int remaining = inventory.InsertItem(carriedItem, carriedAmount);
 
         carriedAmount = remaining;
         if (carriedAmount <= 0)
@@ -711,5 +717,26 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         }
 
         return true;
+    }
+
+    private bool TryHandleQuickTransfer()
+    {
+        if (QuickTransferRequested == null)
+            return false;
+
+        System.Delegate[] listeners = QuickTransferRequested.GetInvocationList();
+        for (int i = 0; i < listeners.Length; i++)
+        {
+            QuickTransferRequestedHandler handler = (QuickTransferRequestedHandler)listeners[i];
+            if (handler.Invoke(this))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsQuickTransferModifierHeld()
+    {
+        return Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
     }
 }

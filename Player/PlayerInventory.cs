@@ -25,6 +25,9 @@ public class PlayerInventory : MonoBehaviour
     [SerializeField] private KeyCode toggleInventoryKey = KeyCode.E;
     [SerializeField] private bool lockCursorWhenClosed = true;
 
+    [Header("Quick Move")]
+    [Min(0)] [SerializeField] private int hotbarSlotCount = 7;
+
     [Header("Audio")]
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private AudioClip addItemClip;
@@ -114,9 +117,17 @@ public class PlayerInventory : MonoBehaviour
 
     public bool AddItem(Item item, int amount = 1)
     {
-        if (item == null || amount <= 0) return false;
-        if (slots == null || slots.Length == 0) MapSlotsFromContainer();
-        if (slots == null || slots.Length == 0) return false;
+        return InsertItem(item, amount) == 0;
+    }
+
+    public int InsertItem(Item item, int amount = 1, Slot excludedSlot = null)
+    {
+        if (item == null || amount <= 0)
+            return amount;
+
+        EnsureSlotsMappedIfNeeded();
+        if (slots == null || slots.Length == 0)
+            return amount;
 
         int requested = amount;
         int remaining = amount;
@@ -124,30 +135,73 @@ public class PlayerInventory : MonoBehaviour
         BeginContentChangeBatch();
         try
         {
-            for (int i = 0; i < slots.Length && remaining > 0; i++)
-            {
-                Slot slot = slots[i];
-                if (slot == null || slot.IsEmpty) continue;
-                remaining = slot.Add(item, remaining);
-            }
-
-            for (int i = 0; i < slots.Length && remaining > 0; i++)
-            {
-                Slot slot = slots[i];
-                if (slot == null || !slot.IsEmpty) continue;
-                remaining = slot.Add(item, remaining);
-            }
+            remaining = InsertIntoMatchingSlots(item, remaining, 0, slots.Length, excludedSlot);
+            remaining = InsertIntoEmptySlots(item, remaining, 0, slots.Length, excludedSlot);
         }
         finally
         {
             EndContentChangeBatch();
         }
 
-        int addedAmount = requested - remaining;
-        if (addedAmount > 0)
+        if (requested != remaining)
             TryPlayAddItemSound();
 
-        return remaining == 0;
+        return remaining;
+    }
+
+    public bool TryAddItemFully(Item item, int amount = 1)
+    {
+        if (item == null || amount <= 0)
+            return false;
+
+        EnsureSlotsMappedIfNeeded();
+        if (!HasSpaceFor(item, amount))
+            return false;
+
+        return InsertItem(item, amount) == 0;
+    }
+
+    public bool TryMoveSlotToInventory(Slot sourceSlot)
+    {
+        if (sourceSlot == null || sourceSlot.IsEmpty)
+            return false;
+
+        Item sourceItem = sourceSlot.item;
+        int originalAmount = sourceSlot.amount;
+        int remaining = InsertItem(sourceItem, originalAmount, sourceSlot);
+        int movedAmount = originalAmount - remaining;
+        if (movedAmount <= 0)
+            return false;
+
+        if (remaining <= 0)
+            sourceSlot.Clear();
+        else
+            sourceSlot.SetContents(sourceItem, remaining);
+
+        return true;
+    }
+
+    public bool TryQuickMoveSlot(Slot sourceSlot)
+    {
+        if (sourceSlot == null || sourceSlot.IsEmpty)
+            return false;
+
+        EnsureSlotsMappedIfNeeded();
+        if (slots == null || slots.Length == 0)
+            return false;
+
+        int sourceIndex = GetSlotIndex(sourceSlot);
+        if (sourceIndex < 0)
+            return false;
+
+        int resolvedHotbarCount = Mathf.Clamp(hotbarSlotCount, 0, slots.Length);
+        if (resolvedHotbarCount <= 0 || resolvedHotbarCount >= slots.Length)
+            return false;
+
+        bool sourceIsInHotbar = sourceIndex < resolvedHotbarCount;
+        int targetStart = sourceIsInHotbar ? resolvedHotbarCount : 0;
+        int targetEnd = sourceIsInHotbar ? slots.Length : resolvedHotbarCount;
+        return TryMoveInventorySlotToRange(sourceSlot, targetStart, targetEnd);
     }
 
     public int RemoveItem(Item item, int amount = 1)
@@ -197,6 +251,7 @@ public class PlayerInventory : MonoBehaviour
     public bool HasSpaceFor(Item item, int amount = 1)
     {
         if (item == null || amount <= 0) return false;
+        EnsureSlotsMappedIfNeeded();
         if (slots == null || slots.Length == 0) return false;
 
         return GetAvailableCapacityFor(item) >= amount;
@@ -204,6 +259,7 @@ public class PlayerInventory : MonoBehaviour
 
     public int GetAvailableCapacityFor(Item item)
     {
+        EnsureSlotsMappedIfNeeded();
         if (item == null || slots == null || slots.Length == 0)
             return 0;
 
@@ -288,6 +344,7 @@ public class PlayerInventory : MonoBehaviour
     public bool TryConsumeFromSlot(int slotIndex, int amount = 1, Item expectedItem = null)
     {
         if (amount <= 0) return false;
+        EnsureSlotsMappedIfNeeded();
         if (slots == null || slots.Length == 0) return false;
         if (slotIndex < 0 || slotIndex >= slots.Length) return false;
 
@@ -375,6 +432,90 @@ public class PlayerInventory : MonoBehaviour
 
         audioSource.PlayOneShot(addItemClip, addItemVolume);
         lastAddItemSoundTime = now;
+    }
+
+    private bool TryMoveInventorySlotToRange(Slot sourceSlot, int startIndex, int endIndex)
+    {
+        if (sourceSlot == null || sourceSlot.IsEmpty)
+            return false;
+
+        startIndex = Mathf.Clamp(startIndex, 0, slots.Length);
+        endIndex = Mathf.Clamp(endIndex, 0, slots.Length);
+        if (startIndex >= endIndex)
+            return false;
+
+        Item sourceItem = sourceSlot.item;
+        int originalAmount = sourceSlot.amount;
+        int remaining = originalAmount;
+
+        BeginContentChangeBatch();
+        try
+        {
+            remaining = InsertIntoMatchingSlots(sourceItem, remaining, startIndex, endIndex, sourceSlot);
+            remaining = InsertIntoEmptySlots(sourceItem, remaining, startIndex, endIndex, sourceSlot);
+
+            int movedAmount = originalAmount - remaining;
+            if (movedAmount > 0)
+                sourceSlot.Remove(movedAmount);
+        }
+        finally
+        {
+            EndContentChangeBatch();
+        }
+
+        return remaining != originalAmount;
+    }
+
+    private int InsertIntoMatchingSlots(Item item, int amount, int startIndex, int endIndex, Slot excludedSlot)
+    {
+        int remaining = amount;
+
+        for (int i = startIndex; i < endIndex && remaining > 0; i++)
+        {
+            Slot slot = slots[i];
+            if (slot == null || slot == excludedSlot || slot.IsEmpty || slot.item != item)
+                continue;
+
+            remaining = slot.Add(item, remaining);
+        }
+
+        return remaining;
+    }
+
+    private int InsertIntoEmptySlots(Item item, int amount, int startIndex, int endIndex, Slot excludedSlot)
+    {
+        int remaining = amount;
+
+        for (int i = startIndex; i < endIndex && remaining > 0; i++)
+        {
+            Slot slot = slots[i];
+            if (slot == null || slot == excludedSlot || !slot.IsEmpty)
+                continue;
+
+            remaining = slot.Add(item, remaining);
+        }
+
+        return remaining;
+    }
+
+    private int GetSlotIndex(Slot targetSlot)
+    {
+        if (targetSlot == null || slots == null)
+            return -1;
+
+        for (int i = 0; i < slots.Length; i++)
+        {
+            if (slots[i] == targetSlot)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private void EnsureSlotsMappedIfNeeded()
+    {
+        if (slots == null || slots.Length == 0)
+            MapSlotsFromContainer();
     }
 
     private void BeginContentChangeBatch()

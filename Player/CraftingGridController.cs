@@ -115,7 +115,10 @@ public class CraftingGridController : MonoBehaviour
             for (int i = 0; i < craftingSlots.Length; i++)
             {
                 if (craftingSlots[i] != null)
+                {
                     craftingSlots[i].SlotChanged += HandleCraftingSlotChanged;
+                    craftingSlots[i].QuickTransferRequested += HandleSlotQuickTransferRequested;
+                }
             }
         }
 
@@ -123,6 +126,7 @@ public class CraftingGridController : MonoBehaviour
         {
             outputSlot.BeforeTakeFromSlot += HandleOutputBeforeTake;
             outputSlot.AfterTakeFromSlot += HandleOutputAfterTake;
+            outputSlot.QuickTransferRequested += HandleSlotQuickTransferRequested;
         }
     }
 
@@ -133,7 +137,10 @@ public class CraftingGridController : MonoBehaviour
             for (int i = 0; i < craftingSlots.Length; i++)
             {
                 if (craftingSlots[i] != null)
+                {
                     craftingSlots[i].SlotChanged -= HandleCraftingSlotChanged;
+                    craftingSlots[i].QuickTransferRequested -= HandleSlotQuickTransferRequested;
+                }
             }
         }
 
@@ -141,6 +148,7 @@ public class CraftingGridController : MonoBehaviour
         {
             outputSlot.BeforeTakeFromSlot -= HandleOutputBeforeTake;
             outputSlot.AfterTakeFromSlot -= HandleOutputAfterTake;
+            outputSlot.QuickTransferRequested -= HandleSlotQuickTransferRequested;
         }
     }
 
@@ -184,6 +192,18 @@ public class CraftingGridController : MonoBehaviour
             refreshAfterOutputTake = false;
             RefreshCraftResult();
         }
+    }
+
+    private bool HandleSlotQuickTransferRequested(Slot slot)
+    {
+        PlayerInventory inventory = PlayerInventory.Instance;
+        if (slot == null || inventory == null)
+            return false;
+
+        if (slot == outputSlot)
+            return TryQuickCraftOutputToInventory(inventory);
+
+        return inventory.TryMoveSlotToInventory(slot);
     }
 
     private bool TryFindMatchingRecipe(out RecipeMatch match)
@@ -409,14 +429,44 @@ public class CraftingGridController : MonoBehaviour
         if (slot == null || slot.IsEmpty || inventory == null)
             return;
 
-        Item slotItem = slot.item;
-        int remaining = slot.amount;
-        while (remaining > 0 && inventory.AddItem(slotItem, 1))
-            remaining--;
+        inventory.TryMoveSlotToInventory(slot);
+    }
 
-        if (remaining <= 0)
-            slot.Clear();
-        else if (remaining != slot.amount)
-            slot.SetContents(slotItem, remaining);
+    private bool TryQuickCraftOutputToInventory(PlayerInventory inventory)
+    {
+        if (inventory == null)
+            return false;
+
+        bool craftedAny = false;
+        suppressCraftingRefresh = true;
+
+        try
+        {
+            while (TryFindMatchingRecipe(out RecipeMatch match))
+            {
+                if (match.recipe == null || match.recipe.OutputItem == null)
+                    break;
+
+                if (!inventory.HasSpaceFor(match.recipe.OutputItem, match.recipe.OutputAmount))
+                    break;
+
+                if (!TryConsumeRecipe(match))
+                    break;
+
+                if (inventory.InsertItem(match.recipe.OutputItem, match.recipe.OutputAmount) != 0)
+                    break;
+
+                craftedAny = true;
+            }
+        }
+        finally
+        {
+            suppressCraftingRefresh = false;
+        }
+
+        if (craftedAny)
+            RefreshCraftResult();
+
+        return craftedAny;
     }
 }
