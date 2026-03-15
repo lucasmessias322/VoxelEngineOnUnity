@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.Sprites;
 
 [DisallowMultipleComponent]
 public class HeldBlockVisual : MonoBehaviour
@@ -9,7 +10,7 @@ public class HeldBlockVisual : MonoBehaviour
     {
         None,
         Block,
-        Sprite,
+        FlatItem,
         Prefab
     }
 
@@ -22,18 +23,23 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private Vector3 localPosition = new Vector3(0.35f, -0.3f, 0.55f);
     [SerializeField] private Vector3 localEulerAngles = new Vector3(20f, -25f, -8f);
     [SerializeField] private float heldScale = 0.28f;
+    [SerializeField] private float flatItemScale = 0.85f;
+    [SerializeField] private float prefabScale = 1f;
     [SerializeField] private bool hideWhenInventoryOpen = true;
     [SerializeField] private bool castShadows = false;
     [SerializeField] private bool receiveShadows = false;
 
-    private readonly Dictionary<BlockType, Mesh> meshCache = new Dictionary<BlockType, Mesh>();
+    private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
+    private readonly Dictionary<Sprite, Mesh> flatItemMeshCache = new Dictionary<Sprite, Mesh>();
 
     private GameObject visualRoot;
     private GameObject blockVisualObject;
-    private MeshFilter meshFilter;
-    private MeshRenderer meshRenderer;
-    private GameObject spriteVisualObject;
-    private SpriteRenderer spriteRenderer;
+    private MeshFilter blockMeshFilter;
+    private MeshRenderer blockMeshRenderer;
+    private GameObject flatItemVisualObject;
+    private MeshFilter flatItemMeshFilter;
+    private MeshRenderer flatItemMeshRenderer;
+    private Material flatItemMaterial;
     private GameObject heldPrefabInstance;
     private GameObject heldPrefabSource;
     private Item shownItem;
@@ -45,7 +51,7 @@ public class HeldBlockVisual : MonoBehaviour
     {
         ResolveReferences();
         EnsureVisualObject();
-        ApplyViewTransform(null);
+        ApplyViewTransform(null, HeldVisualKind.None);
         RefreshHeldBlock(forceRefresh: true);
     }
 
@@ -59,7 +65,7 @@ public class HeldBlockVisual : MonoBehaviour
     {
         ResolveReferences();
         EnsureVisualObject();
-        ApplyViewTransform(null);
+        ApplyViewTransform(null, HeldVisualKind.None);
         RefreshHeldBlock(forceRefresh: true);
     }
 
@@ -68,20 +74,19 @@ public class HeldBlockVisual : MonoBehaviour
         if (!Application.isPlaying)
             return;
 
-        ApplyViewTransform(shownItem);
+        ApplyViewTransform(shownItem, shownVisualKind);
         ApplyRendererSettings();
         RefreshHeldBlock(forceRefresh: true);
     }
 
     private void OnDestroy()
     {
-        foreach (KeyValuePair<BlockType, Mesh> pair in meshCache)
-        {
-            if (pair.Value != null)
-                Destroy(pair.Value);
-        }
+        DestroyCachedMeshes(blockMeshCache);
+        DestroyCachedMeshes(flatItemMeshCache);
 
-        meshCache.Clear();
+        if (flatItemMaterial != null)
+            Destroy(flatItemMaterial);
+
         ClearHeldPrefabInstance();
     }
 
@@ -116,38 +121,41 @@ public class HeldBlockVisual : MonoBehaviour
         {
             blockVisualObject = new GameObject("BlockVisual");
             blockVisualObject.transform.SetParent(visualRoot.transform, false);
-            meshFilter = blockVisualObject.AddComponent<MeshFilter>();
-            meshRenderer = blockVisualObject.AddComponent<MeshRenderer>();
+            blockMeshFilter = blockVisualObject.AddComponent<MeshFilter>();
+            blockMeshRenderer = blockVisualObject.AddComponent<MeshRenderer>();
             blockVisualObject.SetActive(false);
         }
 
-        if (spriteVisualObject == null)
+        if (flatItemVisualObject == null)
         {
-            spriteVisualObject = new GameObject("SpriteVisual");
-            spriteVisualObject.transform.SetParent(visualRoot.transform, false);
-            spriteRenderer = spriteVisualObject.AddComponent<SpriteRenderer>();
-            spriteRenderer.sprite = null;
-            spriteVisualObject.SetActive(false);
+            flatItemVisualObject = new GameObject("FlatItemVisual");
+            flatItemVisualObject.transform.SetParent(visualRoot.transform, false);
+            flatItemMeshFilter = flatItemVisualObject.AddComponent<MeshFilter>();
+            flatItemMeshRenderer = flatItemVisualObject.AddComponent<MeshRenderer>();
+            flatItemVisualObject.SetActive(false);
         }
 
-        if (meshFilter == null)
-            meshFilter = blockVisualObject.GetComponent<MeshFilter>();
-        if (meshRenderer == null)
-            meshRenderer = blockVisualObject.GetComponent<MeshRenderer>();
-        if (spriteRenderer == null)
-            spriteRenderer = spriteVisualObject.GetComponent<SpriteRenderer>();
+        if (blockMeshFilter == null)
+            blockMeshFilter = blockVisualObject.GetComponent<MeshFilter>();
+        if (blockMeshRenderer == null)
+            blockMeshRenderer = blockVisualObject.GetComponent<MeshRenderer>();
+        if (flatItemMeshFilter == null)
+            flatItemMeshFilter = flatItemVisualObject.GetComponent<MeshFilter>();
+        if (flatItemMeshRenderer == null)
+            flatItemMeshRenderer = flatItemVisualObject.GetComponent<MeshRenderer>();
 
+        EnsureFlatItemMaterial();
         ApplyRendererSettings();
     }
 
-    private void ApplyViewTransform(Item selectedItem)
+    private void ApplyViewTransform(Item selectedItem, HeldVisualKind visualKind)
     {
         if (visualRoot == null)
             return;
 
         Vector3 targetPosition = localPosition;
         Vector3 targetEulerAngles = localEulerAngles;
-        Vector3 targetScale = Vector3.one * Mathf.Max(0.01f, heldScale);
+        Vector3 targetScale = Vector3.one * GetDefaultScaleFor(visualKind);
 
         if (selectedItem != null && selectedItem.overrideHeldTransform)
         {
@@ -161,18 +169,33 @@ public class HeldBlockVisual : MonoBehaviour
         visualRoot.transform.localScale = targetScale;
     }
 
+    private float GetDefaultScaleFor(HeldVisualKind visualKind)
+    {
+        switch (visualKind)
+        {
+            case HeldVisualKind.FlatItem:
+                return Mathf.Max(0.01f, flatItemScale);
+            case HeldVisualKind.Prefab:
+                return Mathf.Max(0.01f, prefabScale);
+            case HeldVisualKind.Block:
+            case HeldVisualKind.None:
+            default:
+                return Mathf.Max(0.01f, heldScale);
+        }
+    }
+
     private void ApplyRendererSettings()
     {
-        if (meshRenderer != null)
+        if (blockMeshRenderer != null)
         {
-            meshRenderer.shadowCastingMode = castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
-            meshRenderer.receiveShadows = receiveShadows;
+            blockMeshRenderer.shadowCastingMode = castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
+            blockMeshRenderer.receiveShadows = receiveShadows;
         }
 
-        if (spriteRenderer != null)
+        if (flatItemMeshRenderer != null)
         {
-            spriteRenderer.shadowCastingMode = castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
-            spriteRenderer.receiveShadows = receiveShadows;
+            flatItemMeshRenderer.shadowCastingMode = castShadows ? ShadowCastingMode.On : ShadowCastingMode.Off;
+            flatItemMeshRenderer.receiveShadows = receiveShadows;
         }
     }
 
@@ -205,7 +228,7 @@ public class HeldBlockVisual : MonoBehaviour
             return;
         }
 
-        ApplyViewTransform(selectedItem);
+        ApplyViewTransform(selectedItem, desiredKind);
 
         if (!forceRefresh &&
             isVisible &&
@@ -226,8 +249,8 @@ public class HeldBlockVisual : MonoBehaviour
             case HeldVisualKind.Block:
                 shownSuccessfully = ShowBlock(selectedBlockType);
                 break;
-            case HeldVisualKind.Sprite:
-                shownSuccessfully = ShowSprite(selectedItem.icon);
+            case HeldVisualKind.FlatItem:
+                shownSuccessfully = ShowFlatItem(selectedItem.icon);
                 break;
         }
 
@@ -256,7 +279,7 @@ public class HeldBlockVisual : MonoBehaviour
             return HeldVisualKind.Block;
 
         if (selectedItem.icon != null)
-            return HeldVisualKind.Sprite;
+            return HeldVisualKind.FlatItem;
 
         return HeldVisualKind.None;
     }
@@ -272,26 +295,35 @@ public class HeldBlockVisual : MonoBehaviour
         if (world == null || world.Material == null || world.Material.Length == 0)
             return false;
 
-        Mesh heldMesh = GetOrCreateMesh(blockType);
+        Mesh heldMesh = GetOrCreateBlockMesh(blockType);
         if (heldMesh == null)
             return false;
 
         HideAllVisualChildren();
-        meshFilter.sharedMesh = heldMesh;
-        meshRenderer.materials = world.Material;
+        blockMeshFilter.sharedMesh = heldMesh;
+        blockMeshRenderer.materials = world.Material;
         blockVisualObject.SetActive(true);
         return true;
     }
 
-    private bool ShowSprite(Sprite iconSprite)
+    private bool ShowFlatItem(Sprite iconSprite)
     {
-        if (iconSprite == null || spriteRenderer == null)
+        if (iconSprite == null || flatItemMeshFilter == null || flatItemMeshRenderer == null)
+            return false;
+
+        EnsureFlatItemMaterial();
+        if (flatItemMaterial == null)
+            return false;
+
+        Mesh flatMesh = GetOrCreateFlatItemMesh(iconSprite);
+        if (flatMesh == null)
             return false;
 
         HideAllVisualChildren();
-        spriteRenderer.sprite = iconSprite;
-        spriteRenderer.color = Color.white;
-        spriteVisualObject.SetActive(true);
+        ApplyFlatItemTexture(iconSprite.texture);
+        flatItemMeshFilter.sharedMesh = flatMesh;
+        flatItemMeshRenderer.sharedMaterial = flatItemMaterial;
+        flatItemVisualObject.SetActive(true);
         return true;
     }
 
@@ -342,20 +374,16 @@ public class HeldBlockVisual : MonoBehaviour
         if (blockVisualObject != null && blockVisualObject.activeSelf)
             blockVisualObject.SetActive(false);
 
-        if (spriteVisualObject != null && spriteVisualObject.activeSelf)
-        {
-            spriteVisualObject.SetActive(false);
-            if (spriteRenderer != null)
-                spriteRenderer.sprite = null;
-        }
+        if (flatItemVisualObject != null && flatItemVisualObject.activeSelf)
+            flatItemVisualObject.SetActive(false);
 
         if (heldPrefabInstance != null && heldPrefabInstance.activeSelf)
             heldPrefabInstance.SetActive(false);
     }
 
-    private Mesh GetOrCreateMesh(BlockType blockType)
+    private Mesh GetOrCreateBlockMesh(BlockType blockType)
     {
-        if (meshCache.TryGetValue(blockType, out Mesh cachedMesh) && cachedMesh != null)
+        if (blockMeshCache.TryGetValue(blockType, out Mesh cachedMesh) && cachedMesh != null)
             return cachedMesh;
 
         Mesh mesh = BlockDrop.BuildBlockMesh(world, blockType, out _);
@@ -363,8 +391,123 @@ public class HeldBlockVisual : MonoBehaviour
             return null;
 
         mesh.name = $"HeldMesh_{blockType}";
-        meshCache[blockType] = mesh;
+        blockMeshCache[blockType] = mesh;
         return mesh;
+    }
+
+    private Mesh GetOrCreateFlatItemMesh(Sprite sprite)
+    {
+        if (sprite == null)
+            return null;
+
+        if (flatItemMeshCache.TryGetValue(sprite, out Mesh cachedMesh) && cachedMesh != null)
+            return cachedMesh;
+
+        Mesh mesh = BuildFlatItemMesh(sprite);
+        if (mesh == null)
+            return null;
+
+        mesh.name = $"HeldFlatItem_{sprite.name}";
+        flatItemMeshCache[sprite] = mesh;
+        return mesh;
+    }
+
+    private static Mesh BuildFlatItemMesh(Sprite sprite)
+    {
+        if (sprite == null)
+            return null;
+
+        float safeHeight = Mathf.Max(1f, sprite.rect.height);
+        float aspect = Mathf.Max(0.01f, sprite.rect.width / safeHeight);
+        float halfWidth = aspect * 0.5f;
+        float halfHeight = 0.5f;
+
+        Vector4 outerUv = DataUtility.GetOuterUV(sprite);
+        Vector2[] uv =
+        {
+            new Vector2(outerUv.x, outerUv.y),
+            new Vector2(outerUv.x, outerUv.w),
+            new Vector2(outerUv.z, outerUv.w),
+            new Vector2(outerUv.z, outerUv.y)
+        };
+
+        Mesh mesh = new Mesh();
+        mesh.vertices = new[]
+        {
+            new Vector3(-halfWidth, -halfHeight, 0f),
+            new Vector3(-halfWidth, halfHeight, 0f),
+            new Vector3(halfWidth, halfHeight, 0f),
+            new Vector3(halfWidth, -halfHeight, 0f)
+        };
+        mesh.uv = uv;
+        mesh.triangles = new[] { 0, 1, 2, 0, 2, 3 };
+        mesh.normals = new[]
+        {
+            Vector3.forward,
+            Vector3.forward,
+            Vector3.forward,
+            Vector3.forward
+        };
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private void EnsureFlatItemMaterial()
+    {
+        if (flatItemMaterial != null)
+            return;
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+            shader = Shader.Find("Sprites/Default");
+        if (shader == null)
+            shader = Shader.Find("Unlit/Transparent");
+
+        if (shader == null)
+            return;
+
+        flatItemMaterial = new Material(shader)
+        {
+            name = "HeldFlatItemMaterial"
+        };
+
+        if (flatItemMaterial.HasProperty("_Surface"))
+            flatItemMaterial.SetFloat("_Surface", 1f);
+        if (flatItemMaterial.HasProperty("_Blend"))
+            flatItemMaterial.SetFloat("_Blend", 0f);
+        if (flatItemMaterial.HasProperty("_Cull"))
+            flatItemMaterial.SetFloat("_Cull", (float)CullMode.Off);
+        if (flatItemMaterial.HasProperty("_AlphaClip"))
+            flatItemMaterial.SetFloat("_AlphaClip", 0f);
+    }
+
+    private void ApplyFlatItemTexture(Texture texture)
+    {
+        if (flatItemMaterial == null)
+            return;
+
+        if (flatItemMaterial.HasProperty("_BaseMap"))
+            flatItemMaterial.SetTexture("_BaseMap", texture);
+
+        if (flatItemMaterial.HasProperty("_MainTex"))
+            flatItemMaterial.SetTexture("_MainTex", texture);
+
+        flatItemMaterial.mainTexture = texture;
+        if (flatItemMaterial.HasProperty("_BaseColor"))
+            flatItemMaterial.SetColor("_BaseColor", Color.white);
+        if (flatItemMaterial.HasProperty("_Color"))
+            flatItemMaterial.SetColor("_Color", Color.white);
+    }
+
+    private static void DestroyCachedMeshes<T>(Dictionary<T, Mesh> cache)
+    {
+        foreach (KeyValuePair<T, Mesh> pair in cache)
+        {
+            if (pair.Value != null)
+                Destroy(pair.Value);
+        }
+
+        cache.Clear();
     }
 
     private void SetVisible(bool visible)
