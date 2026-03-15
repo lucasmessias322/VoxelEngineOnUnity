@@ -573,6 +573,9 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
             return blockIcon;
         }
 
+        if (ItemAtlasIconCache.TryGetIcon(currentItem, out Sprite atlasIcon) && atlasIcon != null)
+            return atlasIcon;
+
         return currentItem.icon;
     }
 
@@ -635,6 +638,11 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
                 blockIcon != null)
             {
                 iconToShow = blockIcon;
+                hasIcon = true;
+            }
+            else if (ItemAtlasIconCache.TryGetIcon(item, out Sprite atlasIcon) && atlasIcon != null)
+            {
+                iconToShow = atlasIcon;
                 hasIcon = true;
             }
             else if (item.icon != null)

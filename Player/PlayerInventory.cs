@@ -34,12 +34,16 @@ public class PlayerInventory : MonoBehaviour
     [Header("Block Drop Mapping")]
     [SerializeField] private BlockItemMapping[] blockItemMappings;
 
+    [Header("Item Atlas")]
+    [SerializeField] private ItemAtlasDataSO itemAtlasData;
+
     [Header("Runtime (Read Only)")]
     [SerializeField] private Slot[] slots;
 
     public Slot[] Slots => slots;
     public Transform SlotsContainer => slotsContainer;
     public bool IsInventoryOpen => inventoryUI != null && inventoryUI.activeSelf;
+    public ItemAtlasDataSO ItemAtlasData => itemAtlasData;
 
     private float lastAddItemSoundTime = -999f;
     private int contentChangeBatchDepth;
@@ -49,6 +53,8 @@ public class PlayerInventory : MonoBehaviour
     {
         if (audioSource == null)
             audioSource = GetComponent<AudioSource>();
+
+        InitializeItemAtlasLookup();
 
         if (autoMapOnAwake)
             MapSlotsFromContainer();
@@ -77,6 +83,8 @@ public class PlayerInventory : MonoBehaviour
 
     private void OnValidate()
     {
+        InitializeItemAtlasLookup();
+
         if (!Application.isPlaying && autoMapOnAwake)
             MapSlotsFromContainer();
     }
@@ -337,6 +345,12 @@ public class PlayerInventory : MonoBehaviour
         return false;
     }
 
+    public bool TryGetItemAtlasData(out ItemAtlasDataSO atlasData)
+    {
+        atlasData = itemAtlasData;
+        return atlasData != null;
+    }
+
     public bool ContainsSlot(Slot target)
     {
         if (target == null || slots == null) return false;
@@ -366,6 +380,12 @@ public class PlayerInventory : MonoBehaviour
     private void BeginContentChangeBatch()
     {
         contentChangeBatchDepth++;
+    }
+
+    private void InitializeItemAtlasLookup()
+    {
+        if (itemAtlasData != null)
+            itemAtlasData.InitializeLookup();
     }
 
     private void EndContentChangeBatch()

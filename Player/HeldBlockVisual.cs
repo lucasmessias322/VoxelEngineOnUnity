@@ -18,19 +18,20 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private HotbarMirror hotbar;
     [SerializeField] private Transform handAnchor;
     [SerializeField] private World world;
+    [SerializeField] private ItemAtlasDataSO itemAtlasData;
 
     [Header("Default View")]
     [SerializeField] private Vector3 localPosition = new Vector3(0.35f, -0.3f, 0.55f);
     [SerializeField] private Vector3 localEulerAngles = new Vector3(20f, -25f, -8f);
     [SerializeField] private float heldScale = 0.28f;
     [SerializeField] private float flatItemScale = 0.85f;
-    [SerializeField] private float prefabScale = 1f;
     [SerializeField] private bool hideWhenInventoryOpen = true;
     [SerializeField] private bool castShadows = false;
     [SerializeField] private bool receiveShadows = false;
 
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
-    private readonly Dictionary<Sprite, Mesh> flatItemMeshCache = new Dictionary<Sprite, Mesh>();
+    private readonly Dictionary<Sprite, Mesh> spriteFlatItemMeshCache = new Dictionary<Sprite, Mesh>();
+    private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
 
     private GameObject visualRoot;
     private GameObject blockVisualObject;
@@ -82,7 +83,8 @@ public class HeldBlockVisual : MonoBehaviour
     private void OnDestroy()
     {
         DestroyCachedMeshes(blockMeshCache);
-        DestroyCachedMeshes(flatItemMeshCache);
+        DestroyCachedMeshes(spriteFlatItemMeshCache);
+        DestroyCachedMeshes(atlasFlatItemMeshCache);
 
         if (flatItemMaterial != null)
             Destroy(flatItemMaterial);
@@ -155,13 +157,15 @@ public class HeldBlockVisual : MonoBehaviour
 
         Vector3 targetPosition = localPosition;
         Vector3 targetEulerAngles = localEulerAngles;
-        Vector3 targetScale = Vector3.one * GetDefaultScaleFor(visualKind);
+        Vector3 targetScale = GetDefaultRootScaleFor(visualKind);
 
         if (selectedItem != null && selectedItem.overrideHeldTransform)
         {
             targetPosition = selectedItem.heldLocalPosition;
             targetEulerAngles = selectedItem.heldLocalEulerAngles;
-            targetScale = SanitizeScale(selectedItem.heldLocalScale);
+
+            if (visualKind != HeldVisualKind.Prefab)
+                targetScale = SanitizeScale(selectedItem.heldLocalScale);
         }
 
         visualRoot.transform.localPosition = targetPosition;
@@ -169,18 +173,18 @@ public class HeldBlockVisual : MonoBehaviour
         visualRoot.transform.localScale = targetScale;
     }
 
-    private float GetDefaultScaleFor(HeldVisualKind visualKind)
+    private Vector3 GetDefaultRootScaleFor(HeldVisualKind visualKind)
     {
         switch (visualKind)
         {
             case HeldVisualKind.FlatItem:
-                return Mathf.Max(0.01f, flatItemScale);
+                return Vector3.one * Mathf.Max(0.01f, flatItemScale);
             case HeldVisualKind.Prefab:
-                return Mathf.Max(0.01f, prefabScale);
+                return Vector3.one;
             case HeldVisualKind.Block:
             case HeldVisualKind.None:
             default:
-                return Mathf.Max(0.01f, heldScale);
+                return Vector3.one * Mathf.Max(0.01f, heldScale);
         }
     }
 
@@ -250,7 +254,7 @@ public class HeldBlockVisual : MonoBehaviour
                 shownSuccessfully = ShowBlock(selectedBlockType);
                 break;
             case HeldVisualKind.FlatItem:
-                shownSuccessfully = ShowFlatItem(selectedItem.icon);
+                shownSuccessfully = ShowFlatItem(selectedItem);
                 break;
         }
 
@@ -278,7 +282,7 @@ public class HeldBlockVisual : MonoBehaviour
         if (hasBlockSelection)
             return HeldVisualKind.Block;
 
-        if (selectedItem.icon != null)
+        if (selectedItem.icon != null || HasAtlasFlatItem(selectedItem))
             return HeldVisualKind.FlatItem;
 
         return HeldVisualKind.None;
@@ -306,23 +310,18 @@ public class HeldBlockVisual : MonoBehaviour
         return true;
     }
 
-    private bool ShowFlatItem(Sprite iconSprite)
+    private bool ShowFlatItem(Item selectedItem)
     {
-        if (iconSprite == null || flatItemMeshFilter == null || flatItemMeshRenderer == null)
+        if (selectedItem == null || flatItemMeshFilter == null || flatItemMeshRenderer == null)
             return false;
 
-        EnsureFlatItemMaterial();
-        if (flatItemMaterial == null)
-            return false;
-
-        Mesh flatMesh = GetOrCreateFlatItemMesh(iconSprite);
-        if (flatMesh == null)
+        Mesh flatMesh = GetOrCreateFlatItemMesh(selectedItem, out Material renderMaterial);
+        if (flatMesh == null || renderMaterial == null)
             return false;
 
         HideAllVisualChildren();
-        ApplyFlatItemTexture(iconSprite.texture);
         flatItemMeshFilter.sharedMesh = flatMesh;
-        flatItemMeshRenderer.sharedMaterial = flatItemMaterial;
+        flatItemMeshRenderer.sharedMaterial = renderMaterial;
         flatItemVisualObject.SetActive(true);
         return true;
     }
@@ -337,6 +336,7 @@ public class HeldBlockVisual : MonoBehaviour
             return false;
 
         HideAllVisualChildren();
+        ApplyHeldPrefabScale(instance.transform, selectedItem);
         instance.SetActive(true);
         return true;
     }
@@ -355,9 +355,28 @@ public class HeldBlockVisual : MonoBehaviour
         heldPrefabInstance.name = prefab.name + "_Held";
         heldPrefabInstance.transform.localPosition = Vector3.zero;
         heldPrefabInstance.transform.localRotation = Quaternion.identity;
-        heldPrefabInstance.transform.localScale = Vector3.one;
+        heldPrefabInstance.transform.localScale = SanitizeScale(prefab.transform.localScale);
         heldPrefabSource = prefab;
         return heldPrefabInstance;
+    }
+
+    private void ApplyHeldPrefabScale(Transform prefabTransform, Item selectedItem)
+    {
+        if (prefabTransform == null || selectedItem == null || selectedItem.heldPrefab == null)
+            return;
+
+        Vector3 sourceScale = SanitizeScale(selectedItem.heldPrefab.transform.localScale);
+        if (!selectedItem.overrideHeldTransform)
+        {
+            prefabTransform.localScale = sourceScale;
+            return;
+        }
+
+        Vector3 scaleMultiplier = SanitizeScale(selectedItem.heldLocalScale);
+        prefabTransform.localScale = new Vector3(
+            sourceScale.x * scaleMultiplier.x,
+            sourceScale.y * scaleMultiplier.y,
+            sourceScale.z * scaleMultiplier.z);
     }
 
     private void ClearHeldPrefabInstance()
@@ -395,12 +414,80 @@ public class HeldBlockVisual : MonoBehaviour
         return mesh;
     }
 
-    private Mesh GetOrCreateFlatItemMesh(Sprite sprite)
+    private bool HasAtlasFlatItem(Item item)
+    {
+        if (item == null || !TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData))
+            return false;
+
+        return atlasData.HasMapping(item);
+    }
+
+    private bool TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData)
+    {
+        atlasData = itemAtlasData;
+        if (atlasData == null && PlayerInventory.Instance != null)
+            PlayerInventory.Instance.TryGetItemAtlasData(out atlasData);
+
+        return atlasData != null;
+    }
+
+    private Mesh GetOrCreateFlatItemMesh(Item item, out Material renderMaterial)
+    {
+        renderMaterial = null;
+        if (item == null)
+            return null;
+
+        if (TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData) &&
+            atlasData.TryGetUvRect(item, out Rect atlasUvRect) &&
+            atlasData.TryGetAspect(item, out float atlasAspect))
+        {
+            Mesh atlasMesh = GetOrCreateAtlasFlatItemMesh(item, atlasUvRect, atlasAspect);
+            if (atlasMesh == null)
+                return null;
+
+            if (atlasData.TryGetTexture(out Texture2D atlasTexture) && atlasTexture != null)
+                ConfigurePixelArtTexture(atlasTexture);
+
+            if (atlasData.TryGetMaterial(out Material atlasMaterial) && atlasMaterial != null)
+            {
+                renderMaterial = atlasMaterial;
+                return atlasMesh;
+            }
+
+            if (atlasData.TryGetTexture(out Texture2D atlasTextureFallback) && atlasTextureFallback != null)
+            {
+                EnsureFlatItemMaterial();
+                if (flatItemMaterial == null)
+                    return null;
+
+                ApplyFlatItemTexture(atlasTextureFallback);
+                renderMaterial = flatItemMaterial;
+                return atlasMesh;
+            }
+        }
+
+        if (item.icon == null)
+            return null;
+
+        Mesh spriteMesh = GetOrCreateSpriteFlatItemMesh(item.icon);
+        if (spriteMesh == null)
+            return null;
+
+        EnsureFlatItemMaterial();
+        if (flatItemMaterial == null)
+            return null;
+
+        ApplyFlatItemTexture(item.icon.texture);
+        renderMaterial = flatItemMaterial;
+        return spriteMesh;
+    }
+
+    private Mesh GetOrCreateSpriteFlatItemMesh(Sprite sprite)
     {
         if (sprite == null)
             return null;
 
-        if (flatItemMeshCache.TryGetValue(sprite, out Mesh cachedMesh) && cachedMesh != null)
+        if (spriteFlatItemMeshCache.TryGetValue(sprite, out Mesh cachedMesh) && cachedMesh != null)
             return cachedMesh;
 
         Mesh mesh = BuildFlatItemMesh(sprite);
@@ -408,7 +495,24 @@ public class HeldBlockVisual : MonoBehaviour
             return null;
 
         mesh.name = $"HeldFlatItem_{sprite.name}";
-        flatItemMeshCache[sprite] = mesh;
+        spriteFlatItemMeshCache[sprite] = mesh;
+        return mesh;
+    }
+
+    private Mesh GetOrCreateAtlasFlatItemMesh(Item item, Rect uvRect, float aspect)
+    {
+        if (item == null)
+            return null;
+
+        if (atlasFlatItemMeshCache.TryGetValue(item, out Mesh cachedMesh) && cachedMesh != null)
+            return cachedMesh;
+
+        Mesh mesh = BuildFlatItemMesh(aspect, uvRect);
+        if (mesh == null)
+            return null;
+
+        mesh.name = $"HeldFlatItemAtlas_{item.name}";
+        atlasFlatItemMeshCache[item] = mesh;
         return mesh;
     }
 
@@ -419,16 +523,22 @@ public class HeldBlockVisual : MonoBehaviour
 
         float safeHeight = Mathf.Max(1f, sprite.rect.height);
         float aspect = Mathf.Max(0.01f, sprite.rect.width / safeHeight);
-        float halfWidth = aspect * 0.5f;
+        Vector4 outerUv = DataUtility.GetOuterUV(sprite);
+        Rect uvRect = Rect.MinMaxRect(outerUv.x, outerUv.y, outerUv.z, outerUv.w);
+        return BuildFlatItemMesh(aspect, uvRect);
+    }
+
+    private static Mesh BuildFlatItemMesh(float aspect, Rect uvRect)
+    {
+        float halfWidth = Mathf.Max(0.01f, aspect) * 0.5f;
         float halfHeight = 0.5f;
 
-        Vector4 outerUv = DataUtility.GetOuterUV(sprite);
         Vector2[] uv =
         {
-            new Vector2(outerUv.x, outerUv.y),
-            new Vector2(outerUv.x, outerUv.w),
-            new Vector2(outerUv.z, outerUv.w),
-            new Vector2(outerUv.z, outerUv.y)
+            new Vector2(uvRect.xMin, uvRect.yMin),
+            new Vector2(uvRect.xMin, uvRect.yMax),
+            new Vector2(uvRect.xMax, uvRect.yMax),
+            new Vector2(uvRect.xMax, uvRect.yMin)
         };
 
         Mesh mesh = new Mesh();
@@ -486,6 +596,8 @@ public class HeldBlockVisual : MonoBehaviour
         if (flatItemMaterial == null)
             return;
 
+        ConfigurePixelArtTexture(texture);
+
         if (flatItemMaterial.HasProperty("_BaseMap"))
             flatItemMaterial.SetTexture("_BaseMap", texture);
 
@@ -497,6 +609,16 @@ public class HeldBlockVisual : MonoBehaviour
             flatItemMaterial.SetColor("_BaseColor", Color.white);
         if (flatItemMaterial.HasProperty("_Color"))
             flatItemMaterial.SetColor("_Color", Color.white);
+    }
+
+    private static void ConfigurePixelArtTexture(Texture texture)
+    {
+        if (texture == null)
+            return;
+
+        texture.filterMode = FilterMode.Point;
+        texture.wrapMode = TextureWrapMode.Clamp;
+        texture.anisoLevel = 0;
     }
 
     private static void DestroyCachedMeshes<T>(Dictionary<T, Mesh> cache)
