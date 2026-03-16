@@ -43,7 +43,7 @@ public static class ChunkLighting
                         }
 
                         int idx = lx + y * voxelSizeX + lz * voxelPlaneSize;
-                        byte opacity = blockMappings[(int)blockTypes[idx]].lightOpacity;
+                        byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[idx]]);
 
                         if (opacity >= 15)
                         {
@@ -122,7 +122,7 @@ public static class ChunkLighting
 
         private bool CanImproveNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
         {
-            byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
             byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
             return propagatedLight > skyMap[neighborIndex];
@@ -130,7 +130,7 @@ public static class ChunkLighting
 
         private void TryPropagate(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
         {
-            byte opacity = blockMappings[(int)blockTypes[neighborIndex]].lightOpacity;
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
             byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
 
@@ -139,6 +139,14 @@ public static class ChunkLighting
                 skyMap[neighborIndex] = propagatedLight;
                 lightQueue.Enqueue(neighborIndex);
             }
+        }
+
+        private static byte GetEffectiveOpacity(BlockTextureMapping mapping)
+        {
+            if (mapping.renderShape != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
+                return 0;
+
+            return mapping.lightOpacity;
         }
     }
 }

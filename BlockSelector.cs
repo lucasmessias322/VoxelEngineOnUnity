@@ -25,7 +25,7 @@ public class BlockSelector : MonoBehaviour
         line.startWidth = 0.05f;
         line.endWidth = 0.05f;
 
-        line.positionCount = 16;
+        line.positionCount = 18;
         line.enabled = false;
         line.numCapVertices = 4;
         line.numCornerVertices = 4;
@@ -65,7 +65,7 @@ public class BlockSelector : MonoBehaviour
             CurrentBlock = hitType;
             IsBillboardHit = isBillboard;
             BillboardGroundBlockPos = billboardGroundPos;
-            DrawCube(blockPos);
+            DrawSelection(blockPos, hitType, isBillboard);
             hasBlock = true;
         }
         else
@@ -79,14 +79,18 @@ public class BlockSelector : MonoBehaviour
         }
     }
 
-    void DrawCube(Vector3Int pos)
+    void DrawSelection(Vector3Int pos, BlockType blockType, bool isBillboard)
     {
         line.enabled = true;
 
         float offset = 0.0025f;
 
-        Vector3 p = pos - Vector3.one * offset;
-        Vector3 size = Vector3.one + Vector3.one * offset * 2f;
+        Bounds bounds = new Bounds(pos + Vector3.one * 0.5f, Vector3.one);
+        if (!isBillboard && TryGetCustomBounds(pos, blockType, out Bounds customBounds))
+            bounds = customBounds;
+
+        Vector3 p = bounds.min - Vector3.one * offset;
+        Vector3 size = bounds.size + Vector3.one * offset * 2f;
 
         Vector3 v000 = p;
         Vector3 v100 = p + Vector3.right * size.x;
@@ -109,6 +113,26 @@ public class BlockSelector : MonoBehaviour
         };
 
         line.SetPositions(lines);
+    }
+
+    private bool TryGetCustomBounds(Vector3Int pos, BlockType blockType, out Bounds bounds)
+    {
+        bounds = default;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        if (mapping == null)
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        if (!BlockShapeUtility.UsesCustomMesh(value))
+            return false;
+
+        bounds = BlockShapeUtility.GetWorldBounds(pos, value);
+        return true;
     }
 
     public Vector3Int GetSelectedBlock()
@@ -172,31 +196,45 @@ public class BlockSelector : MonoBehaviour
 
         for (int i = 0; i < maxSteps && traveled <= maxDistance; i++)
         {
-            BlockType blockType = World.Instance.GetBlockAt(voxel);
+            World world = World.Instance;
+            BlockType blockType = world.GetBlockAt(voxel);
             if (blockType != BlockType.Air)
             {
-                hitBlock = voxel;
-                hitType = blockType;
-                isBillboardHit = false;
-                billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
-
-                if (lastNormal == Vector3Int.zero)
+                if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal))
                 {
-                    hitNormal = new Vector3Int(
-                        -Mathf.RoundToInt(direction.x),
-                        -Mathf.RoundToInt(direction.y),
-                        -Mathf.RoundToInt(direction.z)
-                    );
-
-                    if (hitNormal == Vector3Int.zero)
-                        hitNormal = Vector3Int.up;
-                }
-                else
-                {
-                    hitNormal = lastNormal;
+                    hitBlock = voxel;
+                    hitType = blockType;
+                    hitNormal = customNormal;
+                    isBillboardHit = false;
+                    billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
+                    return true;
                 }
 
-                return true;
+                if (!IsCustomShapeBlock(blockType))
+                {
+                    hitBlock = voxel;
+                    hitType = blockType;
+                    isBillboardHit = false;
+                    billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
+
+                    if (lastNormal == Vector3Int.zero)
+                    {
+                        hitNormal = new Vector3Int(
+                            -Mathf.RoundToInt(direction.x),
+                            -Mathf.RoundToInt(direction.y),
+                            -Mathf.RoundToInt(direction.z)
+                        );
+
+                        if (hitNormal == Vector3Int.zero)
+                            hitNormal = Vector3Int.up;
+                    }
+                    else
+                    {
+                        hitNormal = lastNormal;
+                    }
+
+                    return true;
+                }
             }
 
             if (TryHitGrassBillboardInVoxel(
@@ -238,6 +276,226 @@ public class BlockSelector : MonoBehaviour
         }
 
         return false;
+    }
+
+    private bool IsCustomShapeBlock(BlockType blockType)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        return mapping != null && BlockShapeUtility.UsesCustomMesh(mapping.Value);
+    }
+
+    private bool TryHitCustomBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockType blockType,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal)
+    {
+        hitNormal = Vector3Int.zero;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        if (mapping == null || !BlockShapeUtility.UsesCustomMesh(mapping.Value))
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        switch (value.renderShape)
+        {
+            case BlockRenderShape.Cuboid:
+                return TryHitCuboidBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
+
+            case BlockRenderShape.Cross:
+                return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
+
+            default:
+                return false;
+        }
+    }
+
+    private bool TryHitCuboidBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockTextureMapping mapping,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal)
+    {
+        Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, mapping);
+        if (!bounds.IntersectRay(ray, out float distance) || distance > maxDistance)
+        {
+            hitNormal = Vector3Int.zero;
+            return false;
+        }
+
+        Vector3 point = ray.GetPoint(Mathf.Max(0f, distance));
+        hitNormal = ResolveBoundsHitNormal(bounds, point, lastNormal, ray.direction);
+        return true;
+    }
+
+    private bool TryHitCrossBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockTextureMapping mapping,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal)
+    {
+        BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+        Vector3 origin = voxel;
+
+        if (TryHitQuad(
+            ray,
+            origin + new Vector3(min.x, min.y, min.z),
+            origin + new Vector3(max.x, min.y, max.z),
+            origin + new Vector3(max.x, max.y, max.z),
+            origin + new Vector3(min.x, max.y, min.z),
+            maxDistance,
+            lastNormal,
+            out hitNormal))
+        {
+            return true;
+        }
+
+        return TryHitQuad(
+            ray,
+            origin + new Vector3(min.x, min.y, max.z),
+            origin + new Vector3(max.x, min.y, min.z),
+            origin + new Vector3(max.x, max.y, min.z),
+            origin + new Vector3(min.x, max.y, max.z),
+            maxDistance,
+            lastNormal,
+            out hitNormal);
+    }
+
+    private bool TryHitQuad(
+        Ray ray,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        Vector3 p3,
+        float maxDistance,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal)
+    {
+        hitNormal = Vector3Int.zero;
+
+        bool hitFirst = TryRayTriangle(ray, p0, p1, p2, maxDistance, out float t1, out Vector3 normal1);
+        bool hitSecond = TryRayTriangle(ray, p0, p2, p3, maxDistance, out float t2, out Vector3 normal2);
+
+        if (!hitFirst && !hitSecond)
+            return false;
+
+        Vector3 normal = normal1;
+        if (!hitFirst || (hitSecond && t2 < t1))
+            normal = normal2;
+
+        hitNormal = ResolveCustomSurfaceNormal(normal, lastNormal, ray.direction);
+        return true;
+    }
+
+    private static bool TryRayTriangle(
+        Ray ray,
+        Vector3 v0,
+        Vector3 v1,
+        Vector3 v2,
+        float maxDistance,
+        out float distance,
+        out Vector3 normal)
+    {
+        const float epsilon = 0.000001f;
+        distance = 0f;
+        normal = Vector3.zero;
+
+        Vector3 edge1 = v1 - v0;
+        Vector3 edge2 = v2 - v0;
+        Vector3 pvec = Vector3.Cross(ray.direction, edge2);
+        float det = Vector3.Dot(edge1, pvec);
+
+        if (Mathf.Abs(det) < epsilon)
+            return false;
+
+        float invDet = 1f / det;
+        Vector3 tvec = ray.origin - v0;
+        float u = Vector3.Dot(tvec, pvec) * invDet;
+        if (u < 0f || u > 1f)
+            return false;
+
+        Vector3 qvec = Vector3.Cross(tvec, edge1);
+        float v = Vector3.Dot(ray.direction, qvec) * invDet;
+        if (v < 0f || u + v > 1f)
+            return false;
+
+        float t = Vector3.Dot(edge2, qvec) * invDet;
+        if (t < 0f || t > maxDistance)
+            return false;
+
+        distance = t;
+        normal = Vector3.Normalize(Vector3.Cross(edge1, edge2));
+        if (Vector3.Dot(normal, ray.direction) > 0f)
+            normal = -normal;
+        return true;
+    }
+
+    private static Vector3Int ResolveBoundsHitNormal(Bounds bounds, Vector3 point, Vector3Int lastNormal, Vector3 rayDirection)
+    {
+        float dxMin = Mathf.Abs(point.x - bounds.min.x);
+        float dxMax = Mathf.Abs(point.x - bounds.max.x);
+        float dyMin = Mathf.Abs(point.y - bounds.min.y);
+        float dyMax = Mathf.Abs(point.y - bounds.max.y);
+        float dzMin = Mathf.Abs(point.z - bounds.min.z);
+        float dzMax = Mathf.Abs(point.z - bounds.max.z);
+
+        float best = dxMin;
+        Vector3Int normal = Vector3Int.left;
+
+        if (dxMax < best) { best = dxMax; normal = Vector3Int.right; }
+        if (dyMin < best) { best = dyMin; normal = Vector3Int.down; }
+        if (dyMax < best) { best = dyMax; normal = Vector3Int.up; }
+        if (dzMin < best) { best = dzMin; normal = Vector3Int.back; }
+        if (dzMax < best) { normal = Vector3Int.forward; }
+
+        if (normal == Vector3Int.zero)
+            return ResolveFallbackHitNormal(lastNormal, rayDirection);
+
+        return normal;
+    }
+
+    private static Vector3Int ResolveCustomSurfaceNormal(Vector3 surfaceNormal, Vector3Int lastNormal, Vector3 rayDirection)
+    {
+        Vector3 abs = new Vector3(Mathf.Abs(surfaceNormal.x), Mathf.Abs(surfaceNormal.y), Mathf.Abs(surfaceNormal.z));
+        if (abs.x >= abs.y && abs.x >= abs.z)
+            return surfaceNormal.x >= 0f ? Vector3Int.right : Vector3Int.left;
+        if (abs.y >= abs.x && abs.y >= abs.z)
+            return surfaceNormal.y >= 0f ? Vector3Int.up : Vector3Int.down;
+        if (abs.z >= abs.x && abs.z >= abs.y)
+            return surfaceNormal.z >= 0f ? Vector3Int.forward : Vector3Int.back;
+
+        return ResolveFallbackHitNormal(lastNormal, rayDirection);
+    }
+
+    private static Vector3Int ResolveFallbackHitNormal(Vector3Int lastNormal, Vector3 rayDirection)
+    {
+        if (lastNormal != Vector3Int.zero)
+            return lastNormal;
+
+        Vector3 fallback = -rayDirection;
+        float absX = Mathf.Abs(fallback.x);
+        float absY = Mathf.Abs(fallback.y);
+        float absZ = Mathf.Abs(fallback.z);
+
+        if (absX >= absY && absX >= absZ)
+            return fallback.x >= 0f ? Vector3Int.right : Vector3Int.left;
+        if (absY >= absX && absY >= absZ)
+            return fallback.y >= 0f ? Vector3Int.up : Vector3Int.down;
+        return fallback.z >= 0f ? Vector3Int.forward : Vector3Int.back;
     }
 
     private bool TryHitGrassBillboardInVoxel(

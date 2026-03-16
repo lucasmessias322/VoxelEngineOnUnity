@@ -2,6 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Side = 2 }
+public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2 }
 
 [CreateAssetMenu(fileName = "BlockDataSO", menuName = "ScriptableObjects/BlockDataSO", order = 1)]
 public class BlockDataSO : ScriptableObject
@@ -92,6 +93,14 @@ public struct BlockTextureMapping
     public Vector2Int bottom; // coordenada no atlas para a face de baixo
     public Vector2Int side;   // coordenada no atlas para as laterais
 
+    [Header("Rendering")]
+    [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes).")]
+    public BlockRenderShape renderShape;
+    [Tooltip("Canto minimo local do formato dentro do voxel (0..1). Usado em Cross e Cuboid.")]
+    public Vector3 shapeMin;
+    [Tooltip("Canto maximo local do formato dentro do voxel (0..1). Usado em Cross e Cuboid.")]
+    public Vector3 shapeMax;
+
     [Header("Behavior (use to control face culling / water handling)")]
     public bool isEmpty;       // ex: true para agua/ar
     public bool isSolid;       // defina como true no Inspector para blocos solidos
@@ -116,4 +125,81 @@ public struct BlockTextureMapping
 
     [Tooltip("Aplica cor do bioma nas laterais?")]
     public bool tintSide;
+}
+
+public static class BlockShapeUtility
+{
+    private static readonly Vector3 DefaultCrossMin = new Vector3(0.15f, 0f, 0.15f);
+    private static readonly Vector3 DefaultCrossMax = new Vector3(0.85f, 1f, 0.85f);
+    private static readonly Vector3 DefaultCuboidMin = new Vector3(0.375f, 0f, 0.375f);
+    private static readonly Vector3 DefaultCuboidMax = new Vector3(0.625f, 0.75f, 0.625f);
+    private const float BoundsEpsilon = 0.0001f;
+
+    public static bool UsesCustomMesh(BlockTextureMapping mapping)
+    {
+        return mapping.renderShape != BlockRenderShape.Cube;
+    }
+
+    public static byte GetEffectiveLightOpacity(BlockTextureMapping mapping)
+    {
+        if (mapping.renderShape != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
+            return 0;
+
+        return mapping.lightOpacity;
+    }
+
+    public static void ResolveShapeBounds(BlockTextureMapping mapping, out Vector3 min, out Vector3 max)
+    {
+        Vector3 clampedMin = Clamp01(mapping.shapeMin);
+        Vector3 clampedMax = Clamp01(mapping.shapeMax);
+
+        bool valid =
+            clampedMax.x > clampedMin.x + BoundsEpsilon &&
+            clampedMax.y > clampedMin.y + BoundsEpsilon &&
+            clampedMax.z > clampedMin.z + BoundsEpsilon;
+
+        if (valid)
+        {
+            min = clampedMin;
+            max = clampedMax;
+            return;
+        }
+
+        switch (mapping.renderShape)
+        {
+            case BlockRenderShape.Cross:
+                min = DefaultCrossMin;
+                max = DefaultCrossMax;
+                return;
+
+            case BlockRenderShape.Cuboid:
+                min = DefaultCuboidMin;
+                max = DefaultCuboidMax;
+                return;
+
+            default:
+                min = Vector3.zero;
+                max = Vector3.one;
+                return;
+        }
+    }
+
+    public static Bounds GetWorldBounds(Vector3Int blockPos, BlockTextureMapping mapping)
+    {
+        ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+        Vector3 worldMin = blockPos + min;
+        Vector3 worldMax = blockPos + max;
+        Vector3 size = worldMax - worldMin;
+        Vector3 center = worldMin + size * 0.5f;
+        return new Bounds(center, size);
+    }
+
+    private static Vector3 Clamp01(Vector3 value)
+    {
+        return new Vector3(
+            Mathf.Clamp01(value.x),
+            Mathf.Clamp01(value.y),
+            Mathf.Clamp01(value.z));
+    }
 }

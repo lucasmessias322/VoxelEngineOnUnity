@@ -175,47 +175,61 @@ public class BlockDrop : MonoBehaviour
 
         float invAtlasTilesX = 1f / Mathf.Max(1, world.atlasTilesX);
         float invAtlasTilesY = 1f / Mathf.Max(1, world.atlasTilesY);
+        Vector3 origin = -Vector3.one * 0.5f;
 
-        for (int f = 0; f < 6; f++)
+        switch (mapping.renderShape)
         {
-            FaceDef face = FaceDefs[f];
-            int baseIndex = vertices.Count;
+            case BlockRenderShape.Cross:
+                AppendCrossMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
 
-            vertices.Add(face.v0 - Vector3.one * 0.5f);
-            vertices.Add(face.v1 - Vector3.one * 0.5f);
-            vertices.Add(face.v2 - Vector3.one * 0.5f);
-            vertices.Add(face.v3 - Vector3.one * 0.5f);
+            case BlockRenderShape.Cuboid:
+                AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
 
-            normals.Add(face.normal3);
-            normals.Add(face.normal3);
-            normals.Add(face.normal3);
-            normals.Add(face.normal3);
+            default:
+                for (int f = 0; f < 6; f++)
+                {
+                    FaceDef face = FaceDefs[f];
+                    int baseIndex = vertices.Count;
 
-            uv0.Add(GetFaceBaseUv(f, face.v0));
-            uv0.Add(GetFaceBaseUv(f, face.v1));
-            uv0.Add(GetFaceBaseUv(f, face.v2));
-            uv0.Add(GetFaceBaseUv(f, face.v3));
+                    vertices.Add(face.v0 + origin);
+                    vertices.Add(face.v1 + origin);
+                    vertices.Add(face.v2 + origin);
+                    vertices.Add(face.v3 + origin);
 
-            Vector2Int tile = GetTileForFace(mapping, f);
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-            uv1.Add(atlasUv);
-            uv1.Add(atlasUv);
-            uv1.Add(atlasUv);
-            uv1.Add(atlasUv);
+                    normals.Add(face.normal3);
+                    normals.Add(face.normal3);
+                    normals.Add(face.normal3);
+                    normals.Add(face.normal3);
 
-            float tint = GetTintForFace(mapping, f) ? 1f : 0f;
-            Vector4 extra = new Vector4(1f, tint, 1f, 0f);
-            uv2.Add(extra);
-            uv2.Add(extra);
-            uv2.Add(extra);
-            uv2.Add(extra);
+                    uv0.Add(GetFaceBaseUv(f, face.v0));
+                    uv0.Add(GetFaceBaseUv(f, face.v1));
+                    uv0.Add(GetFaceBaseUv(f, face.v2));
+                    uv0.Add(GetFaceBaseUv(f, face.v3));
 
-            tris.Add(baseIndex + 0);
-            tris.Add(baseIndex + 1);
-            tris.Add(baseIndex + 2);
-            tris.Add(baseIndex + 0);
-            tris.Add(baseIndex + 2);
-            tris.Add(baseIndex + 3);
+                    Vector2Int tile = GetTileForFace(mapping, f);
+                    Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+                    uv1.Add(atlasUv);
+                    uv1.Add(atlasUv);
+                    uv1.Add(atlasUv);
+                    uv1.Add(atlasUv);
+
+                    float tint = GetTintForFace(mapping, f) ? 1f : 0f;
+                    Vector4 extra = new Vector4(1f, tint, 1f, 0f);
+                    uv2.Add(extra);
+                    uv2.Add(extra);
+                    uv2.Add(extra);
+                    uv2.Add(extra);
+
+                    tris.Add(baseIndex + 0);
+                    tris.Add(baseIndex + 1);
+                    tris.Add(baseIndex + 2);
+                    tris.Add(baseIndex + 0);
+                    tris.Add(baseIndex + 2);
+                    tris.Add(baseIndex + 3);
+                }
+                break;
         }
 
         mesh.SetVertices(vertices);
@@ -234,6 +248,230 @@ public class BlockDrop : MonoBehaviour
         mesh.SetTriangles(submeshIndex == 2 ? tris : empty, 2, false);
         mesh.RecalculateBounds();
         return mesh;
+    }
+
+    private static void AppendCrossMesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+        Vector2Int tile = mapping.side;
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        float tint = mapping.tintSide ? 1f : 0f;
+
+        Vector3 a0 = origin + new Vector3(min.x, min.y, min.z);
+        Vector3 a1 = origin + new Vector3(max.x, min.y, max.z);
+        Vector3 a2 = origin + new Vector3(max.x, max.y, max.z);
+        Vector3 a3 = origin + new Vector3(min.x, max.y, min.z);
+        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, tris, a0, a1, a2, a3, atlasUv, tint);
+
+        Vector3 b0 = origin + new Vector3(min.x, min.y, max.z);
+        Vector3 b1 = origin + new Vector3(max.x, min.y, min.z);
+        Vector3 b2 = origin + new Vector3(max.x, max.y, min.z);
+        Vector3 b3 = origin + new Vector3(min.x, max.y, max.z);
+        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, tris, b0, b1, b2, b3, atlasUv, tint);
+    }
+
+    private static void AppendCuboidMesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(max.x, min.y, min.z),
+            origin + new Vector3(max.x, max.y, min.z),
+            origin + new Vector3(max.x, max.y, max.z),
+            origin + new Vector3(max.x, min.y, max.z),
+            Vector3.right,
+            mapping.side,
+            mapping.tintSide,
+            invAtlasTilesX,
+            invAtlasTilesY);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(min.x, min.y, max.z),
+            origin + new Vector3(min.x, max.y, max.z),
+            origin + new Vector3(min.x, max.y, min.z),
+            origin + new Vector3(min.x, min.y, min.z),
+            Vector3.left,
+            mapping.side,
+            mapping.tintSide,
+            invAtlasTilesX,
+            invAtlasTilesY);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(min.x, max.y, max.z),
+            origin + new Vector3(max.x, max.y, max.z),
+            origin + new Vector3(max.x, max.y, min.z),
+            origin + new Vector3(min.x, max.y, min.z),
+            Vector3.up,
+            mapping.top,
+            mapping.tintTop,
+            invAtlasTilesX,
+            invAtlasTilesY);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(min.x, min.y, min.z),
+            origin + new Vector3(max.x, min.y, min.z),
+            origin + new Vector3(max.x, min.y, max.z),
+            origin + new Vector3(min.x, min.y, max.z),
+            Vector3.down,
+            mapping.bottom,
+            mapping.tintBottom,
+            invAtlasTilesX,
+            invAtlasTilesY);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(max.x, min.y, max.z),
+            origin + new Vector3(max.x, max.y, max.z),
+            origin + new Vector3(min.x, max.y, max.z),
+            origin + new Vector3(min.x, min.y, max.z),
+            Vector3.forward,
+            mapping.side,
+            mapping.tintSide,
+            invAtlasTilesX,
+            invAtlasTilesY);
+
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+            origin + new Vector3(min.x, min.y, min.z),
+            origin + new Vector3(min.x, max.y, min.z),
+            origin + new Vector3(max.x, max.y, min.z),
+            origin + new Vector3(max.x, min.y, min.z),
+            Vector3.back,
+            mapping.side,
+            mapping.tintSide,
+            invAtlasTilesX,
+            invAtlasTilesY);
+    }
+
+    private static void AppendShapeFace(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        Vector3 p3,
+        Vector3 normal,
+        Vector2Int tile,
+        bool tint,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        int baseIndex = vertices.Count;
+
+        vertices.Add(p0);
+        vertices.Add(p1);
+        vertices.Add(p2);
+        vertices.Add(p3);
+
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+
+        uv0.Add(new Vector2(0f, 0f));
+        uv0.Add(new Vector2(1f, 0f));
+        uv0.Add(new Vector2(1f, 1f));
+        uv0.Add(new Vector2(0f, 1f));
+
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+
+        Vector4 extra = new Vector4(1f, tint ? 1f : 0f, 1f, 0f);
+        uv2.Add(extra);
+        uv2.Add(extra);
+        uv2.Add(extra);
+        uv2.Add(extra);
+
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 1);
+        tris.Add(baseIndex + 2);
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 2);
+        tris.Add(baseIndex + 3);
+    }
+
+    private static void AppendDoubleSidedQuad(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        Vector3 p3,
+        Vector2 atlasUv,
+        float tint)
+    {
+        int baseIndex = vertices.Count;
+        Vector3 upNormal = Vector3.up;
+
+        vertices.Add(p0);
+        vertices.Add(p1);
+        vertices.Add(p2);
+        vertices.Add(p3);
+
+        normals.Add(upNormal);
+        normals.Add(upNormal);
+        normals.Add(upNormal);
+        normals.Add(upNormal);
+
+        uv0.Add(new Vector2(0f, 0f));
+        uv0.Add(new Vector2(1f, 0f));
+        uv0.Add(new Vector2(1f, 1f));
+        uv0.Add(new Vector2(0f, 1f));
+
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+        uv1.Add(atlasUv);
+
+        Vector4 extra = new Vector4(1f, tint, 1f, 0f);
+        uv2.Add(extra);
+        uv2.Add(extra);
+        uv2.Add(extra);
+        uv2.Add(extra);
+
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 1);
+        tris.Add(baseIndex + 2);
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 2);
+        tris.Add(baseIndex + 3);
+
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 2);
+        tris.Add(baseIndex + 1);
+        tris.Add(baseIndex + 0);
+        tris.Add(baseIndex + 3);
+        tris.Add(baseIndex + 2);
     }
 
     private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex)
@@ -264,7 +502,17 @@ public class BlockDrop : MonoBehaviour
     private void SetupPhysics(Vector3 throwDirection)
     {
         BoxCollider box = gameObject.AddComponent<BoxCollider>();
-        box.size = Vector3.one;
+        MeshFilter meshFilter = GetComponent<MeshFilter>();
+        if (meshFilter != null && meshFilter.sharedMesh != null)
+        {
+            Bounds bounds = meshFilter.sharedMesh.bounds;
+            box.center = bounds.center;
+            box.size = Vector3.Max(bounds.size, Vector3.one * 0.05f);
+        }
+        else
+        {
+            box.size = Vector3.one;
+        }
 
         SphereCollider pickup = gameObject.AddComponent<SphereCollider>();
         pickup.radius = 4f;

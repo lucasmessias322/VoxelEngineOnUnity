@@ -20,7 +20,7 @@ public partial class World
         if (blockData != null && blockData.mappings != null)
         {
             int t = (int)type;
-            if (t >= 0 && t < blockData.mappings.Length) return blockData.mappings[t].lightOpacity;
+            if (t >= 0 && t < blockData.mappings.Length) return BlockShapeUtility.GetEffectiveLightOpacity(blockData.mappings[t]);
         }
         return 15;
     }

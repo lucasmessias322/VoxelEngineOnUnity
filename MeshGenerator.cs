@@ -498,8 +498,53 @@ public static class MeshGenerator
             float invAtlasTilesY = 1f / atlasTilesY;
 
             GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+            GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
             GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
         }
+
+        private void GenerateSpecialMeshes(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> light,
+            float invAtlasTilesX,
+            float invAtlasTilesY)
+        {
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+
+            for (int y = startY; y < endY; y++)
+            {
+                for (int z = border; z < border + SizeZ; z++)
+                {
+                    for (int x = border; x < border + SizeX; x++)
+                    {
+                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                        BlockType blockType = blockTypes[idx];
+                        if (blockType == BlockType.Air)
+                            continue;
+
+                        BlockTextureMapping mapping = blockMappings[(int)blockType];
+                        if (mapping.isEmpty || mapping.renderShape == BlockRenderShape.Cube)
+                            continue;
+
+                        float light01 = GetSpecialMeshLight01(idx, voxelSizeX, light);
+                        Vector3 origin = new Vector3(x - border, y, z - border);
+
+                        switch (mapping.renderShape)
+                        {
+                            case BlockRenderShape.Cross:
+                                AddCrossShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, light01);
+                                break;
+
+                            case BlockRenderShape.Cuboid:
+                                AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY);
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+
         private void GenerateGrassBillboards(
             NativeArray<BlockType> blockTypes,
             NativeArray<byte> light,
@@ -661,6 +706,324 @@ public static class MeshGenerator
             billboardTriangles.Add(vIndex + 2);
         }
 
+        private void AddCrossShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+            Vector2Int tile = mapping.side;
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            float tint = mapping.tintSide ? 1f : 0f;
+
+            NativeList<int> tris = blockType == BlockType.Water
+                ? waterTriangles
+                : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
+
+            Vector3 a0 = origin + new Vector3(min.x, min.y, min.z);
+            Vector3 a1 = origin + new Vector3(max.x, min.y, max.z);
+            Vector3 a2 = origin + new Vector3(max.x, max.y, max.z);
+            Vector3 a3 = origin + new Vector3(min.x, max.y, min.z);
+            AddDoubleSidedShapeQuad(a0, a1, a2, a3, atlasUv, light01, tint, tris);
+
+            Vector3 b0 = origin + new Vector3(min.x, min.y, max.z);
+            Vector3 b1 = origin + new Vector3(max.x, min.y, min.z);
+            Vector3 b2 = origin + new Vector3(max.x, max.y, min.z);
+            Vector3 b3 = origin + new Vector3(min.x, max.y, max.z);
+            AddDoubleSidedShapeQuad(b0, b1, b2, b3, atlasUv, light01, tint, tris);
+        }
+
+        private void AddCuboidShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            float invAtlasTilesX,
+            float invAtlasTilesY)
+        {
+            ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+            NativeList<int> tris = blockType == BlockType.Water
+                ? waterTriangles
+                : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
+            byte emission = mapping.lightEmission;
+
+            AddShapeFace(
+                origin + new Vector3(max.x, min.y, min.z),
+                origin + new Vector3(max.x, max.y, min.z),
+                origin + new Vector3(max.x, max.y, max.z),
+                origin + new Vector3(max.x, min.y, max.z),
+                Vector3.right,
+                mapping.side,
+                mapping.tintSide,
+                new Vector3Int(voxelX + 1, voxelY, voxelZ),
+                Vector3Int.up,
+                Vector3Int.forward,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddShapeFace(
+                origin + new Vector3(min.x, min.y, max.z),
+                origin + new Vector3(min.x, max.y, max.z),
+                origin + new Vector3(min.x, max.y, min.z),
+                origin + new Vector3(min.x, min.y, min.z),
+                Vector3.left,
+                mapping.side,
+                mapping.tintSide,
+                new Vector3Int(voxelX, voxelY, voxelZ),
+                Vector3Int.up,
+                Vector3Int.forward,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddShapeFace(
+                origin + new Vector3(min.x, max.y, max.z),
+                origin + new Vector3(max.x, max.y, max.z),
+                origin + new Vector3(max.x, max.y, min.z),
+                origin + new Vector3(min.x, max.y, min.z),
+                Vector3.up,
+                mapping.top,
+                mapping.tintTop,
+                new Vector3Int(voxelX, voxelY + 1, voxelZ),
+                Vector3Int.right,
+                Vector3Int.forward,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddShapeFace(
+                origin + new Vector3(min.x, min.y, min.z),
+                origin + new Vector3(max.x, min.y, min.z),
+                origin + new Vector3(max.x, min.y, max.z),
+                origin + new Vector3(min.x, min.y, max.z),
+                Vector3.down,
+                mapping.bottom,
+                mapping.tintBottom,
+                new Vector3Int(voxelX, voxelY, voxelZ),
+                Vector3Int.right,
+                Vector3Int.forward,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddShapeFace(
+                origin + new Vector3(max.x, min.y, max.z),
+                origin + new Vector3(max.x, max.y, max.z),
+                origin + new Vector3(min.x, max.y, max.z),
+                origin + new Vector3(min.x, min.y, max.z),
+                Vector3.forward,
+                mapping.side,
+                mapping.tintSide,
+                new Vector3Int(voxelX, voxelY, voxelZ + 1),
+                Vector3Int.right,
+                Vector3Int.up,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddShapeFace(
+                origin + new Vector3(min.x, min.y, min.z),
+                origin + new Vector3(min.x, max.y, min.z),
+                origin + new Vector3(max.x, max.y, min.z),
+                origin + new Vector3(max.x, min.y, min.z),
+                Vector3.back,
+                mapping.side,
+                mapping.tintSide,
+                new Vector3Int(voxelX, voxelY, voxelZ),
+                Vector3Int.right,
+                Vector3Int.up,
+                emission,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+        }
+
+        private void AddShapeFace(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector3 normal,
+            Vector2Int tile,
+            bool tint,
+            Vector3Int lightPlanePos,
+            Vector3Int lightStepU,
+            Vector3Int lightStepV,
+            byte emission,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            int vIndex = vertices.Length;
+
+            vertices.Add(p0);
+            vertices.Add(p1);
+            vertices.Add(p2);
+            vertices.Add(p3);
+
+            normals.Add(normal);
+            normals.Add(normal);
+            normals.Add(normal);
+            normals.Add(normal);
+
+            uvs.Add(new Vector2(0f, 0f));
+            uvs.Add(new Vector2(1f, 0f));
+            uvs.Add(new Vector2(1f, 1f));
+            uvs.Add(new Vector2(0f, 1f));
+
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+
+            for (int corner = 0; corner < 4; corner++)
+            {
+                Vector3Int stepU = (corner == 1 || corner == 2) ? lightStepU : -lightStepU;
+                Vector3Int stepV = (corner == 2 || corner == 3) ? lightStepV : -lightStepV;
+                byte vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
+                if (emission > 0)
+                    vertexLight = (byte)math.max((int)vertexLight, (int)emission);
+
+                Vector4 extra = new Vector4(vertexLight / 15f, tint ? 1f : 0f, 1f, 0f);
+                extraUVs.Add(extra);
+            }
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
+        }
+
+        private void AddDoubleSidedShapeQuad(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector2 atlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris)
+        {
+            int vIndex = vertices.Length;
+            Vector3 upNormal = new Vector3(0f, 1f, 0f);
+
+            vertices.Add(p0);
+            vertices.Add(p1);
+            vertices.Add(p2);
+            vertices.Add(p3);
+
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+            normals.Add(upNormal);
+
+            uvs.Add(new Vector2(0f, 0f));
+            uvs.Add(new Vector2(1f, 0f));
+            uvs.Add(new Vector2(1f, 1f));
+            uvs.Add(new Vector2(0f, 1f));
+
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+
+            Vector4 e = new Vector4(light01, tint, 1f, 0f);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+            extraUVs.Add(e);
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 3);
+            tris.Add(vIndex + 2);
+        }
+
+        private float GetSpecialMeshLight01(int idx, int voxelSizeX, NativeArray<byte> light)
+        {
+            float light01 = GetResolvedLight01(light[idx]);
+            int aboveIdx = idx + voxelSizeX;
+            if (aboveIdx >= 0 && aboveIdx < light.Length)
+                light01 = math.max(light01, GetResolvedLight01(light[aboveIdx]));
+
+            return light01;
+        }
+
+        private static float GetResolvedLight01(byte packed)
+        {
+            byte lightValue = (byte)math.max(
+                (int)LightUtils.GetSkyLight(packed),
+                (int)LightUtils.GetBlockLight(packed));
+            return lightValue / 15f;
+        }
+
+        private void ResolveShapeBounds(BlockTextureMapping mapping, out Vector3 min, out Vector3 max)
+        {
+            float3 clampedMin = math.clamp(
+                new float3(mapping.shapeMin.x, mapping.shapeMin.y, mapping.shapeMin.z),
+                0f,
+                1f);
+            float3 clampedMax = math.clamp(
+                new float3(mapping.shapeMax.x, mapping.shapeMax.y, mapping.shapeMax.z),
+                0f,
+                1f);
+
+            bool valid =
+                clampedMax.x > clampedMin.x + 0.0001f &&
+                clampedMax.y > clampedMin.y + 0.0001f &&
+                clampedMax.z > clampedMin.z + 0.0001f;
+
+            if (valid)
+            {
+                min = new Vector3(clampedMin.x, clampedMin.y, clampedMin.z);
+                max = new Vector3(clampedMax.x, clampedMax.y, clampedMax.z);
+                return;
+            }
+
+            switch (mapping.renderShape)
+            {
+                case BlockRenderShape.Cross:
+                    min = new Vector3(0.15f, 0f, 0.15f);
+                    max = new Vector3(0.85f, 1f, 0.85f);
+                    return;
+
+                case BlockRenderShape.Cuboid:
+                    min = new Vector3(0.375f, 0f, 0.375f);
+                    max = new Vector3(0.625f, 0.75f, 0.625f);
+                    return;
+
+                default:
+                    min = Vector3.zero;
+                    max = Vector3.one;
+                    return;
+            }
+        }
+
         private bool IsFaceVisibleForCurrentBlock(BlockType current, BlockType neighbor)
         {
             if (current == neighbor &&
@@ -672,7 +1035,8 @@ public static class MeshGenerator
             if (blockMappings[(int)neighbor].isEmpty)
                 return true;
 
-            bool neighborOpaque = blockMappings[(int)neighbor].isSolid &&
+            bool neighborOpaque = blockMappings[(int)neighbor].renderShape == BlockRenderShape.Cube &&
+                                  blockMappings[(int)neighbor].isSolid &&
                                   !blockMappings[(int)neighbor].isTransparent;
             return !neighborOpaque;
         }
@@ -754,6 +1118,13 @@ public static class MeshGenerator
 
                                 if (current == BlockType.Air) { mask[i + j * sizeU] = 0; continue; }
 
+                                BlockTextureMapping currentMapping = blockMappings[(int)current];
+                                if (currentMapping.renderShape != BlockRenderShape.Cube)
+                                {
+                                    mask[i + j * sizeU] = 0;
+                                    continue;
+                                }
+
                                 int nx = x + (axis == 0 ? normalSign : 0);
                                 int ny = y + (axis == 1 ? normalSign : 0);
                                 int nz = z + (axis == 2 ? normalSign : 0);
@@ -802,7 +1173,8 @@ public static class MeshGenerator
                                     );
 
                                     int packedAO;
-                                    if (aoStrength <= 0f)
+                                    bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(currentMapping);
+                                    if (disableAOForCurrentBlock)
                                     {
                                         packedAO = 0xFF;
                                     }
@@ -861,6 +1233,7 @@ public static class MeshGenerator
                                 BlockType bt = (BlockType)(packedData & 0xFFF);
                                 byte finalLight = (byte)((packedData >> 12) & 0xF);
                                 int packedAO = (packedData >> 16) & 0xFF;
+                                BlockTextureMapping btMapping = blockMappings[(int)bt];
 
                                 // Desempacota o AO do quad gigante (ele será idêntico por toda a superfície mesclada)
                                 byte ao0 = (byte)(packedAO & 0x3);
@@ -899,7 +1272,19 @@ public static class MeshGenerator
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
 
-                                    float rawLight = finalLight / 15f;
+                                    int aoPlaneN = n + normalSign;
+                                    Vector3Int vertexPlanePos = new Vector3Int(
+                                        axis == 0 ? aoPlaneN : (u == 0 ? i + du : v == 0 ? j + dv : n),
+                                        axis == 1 ? aoPlaneN : (u == 1 ? i + du : v == 1 ? j + dv : n),
+                                        axis == 2 ? aoPlaneN : (u == 2 ? i + du : v == 2 ? j + dv : n)
+                                    );
+                                    Vector3Int lightStepU = (l == 1 || l == 2) ? stepU : -stepU;
+                                    Vector3Int lightStepV = (l == 2 || l == 3) ? stepV : -stepV;
+                                    byte vertexLight = GetVertexLight(vertexPlanePos, lightStepU, lightStepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    if (IsEmissiveBlock(btMapping))
+                                        vertexLight = (byte)math.max((int)vertexLight, (int)btMapping.lightEmission);
+
+                                    float rawLight = math.max(finalLight / 15f, vertexLight / 15f);
                                     float floatTint = tint ? 1f : 0f;
                                     float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
                                     float aoBase = currentAO / 3f;
@@ -978,6 +1363,35 @@ public static class MeshGenerator
 
             if (s1 && s2) return 0;
             return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
+        }
+
+        private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            int l0 = SampleLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            int l1 = SampleLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            int l2 = SampleLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            int l3 = SampleLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            return (byte)((l0 + l1 + l2 + l3 + 2) / 4);
+        }
+
+        private int SampleLightValue(Vector3Int pos, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            if (pos.y < 0)
+                return 0;
+            if (pos.y >= SizeY)
+                return 15;
+            if (pos.x < 0 || pos.x >= voxelSizeX || pos.z < 0 || pos.z >= voxelSizeZ)
+                return 15;
+
+            int idx = pos.x + pos.y * voxelSizeX + pos.z * voxelPlaneSize;
+            byte packed = light[idx];
+            return math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
+        }
+
+        private static bool IsEmissiveBlock(BlockTextureMapping mapping)
+        {
+            return mapping.isLightSource || mapping.lightEmission > 0;
         }
     }
 

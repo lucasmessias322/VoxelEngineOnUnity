@@ -335,8 +335,15 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
 
         crackOverlayObject.SetActive(true);
-        crackOverlayObject.transform.position = blockPos + Vector3.one * 0.5f;
-        crackOverlayObject.transform.localScale = Vector3.one * crackOverlayScale;
+
+        World world = World.Instance;
+        BlockType overlayType = breakingIsBillboard || world == null
+            ? GetBillboardBreakType()
+            : world.GetBlockAt(blockPos);
+
+        Bounds overlayBounds = ResolveBlockBounds(blockPos, overlayType);
+        crackOverlayObject.transform.position = overlayBounds.center;
+        crackOverlayObject.transform.localScale = overlayBounds.size * crackOverlayScale;
 
         if (breakCrackStages == null || breakCrackStages.Length == 0)
             return;
@@ -410,7 +417,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos))
                 return;
 
-            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos))
+            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos, selectedBlockType))
                 return;
 
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
@@ -422,9 +429,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         }
     }
 
-    private bool IsBlockIntersectingPlayer(Vector3Int placePos)
+    private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType)
     {
-        Bounds blockBounds = new Bounds(placePos + Vector3.one * 0.5f, Vector3.one);
+        Bounds blockBounds = ResolveBlockBounds(placePos, blockType);
 
         CharacterController characterController = GetComponent<CharacterController>();
         if (characterController != null)
@@ -441,5 +448,22 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector3 fallbackCenter = transform.position + Vector3.up * (clampedHeight * 0.5f);
         Bounds fallbackBounds = new Bounds(fallbackCenter, new Vector3(clampedRadius * 2f, clampedHeight, clampedRadius * 2f));
         return fallbackBounds.Intersects(blockBounds);
+    }
+
+    private Bounds ResolveBlockBounds(Vector3Int blockPos, BlockType blockType)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        if (mapping == null)
+            return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+
+        BlockTextureMapping value = mapping.Value;
+        if (!BlockShapeUtility.UsesCustomMesh(value))
+            return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+
+        return BlockShapeUtility.GetWorldBounds(blockPos, value);
     }
 }
