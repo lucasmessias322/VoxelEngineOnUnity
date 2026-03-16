@@ -48,6 +48,12 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     void Update()
     {
+        if (World.Instance != null && !World.Instance.IsInitialWorldReady)
+        {
+            CancelBreak();
+            return;
+        }
+
         if (PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
         {
             CancelBreak();

@@ -33,6 +33,7 @@ public class HeldBlockVisual : MonoBehaviour
     private readonly Dictionary<Sprite, Mesh> spriteFlatItemMeshCache = new Dictionary<Sprite, Mesh>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
 
+    private GameObject followRoot;
     private GameObject visualRoot;
     private GameObject blockVisualObject;
     private MeshFilter blockMeshFilter;
@@ -42,6 +43,7 @@ public class HeldBlockVisual : MonoBehaviour
     private MeshRenderer flatItemMeshRenderer;
     private Material flatItemMaterial;
     private GameObject heldPrefabInstance;
+    private GameObject heldPrefabVisualObject;
     private GameObject heldPrefabSource;
     private Item shownItem;
     private BlockType shownBlockType = BlockType.Air;
@@ -52,12 +54,16 @@ public class HeldBlockVisual : MonoBehaviour
     {
         ResolveReferences();
         EnsureVisualObject();
+        UpdateFollowRootTransform();
         ApplyViewTransform(null, HeldVisualKind.None);
         RefreshHeldBlock(forceRefresh: true);
     }
 
     private void LateUpdate()
     {
+        ResolveReferences();
+        EnsureVisualObject();
+        UpdateFollowRootTransform();
         RefreshHeldBlock(forceRefresh: false);
     }
 
@@ -66,6 +72,7 @@ public class HeldBlockVisual : MonoBehaviour
     {
         ResolveReferences();
         EnsureVisualObject();
+        UpdateFollowRootTransform();
         ApplyViewTransform(null, HeldVisualKind.None);
         RefreshHeldBlock(forceRefresh: true);
     }
@@ -76,6 +83,7 @@ public class HeldBlockVisual : MonoBehaviour
             return;
 
         ApplyViewTransform(shownItem, shownVisualKind);
+        UpdateFollowRootTransform();
         ApplyRendererSettings();
         RefreshHeldBlock(forceRefresh: true);
     }
@@ -106,17 +114,27 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void EnsureVisualObject()
     {
-        Transform parent = handAnchor != null ? handAnchor : transform;
+        Transform stableParent = transform;
+
+        if (followRoot == null)
+        {
+            followRoot = new GameObject("HeldItemFollowRoot");
+            followRoot.transform.SetParent(stableParent, false);
+        }
+        else if (followRoot.transform.parent != stableParent)
+        {
+            followRoot.transform.SetParent(stableParent, false);
+        }
 
         if (visualRoot == null)
         {
             visualRoot = new GameObject("HeldItemVisual");
-            visualRoot.transform.SetParent(parent, false);
+            visualRoot.transform.SetParent(followRoot.transform, false);
             visualRoot.SetActive(false);
         }
-        else if (visualRoot.transform.parent != parent)
+        else if (visualRoot.transform.parent != followRoot.transform)
         {
-            visualRoot.transform.SetParent(parent, false);
+            visualRoot.transform.SetParent(followRoot.transform, false);
         }
 
         if (blockVisualObject == null)
@@ -146,8 +164,29 @@ public class HeldBlockVisual : MonoBehaviour
         if (flatItemMeshRenderer == null)
             flatItemMeshRenderer = flatItemVisualObject.GetComponent<MeshRenderer>();
 
+        if (heldPrefabInstance == null)
+        {
+            heldPrefabInstance = new GameObject("HeldPrefabRoot");
+            heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
+            heldPrefabInstance.SetActive(false);
+        }
+        else if (heldPrefabInstance.transform.parent != visualRoot.transform)
+        {
+            heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
+        }
+
         EnsureFlatItemMaterial();
         ApplyRendererSettings();
+    }
+
+    private void UpdateFollowRootTransform()
+    {
+        if (followRoot == null)
+            return;
+
+        Transform source = handAnchor != null ? handAnchor : transform;
+        followRoot.transform.SetPositionAndRotation(source.position, source.rotation);
+        followRoot.transform.localScale = Vector3.one;
     }
 
     private void ApplyViewTransform(Item selectedItem, HeldVisualKind visualKind)
@@ -343,37 +382,39 @@ public class HeldBlockVisual : MonoBehaviour
 
     private GameObject EnsureHeldPrefabInstance(GameObject prefab)
     {
-        if (prefab == null || visualRoot == null)
+        if (prefab == null || heldPrefabInstance == null)
             return null;
 
-        if (heldPrefabInstance != null && heldPrefabSource == prefab)
+        if (heldPrefabVisualObject != null && heldPrefabSource == prefab)
             return heldPrefabInstance;
 
         ClearHeldPrefabInstance();
 
-        heldPrefabInstance = Instantiate(prefab, visualRoot.transform, false);
-        heldPrefabInstance.name = prefab.name + "_Held";
-        heldPrefabInstance.transform.localPosition = Vector3.zero;
-        heldPrefabInstance.transform.localRotation = Quaternion.identity;
-        heldPrefabInstance.transform.localScale = SanitizeScale(prefab.transform.localScale);
+        heldPrefabVisualObject = Instantiate(prefab, heldPrefabInstance.transform, false);
+        heldPrefabVisualObject.name = prefab.name + "_Held";
+        heldPrefabVisualObject.transform.localPosition = Vector3.zero;
+        heldPrefabVisualObject.transform.localRotation = Quaternion.identity;
+        heldPrefabVisualObject.transform.localScale = SanitizeScale(prefab.transform.localScale);
         heldPrefabSource = prefab;
         return heldPrefabInstance;
     }
 
     private void ApplyHeldPrefabScale(Transform prefabTransform, Item selectedItem)
     {
-        if (prefabTransform == null || selectedItem == null || selectedItem.heldPrefab == null)
+        if (prefabTransform == null || selectedItem == null || selectedItem.heldPrefab == null || heldPrefabVisualObject == null)
             return;
 
         Vector3 sourceScale = SanitizeScale(selectedItem.heldPrefab.transform.localScale);
         if (!selectedItem.overrideHeldTransform)
         {
-            prefabTransform.localScale = sourceScale;
+            prefabTransform.localScale = Vector3.one;
+            heldPrefabVisualObject.transform.localScale = sourceScale;
             return;
         }
 
         Vector3 scaleMultiplier = SanitizeScale(selectedItem.heldLocalScale);
-        prefabTransform.localScale = new Vector3(
+        prefabTransform.localScale = Vector3.one;
+        heldPrefabVisualObject.transform.localScale = new Vector3(
             sourceScale.x * scaleMultiplier.x,
             sourceScale.y * scaleMultiplier.y,
             sourceScale.z * scaleMultiplier.z);
@@ -381,10 +422,10 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void ClearHeldPrefabInstance()
     {
-        if (heldPrefabInstance != null)
-            Destroy(heldPrefabInstance);
+        if (heldPrefabVisualObject != null)
+            Destroy(heldPrefabVisualObject);
 
-        heldPrefabInstance = null;
+        heldPrefabVisualObject = null;
         heldPrefabSource = null;
     }
 

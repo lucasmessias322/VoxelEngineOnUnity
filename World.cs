@@ -146,6 +146,8 @@ public partial class World : MonoBehaviour
 
         if (caveWormSettings.LooksUninitialized)
             caveWormSettings = WormCaveSettings.Default;
+
+        EnsureLoadingBootstrapExists();
     }
 
     #endregion

@@ -59,6 +59,7 @@ public class FPSController : MonoBehaviour
     private float targetHeight;
     public float cameraTargetY;
     private float originalStepOffset;
+    private bool worldLoadingLocked;
 
     void Start()
     {
@@ -86,6 +87,14 @@ public class FPSController : MonoBehaviour
 
     void Update()
     {
+        if (worldLoadingLocked)
+        {
+            velocity = Vector3.zero;
+            currentFlyHorizontal = Vector3.zero;
+            flySmoothVelocity = Vector3.zero;
+            return;
+        }
+
         HandleRotation();
         // HandleCrouchInput(); // descoment se quiser ativar toggle crouch
         HandleFlightToggle();
@@ -354,4 +363,41 @@ public class FPSController : MonoBehaviour
     public bool IsCrouching() => isCrouching;
     public bool IsSprinting() => sprintToggled || Input.GetKey(KeyCode.LeftShift);
     public bool IsFlying() => isFlying;
+
+    public void SetWorldLoadingState(bool isLoading)
+    {
+        if (characterController == null)
+            characterController = GetComponent<CharacterController>();
+
+        worldLoadingLocked = isLoading;
+        velocity = Vector3.zero;
+        currentFlyHorizontal = Vector3.zero;
+        flySmoothVelocity = Vector3.zero;
+        sprintToggled = false;
+        flightToggled = false;
+        isFlying = false;
+
+        if (isLoading && characterController != null && characterController.enabled)
+            characterController.Move(Vector3.zero);
+    }
+
+    public void TeleportTo(Vector3 worldPosition)
+    {
+        if (characterController == null)
+            characterController = GetComponent<CharacterController>();
+
+        velocity = Vector3.zero;
+        currentFlyHorizontal = Vector3.zero;
+        flySmoothVelocity = Vector3.zero;
+
+        if (characterController != null && characterController.enabled)
+        {
+            characterController.enabled = false;
+            transform.position = worldPosition;
+            characterController.enabled = true;
+            return;
+        }
+
+        transform.position = worldPosition;
+    }
 }
