@@ -1180,10 +1180,10 @@ public static class MeshGenerator
                                     }
                                     else
                                     {
-                                        byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao1 = GetVertexAO(aoPos, stepU, -stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao2 = GetVertexAO(aoPos, stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao3 = GetVertexAO(aoPos, -stepU, stepV, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao1 = GetVertexAO(aoPos, stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao2 = GetVertexAO(aoPos, stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                        byte ao3 = GetVertexAO(aoPos, -stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                         packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
                                     }
 
@@ -1346,23 +1346,43 @@ public static class MeshGenerator
         }
 
        
-        private bool IsOccluder(int x, int y, int z, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private bool IsOccluder(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
                 return false;
 
             int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-            return solids[idx];
+            if (!solids[idx])
+                return false;
+
+            BlockType blockType = blockTypes[idx];
+            BlockTextureMapping mapping = blockMappings[(int)blockType];
+            return CastsAmbientOcclusion(blockType, mapping);
         }
 
-        private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            bool c = IsOccluder(pos.x + d1.x + d2.x, pos.y + d1.y + d2.y, pos.z + d1.z + d2.z, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool c = IsOccluder(pos.x + d1.x + d2.x, pos.y + d1.y + d2.y, pos.z + d1.z + d2.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             if (s1 && s2) return 0;
             return (byte)(3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (c ? 1 : 0));
+        }
+
+        private static bool CastsAmbientOcclusion(BlockType blockType, BlockTextureMapping mapping)
+        {
+            // AO deve vir de cubos cheios que realmente fecham a iluminação ambiente.
+            // Folhas são a exceção: mesmo transparentes, devem sombrear como no Minecraft.
+            if (mapping.renderShape != BlockRenderShape.Cube ||
+                mapping.isEmpty ||
+                mapping.isLiquid ||
+                mapping.lightOpacity == 0)
+            {
+                return false;
+            }
+
+            return !mapping.isTransparent || blockType == BlockType.Leaves;
         }
 
         private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
