@@ -78,7 +78,7 @@ public partial class World
         // Define a luz inicial usando o novo sistema de colunas
         SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, lightEmission);
 
-        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
 
         while (lightQueue.Count > 0)
         {
@@ -92,7 +92,7 @@ public partial class World
                 Mathf.FloorToInt((float)node.x / Chunk.SizeX),
                 Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
             );
-            dirtiedChunks.Add(chunkCoord);
+            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
 
             foreach (Vector3Int dir in sixDirections)
             {
@@ -131,9 +131,9 @@ public partial class World
         }
 
         // Reconstrói os chunks que receberam luz
-        foreach (Vector2Int coord in dirtiedChunks)
+        foreach (var kv in dirtiedChunks)
         {
-            RequestChunkRebuild(coord);
+            RequestChunkRebuild(kv.Key, kv.Value, false);
         }
     }
     public void RemoveLightGlobal(Vector3Int startWorldPos)
@@ -145,7 +145,7 @@ public partial class World
 
         Queue<(Vector3Int pos, byte lightLevel)> darkQueue = new Queue<(Vector3Int, byte)>();
         Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
-        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
 
         darkQueue.Enqueue((startWorldPos, oldLight));
         SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, 0);
@@ -154,7 +154,7 @@ public partial class World
         {
             var node = darkQueue.Dequeue();
             Vector2Int chunkCoord = new Vector2Int(Mathf.FloorToInt((float)node.pos.x / Chunk.SizeX), Mathf.FloorToInt((float)node.pos.z / Chunk.SizeZ));
-            dirtiedChunks.Add(chunkCoord);
+            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.pos.y));
 
             foreach (Vector3Int dir in sixDirections)
             {
@@ -188,6 +188,12 @@ public partial class World
             Vector3Int node = refillQueue.Dequeue();
             byte currentLight = GetColumnLight(node.x, node.z, node.y);
 
+            Vector2Int chunkCoord = new Vector2Int(
+                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
+            );
+            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
+
             foreach (Vector3Int dir in sixDirections)
             {
                 Vector3Int neighborPos = node + dir;
@@ -215,7 +221,8 @@ public partial class World
             }
         }
 
-        foreach (Vector2Int coord in dirtiedChunks) RequestChunkRebuild(coord);
+        foreach (var kv in dirtiedChunks)
+            RequestChunkRebuild(kv.Key, kv.Value, false);
 
         CleanupEmptyLightColumns();
     }
@@ -224,7 +231,7 @@ public partial class World
     {
         if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
 
-        HashSet<Vector2Int> dirtiedChunks = new HashSet<Vector2Int>();
+        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
         Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
         HashSet<Vector3Int> enqueued = new HashSet<Vector3Int>();
 
@@ -293,7 +300,7 @@ public partial class World
                 Mathf.FloorToInt((float)node.x / Chunk.SizeX),
                 Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
             );
-            dirtiedChunks.Add(chunkCoord);
+            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
 
             foreach (Vector3Int dir in sixDirections)
             {
@@ -324,9 +331,9 @@ public partial class World
             }
         }
 
-        foreach (Vector2Int coord in dirtiedChunks)
+        foreach (var kv in dirtiedChunks)
         {
-            RequestChunkRebuild(coord);
+            RequestChunkRebuild(kv.Key, kv.Value, false);
         }
     }
 

@@ -215,7 +215,7 @@ public partial class World : MonoBehaviour
 
         Vector2Int coord = GetChunkCoordFromWorldXZ(billboardPos.x, billboardPos.z);
 
-        RequestChunkRebuild(coord);
+        RequestChunkRebuild(coord, GetDirtySubchunkMaskForWorldY(billboardPos.y), false);
     }
 
 
@@ -256,6 +256,7 @@ public partial class World : MonoBehaviour
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
 
+        int terrainDirtySubchunkMask = GetDirtySubchunkMaskForWorldY(worldPos.y);
         HashSet<Vector2Int> chunksToRebuild = new HashSet<Vector2Int>();
         chunksToRebuild.Add(chunkCoord);
 
@@ -281,8 +282,9 @@ public partial class World : MonoBehaviour
 
             if (worldPos.y == Chunk.SizeY || worldPos.y == Chunk.SizeY + 1)
             {
+                int topTerrainSubchunkMask = GetDirtySubchunkMaskForWorldY(Chunk.SizeY - 1);
                 foreach (Vector2Int coord in chunksToRebuild)
-                    RequestChunkRebuild(coord);
+                    RequestChunkRebuild(coord, topTerrainSubchunkMask);
             }
             return;
         }
@@ -317,7 +319,7 @@ public partial class World : MonoBehaviour
 
         foreach (Vector2Int coord in chunksToRebuild)
         {
-            RequestChunkRebuild(coord);
+            RequestChunkRebuild(coord, terrainDirtySubchunkMask);
         }
 
         // Mudanca no topo do chunk pode expor/ocultar a face inferior de construcoes altas.

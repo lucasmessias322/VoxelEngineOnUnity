@@ -24,6 +24,8 @@ public class Subchunk : MonoBehaviour
     private bool hasColliderData = false;
     private readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
     private int activeBoxColliderCount = 0;
+    private bool[] colliderSolidsBuffer;
+    private bool[] colliderVisitedBuffer;
 
     [HideInInspector]
     public bool hasGeometry = false;
@@ -133,7 +135,7 @@ public class Subchunk : MonoBehaviour
             MeshUpdateFlags.DontRecalculateBounds |
             MeshUpdateFlags.DontValidateIndices |
             MeshUpdateFlags.DontNotifyMeshUsers);
-        mesh.RecalculateBounds();
+        mesh.bounds = CreateMeshBounds(startY, endY);
 
         bool hasSolid = opaqueTris.Length > 0 || transparentTris.Length > 0;
 
@@ -202,8 +204,11 @@ public class Subchunk : MonoBehaviour
         int plane = sizeX * sizeZ;
         int volume = sizeX * height * sizeZ;
 
-        bool[] solids = new bool[volume];
-        bool[] visited = new bool[volume];
+        EnsureColliderBuffers(volume);
+        bool[] solids = colliderSolidsBuffer;
+        bool[] visited = colliderVisitedBuffer;
+        System.Array.Clear(solids, 0, volume);
+        System.Array.Clear(visited, 0, volume);
 
         for (int y = 0; y < height; y++)
         {
@@ -349,6 +354,18 @@ public class Subchunk : MonoBehaviour
         return x + y * sizeX + z * sizeX * sizeY;
     }
 
+    private void EnsureColliderBuffers(int volume)
+    {
+        if (volume <= 0)
+            return;
+
+        if (colliderSolidsBuffer == null || colliderSolidsBuffer.Length < volume)
+            colliderSolidsBuffer = new bool[volume];
+
+        if (colliderVisitedBuffer == null || colliderVisitedBuffer.Length < volume)
+            colliderVisitedBuffer = new bool[volume];
+    }
+
     private static bool IsBlockCollidable(byte blockId, BlockTextureMapping[] blockMappings)
     {
         if (blockId == (byte)BlockType.Air || blockId == (byte)BlockType.Water)
@@ -360,5 +377,16 @@ public class Subchunk : MonoBehaviour
 
         BlockTextureMapping mapping = blockMappings[mapIndex];
         return mapping.isSolid && !mapping.isEmpty;
+    }
+
+    private static Bounds CreateMeshBounds(int startY, int endY)
+    {
+        float height = Mathf.Max(1f, endY - startY);
+
+        // Small padding keeps custom meshes and billboards inside bounds
+        // without paying RecalculateBounds() every rebuild.
+        return new Bounds(
+            new Vector3(Chunk.SizeX * 0.5f, startY + height * 0.5f, Chunk.SizeZ * 0.5f),
+            new Vector3(Chunk.SizeX + 2f, height + 2f, Chunk.SizeZ + 2f));
     }
 }

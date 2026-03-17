@@ -58,13 +58,6 @@ public partial class World : MonoBehaviour
     [Min(0.001f)]
     public float coldSurfaceNoiseScale = DefaultColdSurfaceNoiseScale;
 
-    [Min(0)]
-    public int biomeTintBlendRadius = 16;
-    [Min(1)]
-    public int biomeTintBlendStep = 2;
-    [Min(0.01f)]
-    public float biomeTintBlendExponent = 0.25f;
-
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
     private MaterialPropertyBlock biomeTintPropertyBlock;
     private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
@@ -314,42 +307,7 @@ public partial class World : MonoBehaviour
     {
         int centerX = coord.x * Chunk.SizeX + Chunk.SizeX / 2;
         int centerZ = coord.y * Chunk.SizeZ + Chunk.SizeZ / 2;
-        int radius = Mathf.Max(0, biomeTintBlendRadius);
-        int step = Mathf.Max(1, biomeTintBlendStep);
-        float blendExponent = Mathf.Max(0.01f, biomeTintBlendExponent);
-
-        if (radius <= 0)
-            return GetGrassTintForBiome(GetBiomeAt(centerX, centerZ));
-
-        Color sum = Color.black;
-        float weightSum = 0f;
-        float radiusSq = radius * radius;
-
-        for (int dz = -radius; dz <= radius; dz += step)
-        {
-            for (int dx = -radius; dx <= radius; dx += step)
-            {
-                float distSq = dx * dx + dz * dz;
-                if (distSq > radiusSq)
-                    continue;
-
-                int sampleX = centerX + dx;
-                int sampleZ = centerZ + dz;
-                BiomeType biome = GetBiomeAt(sampleX, sampleZ);
-                Color tint = GetGrassTintForBiome(biome);
-
-                float distance01 = math.sqrt(distSq) / math.max(1f, radius);
-                float weight = math.pow(math.saturate(1f - distance01), blendExponent);
-
-                sum += tint * weight;
-                weightSum += weight;
-            }
-        }
-
-        if (weightSum <= 1e-5f)
-            return GetGrassTintForBiome(GetBiomeAt(centerX, centerZ));
-
-        return sum / weightSum;
+        return GetGrassTintForBiome(GetBiomeAt(centerX, centerZ));
     }
 }
 
