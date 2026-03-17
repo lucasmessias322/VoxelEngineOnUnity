@@ -7,6 +7,42 @@ public partial class World : MonoBehaviour
 {
     #region Helpers: Padding, GetBlock, Procedural Fallback
 
+    [Header("Leaf Decay")]
+    [SerializeField] private bool enableLeafDecay = true;
+    [SerializeField, Min(1)] private int leafDecaySupportDistance = 4;
+    [SerializeField, Min(1)] private int leafDecayChecksPerFrame = 8;
+    [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
+    [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
+
+    private readonly Queue<LeafDecayCandidate> queuedLeafDecay = new Queue<LeafDecayCandidate>();
+    private readonly HashSet<Vector3Int> queuedLeafDecaySet = new HashSet<Vector3Int>();
+    private readonly Dictionary<Vector3Int, float> leafDecayUnsupportedSince = new Dictionary<Vector3Int, float>();
+    private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>();
+    private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>();
+    private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>();
+
+    private static readonly Vector3Int[] LeafDecayNeighborOffsets =
+    {
+        Vector3Int.up,
+        Vector3Int.down,
+        Vector3Int.left,
+        Vector3Int.right,
+        new Vector3Int(0, 0, 1),
+        new Vector3Int(0, 0, -1)
+    };
+
+    private struct LeafDecayCandidate
+    {
+        public Vector3Int position;
+        public float nextCheckTime;
+    }
+
+    private struct LeafSupportSearchNode
+    {
+        public Vector3Int position;
+        public int distance;
+    }
+
 
     public NativeArray<byte> GetPaddedVoxelData(int chunkX, int chunkZ)
     {
@@ -183,7 +219,7 @@ public partial class World : MonoBehaviour
     }
 
 
-    public void SetBlockAt(Vector3Int worldPos, BlockType type)
+    public void SetBlockAt(Vector3Int worldPos, BlockType type, bool placedByPlayer = false)
     {
         if (worldPos.y <= 2)
         {
@@ -218,6 +254,7 @@ public partial class World : MonoBehaviour
         );
 
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
+        HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
 
         HashSet<Vector2Int> chunksToRebuild = new HashSet<Vector2Int>();
         chunksToRebuild.Add(chunkCoord);
@@ -308,6 +345,191 @@ public partial class World : MonoBehaviour
 
         int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
         chunk.voxelData[idx] = (byte)type;
+    }
+
+    private void ProcessQueuedLeafDecay()
+    {
+        if (!enableLeafDecay || queuedLeafDecay.Count == 0)
+            return;
+
+        float now = Time.time;
+        int processed = 0;
+        int attempts = queuedLeafDecay.Count;
+
+        while (processed < Mathf.Max(1, leafDecayChecksPerFrame) && attempts-- > 0)
+        {
+            LeafDecayCandidate candidate = queuedLeafDecay.Dequeue();
+            queuedLeafDecaySet.Remove(candidate.position);
+
+            if (candidate.nextCheckTime > now)
+            {
+                queuedLeafDecay.Enqueue(candidate);
+                queuedLeafDecaySet.Add(candidate.position);
+                continue;
+            }
+
+            EvaluateLeafDecay(candidate.position, now);
+            processed++;
+        }
+    }
+
+    private void EvaluateLeafDecay(Vector3Int worldPos, float now)
+    {
+        BlockType blockType = GetBlockAt(worldPos);
+        if (blockType != BlockType.Leaves)
+        {
+            leafDecayUnsupportedSince.Remove(worldPos);
+            persistentLeafBlocks.Remove(worldPos);
+            return;
+        }
+
+        if (persistentLeafBlocks.Contains(worldPos))
+        {
+            leafDecayUnsupportedSince.Remove(worldPos);
+            return;
+        }
+
+        if (HasLeafSupport(worldPos))
+        {
+            leafDecayUnsupportedSince.Remove(worldPos);
+            return;
+        }
+
+        if (!leafDecayUnsupportedSince.TryGetValue(worldPos, out float unsupportedSince))
+        {
+            leafDecayUnsupportedSince[worldPos] = now;
+            TryQueueLeafDecay(worldPos, leafDecayStepInterval);
+            return;
+        }
+
+        if (now - unsupportedSince < leafDecayGraceSeconds)
+        {
+            TryQueueLeafDecay(worldPos, leafDecayStepInterval);
+            return;
+        }
+
+        SetBlockAt(worldPos, BlockType.Air);
+    }
+
+    private void HandleLeafDecayBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType, bool placedByPlayer)
+    {
+        if (!enableLeafDecay)
+            return;
+
+        bool wasLeaf = previousType == BlockType.Leaves;
+        bool isLeaf = newType == BlockType.Leaves;
+        bool wasLeafSupport = IsLeafSupportBlock(previousType);
+        bool isLeafSupport = IsLeafSupportBlock(newType);
+
+        if (isLeaf && placedByPlayer)
+            persistentLeafBlocks.Add(worldPos);
+        else if (!isLeaf || !placedByPlayer)
+            persistentLeafBlocks.Remove(worldPos);
+
+        if (!isLeaf)
+            leafDecayUnsupportedSince.Remove(worldPos);
+
+        if (wasLeafSupport != isLeafSupport)
+            QueueNearbyLeavesForDecay(worldPos, Mathf.Max(1, leafDecaySupportDistance));
+
+        if (wasLeaf != isLeaf)
+        {
+            QueueAdjacentLeavesForDecay(worldPos);
+
+            if (isLeaf)
+                TryQueueLeafDecay(worldPos, leafDecayStepInterval);
+        }
+    }
+
+    private void QueueAdjacentLeavesForDecay(Vector3Int center)
+    {
+        for (int i = 0; i < LeafDecayNeighborOffsets.Length; i++)
+        {
+            Vector3Int neighborPos = center + LeafDecayNeighborOffsets[i];
+            if (GetBlockAt(neighborPos) == BlockType.Leaves)
+                TryQueueLeafDecay(neighborPos, leafDecayStepInterval);
+        }
+    }
+
+    private void QueueNearbyLeavesForDecay(Vector3Int center, int radius)
+    {
+        int clampedRadius = Mathf.Max(1, radius);
+
+        for (int dy = -clampedRadius; dy <= clampedRadius; dy++)
+        {
+            for (int dz = -clampedRadius; dz <= clampedRadius; dz++)
+            {
+                for (int dx = -clampedRadius; dx <= clampedRadius; dx++)
+                {
+                    Vector3Int pos = new Vector3Int(center.x + dx, center.y + dy, center.z + dz);
+                    if (GetBlockAt(pos) == BlockType.Leaves)
+                        TryQueueLeafDecay(pos, leafDecayStepInterval);
+                }
+            }
+        }
+    }
+
+    private void TryQueueLeafDecay(Vector3Int worldPos, float delaySeconds = 0f)
+    {
+        if (!enableLeafDecay || !queuedLeafDecaySet.Add(worldPos))
+            return;
+
+        queuedLeafDecay.Enqueue(new LeafDecayCandidate
+        {
+            position = worldPos,
+            nextCheckTime = Time.time + Mathf.Max(0f, delaySeconds)
+        });
+    }
+
+    private bool HasLeafSupport(Vector3Int origin)
+    {
+        int maxDistance = Mathf.Max(1, leafDecaySupportDistance);
+
+        leafSupportSearchQueue.Clear();
+        leafSupportVisited.Clear();
+        leafSupportVisited.Add(origin);
+        leafSupportSearchQueue.Enqueue(new LeafSupportSearchNode
+        {
+            position = origin,
+            distance = 0
+        });
+
+        while (leafSupportSearchQueue.Count > 0)
+        {
+            LeafSupportSearchNode current = leafSupportSearchQueue.Dequeue();
+            if (current.distance >= maxDistance)
+                continue;
+
+            int nextDistance = current.distance + 1;
+            for (int i = 0; i < LeafDecayNeighborOffsets.Length; i++)
+            {
+                Vector3Int neighborPos = current.position + LeafDecayNeighborOffsets[i];
+                if (!leafSupportVisited.Add(neighborPos))
+                    continue;
+
+                BlockType neighborType = GetBlockAt(neighborPos);
+                if (IsLeafSupportBlock(neighborType))
+                    return true;
+
+                if (neighborType == BlockType.Leaves)
+                {
+                    leafSupportSearchQueue.Enqueue(new LeafSupportSearchNode
+                    {
+                        position = neighborPos,
+                        distance = nextDistance
+                    });
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsLeafSupportBlock(BlockType blockType)
+    {
+        return blockType == BlockType.Log ||
+               blockType == BlockType.birch_log ||
+               blockType == BlockType.acacia_log;
     }
 
     #endregion

@@ -126,11 +126,12 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (breakProgress01 < 1f)
             return;
 
+        bool shouldDrop = ShouldDropBlock(current);
         Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
-        bool spawnedDrop = BlockDrop.Spawn(World.Instance, sel, current, throwDir);
+        bool spawnedDrop = shouldDrop && BlockDrop.Spawn(World.Instance, sel, current, throwDir);
         World.Instance.SetBlockAt(sel, BlockType.Air);
 
-        if (!spawnedDrop)
+        if (shouldDrop && !spawnedDrop)
         {
             bool addedToInventory = PlayerInventory.Instance != null &&
                                     PlayerInventory.Instance.TryAddBlockDrop(current, 1);
@@ -151,6 +152,11 @@ public class PlayerBlockBreaker : MonoBehaviour
         return blockType != BlockType.Bedrock &&
                blockType != BlockType.Air &&
                !IsLiquid(blockType);
+    }
+
+    bool ShouldDropBlock(BlockType blockType)
+    {
+        return blockType != BlockType.Leaves;
     }
 
     bool IsLiquid(BlockType blockType)
@@ -423,7 +429,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
 
-            World.Instance.SetBlockAt(placePos, selectedBlockType);
+            World.Instance.SetBlockAt(placePos, selectedBlockType, true);
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }

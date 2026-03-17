@@ -706,6 +706,7 @@ public partial class World : MonoBehaviour
         meshesAppliedThisFrame = 0;
         ProcessQueuedChunkRebuilds();
         ProcessQueuedHighBuildMeshRebuilds();
+        ProcessQueuedLeafDecay();
         UpdateChunks();
         UpdateDistantTerrainLod();
         ProcessChunkQueue();

@@ -1041,28 +1041,6 @@ public static class MeshGenerator
             return !neighborOpaque;
         }
 
-        private bool LeavesHasAnyExposedFace(int x, int y, int z, NativeArray<BlockType> blockTypes, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
-        {
-            // Renderiza "cubo completo" apenas quando houver ao menos uma face exposta.
-            for (int d = 0; d < 6; d++)
-            {
-                int nx = x + (d == 0 ? 1 : d == 1 ? -1 : 0);
-                int ny = y + (d == 2 ? 1 : d == 3 ? -1 : 0);
-                int nz = z + (d == 4 ? 1 : d == 5 ? -1 : 0);
-
-                bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
-                if (outside)
-                    return true;
-
-                int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
-                BlockType neighbor = blockTypes[nIdx];
-                if (IsFaceVisibleForCurrentBlock(BlockType.Leaves, neighbor))
-                    return true;
-            }
-
-            return false;
-        }
-
         private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
@@ -1144,13 +1122,6 @@ public static class MeshGenerator
                                     BlockType neighbor = blockTypes[nIdx];
 
                                     isVisible = IsFaceVisibleForCurrentBlock(current, neighbor);
-                                }
-
-                                if (!isVisible && current == BlockType.Leaves)
-                                {
-                                    bool shouldRenderFullCube = LeavesHasAnyExposedFace(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    if (shouldRenderFullCube)
-                                        isVisible = true;
                                 }
 
                                 if (isVisible)
