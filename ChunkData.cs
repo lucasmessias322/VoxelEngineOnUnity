@@ -132,7 +132,8 @@ public static class ChunkData
             int chunkMaxX = chunkMinX + SizeX - 1;
             int chunkMaxZ = chunkMinZ + SizeZ - 1;
 
-            int searchMargin = settings.canopyRadius + settings.minSpacing;
+            int horizontalReach = TreeGenerationMetrics.GetHorizontalReach(rule.treeStyle, settings.maxHeight, settings.canopyRadius, settings.canopyHeight);
+            int searchMargin = horizontalReach + settings.minSpacing;
             int cellX0 = FloorDiv(chunkMinX - searchMargin, cellSize);
             int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
             int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
@@ -146,6 +147,8 @@ public static class ChunkData
             int canopyRadius = math.max(0, settings.canopyRadius);
             int canopyHeight = math.max(1, settings.canopyHeight);
             int proximitySpacing = math.max(1, settings.minSpacing / 2);
+            if (rule.treeStyle == TreeStyle.FancyOak)
+                proximitySpacing = math.max(proximitySpacing, math.max(5, horizontalReach - 2));
 
             for (int cx = cellX0; cx <= cellX1; cx++)
             {

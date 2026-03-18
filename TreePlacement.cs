@@ -34,6 +34,7 @@ public static class TreePlacement
             bool isTaigaSpruce = t.treeStyle == TreeStyle.TaigaSpruce;
             bool isCactus = t.treeStyle == TreeStyle.Cactus;
             bool isSavannaAcacia = t.treeStyle == TreeStyle.SavannaAcacia;
+            bool isFancyOak = t.treeStyle == TreeStyle.FancyOak;
 
             int treeHash = (t.worldX * 73856093) ^ (t.worldZ * 19349663) ^ (t.trunkHeight * 83492791) ^ ((int)t.treeStyle * 26544357);
             BlockType trunkType = GetTrunkBlockType(t.treeStyle, blockMappings);
@@ -42,9 +43,10 @@ public static class TreePlacement
             int localZ = t.worldZ - baseWorldZ;
             int canopyH = math.max(1, t.canopyHeight);
             int canopyR = math.max(0, t.canopyRadius);
+            int horizontalReach = TreeGenerationMetrics.GetHorizontalReach(t.treeStyle, t.trunkHeight, canopyR, canopyH);
 
-            if (localX < -canopyR || localX >= chunkSizeX + canopyR ||
-                localZ < -canopyR || localZ >= chunkSizeZ + canopyR)
+            if (localX < -horizontalReach || localX >= chunkSizeX + horizontalReach ||
+                localZ < -horizontalReach || localZ >= chunkSizeZ + horizontalReach)
                 continue;
 
             int ix = localX + border;
@@ -91,13 +93,12 @@ public static class TreePlacement
             if (skipTree)
                 continue;
 
-            int extraTop = isSavannaAcacia ? 3 : (isTaigaSpruce ? 2 : (isCactus ? 2 : 1));
-            int maxCheckY = math.min(chunkSizeY - 1, surfaceY + t.trunkHeight + canopyH + extraTop);
+            int maxCheckY = math.min(chunkSizeY - 1, surfaceY + GetTreeTopOffset(t.treeStyle, t.trunkHeight, canopyH));
             for (int yy = surfaceY + 1; yy <= maxCheckY && !skipTree; yy++)
             {
-                for (int dx = -canopyR; dx <= canopyR && !skipTree; dx++)
+                for (int dx = -horizontalReach; dx <= horizontalReach && !skipTree; dx++)
                 {
-                    for (int dz = -canopyR; dz <= canopyR; dz++)
+                    for (int dz = -horizontalReach; dz <= horizontalReach; dz++)
                     {
                         int cx = ix + dx;
                         int cz = iz + dz;
@@ -116,6 +117,16 @@ public static class TreePlacement
 
             if (skipTree)
                 continue;
+
+            if (isFancyOak)
+            {
+                PlaceFancyOakTree(
+                    ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
+                    blockTypes, solids, blockMappings,
+                    chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, trunkType
+                );
+                continue;
+            }
 
             for (int dy = 1; dy <= t.trunkHeight; dy++)
             {
@@ -210,7 +221,29 @@ public static class TreePlacement
     {
         return blockType == BlockType.Log ||
                blockType == BlockType.birch_log ||
+               blockType == BlockType.acacia_log ||
                blockType == BlockType.Cactus;
+    }
+
+    private static int GetTreeTopOffset(TreeStyle treeStyle, int heightValue, int canopyHeight)
+    {
+        switch (treeStyle)
+        {
+            case TreeStyle.Cactus:
+                return heightValue + 2;
+
+            case TreeStyle.TaigaSpruce:
+                return heightValue + math.max(2, canopyHeight);
+
+            case TreeStyle.SavannaAcacia:
+                return heightValue + math.max(3, canopyHeight);
+
+            case TreeStyle.FancyOak:
+                return math.max(6, heightValue);
+
+            default:
+                return heightValue + canopyHeight + 1;
+        }
     }
 
     private static bool TryPlaceWoodBlock(
@@ -247,6 +280,324 @@ public static class TreePlacement
         blockTypes[idx] = trunkType;
         solids[idx] = blockMappings[mappingIndex].isSolid;
         return true;
+    }
+
+    private static void PlaceFancyOakTree(
+        int ix,
+        int iz,
+        int surfaceY,
+        int heightLimitValue,
+        int canopyH,
+        int canopyR,
+        int treeHash,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        BlockType trunkType)
+    {
+        int heightLimit = math.max(6, heightLimitValue);
+        int leafDistanceLimit = math.clamp(math.max(4, canopyH), 4, 5);
+        int trunkHeight = math.max(1, (int)math.floor(heightLimit * 0.618f));
+        if (trunkHeight >= heightLimit)
+            trunkHeight = heightLimit - 1;
+
+        int trunkTopY = surfaceY + trunkHeight;
+        int topLeafY = surfaceY + heightLimit - leafDistanceLimit;
+        float scaleWidth = math.max(1f, canopyR / 4f);
+        float leafDensity = math.max(1f, canopyH / 4f);
+        int nodesPerLayer = math.max(1, (int)(1.382f + math.pow(leafDensity * heightLimit / 13f, 2f)));
+        nodesPerLayer = math.clamp(nodesPerLayer, 1, 4);
+
+        PlaceFancyOakLeafNode(
+            ix, topLeafY, iz, leafDistanceLimit,
+            blockTypes, solids, blockMappings,
+            voxelSizeX, voxelSizeZ, voxelPlaneSize
+        );
+
+        int minLeafY = surfaceY + (int)math.ceil(heightLimit * 0.3f);
+        for (int layerY = topLeafY - 1; layerY >= minLeafY; layerY--)
+        {
+            float layerSize = GetFancyOakLayerSize(heightLimit, layerY - surfaceY);
+            if (layerSize < 0f)
+                continue;
+
+            for (int nodeIndex = 0; nodeIndex < nodesPerLayer; nodeIndex++)
+            {
+                int nodeHash = treeHash ^ (layerY * 73428767) ^ (nodeIndex * 912367421);
+                float distance = scaleWidth * layerSize * (0.328f + Hash01(nodeHash));
+                float angle = Hash01(nodeHash ^ 1757151723) * 6.2831855f;
+
+                int nodeX = ix + (int)math.floor(distance * math.sin(angle) + 0.5f);
+                int nodeZ = iz + (int)math.floor(distance * math.cos(angle) + 0.5f);
+                int nodeY = layerY;
+
+                if (!IsFancyOakLeafNodeClear(nodeX, nodeY, nodeZ, leafDistanceLimit, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
+                    continue;
+
+                int dx = nodeX - ix;
+                int dz = nodeZ - iz;
+                float horizontalDistance = math.sqrt((float)(dx * dx + dz * dz));
+                int branchBaseY;
+                if ((float)nodeY - horizontalDistance * 0.381f > trunkTopY)
+                    branchBaseY = trunkTopY;
+                else
+                    branchBaseY = (int)((float)nodeY - horizontalDistance * 0.381f);
+
+                branchBaseY = math.clamp(branchBaseY, surfaceY + 1, trunkTopY);
+
+                if (!IsWoodLineClear(ix, branchBaseY, iz, nodeX, nodeY, nodeZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
+                    continue;
+
+                PlaceFancyOakLeafNode(
+                    nodeX, nodeY, nodeZ, leafDistanceLimit,
+                    blockTypes, solids, blockMappings,
+                    voxelSizeX, voxelSizeZ, voxelPlaneSize
+                );
+
+                if ((float)(nodeY - surfaceY) >= heightLimit * 0.2f)
+                {
+                    PlaceWoodLine(
+                        ix, branchBaseY, iz, nodeX, nodeY, nodeZ,
+                        blockTypes, solids, blockMappings,
+                        voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType
+                    );
+                }
+            }
+        }
+
+        PlaceWoodLine(
+            ix, surfaceY + 1, iz, ix, trunkTopY, iz,
+            blockTypes, solids, blockMappings,
+            voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType
+        );
+    }
+
+    private static void PlaceFancyOakLeafNode(
+        int centerX,
+        int centerY,
+        int centerZ,
+        int leafDistanceLimit,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        for (int yOffset = 0; yOffset < leafDistanceLimit; yOffset++)
+        {
+            float radius = GetFancyOakLeafSize(yOffset, leafDistanceLimit);
+            if (radius < 0f)
+                continue;
+
+            PlaceFancyOakLeafDisc(
+                centerX, centerY + yOffset, centerZ, radius,
+                blockTypes, solids, blockMappings,
+                voxelSizeX, voxelSizeZ, voxelPlaneSize
+            );
+        }
+    }
+
+    private static void PlaceFancyOakLeafDisc(
+        int centerX,
+        int layerY,
+        int centerZ,
+        float radius,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        int discRadius = (int)(radius + 0.618f);
+        float radiusSq = radius * radius;
+
+        for (int dx = -discRadius; dx <= discRadius; dx++)
+        {
+            for (int dz = -discRadius; dz <= discRadius; dz++)
+            {
+                float distSq = math.pow(math.abs(dx) + 0.5f, 2f) + math.pow(math.abs(dz) + 0.5f, 2f);
+                if (distSq > radiusSq)
+                    continue;
+
+                TryPlaceLeaf(centerX + dx, layerY, centerZ + dz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+            }
+        }
+    }
+
+    private static float GetFancyOakLayerSize(int heightLimit, int layerOffset)
+    {
+        if ((float)layerOffset < heightLimit * 0.3f)
+            return -1.618f;
+
+        float halfHeight = heightLimit * 0.5f;
+        float distanceFromCenter = halfHeight - layerOffset;
+
+        if (distanceFromCenter == 0f)
+            return halfHeight * 0.5f;
+        if (math.abs(distanceFromCenter) >= halfHeight)
+            return 0f;
+
+        return math.sqrt(halfHeight * halfHeight - distanceFromCenter * distanceFromCenter) * 0.5f;
+    }
+
+    private static float GetFancyOakLeafSize(int layerOffset, int leafDistanceLimit)
+    {
+        if (layerOffset < 0 || layerOffset >= leafDistanceLimit)
+            return -1f;
+
+        return (layerOffset != 0 && layerOffset != leafDistanceLimit - 1) ? 3f : 2f;
+    }
+
+    private static bool IsFancyOakLeafNodeClear(
+        int centerX,
+        int centerY,
+        int centerZ,
+        int leafDistanceLimit,
+        NativeArray<BlockType> blockTypes,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY)
+    {
+        int maxY = centerY + leafDistanceLimit;
+        for (int y = centerY; y <= maxY; y++)
+        {
+            if (!CanLeafReplaceAt(centerX, y, centerZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool IsWoodLineClear(
+        int startX,
+        int startY,
+        int startZ,
+        int endX,
+        int endY,
+        int endZ,
+        NativeArray<BlockType> blockTypes,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY)
+    {
+        int dx = endX - startX;
+        int dy = endY - startY;
+        int dz = endZ - startZ;
+        int steps = math.max(math.abs(dx), math.max(math.abs(dy), math.abs(dz)));
+
+        if (steps == 0)
+            return CanWoodReplaceAt(startX, startY, startZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY);
+
+        for (int step = 0; step <= steps; step++)
+        {
+            float t = (float)step / steps;
+            int x = (int)math.floor(startX + dx * t + 0.5f);
+            int y = (int)math.floor(startY + dy * t + 0.5f);
+            int z = (int)math.floor(startZ + dz * t + 0.5f);
+
+            if (!CanWoodReplaceAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static void PlaceWoodLine(
+        int startX,
+        int startY,
+        int startZ,
+        int endX,
+        int endY,
+        int endZ,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<BlockTextureMapping> blockMappings,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY,
+        BlockType trunkType)
+    {
+        int dx = endX - startX;
+        int dy = endY - startY;
+        int dz = endZ - startZ;
+        int steps = math.max(math.abs(dx), math.max(math.abs(dy), math.abs(dz)));
+
+        if (steps == 0)
+        {
+            TryPlaceWoodBlock(startX, startY, startZ, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType);
+            return;
+        }
+
+        for (int step = 0; step <= steps; step++)
+        {
+            float t = (float)step / steps;
+            int x = (int)math.floor(startX + dx * t + 0.5f);
+            int y = (int)math.floor(startY + dy * t + 0.5f);
+            int z = (int)math.floor(startZ + dz * t + 0.5f);
+
+            TryPlaceWoodBlock(x, y, z, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, trunkType);
+        }
+    }
+
+    private static bool CanLeafReplaceAt(
+        int x,
+        int y,
+        int z,
+        NativeArray<BlockType> blockTypes,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY)
+    {
+        if (!IsInsideVoxelBounds(x, y, z, voxelSizeX, voxelSizeZ, chunkSizeY))
+            return false;
+
+        BlockType existing = blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
+        return existing == BlockType.Air || existing == BlockType.Leaves;
+    }
+
+    private static bool CanWoodReplaceAt(
+        int x,
+        int y,
+        int z,
+        NativeArray<BlockType> blockTypes,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkSizeY)
+    {
+        if (!IsInsideVoxelBounds(x, y, z, voxelSizeX, voxelSizeZ, chunkSizeY))
+            return false;
+
+        BlockType existing = blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
+        return existing == BlockType.Air || existing == BlockType.Leaves || IsWoodBlock(existing);
+    }
+
+    private static bool IsInsideVoxelBounds(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int chunkSizeY)
+    {
+        return x >= 0 && x < voxelSizeX &&
+               z >= 0 && z < voxelSizeZ &&
+               y >= 0 && y < chunkSizeY;
+    }
+
+    private static float Hash01(int value)
+    {
+        uint x = (uint)value;
+        x ^= x >> 16;
+        x *= 0x7FEB352Du;
+        x ^= x >> 15;
+        x *= 0x846CA68Bu;
+        x ^= x >> 16;
+        return (x & 0x00FFFFFFu) / 16777215f;
     }
 
     private static void PlaceCactusStructure(

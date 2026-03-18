@@ -794,7 +794,7 @@ public partial class World : MonoBehaviour
 
         int maxRadius = 0;
         for (int i = 0; i < rules.Length; i++)
-            maxRadius = Mathf.Max(maxRadius, Mathf.Max(0, rules[i].settings.canopyRadius));
+            maxRadius = Mathf.Max(maxRadius, TreeGenerationMetrics.GetHorizontalReach(rules[i].treeStyle, rules[i].settings));
 
         return maxRadius;
     }
@@ -814,7 +814,7 @@ public partial class World : MonoBehaviour
         for (int i = 0; i < rules.Length; i++)
         {
             TreeSettings s = rules[i].settings;
-            maxMargin = Mathf.Max(maxMargin, Mathf.Max(1, s.maxHeight + s.canopyHeight + 2));
+            maxMargin = Mathf.Max(maxMargin, Mathf.Max(1, TreeGenerationMetrics.GetVerticalMargin(rules[i].treeStyle, s)));
         }
 
         return maxMargin;
@@ -884,6 +884,15 @@ public partial class World : MonoBehaviour
                 s.canopyHeight = Mathf.Max(3, s.canopyHeight);
                 s.minSpacing = Mathf.Max(6, s.minSpacing);
                 break;
+
+            case TreeStyle.FancyOak:
+                s.minHeight = Mathf.Max(9, s.minHeight);
+                s.maxHeight = Mathf.Max(s.minHeight, s.maxHeight);
+                s.canopyRadius = Mathf.Max(4, s.canopyRadius);
+                s.canopyHeight = Mathf.Max(4, s.canopyHeight);
+                s.minSpacing = Mathf.Max(9, s.minSpacing);
+                break;
+
             case TreeStyle.Cactus:
                 s.canopyRadius = Mathf.Max(1, s.canopyRadius);
                 break;
