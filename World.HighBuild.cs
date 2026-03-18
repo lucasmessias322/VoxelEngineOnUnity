@@ -11,7 +11,17 @@ public partial class World
         public MeshFilter meshFilter;
         public MeshRenderer meshRenderer;
         public Mesh mesh;
+        public readonly List<Vector3> vertices = new List<Vector3>(256);
+        public readonly List<Vector3> normals = new List<Vector3>(256);
+        public readonly List<Vector2> uv0 = new List<Vector2>(256);
+        public readonly List<Vector2> uv1 = new List<Vector2>(256);
+        public readonly List<Vector4> uv2 = new List<Vector4>(256);
+        public readonly List<int> opaqueTris = new List<int>(384);
+        public readonly List<int> transparentTris = new List<int>(384);
+        public readonly List<int> waterTris = new List<int>(384);
         public readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
+        public bool[] colliderSolidsBuffer;
+        public bool[] colliderVisitedBuffer;
         public int activeBoxColliderCount;
         public bool hasColliderData;
         public bool canHaveColliders;
@@ -158,15 +168,16 @@ public partial class World
     private void RebuildHighBuildSectionMesh(Vector2Int coord, int section, List<Vector3Int> positions)
     {
         HighBuildMeshData data = GetOrCreateHighBuildMesh(coord, section);
+        PrepareHighBuildMeshBuffers(data, positions.Count);
 
-        List<Vector3> vertices = new List<Vector3>(positions.Count * 24);
-        List<Vector3> normals = new List<Vector3>(positions.Count * 24);
-        List<Vector2> uv0 = new List<Vector2>(positions.Count * 24);
-        List<Vector2> uv1 = new List<Vector2>(positions.Count * 24);
-        List<Vector4> uv2 = new List<Vector4>(positions.Count * 24);
-        List<int> opaqueTris = new List<int>(positions.Count * 18);
-        List<int> transparentTris = new List<int>(positions.Count * 18);
-        List<int> waterTris = new List<int>(positions.Count * 18);
+        List<Vector3> vertices = data.vertices;
+        List<Vector3> normals = data.normals;
+        List<Vector2> uv0 = data.uv0;
+        List<Vector2> uv1 = data.uv1;
+        List<Vector4> uv2 = data.uv2;
+        List<int> opaqueTris = data.opaqueTris;
+        List<int> transparentTris = data.transparentTris;
+        List<int> waterTris = data.waterTris;
 
         float invAtlasTilesX = 1f / Mathf.Max(1, atlasTilesX);
         float invAtlasTilesY = 1f / Mathf.Max(1, atlasTilesY);
@@ -248,7 +259,7 @@ public partial class World
         data.mesh.SetTriangles(opaqueTris, 0, true);
         data.mesh.SetTriangles(transparentTris, 1, true);
         data.mesh.SetTriangles(waterTris, 2, true);
-        data.mesh.RecalculateBounds();
+        data.mesh.bounds = CreateHighBuildSectionBounds(coord, section);
         data.meshFilter.sharedMesh = data.mesh;
         ApplyBiomeTintToRenderer(data.meshRenderer, coord);
         data.meshRenderer.enabled = true;
@@ -339,6 +350,7 @@ public partial class World
         mr.materials = Material;
 
         Mesh mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
+        mesh.MarkDynamic();
         mf.sharedMesh = mesh;
         go.SetActive(false);
 
@@ -363,9 +375,11 @@ public partial class World
         int sizeY = HighBuildSectionHeight;
         int sizeZ = Chunk.SizeZ;
         int volume = sizeX * sizeY * sizeZ;
-
-        bool[] solids = new bool[volume];
-        bool[] visited = new bool[volume];
+        EnsureHighBuildColliderBuffers(data, volume);
+        bool[] solids = data.colliderSolidsBuffer;
+        bool[] visited = data.colliderVisitedBuffer;
+        System.Array.Clear(solids, 0, volume);
+        System.Array.Clear(visited, 0, volume);
 
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
@@ -518,6 +532,56 @@ public partial class World
     private static int GetHighBuildVoxelIndex(int x, int y, int z, int sizeX, int sizeY)
     {
         return x + y * sizeX + z * sizeX * sizeY;
+    }
+
+    private static void PrepareHighBuildMeshBuffers(HighBuildMeshData data, int blockCount)
+    {
+        if (data == null)
+            return;
+
+        int vertexCapacity = Mathf.Max(4, blockCount * 24);
+        int triangleCapacity = Mathf.Max(6, blockCount * 18);
+
+        data.vertices.Clear();
+        data.normals.Clear();
+        data.uv0.Clear();
+        data.uv1.Clear();
+        data.uv2.Clear();
+        data.opaqueTris.Clear();
+        data.transparentTris.Clear();
+        data.waterTris.Clear();
+
+        if (data.vertices.Capacity < vertexCapacity) data.vertices.Capacity = vertexCapacity;
+        if (data.normals.Capacity < vertexCapacity) data.normals.Capacity = vertexCapacity;
+        if (data.uv0.Capacity < vertexCapacity) data.uv0.Capacity = vertexCapacity;
+        if (data.uv1.Capacity < vertexCapacity) data.uv1.Capacity = vertexCapacity;
+        if (data.uv2.Capacity < vertexCapacity) data.uv2.Capacity = vertexCapacity;
+        if (data.opaqueTris.Capacity < triangleCapacity) data.opaqueTris.Capacity = triangleCapacity;
+        if (data.transparentTris.Capacity < triangleCapacity) data.transparentTris.Capacity = triangleCapacity;
+        if (data.waterTris.Capacity < triangleCapacity) data.waterTris.Capacity = triangleCapacity;
+    }
+
+    private static void EnsureHighBuildColliderBuffers(HighBuildMeshData data, int volume)
+    {
+        if (data == null || volume <= 0)
+            return;
+
+        if (data.colliderSolidsBuffer == null || data.colliderSolidsBuffer.Length < volume)
+            data.colliderSolidsBuffer = new bool[volume];
+
+        if (data.colliderVisitedBuffer == null || data.colliderVisitedBuffer.Length < volume)
+            data.colliderVisitedBuffer = new bool[volume];
+    }
+
+    private static Bounds CreateHighBuildSectionBounds(Vector2Int coord, int section)
+    {
+        float minY = Chunk.SizeY + section * HighBuildSectionHeight;
+        return new Bounds(
+            new Vector3(
+                coord.x * Chunk.SizeX + Chunk.SizeX * 0.5f,
+                minY + HighBuildSectionHeight * 0.5f,
+                coord.y * Chunk.SizeZ + Chunk.SizeZ * 0.5f),
+            new Vector3(Chunk.SizeX + 2f, HighBuildSectionHeight + 2f, Chunk.SizeZ + 2f));
     }
 
     private static int GetHighSectionIndex(int y)

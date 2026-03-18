@@ -396,10 +396,18 @@ public partial class World : MonoBehaviour
     private bool lastEnableBlockColliders = true;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
     private bool treeSpawnRulesDirty = true;
+    private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
+    private NativeArray<WarpLayer> cachedNativeWarpLayers;
+    private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
+    private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
+    private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
+    private bool nativeGenerationConfigDirty = true;
 
 
     // Optimization temporaries
     private Vector2Int _lastChunkCoord = new Vector2Int(-99999, -99999);
+    private Vector2Int _lastSimulationCenter = new Vector2Int(int.MinValue, int.MinValue);
+    private int _lastSimulationDistance = -1;
     private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
 
@@ -454,6 +462,69 @@ public partial class World : MonoBehaviour
     private bool IsCoordInsideSimulationDistance(Vector2Int coord, Vector2Int center)
     {
         return IsCoordInsideDistance(coord, center, GetEffectiveSimulationDistance());
+    }
+
+    private void InvalidateNativeGenerationCaches()
+    {
+        nativeGenerationConfigDirty = true;
+    }
+
+    private void DisposeNativeGenerationCaches()
+    {
+        if (cachedNativeNoiseLayers.IsCreated) cachedNativeNoiseLayers.Dispose();
+        if (cachedNativeWarpLayers.IsCreated) cachedNativeWarpLayers.Dispose();
+        if (cachedNativeBlockMappings.IsCreated) cachedNativeBlockMappings.Dispose();
+        if (cachedNativeOreSettings.IsCreated) cachedNativeOreSettings.Dispose();
+        if (cachedNativeTreeSpawnRules.IsCreated) cachedNativeTreeSpawnRules.Dispose();
+    }
+
+    private void EnsureNativeGenerationCaches()
+    {
+        bool cachesCreated = cachedNativeNoiseLayers.IsCreated &&
+                             cachedNativeWarpLayers.IsCreated &&
+                             cachedNativeBlockMappings.IsCreated &&
+                             cachedNativeOreSettings.IsCreated &&
+                             cachedNativeTreeSpawnRules.IsCreated;
+
+        if (!nativeGenerationConfigDirty && cachesCreated)
+        {
+            return;
+        }
+
+        if (nativeGenerationConfigDirty && cachesCreated &&
+            (pendingDataJobs.Count > 0 || pendingMeshes.Count > 0))
+        {
+            return;
+        }
+
+        DisposeNativeGenerationCaches();
+
+        NoiseLayer[] runtimeNoiseLayers = noiseLayers ?? Array.Empty<NoiseLayer>();
+        WarpLayer[] runtimeWarpLayers = warpLayers ?? Array.Empty<WarpLayer>();
+        BlockTextureMapping[] runtimeBlockMappings = blockData != null && blockData.mappings != null
+            ? blockData.mappings
+            : Array.Empty<BlockTextureMapping>();
+        OreSpawnSettings[] runtimeOreSettings = oreSettings ?? Array.Empty<OreSpawnSettings>();
+        TreeSpawnRuleData[] runtimeTreeSpawnRules = GetActiveTreeSpawnRules();
+
+        cachedNativeNoiseLayers = new NativeArray<NoiseLayer>(runtimeNoiseLayers, Allocator.Persistent);
+        cachedNativeWarpLayers = new NativeArray<WarpLayer>(runtimeWarpLayers, Allocator.Persistent);
+        cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
+        cachedNativeOreSettings = new NativeArray<OreSpawnSettings>(runtimeOreSettings, Allocator.Persistent);
+        cachedNativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(runtimeTreeSpawnRules, Allocator.Persistent);
+        nativeGenerationConfigDirty = false;
+    }
+
+    private void RefreshSimulationDistanceStateIfNeeded()
+    {
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        int effectiveDistance = GetEffectiveSimulationDistance();
+        if (simulationCenter == _lastSimulationCenter && effectiveDistance == _lastSimulationDistance)
+            return;
+
+        _lastSimulationCenter = simulationCenter;
+        _lastSimulationDistance = effectiveDistance;
+        RefreshSimulationDistanceState(simulationCenter);
     }
 
     private bool IsChunkInsideSimulationDistance(Vector2Int coord)
@@ -853,7 +924,6 @@ public partial class World : MonoBehaviour
         public NativeArray<BlockType> blockTypes;
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
-        public NativeArray<BlockTextureMapping> nativeBlockMappings;
         public NativeArray<int3> suppressedBillboards;
         public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
@@ -867,11 +937,6 @@ public partial class World : MonoBehaviour
         public NativeArray<BlockType> blockTypes;
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
-        public NativeArray<NoiseLayer> nativeNoiseLayers;
-        public NativeArray<WarpLayer> nativeWarpLayers;
-        public NativeArray<BlockTextureMapping> nativeBlockMappings;
-        public NativeArray<OreSpawnSettings> nativeOreSettings;
-        public NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules;
 
         public Chunk chunk;
         public Vector2Int coord;
@@ -901,6 +966,7 @@ public partial class World : MonoBehaviour
         EnsureTerrainLayerArraysInitialized();
         EnsureDefaultWarpLayersConfigured();
         MarkBiomeCachesDirty();
+        InvalidateNativeGenerationCaches();
     }
 
     private void Start()
@@ -916,6 +982,7 @@ public partial class World : MonoBehaviour
         InitializeBiomeNoiseOffsets();
         InitializeNoiseLayers();
         InitializeWarpLayers();
+        InvalidateNativeGenerationCaches();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -929,6 +996,34 @@ public partial class World : MonoBehaviour
         lastEnableBlockColliders = enableBlockColliders;
     }
 
+    private void OnDestroy()
+    {
+        for (int i = 0; i < pendingDataJobs.Count; i++)
+        {
+            PendingData pd = pendingDataJobs[i];
+            pd.handle.Complete();
+            DisposeDataJobResources(pd);
+        }
+        pendingDataJobs.Clear();
+
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            PendingMesh pm = pendingMeshes[i];
+            pm.handle.Complete();
+            DisposePendingMesh(pm);
+        }
+        pendingMeshes.Clear();
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+            if (chunk != null && chunk.jobScheduled && !chunk.currentJob.IsCompleted)
+                chunk.currentJob.Complete();
+        }
+
+        DisposeNativeGenerationCaches();
+    }
+
     private void Update()
     {
         HandleBlockColliderToggle();
@@ -937,7 +1032,7 @@ public partial class World : MonoBehaviour
         ProcessQueuedHighBuildMeshRebuilds();
         ProcessQueuedLeafDecay();
         UpdateChunks();
-        RefreshSimulationDistanceState();
+        RefreshSimulationDistanceStateIfNeeded();
         ProcessPendingColliderBuilds();
         ProcessChunkQueue();
     }
@@ -1126,11 +1221,6 @@ public partial class World : MonoBehaviour
                     CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData);
 
                     ScheduleSubchunkMeshJobs(pd, activeChunk);
-
-                    if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
-                    if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
-                    if (pd.nativeOreSettings.IsCreated) pd.nativeOreSettings.Dispose();
-                    if (pd.nativeTreeSpawnRules.IsCreated) pd.nativeTreeSpawnRules.Dispose();
                 }
             }
             else
@@ -1367,7 +1457,7 @@ public partial class World : MonoBehaviour
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
 
             MeshGenerator.ScheduleMeshJob(
-                pd.heightCache, pd.blockTypes, pd.solids, pd.light, pd.nativeBlockMappings, nativeSuppressedBillboards,
+                pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
                 atlasTilesX, atlasTilesY, true, borderSize,
                 pd.coord.x, pd.coord.y,
                 startY, endY,
@@ -1414,7 +1504,6 @@ public partial class World : MonoBehaviour
                 blockTypes = pd.blockTypes,
                 solids = pd.solids,
                 light = pd.light,
-                nativeBlockMappings = pd.nativeBlockMappings,
                 suppressedBillboards = default,
                 buildColliders = pd.rebuildColliders
             });
@@ -1432,7 +1521,6 @@ public partial class World : MonoBehaviour
             blockTypes = pd.blockTypes,
             solids = pd.solids,
             light = pd.light,
-            blockMappings = pd.nativeBlockMappings,
             subchunkNonEmpty = pd.subchunkNonEmpty
         };
         JobHandle dataDisposeHandle = disposeJob.Schedule(combinedMeshHandle);
@@ -1711,9 +1799,9 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = GetMaxTreeMarginForGeneration();
-        TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
+        EnsureNativeGenerationCaches();
 
         // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
@@ -1731,14 +1819,14 @@ public partial class World : MonoBehaviour
 
         // Agendamento do data job
         MeshGenerator.ScheduleDataJob(
-            coord, noiseLayers, warpLayers, blockData.mappings,
+            coord, cachedNativeNoiseLayers, cachedNativeWarpLayers, cachedNativeBlockMappings,
             baseHeight, offsetX, offsetZ, seaLevel,
             GetBiomeNoiseSettings(),
             seed,
             nativeEdits, treeMargin, borderSize,
             GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,
-            oreSettings,
-            activeTreeSpawnRules,
+            cachedNativeOreSettings,
+            cachedNativeTreeSpawnRules,
             caveWormSettings,
             chunkLightData,
             out JobHandle dataHandle,
@@ -1746,11 +1834,6 @@ public partial class World : MonoBehaviour
             out NativeArray<BlockType> blockTypes,
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
-            out NativeArray<NoiseLayer> nativeNoiseLayers,
-            out NativeArray<WarpLayer> nativeWarpLayers,
-            out NativeArray<BlockTextureMapping> nativeBlockMappings,
-            out NativeArray<OreSpawnSettings> nativeOreSettings,
-            out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
             out NativeArray<bool> subchunkNonEmpty
         );
 
@@ -1761,11 +1844,6 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             solids = solids,
             light = light,
-            nativeNoiseLayers = nativeNoiseLayers,
-            nativeWarpLayers = nativeWarpLayers,
-            nativeBlockMappings = nativeBlockMappings,
-            nativeOreSettings = nativeOreSettings,
-            nativeTreeSpawnRules = nativeTreeSpawnRules,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -1798,13 +1876,13 @@ public partial class World : MonoBehaviour
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         int totalVoxels = voxelSizeX * Chunk.SizeY * voxelSizeZ;
         int totalHeightPoints = voxelSizeX * voxelSizeZ;
+        EnsureNativeGenerationCaches();
 
         NativeArray<int> heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
         NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
         NativeArray<bool> solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
         NativeArray<byte> light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
         NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.TempJob);
-        NativeArray<BlockTextureMapping> nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockData.mappings, Allocator.TempJob);
         NativeArray<byte> blockLightData = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
 
         FillFastRebuildArraysFromLoadedChunks(
@@ -1821,7 +1899,7 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             light = light,
             blockLightData = blockLightData,
-            blockMappings = nativeBlockMappings,
+            blockMappings = cachedNativeBlockMappings,
             voxelSizeX = voxelSizeX,
             voxelSizeZ = voxelSizeZ,
             totalVoxels = totalVoxels,
@@ -1840,11 +1918,6 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             solids = solids,
             light = light,
-            nativeNoiseLayers = default,
-            nativeWarpLayers = default,
-            nativeBlockMappings = nativeBlockMappings,
-            nativeOreSettings = default,
-            nativeTreeSpawnRules = default,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -2099,9 +2172,9 @@ public partial class World : MonoBehaviour
         }
 
         int treeMargin = GetMaxTreeMarginForGeneration();
-        TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
+        EnsureNativeGenerationCaches();
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
@@ -2113,9 +2186,9 @@ public partial class World : MonoBehaviour
 
         MeshGenerator.ScheduleDataJob(
               coord,
-              noiseLayers,
-              warpLayers,
-              blockData.mappings,
+              cachedNativeNoiseLayers,
+              cachedNativeWarpLayers,
+              cachedNativeBlockMappings,
               baseHeight,
               offsetX,
               offsetZ,
@@ -2128,8 +2201,8 @@ public partial class World : MonoBehaviour
               GetMaxTreeRadiusForGeneration(),
               CliffTreshold,
               enableTrees,
-              oreSettings,
-              activeTreeSpawnRules,
+              cachedNativeOreSettings,
+              cachedNativeTreeSpawnRules,
               caveWormSettings,
               chunkLightData,
               out JobHandle dataHandle,
@@ -2137,11 +2210,6 @@ public partial class World : MonoBehaviour
               out NativeArray<BlockType> blockTypes,
               out NativeArray<bool> solids,
               out NativeArray<byte> light,
-              out NativeArray<NoiseLayer> nativeNoiseLayers,
-              out NativeArray<WarpLayer> nativeWarpLayers,
-              out NativeArray<BlockTextureMapping> nativeBlockMappings,
-              out NativeArray<OreSpawnSettings> nativeOreSettings,
-              out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
               out NativeArray<bool> subchunkNonEmpty
           );
 
@@ -2152,11 +2220,6 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             solids = solids,
             light = light,
-            nativeNoiseLayers = nativeNoiseLayers,
-            nativeWarpLayers = nativeWarpLayers,
-            nativeBlockMappings = nativeBlockMappings,
-            nativeOreSettings = nativeOreSettings,
-            nativeTreeSpawnRules = nativeTreeSpawnRules,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
@@ -2270,10 +2333,8 @@ public partial class World : MonoBehaviour
         }
     }
 
-    private void RefreshSimulationDistanceState()
+    private void RefreshSimulationDistanceState(Vector2Int simulationCenter)
     {
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
-
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
@@ -2423,11 +2484,6 @@ public partial class World : MonoBehaviour
         if (pd.blockTypes.IsCreated) pd.blockTypes.Dispose();
         if (pd.solids.IsCreated) pd.solids.Dispose();
         if (pd.light.IsCreated) pd.light.Dispose();
-        if (pd.nativeNoiseLayers.IsCreated) pd.nativeNoiseLayers.Dispose();
-        if (pd.nativeWarpLayers.IsCreated) pd.nativeWarpLayers.Dispose();
-        if (pd.nativeBlockMappings.IsCreated) pd.nativeBlockMappings.Dispose();
-        if (pd.nativeOreSettings.IsCreated) pd.nativeOreSettings.Dispose();
-        if (pd.nativeTreeSpawnRules.IsCreated) pd.nativeTreeSpawnRules.Dispose();
         if (pd.chunkLightData.IsCreated) pd.chunkLightData.Dispose();
         if (pd.edits.IsCreated) pd.edits.Dispose();
         if (pd.subchunkNonEmpty.IsCreated) pd.subchunkNonEmpty.Dispose();

@@ -174,9 +174,9 @@ public static class MeshGenerator
 
     public static void ScheduleDataJob(
         Vector2Int coord,
-        NoiseLayer[] noiseLayersArr,
-        WarpLayer[] warpLayersArr,
-        BlockTextureMapping[] blockMappingsArr,
+        NativeArray<NoiseLayer> noiseLayers,
+        NativeArray<WarpLayer> warpLayers,
+        NativeArray<BlockTextureMapping> blockMappings,
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
@@ -192,8 +192,8 @@ public static class MeshGenerator
         int maxTreeRadius,
         int CliffTreshold,
         bool enableTrees,
-        OreSpawnSettings[] oreSettingsArr,
-        TreeSpawnRuleData[] treeSpawnRulesArr,
+        NativeArray<OreSpawnSettings> oreSettings,
+        NativeArray<TreeSpawnRuleData> treeSpawnRules,
         WormCaveSettings caveSettings,
         NativeArray<byte> lightData, // <--- NOVA INJECAO DE DEPENDENCIA DE LUZ
         out JobHandle dataHandle,
@@ -201,31 +201,14 @@ public static class MeshGenerator
         out NativeArray<BlockType> blockTypes,
         out NativeArray<bool> solids,
         out NativeArray<byte> light,
-        out NativeArray<NoiseLayer> nativeNoiseLayers,
-        out NativeArray<WarpLayer> nativeWarpLayers,
-        out NativeArray<BlockTextureMapping> nativeBlockMappings,
-        out NativeArray<OreSpawnSettings> nativeOreSettings,
-        out NativeArray<TreeSpawnRuleData> nativeTreeSpawnRules,
         out NativeArray<bool> subchunkNonEmpty
     )
     {
         // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
-        // 2. AlocaÃ§Ãµes Iniciais de ConfiguraÃ§Ã£o
-        nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
-        nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
-        nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
-        if (oreSettingsArr != null && oreSettingsArr.Length > 0)
-            nativeOreSettings = new NativeArray<OreSpawnSettings>(oreSettingsArr, Allocator.TempJob);
-        else
-            nativeOreSettings = new NativeArray<OreSpawnSettings>(0, Allocator.TempJob);
-        if (treeSpawnRulesArr != null && treeSpawnRulesArr.Length > 0)
-            nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(treeSpawnRulesArr, Allocator.TempJob);
-        else
-            nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(0, Allocator.TempJob);
+        // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
-        // 3. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -247,8 +230,8 @@ public static class MeshGenerator
         var heightJob = new HeightmapJob
         {
             coord = coord,
-            noiseLayers = nativeNoiseLayers,
-            warpLayers = nativeWarpLayers,
+            noiseLayers = noiseLayers,
+            warpLayers = warpLayers,
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
@@ -271,7 +254,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
-            blockMappings = nativeBlockMappings,
+            blockMappings = blockMappings,
             border = borderSize,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
@@ -293,9 +276,9 @@ public static class MeshGenerator
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
             coord = coord,
-            noiseLayers = nativeNoiseLayers,
-            warpLayers = nativeWarpLayers,
-            blockMappings = nativeBlockMappings,
+            noiseLayers = noiseLayers,
+            warpLayers = warpLayers,
+            blockMappings = blockMappings,
             blockEdits = blockEdits,
 
 
@@ -314,8 +297,8 @@ public static class MeshGenerator
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
-            treeSpawnRules = nativeTreeSpawnRules,
-            oreSettings = nativeOreSettings,
+            treeSpawnRules = treeSpawnRules,
+            oreSettings = oreSettings,
             oreSeed = oreSeed,
             caveSettings = caveSettings,
 
@@ -330,7 +313,7 @@ public static class MeshGenerator
             blockTypes = blockTypes,
             light = light, // Output calculado
             blockLightData = lightData, // Injeta block light do global
-            blockMappings = nativeBlockMappings,
+            blockMappings = blockMappings,
             voxelSizeX = voxelSizeX,
             voxelSizeZ = voxelSizeZ,
             totalVoxels = totalVoxels,
@@ -1765,7 +1748,6 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<BlockType> blockTypes;
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
-        [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
         [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // â† NOVO
         public void Execute() { }
     }

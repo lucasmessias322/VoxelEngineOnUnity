@@ -71,6 +71,7 @@ public partial class World : MonoBehaviour
         biomeDefinitionsDirty = true;
         biomeNoiseSettingsDirty = true;
         treeSpawnRulesDirty = true;
+        InvalidateNativeGenerationCaches();
     }
 
     private void EnsureBiomeDefinitionCache()
