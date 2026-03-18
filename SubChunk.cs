@@ -31,6 +31,7 @@ public class Subchunk : MonoBehaviour
     [HideInInspector]
     public bool hasGeometry = false;
     public bool CanHaveColliders => canHaveColliders;
+    public bool HasColliderData => hasColliderData;
 
     public void Initialize(Material[] materials, int subchunkIndex)
     {

@@ -358,6 +358,7 @@ public partial class World : MonoBehaviour
             return;
 
         float now = Time.time;
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
         int processed = 0;
         int attempts = queuedLeafDecay.Count;
 
@@ -370,6 +371,12 @@ public partial class World : MonoBehaviour
             {
                 queuedLeafDecay.Enqueue(candidate);
                 queuedLeafDecaySet.Add(candidate.position);
+                continue;
+            }
+
+            if (!IsWorldPositionInsideSimulationDistance(candidate.position, simulationCenter))
+            {
+                TryQueueLeafDecay(candidate.position, Mathf.Max(leafDecayStepInterval, 0.5f));
                 continue;
             }
 

@@ -14,6 +14,7 @@ public partial class World
         public readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
         public int activeBoxColliderCount;
         public bool hasColliderData;
+        public bool canHaveColliders;
     }
 
     // Key: (chunkX, highSectionY, chunkZ)
@@ -253,7 +254,12 @@ public partial class World
         data.meshRenderer.enabled = true;
         data.root.SetActive(true);
 
-        if (enableBlockColliders && (opaqueTris.Count > 0 || transparentTris.Count > 0))
+        bool shouldBuildColliders = enableBlockColliders &&
+                                    IsChunkInsideSimulationDistance(coord) &&
+                                    (opaqueTris.Count > 0 || transparentTris.Count > 0);
+        data.canHaveColliders = opaqueTris.Count > 0 || transparentTris.Count > 0;
+
+        if (shouldBuildColliders)
             BuildHighBuildSectionColliders(data, coord, section, positions);
         else
             DisableHighBuildColliders(data, true);
@@ -261,12 +267,29 @@ public partial class World
 
     private void SetHighBuildCollidersEnabled(bool enabled)
     {
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+
         foreach (var kv in highBuildMeshes)
         {
             HighBuildMeshData data = kv.Value;
             if (data == null) continue;
 
-            bool shouldEnable = enabled && data.hasColliderData;
+            Vector2Int coord = new Vector2Int(kv.Key.x, kv.Key.z);
+            bool isSimulated = IsCoordInsideSimulationDistance(coord, simulationCenter);
+
+            if (enabled &&
+                isSimulated &&
+                data.canHaveColliders &&
+                !data.hasColliderData &&
+                data.root != null &&
+                data.root.activeSelf)
+            {
+                RequestHighBuildMeshRebuild(coord);
+            }
+
+            bool shouldEnable = enabled &&
+                                data.hasColliderData &&
+                                isSimulated;
             for (int i = 0; i < data.activeBoxColliderCount; i++)
             {
                 BoxCollider box = data.boxColliders[i];
@@ -295,6 +318,7 @@ public partial class World
     {
         if (!highBuildMeshes.TryGetValue(key, out HighBuildMeshData data)) return;
         DisableHighBuildColliders(data, true);
+        data.canHaveColliders = false;
         if (data.mesh != null) data.mesh.Clear();
         if (data.root != null) data.root.SetActive(false);
     }
@@ -325,7 +349,8 @@ public partial class World
             meshRenderer = mr,
             mesh = mesh,
             activeBoxColliderCount = 0,
-            hasColliderData = false
+            hasColliderData = false,
+            canHaveColliders = false
         };
 
         highBuildMeshes[key] = created;

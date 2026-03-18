@@ -158,6 +158,9 @@ public partial class World : MonoBehaviour
     public Transform player;
     public GameObject chunkPrefab;
     public int renderDistance = 4;
+    [Tooltip("Raio em chunks usado pelos sistemas de simulacao. Limitado automaticamente pela renderDistance.")]
+    [Min(0)]
+    public int simulationDistance = 4;
     public int poolSize = 200;
 
     [Header("Atlas / Material")]
@@ -432,9 +435,40 @@ public partial class World : MonoBehaviour
 
     private bool IsCoordInsideRenderDistance(Vector2Int coord, Vector2Int center)
     {
+        return IsCoordInsideDistance(coord, center, renderDistance);
+    }
+
+    private int GetEffectiveSimulationDistance()
+    {
+        return Mathf.Clamp(simulationDistance, 0, Mathf.Max(0, renderDistance));
+    }
+
+    private static bool IsCoordInsideDistance(Vector2Int coord, Vector2Int center, int distanceInChunks)
+    {
+        int clampedDistance = Mathf.Max(0, distanceInChunks);
         int dx = Mathf.Abs(coord.x - center.x);
         int dz = Mathf.Abs(coord.y - center.y);
-        return dx <= renderDistance && dz <= renderDistance;
+        return dx <= clampedDistance && dz <= clampedDistance;
+    }
+
+    private bool IsCoordInsideSimulationDistance(Vector2Int coord, Vector2Int center)
+    {
+        return IsCoordInsideDistance(coord, center, GetEffectiveSimulationDistance());
+    }
+
+    private bool IsChunkInsideSimulationDistance(Vector2Int coord)
+    {
+        return IsCoordInsideSimulationDistance(coord, GetCurrentPlayerChunkCoord());
+    }
+
+    private bool IsWorldPositionInsideSimulationDistance(Vector3Int worldPos)
+    {
+        return IsWorldPositionInsideSimulationDistance(worldPos, GetCurrentPlayerChunkCoord());
+    }
+
+    private bool IsWorldPositionInsideSimulationDistance(Vector3Int worldPos, Vector2Int center)
+    {
+        return IsCoordInsideSimulationDistance(GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z), center);
     }
 
     private int CountPendingDataJobsInRenderDistance(Vector2Int center)
@@ -531,6 +565,7 @@ public partial class World : MonoBehaviour
         int processed = 0;
         int attempts = queuedColliderBuilds.Count;
         BlockTextureMapping[] blockMappings = blockData != null ? blockData.mappings : null;
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedColliderBuilds.Count > 0)
         {
@@ -555,6 +590,13 @@ public partial class World : MonoBehaviour
             Subchunk subchunk = chunk.subchunks[request.subchunkIndex];
             if (subchunk == null)
                 continue;
+
+            if (!IsCoordInsideSimulationDistance(request.coord, simulationCenter))
+            {
+                subchunk.SetColliderSystemEnabled(false);
+                EnqueueColliderBuild(request.coord, request.expectedGen, request.subchunkIndex);
+                continue;
+            }
 
             if (!subchunk.hasGeometry || !subchunk.CanHaveColliders)
             {
@@ -885,7 +927,6 @@ public partial class World : MonoBehaviour
         }
 
         lastEnableBlockColliders = enableBlockColliders;
-        InitializeDistantTerrainLodState();
     }
 
     private void Update()
@@ -896,7 +937,7 @@ public partial class World : MonoBehaviour
         ProcessQueuedHighBuildMeshRebuilds();
         ProcessQueuedLeafDecay();
         UpdateChunks();
-        UpdateDistantTerrainLod();
+        RefreshSimulationDistanceState();
         ProcessPendingColliderBuilds();
         ProcessChunkQueue();
     }
@@ -1139,7 +1180,7 @@ public partial class World : MonoBehaviour
 
                     if (pm.buildColliders)
                     {
-                        if (hasSolidColliderGeometry)
+                        if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
                             EnqueueColliderBuild(pm.coord, pm.expectedGen, pm.subchunkIndex);
                         else
                             sub.ClearColliderData();
@@ -1650,7 +1691,6 @@ public partial class World : MonoBehaviour
             chunk.hasVoxelData = false;
         }
 
-        RemoveDistantTerrainChunk(coord);
         activeChunks.Add(coord, chunk);
         RequestHighBuildMeshRebuild(coord);
 
@@ -2188,21 +2228,29 @@ public partial class World : MonoBehaviour
         if (lastEnableBlockColliders == enableBlockColliders) return;
 
         lastEnableBlockColliders = enableBlockColliders;
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
 
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
             if (chunk == null || chunk.subchunks == null) continue;
+            bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
 
             for (int i = 0; i < chunk.subchunks.Length; i++)
             {
                 Subchunk sc = chunk.subchunks[i];
                 if (sc != null)
                 {
-                    sc.SetColliderSystemEnabled(enableBlockColliders);
+                    sc.SetColliderSystemEnabled(chunkIsSimulated);
 
-                    if (enableBlockColliders && chunk.hasVoxelData && sc.hasGeometry && sc.CanHaveColliders)
+                    if (chunkIsSimulated &&
+                        chunk.hasVoxelData &&
+                        sc.hasGeometry &&
+                        sc.CanHaveColliders &&
+                        !sc.HasColliderData)
+                    {
                         EnqueueColliderBuild(kv.Key, chunk.generation, i);
+                    }
                 }
             }
         }
@@ -2220,6 +2268,48 @@ public partial class World : MonoBehaviour
         {
             RequestHighBuildMeshRebuild(kv.Key);
         }
+    }
+
+    private void RefreshSimulationDistanceState()
+    {
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+            if (chunk == null || chunk.subchunks == null)
+                continue;
+
+            bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
+            for (int i = 0; i < chunk.subchunks.Length; i++)
+            {
+                Subchunk sc = chunk.subchunks[i];
+                if (sc == null)
+                    continue;
+
+                if (!chunkIsSimulated)
+                {
+                    sc.SetColliderSystemEnabled(false);
+                    continue;
+                }
+
+                if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated || !sc.hasGeometry || !sc.CanHaveColliders)
+                {
+                    sc.SetColliderSystemEnabled(false);
+                    continue;
+                }
+
+                if (sc.HasColliderData)
+                {
+                    sc.SetColliderSystemEnabled(true);
+                    continue;
+                }
+
+                EnqueueColliderBuild(kv.Key, chunk.generation, i);
+            }
+        }
+
+        SetHighBuildCollidersEnabled(enableBlockColliders);
     }
 
     private Vector2Int GetChunkCoordFromWorldPosition(Vector3 worldPos)
@@ -2320,7 +2410,6 @@ public partial class World : MonoBehaviour
             }
         }
 
-        DrawDistantTerrainLodGizmos();
     }
 
 

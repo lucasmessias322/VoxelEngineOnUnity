@@ -125,5 +125,4 @@ public class Chunk : MonoBehaviour
         gameObject.SetActive(false);
     }
     public int generation;
-    [HideInInspector] public int currentLodStep = 1;
 }
