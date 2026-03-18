@@ -419,20 +419,51 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (placePos.y <= 2)
                 return;
 
+            BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
             if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos))
                 return;
 
-            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos, selectedBlockType))
+            if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
+                return;
+
+            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos, placedBlockType))
                 return;
 
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
 
-            World.Instance.SetBlockAt(placePos, selectedBlockType, true);
+            World.Instance.SetBlockAt(placePos, placedBlockType, true);
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
+    }
+
+    private bool CanPlaceTorchAt(Vector3Int placePos, BlockType placedBlockType)
+    {
+        if (!TorchPlacementUtility.IsTorchLike(placedBlockType))
+            return true;
+
+        Vector3Int supportPos = placePos + TorchPlacementUtility.GetSupportDirection(placedBlockType);
+        BlockType supportType = World.Instance.GetBlockAt(supportPos);
+        return CanTorchAttachTo(supportType);
+    }
+
+    private bool CanTorchAttachTo(BlockType supportType)
+    {
+        if (supportType == BlockType.Air || IsLiquid(supportType))
+            return false;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return supportType != BlockType.Air && supportType != BlockType.Water;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(supportType);
+        if (mapping == null)
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isEmpty;
     }
 
     private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType)
@@ -470,6 +501,6 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
 
-        return BlockShapeUtility.GetWorldBounds(blockPos, value);
+        return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value);
     }
 }

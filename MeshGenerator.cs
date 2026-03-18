@@ -722,7 +722,7 @@ public static class MeshGenerator
                                 break;
 
                             case BlockRenderShape.Cuboid:
-                                AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY);
+                                AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, light01);
                                 break;
                         }
                     }
@@ -930,7 +930,8 @@ public static class MeshGenerator
             int voxelY,
             int voxelZ,
             float invAtlasTilesX,
-            float invAtlasTilesY)
+            float invAtlasTilesY,
+            float light01)
         {
             ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
@@ -938,6 +939,13 @@ public static class MeshGenerator
                 ? waterTriangles
                 : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
             byte emission = mapping.lightEmission;
+
+            if (IsWallTorch(blockType))
+            {
+                float resolvedLight01 = math.max(light01, emission / 15f);
+                AddWallTorchShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, resolvedLight01, tris);
+                return;
+            }
 
             AddShapeFace(
                 origin + new Vector3(max.x, min.y, min.z),
@@ -1034,6 +1042,145 @@ public static class MeshGenerator
                 invAtlasTilesX,
                 invAtlasTilesY,
                 tris);
+        }
+
+        private void AddWallTorchShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01,
+            NativeList<int> tris)
+        {
+            ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+
+            Vector3 modelMin = new Vector3(min.x - 0.5f, min.y, min.z - 0.5f);
+            Vector3 modelMax = new Vector3(max.x - 0.5f, max.y, max.z - 0.5f);
+
+            Vector3 p000 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMin.z));
+            Vector3 p001 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMax.z));
+            Vector3 p010 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMin.z));
+            Vector3 p011 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMax.z));
+            Vector3 p100 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMin.z));
+            Vector3 p101 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMax.z));
+            Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z));
+            Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z));
+
+            AddStaticLitShapeFace(p100, p110, p111, p101, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p001, p011, p010, p000, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p011, p111, p110, p010, mapping.top, mapping.tintTop, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p100, p101, p001, mapping.bottom, mapping.tintBottom, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p101, p111, p011, p001, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p010, p110, p100, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
+        }
+
+        private void AddStaticLitShapeFace(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector2Int tile,
+            bool tint,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            int vIndex = vertices.Length;
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
+            if (normal.sqrMagnitude < 0.0001f)
+                normal = Vector3.up;
+
+            vertices.Add(p0);
+            vertices.Add(p1);
+            vertices.Add(p2);
+            vertices.Add(p3);
+
+            normals.Add(normal);
+            normals.Add(normal);
+            normals.Add(normal);
+            normals.Add(normal);
+
+            uvs.Add(new Vector2(0f, 0f));
+            uvs.Add(new Vector2(1f, 0f));
+            uvs.Add(new Vector2(1f, 1f));
+            uvs.Add(new Vector2(0f, 1f));
+
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+            uv2.Add(atlasUv);
+
+            Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
+            extraUVs.Add(extra);
+            extraUVs.Add(extra);
+            extraUVs.Add(extra);
+            extraUVs.Add(extra);
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
+        }
+
+        private static bool IsWallTorch(BlockType blockType)
+        {
+            return blockType == BlockType.WallTorchEast ||
+                   blockType == BlockType.WallTorchWest ||
+                   blockType == BlockType.WallTorchSouth ||
+                   blockType == BlockType.WallTorchNorth;
+        }
+
+        private static Vector3 TransformTorchModelPoint(BlockType blockType, Vector3 modelPoint)
+        {
+            if (!IsWallTorch(blockType))
+                return modelPoint + new Vector3(0.5f, 0f, 0.5f);
+
+            const float angleRadians = 0.3926991f;
+            const float anchorHeight = TorchPlacementUtility.WallAnchorHeight;
+            const float anchorOffset = TorchPlacementUtility.WallAnchorOffset;
+
+            float sin = math.sin(angleRadians);
+            float cos = math.cos(angleRadians);
+
+            Vector3 rotated = modelPoint;
+            switch (blockType)
+            {
+                case BlockType.WallTorchEast:
+                    rotated = new Vector3(
+                        modelPoint.x * cos + modelPoint.y * sin,
+                        -modelPoint.x * sin + modelPoint.y * cos,
+                        modelPoint.z);
+                    return rotated + new Vector3(0.5f - anchorOffset, anchorHeight, 0.5f);
+
+                case BlockType.WallTorchWest:
+                    rotated = new Vector3(
+                        modelPoint.x * cos - modelPoint.y * sin,
+                        modelPoint.x * sin + modelPoint.y * cos,
+                        modelPoint.z);
+                    return rotated + new Vector3(0.5f + anchorOffset, anchorHeight, 0.5f);
+
+                case BlockType.WallTorchSouth:
+                    rotated = new Vector3(
+                        modelPoint.x,
+                        modelPoint.y * cos - modelPoint.z * sin,
+                        modelPoint.y * sin + modelPoint.z * cos);
+                    return rotated + new Vector3(0.5f, anchorHeight, 0.5f - anchorOffset);
+
+                case BlockType.WallTorchNorth:
+                    rotated = new Vector3(
+                        modelPoint.x,
+                        modelPoint.y * cos + modelPoint.z * sin,
+                        -modelPoint.y * sin + modelPoint.z * cos);
+                    return rotated + new Vector3(0.5f, anchorHeight, 0.5f + anchorOffset);
+
+                default:
+                    return modelPoint + new Vector3(0.5f, 0f, 0.5f);
+            }
         }
 
         private void AddShapeFace(

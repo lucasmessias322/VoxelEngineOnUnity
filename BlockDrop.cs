@@ -62,6 +62,8 @@ public class BlockDrop : MonoBehaviour
         if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
             return false;
 
+        blockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
+
         if (world.blockData != null && (world.blockData.mappings == null || world.blockData.mappings.Length == 0))
             world.blockData.InitializeDictionary();
 

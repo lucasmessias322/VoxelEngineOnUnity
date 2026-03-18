@@ -131,7 +131,7 @@ public class BlockSelector : MonoBehaviour
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return false;
 
-        bounds = BlockShapeUtility.GetWorldBounds(pos, value);
+        bounds = BlockShapeUtility.GetWorldBounds(pos, blockType, value);
         return true;
     }
 
@@ -310,7 +310,7 @@ public class BlockSelector : MonoBehaviour
         switch (value.renderShape)
         {
             case BlockRenderShape.Cuboid:
-                return TryHitCuboidBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
+                return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, lastNormal, out hitNormal);
 
             case BlockRenderShape.Cross:
                 return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
@@ -324,11 +324,12 @@ public class BlockSelector : MonoBehaviour
         Ray ray,
         float maxDistance,
         Vector3Int voxel,
+        BlockType blockType,
         BlockTextureMapping mapping,
         Vector3Int lastNormal,
         out Vector3Int hitNormal)
     {
-        Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, mapping);
+        Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, blockType, mapping);
         if (!bounds.IntersectRay(ray, out float distance) || distance > maxDistance)
         {
             hitNormal = Vector3Int.zero;

@@ -33,6 +33,8 @@ public class BlockDataSO : ScriptableObject
             if (index >= 0 && index < enumCount)
                 mappings[index] = mapping;
         }
+
+        PopulateTorchFallbackMappings();
     }
 
     /// <summary>
@@ -48,6 +50,57 @@ public class BlockDataSO : ScriptableObject
             return mappings[index];
 
         return null;
+    }
+
+    private void PopulateTorchFallbackMappings()
+    {
+        if (!TryGetTorchTemplateMapping(out BlockTextureMapping template))
+            return;
+
+        EnsureFallbackMapping(BlockType.torch, template);
+        EnsureFallbackMapping(BlockType.WallTorchEast, template);
+        EnsureFallbackMapping(BlockType.WallTorchWest, template);
+        EnsureFallbackMapping(BlockType.WallTorchSouth, template);
+        EnsureFallbackMapping(BlockType.WallTorchNorth, template);
+    }
+
+    private bool TryGetTorchTemplateMapping(out BlockTextureMapping template)
+    {
+        if (TryGetExplicitMapping(BlockType.torch, out template))
+            return true;
+
+        return TryGetExplicitMapping(BlockType.glowstone, out template);
+    }
+
+    private bool TryGetExplicitMapping(BlockType type, out BlockTextureMapping mapping)
+    {
+        mapping = default;
+        if (mappings == null || mappings.Length == 0)
+            return false;
+
+        int index = (int)type;
+        if (index < 0 || index >= mappings.Length)
+            return false;
+
+        BlockTextureMapping candidate = mappings[index];
+        if (candidate.blockType != type)
+            return false;
+
+        mapping = candidate;
+        return true;
+    }
+
+    private void EnsureFallbackMapping(BlockType type, BlockTextureMapping template)
+    {
+        int index = (int)type;
+        if (index < 0 || index >= mappings.Length)
+            return;
+
+        if (mappings[index].blockType == type)
+            return;
+
+        template.blockType = type;
+        mappings[index] = template;
     }
 
     /// <summary>
@@ -186,6 +239,14 @@ public static class BlockShapeUtility
 
     public static Bounds GetWorldBounds(Vector3Int blockPos, BlockTextureMapping mapping)
     {
+        return GetWorldBounds(blockPos, BlockType.Air, mapping);
+    }
+
+    public static Bounds GetWorldBounds(Vector3Int blockPos, BlockType blockType, BlockTextureMapping mapping)
+    {
+        if (TorchPlacementUtility.IsWallTorch(blockType))
+            return TorchPlacementUtility.GetWorldBounds(blockPos, blockType, mapping);
+
         ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
         Vector3 worldMin = blockPos + min;

@@ -390,6 +390,10 @@ public class Subchunk : MonoBehaviour
         if (blockId == (byte)BlockType.Air || blockId == (byte)BlockType.Water)
             return false;
 
+        BlockType blockType = (BlockType)blockId;
+        if (TorchPlacementUtility.IsTorchLike(blockType))
+            return false;
+
         int mapIndex = blockId;
         if (mapIndex < 0 || mapIndex >= blockMappings.Length)
             return false;

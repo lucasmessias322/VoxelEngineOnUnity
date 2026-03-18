@@ -531,6 +531,9 @@ public partial class World
         if (type == BlockType.Air || type == BlockType.Water)
             return false;
 
+        if (TorchPlacementUtility.IsTorchLike(type))
+            return false;
+
         return mapping.isSolid && !mapping.isEmpty;
     }
 
