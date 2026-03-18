@@ -9,7 +9,7 @@ public class Chunk : MonoBehaviour
     public const int SizeY = 384;
     public const int SizeZ = 16;
     public NativeArray<byte> voxelData;
-    public const int SubchunkHeight = 128;
+    public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab

@@ -282,6 +282,9 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Quantidade maxima de subchunks que podem reconstruir collider por frame.")]
+    [Min(1)]
+    public int maxColliderBuildsPerFrame = 1;
     [Tooltip("Quantidade maxima de jobs de dados concluidos e processados por frame.")]
     [Min(1)]
     public int maxDataCompletionsPerFrame = 2;
@@ -370,6 +373,11 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
     private readonly Dictionary<Vector2Int, bool> queuedChunkRebuildRequiresCollider = new Dictionary<Vector2Int, bool>();
+    private readonly Queue<Vector3Int> queuedColliderBuilds = new Queue<Vector3Int>();
+    private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>();
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
+    private readonly List<Vector3Int> relevantTerrainOverridePositions = new List<Vector3Int>(128);
+    private bool terrainOverrideIndexInitialized = false;
 
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
@@ -487,6 +495,174 @@ public partial class World : MonoBehaviour
     {
         int treeBorder = GetMaxTreeCanopyRadiusForGeneration() + 1;
         return Mathf.Max(treeBorder, sunlightSmoothingPadding);
+    }
+
+    private static Vector3Int GetColliderBuildKey(Vector2Int coord, int subchunkIndex)
+    {
+        return new Vector3Int(coord.x, subchunkIndex, coord.y);
+    }
+
+    private void EnqueueColliderBuild(Vector2Int coord, int expectedGen, int subchunkIndex)
+    {
+        Vector3Int key = GetColliderBuildKey(coord, subchunkIndex);
+        PendingColliderBuild request = new PendingColliderBuild
+        {
+            coord = coord,
+            expectedGen = expectedGen,
+            subchunkIndex = subchunkIndex
+        };
+
+        if (queuedColliderBuildsByKey.ContainsKey(key))
+        {
+            queuedColliderBuildsByKey[key] = request;
+            return;
+        }
+
+        queuedColliderBuildsByKey.Add(key, request);
+        queuedColliderBuilds.Enqueue(key);
+    }
+
+    private void ProcessPendingColliderBuilds()
+    {
+        if (!enableBlockColliders || queuedColliderBuilds.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, maxColliderBuildsPerFrame);
+        int processed = 0;
+        int attempts = queuedColliderBuilds.Count;
+        BlockTextureMapping[] blockMappings = blockData != null ? blockData.mappings : null;
+
+        while (processed < perFrameLimit && attempts-- > 0 && queuedColliderBuilds.Count > 0)
+        {
+            Vector3Int key = queuedColliderBuilds.Dequeue();
+            if (!queuedColliderBuildsByKey.TryGetValue(key, out PendingColliderBuild request))
+                continue;
+
+            queuedColliderBuildsByKey.Remove(key);
+
+            if (!activeChunks.TryGetValue(request.coord, out Chunk chunk) ||
+                chunk == null ||
+                chunk.generation != request.expectedGen ||
+                !chunk.hasVoxelData ||
+                !chunk.voxelData.IsCreated ||
+                chunk.subchunks == null ||
+                request.subchunkIndex < 0 ||
+                request.subchunkIndex >= chunk.subchunks.Length)
+            {
+                continue;
+            }
+
+            Subchunk subchunk = chunk.subchunks[request.subchunkIndex];
+            if (subchunk == null)
+                continue;
+
+            if (!subchunk.hasGeometry || !subchunk.CanHaveColliders)
+            {
+                subchunk.ClearColliderData();
+                continue;
+            }
+
+            int startY = request.subchunkIndex * Chunk.SubchunkHeight;
+            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
+            subchunk.RebuildColliders(chunk.voxelData, blockMappings, startY, endY);
+            subchunk.SetColliderSystemEnabled(true);
+            processed++;
+        }
+    }
+
+    private void EnsureTerrainOverrideIndexBuilt()
+    {
+        if (terrainOverrideIndexInitialized)
+            return;
+
+        terrainOverridePositionsByChunk.Clear();
+        foreach (var kv in blockOverrides)
+        {
+            Vector3Int worldPos = kv.Key;
+            if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+                continue;
+
+            Vector2Int coord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+            if (!terrainOverridePositionsByChunk.TryGetValue(coord, out HashSet<Vector3Int> positions))
+            {
+                positions = new HashSet<Vector3Int>();
+                terrainOverridePositionsByChunk[coord] = positions;
+            }
+
+            positions.Add(worldPos);
+        }
+
+        terrainOverrideIndexInitialized = true;
+    }
+
+    private void IndexTerrainOverride(Vector3Int worldPos, Vector2Int coord)
+    {
+        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            return;
+
+        if (!terrainOverridePositionsByChunk.TryGetValue(coord, out HashSet<Vector3Int> positions))
+        {
+            positions = new HashSet<Vector3Int>();
+            terrainOverridePositionsByChunk[coord] = positions;
+        }
+
+        positions.Add(worldPos);
+    }
+
+    private void CollectRelevantTerrainOverridePositions(Vector2Int coord, int borderSize, List<Vector3Int> output)
+    {
+        output.Clear();
+        if (blockOverrides.Count == 0)
+            return;
+
+        EnsureTerrainOverrideIndexBuilt();
+
+        int minX = coord.x * Chunk.SizeX - borderSize;
+        int minZ = coord.y * Chunk.SizeZ - borderSize;
+        int maxX = coord.x * Chunk.SizeX + Chunk.SizeX - 1 + borderSize;
+        int maxZ = coord.y * Chunk.SizeZ + Chunk.SizeZ - 1 + borderSize;
+        int chunkRadiusX = Mathf.CeilToInt(borderSize / (float)Chunk.SizeX);
+        int chunkRadiusZ = Mathf.CeilToInt(borderSize / (float)Chunk.SizeZ);
+
+        for (int dz = -chunkRadiusZ; dz <= chunkRadiusZ; dz++)
+        {
+            for (int dx = -chunkRadiusX; dx <= chunkRadiusX; dx++)
+            {
+                Vector2Int candidateCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                if (!terrainOverridePositionsByChunk.TryGetValue(candidateCoord, out HashSet<Vector3Int> positions))
+                    continue;
+
+                foreach (Vector3Int worldPos in positions)
+                {
+                    if (worldPos.x < minX || worldPos.x > maxX || worldPos.z < minZ || worldPos.z > maxZ)
+                        continue;
+
+                    output.Add(worldPos);
+                }
+            }
+        }
+    }
+
+    private void AppendRelevantBlockEdits(Vector2Int coord, int borderSize, List<BlockEdit> editsList)
+    {
+        if (editsList == null)
+            return;
+
+        CollectRelevantTerrainOverridePositions(coord, borderSize, relevantTerrainOverridePositions);
+        for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
+        {
+            Vector3Int worldPos = relevantTerrainOverridePositions[i];
+            if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
+                continue;
+
+            editsList.Add(new BlockEdit
+            {
+                x = worldPos.x,
+                y = worldPos.y,
+                z = worldPos.z,
+                type = (int)overrideType
+            });
+        }
     }
 
     private TreeSpawnRuleData[] GetActiveTreeSpawnRules()
@@ -666,6 +842,13 @@ public partial class World : MonoBehaviour
         public bool rebuildColliders;
     }
 
+    private struct PendingColliderBuild
+    {
+        public Vector2Int coord;
+        public int expectedGen;
+        public int subchunkIndex;
+    }
+
     #endregion
 
     #region Unity Callbacks
@@ -714,6 +897,7 @@ public partial class World : MonoBehaviour
         ProcessQueuedLeafDecay();
         UpdateChunks();
         UpdateDistantTerrainLod();
+        ProcessPendingColliderBuilds();
         ProcessChunkQueue();
     }
 
@@ -942,17 +1126,24 @@ public partial class World : MonoBehaviour
             if (canApplyMesh)
             {
                 Subchunk sub = activeChunk.subchunks[pm.subchunkIndex];
+                bool hasSolidColliderGeometry = pm.opaqueTriangles.Length > 0 || pm.transparentTriangles.Length > 0;
 
                 if (pm.vertices.Length > 0)
                 {
                     sub.gameObject.SetActive(true);
                     int startY = pm.subchunkIndex * Chunk.SubchunkHeight;
                     int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-                    bool applyColliders = enableBlockColliders && pm.buildColliders;
                     sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
                                       pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
-                                      activeChunk.voxelData, blockData != null ? blockData.mappings : null,
-                                      startY, endY, applyColliders);
+                                      startY, endY);
+
+                    if (pm.buildColliders)
+                    {
+                        if (hasSolidColliderGeometry)
+                            EnqueueColliderBuild(pm.coord, pm.expectedGen, pm.subchunkIndex);
+                        else
+                            sub.ClearColliderData();
+                    }
                 }
                 else
                 {
@@ -1021,18 +1212,16 @@ public partial class World : MonoBehaviour
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
-        int minX = chunkMinX - borderSize;
-        int minZ = chunkMinZ - borderSize;
-        int maxX = chunkMinX + Chunk.SizeX - 1 + borderSize;
-        int maxZ = chunkMinZ + Chunk.SizeZ - 1 + borderSize;
+
+        CollectRelevantTerrainOverridePositions(coord, borderSize, relevantTerrainOverridePositions);
+        if (relevantTerrainOverridePositions.Count == 0)
+            return;
 
         bool hasRelevantOverrides = false;
-        foreach (var kv in blockOverrides)
+        for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
         {
-            Vector3Int worldPos = kv.Key;
-            if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
-                continue;
-            if (worldPos.x < minX || worldPos.x > maxX || worldPos.z < minZ || worldPos.z > maxZ)
+            Vector3Int worldPos = relevantTerrainOverridePositions[i];
+            if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
 
             int ix = worldPos.x - chunkMinX + borderSize;
@@ -1040,7 +1229,6 @@ public partial class World : MonoBehaviour
             if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
                 continue;
 
-            BlockType overrideType = kv.Value;
             int idx = ix + worldPos.y * voxelSizeX + iz * voxelPlaneSize;
             blockTypes[idx] = overrideType;
             hasRelevantOverrides = true;
@@ -1469,32 +1657,7 @@ public partial class World : MonoBehaviour
         // Build edits from blockOverrides
         var editsList = new List<BlockEdit>();
         int borderSize = GetChunkBorderSize();
-        int chunkMinX = coord.x * Chunk.SizeX;
-        int chunkMinZ = coord.y * Chunk.SizeZ;
-        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
-        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
-
-        // Must cover the same padded area used by generation/lighting.
-        int extend = borderSize;
-        int minX = chunkMinX - extend;
-        int minZ = chunkMinZ - extend;
-        int maxX = chunkMaxX + extend;
-        int maxZ = chunkMaxZ + extend;
-
-        foreach (var kv in blockOverrides)
-        {
-            Vector3Int wp = kv.Key;
-            if (wp.x >= minX && wp.x <= maxX && wp.z >= minZ && wp.z <= maxZ && wp.y >= 0 && wp.y < Chunk.SizeY)
-            {
-                editsList.Add(new BlockEdit
-                {
-                    x = wp.x,
-                    y = wp.y,
-                    z = wp.z,
-                    type = (int)kv.Value
-                });
-            }
-        }
+        AppendRelevantBlockEdits(coord, borderSize, editsList);
 
         NativeArray<BlockEdit> nativeEdits;
         if (editsList.Count > 0)
@@ -1509,6 +1672,8 @@ public partial class World : MonoBehaviour
 
         int treeMargin = GetMaxTreeMarginForGeneration();
         TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
 
         // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
@@ -1857,14 +2022,20 @@ public partial class World : MonoBehaviour
         if (dirtySubchunkMask == 0)
             return;
 
-        int expectedGen = nextChunkGeneration++;
-        chunk.generation = expectedGen;
-
         if (chunk.jobScheduled)
         {
-            try { chunk.currentJob.Complete(); } catch { }
+            if (!chunk.currentJob.IsCompleted)
+            {
+                RequestChunkRebuild(coord, dirtySubchunkMask, rebuildColliders);
+                return;
+            }
+
             chunk.jobScheduled = false;
+            chunk.currentJob = default;
         }
+
+        int expectedGen = nextChunkGeneration++;
+        chunk.generation = expectedGen;
 
         if (TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders))
             return;
@@ -1874,33 +2045,7 @@ public partial class World : MonoBehaviour
         // Build edits similar ao RequestChunk
         var editsList = new List<BlockEdit>();
         int borderSize = GetChunkBorderSize();
-
-        int chunkMinX = coord.x * Chunk.SizeX;
-        int chunkMinZ = coord.y * Chunk.SizeZ;
-        int chunkMaxX = chunkMinX + Chunk.SizeX - 1;
-        int chunkMaxZ = chunkMinZ + Chunk.SizeZ - 1;
-
-        // Must cover the same padded area used by generation/lighting.
-        int extend = borderSize;
-        int minX = chunkMinX - extend;
-        int minZ = chunkMinZ - extend;
-        int maxX = chunkMaxX + extend;
-        int maxZ = chunkMaxZ + extend;
-
-        foreach (var kv in blockOverrides)
-        {
-            Vector3Int wp = kv.Key;
-            if (wp.x >= minX && wp.x <= maxX && wp.z >= minZ && wp.z <= maxZ && wp.y >= 0 && wp.y < Chunk.SizeY)
-            {
-                editsList.Add(new BlockEdit
-                {
-                    x = wp.x,
-                    y = wp.y,
-                    z = wp.z,
-                    type = (int)kv.Value
-                });
-            }
-        }
+        AppendRelevantBlockEdits(coord, borderSize, editsList);
 
         NativeArray<BlockEdit> nativeEdits;
         if (editsList.Count > 0)
@@ -1915,6 +2060,8 @@ public partial class World : MonoBehaviour
 
         int treeMargin = GetMaxTreeMarginForGeneration();
         TreeSpawnRuleData[] activeTreeSpawnRules = GetActiveTreeSpawnRules();
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
@@ -2051,20 +2198,27 @@ public partial class World : MonoBehaviour
             {
                 Subchunk sc = chunk.subchunks[i];
                 if (sc != null)
+                {
                     sc.SetColliderSystemEnabled(enableBlockColliders);
+
+                    if (enableBlockColliders && chunk.hasVoxelData && sc.hasGeometry && sc.CanHaveColliders)
+                        EnqueueColliderBuild(kv.Key, chunk.generation, i);
+                }
             }
         }
 
         SetHighBuildCollidersEnabled(enableBlockColliders);
 
-        // If colliders were re-enabled, rebuild active chunks so subchunks generated while disabled gain collider data.
-        if (enableBlockColliders)
+        if (!enableBlockColliders)
         {
-            foreach (var kv in activeChunks)
-            {
-                RequestChunkRebuild(kv.Key);
-                RequestHighBuildMeshRebuild(kv.Key);
-            }
+            queuedColliderBuilds.Clear();
+            queuedColliderBuildsByKey.Clear();
+            return;
+        }
+
+        foreach (var kv in activeChunks)
+        {
+            RequestHighBuildMeshRebuild(kv.Key);
         }
     }
 

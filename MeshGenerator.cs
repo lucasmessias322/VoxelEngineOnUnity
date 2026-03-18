@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -209,9 +209,9 @@ public static class MeshGenerator
         out NativeArray<bool> subchunkNonEmpty
     )
     {
-        // 1. Fixar o borderSize em 1 (Padrão para Ambient Occlusion e Costura)
+        // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
-        // 2. Alocações Iniciais de Configuração
+        // 2. AlocaÃ§Ãµes Iniciais de ConfiguraÃ§Ã£o
         nativeNoiseLayers = new NativeArray<NoiseLayer>(noiseLayersArr, Allocator.TempJob);
         nativeWarpLayers = new NativeArray<WarpLayer>(warpLayersArr, Allocator.TempJob);
         nativeBlockMappings = new NativeArray<BlockTextureMapping>(blockMappingsArr, Allocator.TempJob);
@@ -225,7 +225,7 @@ public static class MeshGenerator
             nativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(0, Allocator.TempJob);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
-        // 3. Alocações dos Arrays Intermédios que fluem entre os Jobs (TempJob)
+        // 3. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
         int heightSize = SizeX + 2 * borderSize;
         int totalHeightPoints = heightSize * heightSize;
         int voxelSizeX = SizeX + 2 * borderSize;
@@ -242,7 +242,7 @@ public static class MeshGenerator
 
 
         // ==========================================
-        // JOB 0: Geração do Heightmap (Paralelo)
+        // JOB 0: GeraÃ§Ã£o do Heightmap (Paralelo)
         // ==========================================
         var heightJob = new HeightmapJob
         {
@@ -257,7 +257,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             heightStride = heightSize
         };
-        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessário)
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
 
 
 
@@ -282,13 +282,13 @@ public static class MeshGenerator
         int paddedSize = SizeX + 2 * borderSize;
         int totalColumns = paddedSize * paddedSize;
 
-        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 é ótimo
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 Ã© Ã³timo
 
 
 
 
         // ==========================================
-        // JOB 1: Geração de Dados (Terreno)
+        // JOB 1: GeraÃ§Ã£o de Dados (Terreno)
         // ==========================================
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
@@ -322,7 +322,7 @@ public static class MeshGenerator
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
         };
-        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // Dependência no heightHandle
+        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
         JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
         var lightJob = new ChunkLighting.ChunkLightingJob
@@ -381,7 +381,7 @@ public static class MeshGenerator
         out NativeList<Vector4> extraUVs
     )
     {
-        // 1. Alocações das Listas de Mesh (Output)
+        // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
@@ -396,7 +396,7 @@ public static class MeshGenerator
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
 
         // ==========================================
-        // JOB 2: Geração da Malha (Mesh)
+        // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
@@ -404,7 +404,7 @@ public static class MeshGenerator
             endY = endY,
             blockTypes = blockTypes,
             solids = solids,
-            light = light, // Usa a luz previamente calculada e passada por parâmetro
+            light = light, // Usa a luz previamente calculada e passada por parÃ¢metro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
@@ -438,7 +438,7 @@ public static class MeshGenerator
             tintFlags = tintFlags,
             vertexAO = vertexAO
         };
-        // O MeshJob agora é agendado independentemente, assumindo que os dados intermediários já estão prontos
+        // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
         meshHandle = meshJob.Schedule();
     }
 
@@ -492,6 +492,17 @@ public static class MeshGenerator
         public NativeList<byte> tintFlags;
         public NativeList<byte> vertexAO;
 
+        private struct GreedyFaceData
+        {
+            public int blockId;
+            public byte valid;
+            public byte faceLight;
+            public byte ao0;
+            public byte ao1;
+            public byte ao2;
+            public byte ao3;
+        }
+
         public void Execute()
         {
             float invAtlasTilesX = 1f / atlasTilesX;
@@ -500,6 +511,180 @@ public static class MeshGenerator
             GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
             GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
             GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+        }
+
+        private static bool HasFace(in GreedyFaceData face)
+        {
+            return face.valid != 0;
+        }
+
+        private static bool HasSameSurface(in GreedyFaceData a, in GreedyFaceData b)
+        {
+            return HasFace(a) &&
+                   HasFace(b) &&
+                   a.blockId == b.blockId &&
+                   a.faceLight == b.faceLight;
+        }
+
+        private static bool CanMergeAlongU(in GreedyFaceData left, in GreedyFaceData right)
+        {
+            // Merge only when the shared edge keeps the same AO signature.
+            return HasSameSurface(left, right) &&
+                   left.ao1 == right.ao0 &&
+                   left.ao2 == right.ao3;
+        }
+
+        private static bool CanMergeAlongV(in GreedyFaceData bottom, in GreedyFaceData top)
+        {
+            return HasSameSurface(bottom, top) &&
+                   bottom.ao3 == top.ao0 &&
+                   bottom.ao2 == top.ao1;
+        }
+
+        private static Vector3Int GetFaceVertexPlanePos(
+            int axis,
+            int u,
+            int v,
+            int n,
+            int normalSign,
+            int i,
+            int j,
+            int du,
+            int dv)
+        {
+            int planeN = n + normalSign;
+            int uCoord = i + du;
+            int vCoord = j + dv;
+
+            return new Vector3Int(
+                axis == 0 ? planeN : (u == 0 ? uCoord : v == 0 ? vCoord : n),
+                axis == 1 ? planeN : (u == 1 ? uCoord : v == 1 ? vCoord : n),
+                axis == 2 ? planeN : (u == 2 ? uCoord : v == 2 ? vCoord : n)
+            );
+        }
+
+        private static byte GetRectVertexAO(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            int localX,
+            int localY)
+        {
+            int cellX = localX == width ? startI + width - 1 : startI + localX;
+            int cellY = localY == height ? startJ + height - 1 : startJ + localY;
+            GreedyFaceData face = mask[cellX + cellY * sizeU];
+
+            if (localX == width)
+                return localY == height ? face.ao2 : face.ao1;
+
+            return localY == height ? face.ao3 : face.ao0;
+        }
+
+        private static bool MatchesQuadInterpolationForAO(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            bool flipTriangle)
+        {
+            if (width <= 0 || height <= 0)
+                return false;
+
+            int scale = width * height;
+            int ao00 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, 0);
+            int ao10 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, 0);
+            int ao11 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, height);
+            int ao01 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, height);
+
+            for (int y = 0; y <= height; y++)
+            {
+                for (int x = 0; x <= width; x++)
+                {
+                    int actual = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, x, y);
+                    int expectedScaled;
+
+                    if (!flipTriangle)
+                    {
+                        if (x * height >= y * width)
+                        {
+                            expectedScaled = ao00 * scale +
+                                             (ao10 - ao00) * x * height +
+                                             (ao11 - ao10) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = ao00 * scale +
+                                             (ao11 - ao01) * x * height +
+                                             (ao01 - ao00) * y * width;
+                        }
+                    }
+                    else
+                    {
+                        if (x * height + y * width <= scale)
+                        {
+                            expectedScaled = ao00 * scale +
+                                             (ao10 - ao00) * x * height +
+                                             (ao01 - ao00) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = ao11 * scale +
+                                             (ao10 - ao11) * width * (height - y) +
+                                             (ao01 - ao11) * height * (width - x);
+                        }
+                    }
+
+                    if (actual * scale != expectedScaled)
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryGetRepresentableRectFlip(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            out bool flipTriangle)
+        {
+            bool noFlipMatches = MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, false);
+            bool flipMatches = MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, true);
+
+            int ao00 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, 0);
+            int ao10 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, 0);
+            int ao11 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, height);
+            int ao01 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, height);
+            bool heuristicFlip = (ao00 + ao11) > (ao10 + ao01);
+
+            if (noFlipMatches && flipMatches)
+            {
+                flipTriangle = heuristicFlip;
+                return true;
+            }
+
+            if (flipMatches)
+            {
+                flipTriangle = true;
+                return true;
+            }
+
+            if (noFlipMatches)
+            {
+                flipTriangle = false;
+                return true;
+            }
+
+            flipTriangle = heuristicFlip;
+            return false;
         }
 
         private void GenerateSpecialMeshes(
@@ -1048,7 +1233,7 @@ public static class MeshGenerator
             int voxelPlaneSize = voxelSizeX * SizeY;
 
             int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
-            NativeArray<int> mask = new NativeArray<int>(maxMask, Allocator.Temp);
+            NativeArray<GreedyFaceData> mask = new NativeArray<GreedyFaceData>(maxMask, Allocator.Temp);
 
             for (int axis = 0; axis < 3; axis++)
             {
@@ -1059,21 +1244,18 @@ public static class MeshGenerator
                     int u = (axis + 1) % 3;
                     int v = (axis + 2) % 3;
 
-                    int sizeU = (u == 0 ? voxelSizeX : u == 1 ? SizeY : voxelSizeZ);
-                    int sizeV = (v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ);
-                    int chunkSize = (axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ);
+                    int sizeU = u == 0 ? voxelSizeX : u == 1 ? SizeY : voxelSizeZ;
+                    int sizeV = v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ;
+                    int chunkSize = axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ;
 
-                    // AQUI ACONTECE A MÁGICA DE RESTRIÇÃO PARA SUBCHUNKS (Limites de Y controlados)
-                    int minN = (axis == 1) ? startY : border;
-                    int maxN = (axis == 1) ? endY : border + chunkSize;
+                    int minN = axis == 1 ? startY : border;
+                    int maxN = axis == 1 ? endY : border + chunkSize;
 
-                    // Restrict scan to the active chunk footprint for X/Z axes.
-                    // This avoids iterating the full lighting padding when only the core area can emit faces.
-                    int minU = (u == 1) ? startY : (u == 0 ? border : border);
-                    int maxU = (u == 1) ? endY : (u == 0 ? border + SizeX : border + SizeZ);
+                    int minU = u == 1 ? startY : border;
+                    int maxU = u == 1 ? endY : (u == 0 ? border + SizeX : border + SizeZ);
 
-                    int minV = (v == 1) ? startY : (v == 0 ? border : border);
-                    int maxV = (v == 1) ? endY : (v == 0 ? border + SizeX : border + SizeZ);
+                    int minV = v == 1 ? startY : border;
+                    int maxV = v == 1 ? endY : (v == 0 ? border + SizeX : border + SizeZ);
 
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
                     BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
@@ -1087,19 +1269,24 @@ public static class MeshGenerator
                         {
                             for (int i = minU; i < maxU; i++)
                             {
-                                int x = (u == 0 ? i : v == 0 ? j : n);
-                                int y = (u == 1 ? i : v == 1 ? j : n);
-                                int z = (u == 2 ? i : v == 2 ? j : n);
+                                int x = u == 0 ? i : v == 0 ? j : n;
+                                int y = u == 1 ? i : v == 1 ? j : n;
+                                int z = u == 2 ? i : v == 2 ? j : n;
 
+                                int maskIndex = i + j * sizeU;
                                 int idx = x + y * voxelSizeX + z * voxelPlaneSize;
                                 BlockType current = blockTypes[idx];
 
-                                if (current == BlockType.Air) { mask[i + j * sizeU] = 0; continue; }
+                                if (current == BlockType.Air)
+                                {
+                                    mask[maskIndex] = default;
+                                    continue;
+                                }
 
                                 BlockTextureMapping currentMapping = blockMappings[(int)current];
                                 if (currentMapping.renderShape != BlockRenderShape.Cube)
                                 {
-                                    mask[i + j * sizeU] = 0;
+                                    mask[maskIndex] = default;
                                     continue;
                                 }
 
@@ -1108,10 +1295,7 @@ public static class MeshGenerator
                                 int nz = z + (axis == 2 ? normalSign : 0);
 
                                 bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
-
-                                bool isVisible = false;
-
-
+                                bool isVisible;
                                 if (outside)
                                 {
                                     isVisible = true;
@@ -1120,69 +1304,79 @@ public static class MeshGenerator
                                 {
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = blockTypes[nIdx];
-
                                     isVisible = IsFaceVisibleForCurrentBlock(current, neighbor);
                                 }
 
-                                if (isVisible)
+                                if (!isVisible)
                                 {
-                                    byte packed = outside
-                                        ? LightUtils.PackLight(15, 0)
-                                        : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
+                                    mask[maskIndex] = default;
+                                    continue;
+                                }
 
-                                    byte faceLight = (byte)math.max(
-                                        (int)LightUtils.GetSkyLight(packed),
-                                        (int)LightUtils.GetBlockLight(packed)
-                                    );
+                                byte packed = outside
+                                    ? LightUtils.PackLight(15, 0)
+                                    : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
 
-                                    // --- NOVO: CALCULANDO AO POR BLOCO 1x1 ---
-                                    int aoPlaneN = n + normalSign;
-                                    Vector3Int aoPos = new Vector3Int(
-                                        axis == 0 ? aoPlaneN : x,
-                                        axis == 1 ? aoPlaneN : y,
-                                        axis == 2 ? aoPlaneN : z
-                                    );
+                                byte faceLight = (byte)math.max(
+                                    (int)LightUtils.GetSkyLight(packed),
+                                    (int)LightUtils.GetBlockLight(packed)
+                                );
 
-                                    int packedAO;
-                                    bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(currentMapping);
-                                    if (disableAOForCurrentBlock)
-                                    {
-                                        packedAO = 0xFF;
-                                    }
-                                    else
-                                    {
-                                        byte ao0 = GetVertexAO(aoPos, -stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao1 = GetVertexAO(aoPos, stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao2 = GetVertexAO(aoPos, stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        byte ao3 = GetVertexAO(aoPos, -stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                        packedAO = (ao0) | (ao1 << 2) | (ao2 << 4) | (ao3 << 6);
-                                    }
+                                int aoPlaneN = n + normalSign;
+                                Vector3Int aoPos = new Vector3Int(
+                                    axis == 0 ? aoPlaneN : x,
+                                    axis == 1 ? aoPlaneN : y,
+                                    axis == 2 ? aoPlaneN : z
+                                );
 
-                                    // Mask agora guarda: [8 bits AO] | [4 bits Luz] | [12 bits Bloco]
-                                    mask[i + j * sizeU] = (int)current | ((int)faceLight << 12) | (packedAO << 16);
+                                byte ao0;
+                                byte ao1;
+                                byte ao2;
+                                byte ao3;
+                                bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(currentMapping);
+                                if (disableAOForCurrentBlock)
+                                {
+                                    ao0 = 3;
+                                    ao1 = 3;
+                                    ao2 = 3;
+                                    ao3 = 3;
                                 }
                                 else
                                 {
-                                    mask[i + j * sizeU] = 0;
+                                    ao0 = GetVertexAO(aoPos, -stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    ao1 = GetVertexAO(aoPos, stepU, -stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    ao2 = GetVertexAO(aoPos, stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    ao3 = GetVertexAO(aoPos, -stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 }
+
+                                mask[maskIndex] = new GreedyFaceData
+                                {
+                                    blockId = (int)current,
+                                    valid = 1,
+                                    faceLight = faceLight,
+                                    ao0 = ao0,
+                                    ao1 = ao1,
+                                    ao2 = ao2,
+                                    ao3 = ao3
+                                };
                             }
                         }
 
-                        // GREEDY MESHING
                         for (int j = minV; j < maxV; j++)
                         {
                             int i = minU;
                             while (i < maxU)
                             {
-                                int packedData = mask[i + j * sizeU];
-                                if (packedData == 0)
+                                GreedyFaceData startFace = mask[i + j * sizeU];
+                                if (!HasFace(startFace))
                                 {
                                     i++;
                                     continue;
                                 }
 
                                 int w = 1;
-                                while (i + w < maxU && mask[i + w + j * sizeU] == packedData) w++;
+                                while (i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
+                                    w++;
 
                                 int h = 1;
                                 while (j + h < maxV)
@@ -1190,27 +1384,63 @@ public static class MeshGenerator
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
                                     {
-                                        if (mask[i + k + (j + h) * sizeU] != packedData)
+                                        GreedyFaceData candidate = mask[i + k + (j + h) * sizeU];
+                                        if (!HasFace(candidate) ||
+                                            !CanMergeAlongV(mask[i + k + (j + h - 1) * sizeU], candidate) ||
+                                            (k > 0 && !CanMergeAlongU(mask[i + k - 1 + (j + h) * sizeU], candidate)))
                                         {
                                             canGrow = false;
                                             break;
                                         }
                                     }
-                                    if (!canGrow) break;
+
+                                    if (!canGrow)
+                                        break;
+
                                     h++;
                                 }
 
-                                // Extrai os dados que foram empacotados
-                                BlockType bt = (BlockType)(packedData & 0xFFF);
-                                byte finalLight = (byte)((packedData >> 12) & 0xF);
-                                int packedAO = (packedData >> 16) & 0xFF;
-                                BlockTextureMapping btMapping = blockMappings[(int)bt];
+                                int maxW = w;
+                                int maxH = h;
+                                int bestW = 1;
+                                int bestH = 1;
+                                int bestArea = 1;
+                                bool flipTriangle = (startFace.ao0 + startFace.ao2) > (startFace.ao1 + startFace.ao3);
 
-                                // Desempacota o AO do quad gigante (ele será idêntico por toda a superfície mesclada)
-                                byte ao0 = (byte)(packedAO & 0x3);
-                                byte ao1 = (byte)((packedAO >> 2) & 0x3);
-                                byte ao2 = (byte)((packedAO >> 4) & 0x3);
-                                byte ao3 = (byte)((packedAO >> 6) & 0x3);
+                                // Keep the largest sub-rectangle whose AO still fits one quad.
+                                for (int testH = 1; testH <= maxH; testH++)
+                                {
+                                    for (int testW = 1; testW <= maxW; testW++)
+                                    {
+                                        int area = testW * testH;
+                                        if (area < bestArea || (area == bestArea && testW <= bestW))
+                                            continue;
+
+                                        if (!TryGetRepresentableRectFlip(mask, sizeU, i, j, testW, testH, out bool candidateFlip))
+                                            continue;
+
+                                        bestW = testW;
+                                        bestH = testH;
+                                        bestArea = area;
+                                        flipTriangle = candidateFlip;
+                                    }
+                                }
+
+                                w = bestW;
+                                h = bestH;
+
+                                GreedyFaceData bottomLeftFace = mask[i + j * sizeU];
+                                GreedyFaceData bottomRightFace = mask[i + (w - 1) + j * sizeU];
+                                GreedyFaceData topRightFace = mask[i + (w - 1) + (j + h - 1) * sizeU];
+                                GreedyFaceData topLeftFace = mask[i + (j + h - 1) * sizeU];
+
+                                BlockType bt = (BlockType)bottomLeftFace.blockId;
+                                byte finalLight = bottomLeftFace.faceLight;
+
+                                byte ao0 = bottomLeftFace.ao0;
+                                byte ao1 = bottomRightFace.ao1;
+                                byte ao2 = topRightFace.ao2;
+                                byte ao3 = topLeftFace.ao3;
 
                                 int vIndex = vertices.Length;
 
@@ -1227,7 +1457,8 @@ public static class MeshGenerator
                                     float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
                                     float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
 
-                                    if (bt == BlockType.Water && axis == 1 && normalSign > 0) py -= 0.15f;
+                                    if (bt == BlockType.Water && axis == 1 && normalSign > 0)
+                                        py -= 0.15f;
 
                                     vertices.Add(new Vector3(px, py, pz));
                                     normals.Add(normal);
@@ -1242,18 +1473,12 @@ public static class MeshGenerator
                                                 faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
-
-                                    int aoPlaneN = n + normalSign;
-                                    Vector3Int vertexPlanePos = new Vector3Int(
-                                        axis == 0 ? aoPlaneN : (u == 0 ? i + du : v == 0 ? j + dv : n),
-                                        axis == 1 ? aoPlaneN : (u == 1 ? i + du : v == 1 ? j + dv : n),
-                                        axis == 2 ? aoPlaneN : (u == 2 ? i + du : v == 2 ? j + dv : n)
-                                    );
+                                    Vector3Int vertexPlanePos = GetFaceVertexPlanePos(axis, u, v, n, normalSign, i, j, du, dv);
                                     Vector3Int lightStepU = (l == 1 || l == 2) ? stepU : -stepU;
                                     Vector3Int lightStepV = (l == 2 || l == 3) ? stepV : -stepV;
                                     byte vertexLight = GetVertexLight(vertexPlanePos, lightStepU, lightStepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    if (IsEmissiveBlock(btMapping))
-                                        vertexLight = (byte)math.max((int)vertexLight, (int)btMapping.lightEmission);
+                                    if (IsEmissiveBlock(m))
+                                        vertexLight = (byte)math.max((int)vertexLight, (int)m.lightEmission);
 
                                     float rawLight = math.max(finalLight / 15f, vertexLight / 15f);
                                     float floatTint = tint ? 1f : 0f;
@@ -1270,11 +1495,9 @@ public static class MeshGenerator
 
                                     uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                 }
-                                NativeList<int> tris = (bt == BlockType.Water) ? waterTriangles :
-                                                       blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
 
-                                // Flip da diagonal para evitar artefatos no AO
-                                bool flipTriangle = (ao0 + ao2) > (ao1 + ao3);
+                                NativeList<int> tris = bt == BlockType.Water ? waterTriangles :
+                                                       blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
 
                                 if (normalSign > 0)
                                 {
@@ -1304,8 +1527,10 @@ public static class MeshGenerator
                                 }
 
                                 for (int y0 = 0; y0 < h; y0++)
+                                {
                                     for (int x0 = 0; x0 < w; x0++)
-                                        mask[i + x0 + (j + y0) * sizeU] = 0;
+                                        mask[i + x0 + (j + y0) * sizeU] = default;
+                                }
 
                                 i += w;
                             }
@@ -1313,10 +1538,9 @@ public static class MeshGenerator
                     }
                 }
             }
+
             mask.Dispose();
         }
-
-       
         private bool IsOccluder(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
@@ -1343,8 +1567,8 @@ public static class MeshGenerator
 
         private static bool CastsAmbientOcclusion(BlockType blockType, BlockTextureMapping mapping)
         {
-            // AO deve vir de cubos cheios que realmente fecham a iluminação ambiente.
-            // Folhas são a exceção: mesmo transparentes, devem sombrear como no Minecraft.
+            // AO deve vir de cubos cheios que realmente fecham a iluminaÃ§Ã£o ambiente.
+            // Folhas sÃ£o a exceÃ§Ã£o: mesmo transparentes, devem sombrear como no Minecraft.
             if (mapping.renderShape != BlockRenderShape.Cube ||
                 mapping.isEmpty ||
                 mapping.isLiquid ||
@@ -1395,7 +1619,7 @@ public static class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<BlockTextureMapping> blockMappings;
-        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ← NOVO
+        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // â† NOVO
         public void Execute() { }
     }
 
@@ -1430,6 +1654,7 @@ public class MeshBuildResult
         normals = n;
     }
 }
+
 
 
 

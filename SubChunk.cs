@@ -22,6 +22,7 @@ public class Subchunk : MonoBehaviour
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
     private bool hasColliderData = false;
+    private bool canHaveColliders = false;
     private readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
     private int activeBoxColliderCount = 0;
     private bool[] colliderSolidsBuffer;
@@ -29,6 +30,7 @@ public class Subchunk : MonoBehaviour
 
     [HideInInspector]
     public bool hasGeometry = false;
+    public bool CanHaveColliders => canHaveColliders;
 
     public void Initialize(Material[] materials, int subchunkIndex)
     {
@@ -57,18 +59,12 @@ public class Subchunk : MonoBehaviour
         NativeList<Vector2> uv2,
         NativeList<Vector3> normals,
         NativeList<Vector4> extraUVs,
-        NativeArray<byte> voxelData,
-        BlockTextureMapping[] blockMappings,
         int startY,
-        int endY,
-        bool enableBlockColliders)
+        int endY)
     {
         if (vertices.Length == 0)
         {
-            hasGeometry = false;
-            hasColliderData = false;
-            DisableAllBoxColliders();
-            gameObject.SetActive(false);
+            ClearMesh();
             return;
         }
 
@@ -138,14 +134,13 @@ public class Subchunk : MonoBehaviour
         mesh.bounds = CreateMeshBounds(startY, endY);
 
         bool hasSolid = opaqueTris.Length > 0 || transparentTris.Length > 0;
+        canHaveColliders = hasSolid;
 
         hasGeometry = true;
         gameObject.SetActive(true);
         meshRenderer.enabled = true;
 
-        if (enableBlockColliders && hasSolid)
-            BuildGreedyBoxColliders(voxelData, blockMappings, startY, endY);
-        else
+        if (!hasSolid)
         {
             hasColliderData = false;
             DisableAllBoxColliders();
@@ -174,10 +169,33 @@ public class Subchunk : MonoBehaviour
     {
         if (mesh != null) mesh.Clear();
         hasGeometry = false;
+        canHaveColliders = false;
         hasColliderData = false;
         DisableAllBoxColliders();
         if (meshRenderer != null) meshRenderer.enabled = false;
         gameObject.SetActive(false);
+    }
+
+    public void ClearColliderData()
+    {
+        hasColliderData = false;
+        DisableAllBoxColliders();
+    }
+
+    public void RebuildColliders(
+        NativeArray<byte> voxelData,
+        BlockTextureMapping[] blockMappings,
+        int startY,
+        int endY)
+    {
+        if (!hasGeometry || !canHaveColliders)
+        {
+            hasColliderData = false;
+            DisableAllBoxColliders();
+            return;
+        }
+
+        BuildGreedyBoxColliders(voxelData, blockMappings, startY, endY);
     }
 
     private void BuildGreedyBoxColliders(NativeArray<byte> voxelData, BlockTextureMapping[] blockMappings, int startY, int endY)

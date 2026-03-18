@@ -253,6 +253,9 @@ public partial class World : MonoBehaviour
             Mathf.FloorToInt((float)worldPos.z / Chunk.SizeZ)
         );
 
+        EnsureTerrainOverrideIndexBuilt();
+        IndexTerrainOverride(worldPos, chunkCoord);
+
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
 
