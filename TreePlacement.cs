@@ -62,72 +62,11 @@ public static class TreePlacement
 
             int ix = localX + border;
             int iz = localZ + border;
-
-            if (ix < 0 || ix >= heightStride || iz < 0 || iz >= heightStride ||
-                ix >= voxelSizeX || iz >= voxelSizeZ)
-                continue;
-
-            int cacheIdx = ix + iz * heightStride;
-            int surfaceY = heightCache[cacheIdx];
+            int surfaceY = t.surfaceY;
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
 
-            int groundIdx = ix + surfaceY * voxelSizeX + iz * voxelPlaneSize;
-            BlockType groundType = blockTypes[groundIdx];
-            if (isCactus)
-            {
-                if (groundType != BlockType.Sand)
-                    continue;
-            }
-            else if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
-            {
-                continue;
-            }
-
             int leafBottom = surfaceY + t.trunkHeight - 1;
-            bool skipTree = false;
-
-            for (int dy = 1; dy <= t.trunkHeight; dy++)
-            {
-                int ty = surfaceY + dy;
-                if (ty >= chunkSizeY)
-                    break;
-
-                int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                if (blockTypes[tidx] == BlockType.Water)
-                {
-                    skipTree = true;
-                    break;
-                }
-            }
-
-            if (skipTree)
-                continue;
-
-            int maxCheckY = math.min(chunkSizeY - 1, surfaceY + GetTreeTopOffset(t.treeStyle, t.trunkHeight, canopyH));
-            for (int yy = surfaceY + 1; yy <= maxCheckY && !skipTree; yy++)
-            {
-                for (int dx = -horizontalReach; dx <= horizontalReach && !skipTree; dx++)
-                {
-                    for (int dz = -horizontalReach; dz <= horizontalReach; dz++)
-                    {
-                        int cx = ix + dx;
-                        int cz = iz + dz;
-                        if (cx < 0 || cx >= voxelSizeX || cz < 0 || cz >= voxelSizeZ)
-                            continue;
-
-                        int cidx = cx + yy * voxelSizeX + cz * voxelPlaneSize;
-                        if (blockTypes[cidx] == BlockType.Water)
-                        {
-                            skipTree = true;
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (skipTree)
-                continue;
 
             if (isFancyOak)
             {
@@ -190,6 +129,9 @@ public static class TreePlacement
                 int ty = surfaceY + dy;
                 if (ty >= chunkSizeY)
                     break;
+
+                if (!IsInsideVoxelBounds(ix, ty, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+                    continue;
 
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
                 if (!IsWoodBlock(blockTypes[tidx]) &&
@@ -479,6 +421,9 @@ public static class TreePlacement
         int maxY = centerY + leafDistanceLimit;
         for (int y = centerY; y <= maxY; y++)
         {
+            if (!IsInsideVoxelBounds(centerX, y, centerZ, voxelSizeX, voxelSizeZ, chunkSizeY))
+                continue;
+
             if (!CanLeafReplaceAt(centerX, y, centerZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
                 return false;
         }
@@ -505,7 +450,12 @@ public static class TreePlacement
         int steps = math.max(math.abs(dx), math.max(math.abs(dy), math.abs(dz)));
 
         if (steps == 0)
+        {
+            if (!IsInsideVoxelBounds(startX, startY, startZ, voxelSizeX, voxelSizeZ, chunkSizeY))
+                return true;
+
             return CanWoodReplaceAt(startX, startY, startZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY);
+        }
 
         for (int step = 0; step <= steps; step++)
         {
@@ -513,6 +463,9 @@ public static class TreePlacement
             int x = (int)math.floor(startX + dx * t + 0.5f);
             int y = (int)math.floor(startY + dy * t + 0.5f);
             int z = (int)math.floor(startZ + dz * t + 0.5f);
+
+            if (!IsInsideVoxelBounds(x, y, z, voxelSizeX, voxelSizeZ, chunkSizeY))
+                continue;
 
             if (!CanWoodReplaceAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY))
                 return false;
@@ -650,6 +603,13 @@ public static class TreePlacement
             {
                 int lx = ix + dirX * step;
                 int lz = iz + dirZ * step;
+                if (!IsInsideVoxelBounds(lx, armBaseY, lz, voxelSizeX, voxelSizeZ, chunkSizeY))
+                {
+                    tipX = lx;
+                    tipZ = lz;
+                    continue;
+                }
+
                 if (!TryPlaceCactusBlock(lx, armBaseY, lz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, chunkSizeY, cactusType))
                     break;
 

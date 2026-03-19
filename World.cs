@@ -977,7 +977,6 @@ public partial class World : MonoBehaviour
         public Vector2Int coord;
         public int expectedGen;
         public int subchunkIndex;
-        public Subchunk targetSubchunk;
         public Chunk parentChunk;
 
         // Data arrays (kept so we can dispose later)
@@ -2143,8 +2142,10 @@ public partial class World : MonoBehaviour
 
         // Build edits from blockOverrides
         var editsList = new List<BlockEdit>();
-        int borderSize = GetChunkBorderSize();
-        AppendRelevantBlockEdits(coord, borderSize, editsList);
+        int dataBorderSize = GetDetailedGenerationBorderSize();
+        int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
+        int overrideBorderSize = Mathf.Max(dataBorderSize, lightBorderSize);
+        AppendRelevantBlockEdits(coord, overrideBorderSize, editsList);
 
         NativeArray<BlockEdit> nativeEdits;
         if (editsList.Count > 0)
@@ -2165,12 +2166,12 @@ public partial class World : MonoBehaviour
 
         // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
-        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
-        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         if (chunk.jobScheduled)
         {
             try { chunk.currentJob.Complete(); } catch { }
@@ -2179,11 +2180,11 @@ public partial class World : MonoBehaviour
 
         // Agendamento do data job
         MeshGenerator.ScheduleDataJob(
-            coord, cachedNativeNoiseLayers, cachedNativeWarpLayers, cachedNativeBlockMappings,
+            coord, cachedNativeNoiseLayers, cachedNativeWarpLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
             baseHeight, offsetX, offsetZ, seaLevel,
             GetBiomeNoiseSettings(),
             seed,
-            nativeEdits, treeMargin, borderSize, detailBorderSize,
+            nativeEdits, treeMargin, dataBorderSize, lightBorderSize, detailBorderSize,
             GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
@@ -2194,6 +2195,7 @@ public partial class World : MonoBehaviour
             out NativeArray<BlockType> blockTypes,
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
+            out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty
         );
 
@@ -2204,12 +2206,12 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             solids = solids,
             light = light,
-            borderSize = borderSize,
+            borderSize = dataBorderSize,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
             chunkLightData = chunkLightData,
-            lightOpacityData = default,
+            lightOpacityData = lightOpacityData,
             edits = nativeEdits,
             fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
@@ -2754,8 +2756,10 @@ public partial class World : MonoBehaviour
 
         // Build edits similar ao RequestChunk
         var editsList = new List<BlockEdit>();
-        int borderSize = GetChunkBorderSize();
-        AppendRelevantBlockEdits(coord, borderSize, editsList);
+        int dataBorderSize = GetDetailedGenerationBorderSize();
+        int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
+        int overrideBorderSize = Mathf.Max(dataBorderSize, lightBorderSize);
+        AppendRelevantBlockEdits(coord, overrideBorderSize, editsList);
 
         NativeArray<BlockEdit> nativeEdits;
         if (editsList.Count > 0)
@@ -2775,18 +2779,19 @@ public partial class World : MonoBehaviour
         EnsureNativeGenerationCaches();
 
         // Light injection corrected for rebuild (uses borderSize)
-        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
-        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
 
-        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
         MeshGenerator.ScheduleDataJob(
               coord,
               cachedNativeNoiseLayers,
               cachedNativeWarpLayers,
               cachedNativeBlockMappings,
+              cachedNativeEffectiveLightOpacityByBlock,
               baseHeight,
               offsetX,
               offsetZ,
@@ -2795,7 +2800,8 @@ public partial class World : MonoBehaviour
               seed,
               nativeEdits,
               treeMargin,
-              borderSize,
+              dataBorderSize,
+              lightBorderSize,
               detailBorderSize,
               GetMaxTreeRadiusForGeneration(),
               CliffTreshold,
@@ -2809,6 +2815,7 @@ public partial class World : MonoBehaviour
               out NativeArray<BlockType> blockTypes,
               out NativeArray<bool> solids,
               out NativeArray<byte> light,
+              out NativeArray<byte> lightOpacityData,
               out NativeArray<bool> subchunkNonEmpty
           );
 
@@ -2819,12 +2826,12 @@ public partial class World : MonoBehaviour
             blockTypes = blockTypes,
             solids = solids,
             light = light,
-            borderSize = borderSize,
+            borderSize = dataBorderSize,
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
             chunkLightData = chunkLightData,
-            lightOpacityData = default,
+            lightOpacityData = lightOpacityData,
             edits = nativeEdits,
             fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,

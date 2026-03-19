@@ -20,6 +20,7 @@ public struct TreeInstance
 {
     public int worldX;
     public int worldZ;
+    public int surfaceY;
     public int trunkHeight;
     public int canopyRadius;
     public int canopyHeight;
@@ -242,11 +243,142 @@ public static class MeshGenerator
         }
     }
 
+    [BurstCompile]
+    private struct PopulateLightOpacityJob : IJobParallelFor
+    {
+        public Vector2Int coord;
+        [ReadOnly, DeallocateOnJobCompletion] public NativeArray<int> heightCache;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
+        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+
+        public int border;
+        public float seaLevel;
+        public int baseHeight;
+        public int CliffTreshold;
+        public BiomeNoiseSettings biomeNoiseSettings;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+            int heightStride = paddedSize;
+
+            int lx = index % paddedSize;
+            int lz = index / paddedSize;
+            int realLx = lx - border;
+            int realLz = lz - border;
+            int worldX = coord.x * SizeX + realLx;
+            int worldZ = coord.y * SizeZ + realLz;
+
+            int h = heightCache[lx + lz * heightStride];
+            int centerIdx = lx + lz * heightStride;
+            int hN = lz + 1 < paddedSize ? heightCache[centerIdx + heightStride] : h;
+            int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
+            int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
+            int hW = lx > 0 ? heightCache[centerIdx - 1] : h;
+            int hNE = lx + 1 < paddedSize && lz + 1 < paddedSize ? heightCache[centerIdx + 1 + heightStride] : h;
+            int hNW = lx > 0 && lz + 1 < paddedSize ? heightCache[centerIdx - 1 + heightStride] : h;
+            int hSE = lx + 1 < paddedSize && lz > 0 ? heightCache[centerIdx + 1 - heightStride] : h;
+            int hSW = lx > 0 && lz > 0 ? heightCache[centerIdx - 1 - heightStride] : h;
+
+            TerrainColumnContext columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
+                worldX,
+                worldZ,
+                h,
+                hN,
+                hS,
+                hE,
+                hW,
+                hNE,
+                hNW,
+                hSE,
+                hSW,
+                CliffTreshold,
+                baseHeight,
+                seaLevel,
+                biomeNoiseSettings);
+            TerrainSurfaceData surfaceData = columnContext.surface;
+
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int maxSolidY = math.min(h, SizeY - 1);
+            int voxelIndex = lx + lz * voxelPlaneSize;
+
+            for (int y = 0; y <= maxSolidY; y++, voxelIndex += voxelSizeX)
+            {
+                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
+                opacity[voxelIndex] = effectiveOpacityByBlock[(int)bt];
+            }
+        }
+    }
+
+    [BurstCompile]
+    private struct CopyGeneratedOpacityToLightVolumeJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<BlockType> sourceBlockTypes;
+        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> targetOpacity;
+
+        public int sourceVoxelSizeX;
+        public int targetVoxelSizeX;
+        public int targetVoxelPlaneSize;
+        public int sourceBorder;
+        public int targetBorder;
+
+        public void Execute(int index)
+        {
+            int x = index % sourceVoxelSizeX;
+            int temp = index / sourceVoxelSizeX;
+            int y = temp % SizeY;
+            int z = temp / SizeY;
+
+            int targetX = x + (targetBorder - sourceBorder);
+            int targetZ = z + (targetBorder - sourceBorder);
+            int targetIndex = targetX + y * targetVoxelSizeX + targetZ * targetVoxelPlaneSize;
+            targetOpacity[targetIndex] = effectiveOpacityByBlock[(int)sourceBlockTypes[index]];
+        }
+    }
+
+    [BurstCompile]
+    private struct ApplyOpacityOverridesJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockEdit> overrides;
+        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+        public NativeArray<byte> opacity;
+
+        public int chunkMinX;
+        public int chunkMinZ;
+        public int borderSize;
+        public int voxelSizeX;
+        public int voxelSizeZ;
+        public int voxelPlaneSize;
+
+        public void Execute()
+        {
+            for (int index = 0; index < overrides.Length; index++)
+            {
+                BlockEdit edit = overrides[index];
+                if (edit.y < 0 || edit.y >= SizeY)
+                    continue;
+                if (edit.type < 0 || edit.type >= effectiveOpacityByBlock.Length)
+                    continue;
+
+                int ix = edit.x - chunkMinX + borderSize;
+                int iz = edit.z - chunkMinZ + borderSize;
+                if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
+                    continue;
+
+                int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
+                opacity[dstIndex] = effectiveOpacityByBlock[edit.type];
+            }
+        }
+    }
+
     public static void ScheduleDataJob(
         Vector2Int coord,
         NativeArray<NoiseLayer> noiseLayers,
         NativeArray<WarpLayer> warpLayers,
         NativeArray<BlockTextureMapping> blockMappings,
+        NativeArray<byte> effectiveOpacityByBlock,
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
@@ -258,7 +390,8 @@ public static class MeshGenerator
         NativeArray<BlockEdit> blockEdits,
 
         int treeMargin,
-        int borderSize,
+        int dataBorderSize,
+        int lightBorderSize,
         int detailGenerationBorder,
         int maxTreeRadius,
         int CliffTreshold,
@@ -266,31 +399,49 @@ public static class MeshGenerator
         NativeArray<OreSpawnSettings> oreSettings,
         NativeArray<TreeSpawnRuleData> treeSpawnRules,
         WormCaveSettings caveSettings,
-        NativeArray<byte> lightData, // <--- NOVA INJECAO DE DEPENDENCIA DE LUZ
+        NativeArray<byte> lightData,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
         out NativeArray<BlockType> blockTypes,
         out NativeArray<bool> solids,
         out NativeArray<byte> light,
+        out NativeArray<byte> lightOpacityData,
         out NativeArray<bool> subchunkNonEmpty
     )
     {
         // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
         // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
+        lightBorderSize = math.max(lightBorderSize, dataBorderSize);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
 
-        int heightSize = SizeX + 2 * borderSize;
-        int totalHeightPoints = heightSize * heightSize;
-        int voxelSizeX = SizeX + 2 * borderSize;
-        int voxelSizeZ = SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * SizeY;
-        int totalVoxels = voxelSizeX * SizeY * voxelSizeZ;
+        int dataHeightSize = SizeX + 2 * dataBorderSize;
+        int dataTotalHeightPoints = dataHeightSize * dataHeightSize;
+        int dataVoxelSizeX = SizeX + 2 * dataBorderSize;
+        int dataVoxelSizeZ = SizeZ + 2 * dataBorderSize;
+        int dataVoxelPlaneSize = dataVoxelSizeX * SizeY;
+        int dataTotalVoxels = dataVoxelSizeX * SizeY * dataVoxelSizeZ;
 
-        heightCache = new NativeArray<int>(totalHeightPoints, Allocator.TempJob);
-        blockTypes = new NativeArray<BlockType>(totalVoxels, Allocator.TempJob);
-        solids = new NativeArray<bool>(totalVoxels, Allocator.TempJob);
-        light = new NativeArray<byte>(totalVoxels, Allocator.TempJob);
+        int lightHeightSize = SizeX + 2 * lightBorderSize;
+        int lightTotalHeightPoints = lightHeightSize * lightHeightSize;
+        int lightVoxelSizeX = SizeX + 2 * lightBorderSize;
+        int lightVoxelSizeZ = SizeZ + 2 * lightBorderSize;
+        int lightVoxelPlaneSize = lightVoxelSizeX * SizeY;
+        int lightTotalVoxels = lightVoxelSizeX * SizeY * lightVoxelSizeZ;
+
+        int borderSize = dataBorderSize;
+        int heightSize = dataHeightSize;
+        int totalHeightPoints = dataTotalHeightPoints;
+        int voxelSizeX = dataVoxelSizeX;
+        int voxelSizeZ = dataVoxelSizeZ;
+        int voxelPlaneSize = dataVoxelPlaneSize;
+        int totalVoxels = dataTotalVoxels;
+
+        heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.TempJob);
+        blockTypes = new NativeArray<BlockType>(dataTotalVoxels, Allocator.TempJob);
+        solids = new NativeArray<bool>(dataTotalVoxels, Allocator.TempJob);
+        light = new NativeArray<byte>(dataTotalVoxels, Allocator.TempJob);
+        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
 
 
 
@@ -306,10 +457,10 @@ public static class MeshGenerator
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
-            border = borderSize,
+            border = dataBorderSize,
             biomeNoiseSettings = biomeNoiseSettings,
             heightCache = heightCache,
-            heightStride = heightSize
+            heightStride = dataHeightSize
         };
         JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
 
@@ -380,21 +531,87 @@ public static class MeshGenerator
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
         JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
-        var lightJob = new ChunkLighting.ChunkLightingJob
+        NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.TempJob);
+        var lightHeightJob = new HeightmapJob
         {
-            blockTypes = blockTypes,
-            light = light, // Output calculado
-            blockLightData = lightData, // Injeta block light do global
-            blockMappings = blockMappings,
-            voxelSizeX = voxelSizeX,
-            voxelSizeZ = voxelSizeZ,
-            totalVoxels = totalVoxels,
-            voxelPlaneSize = voxelPlaneSize,
-            SizeX = SizeX,
-            SizeY = SizeY,
-            SizeZ = SizeZ
+            coord = coord,
+            noiseLayers = noiseLayers,
+            warpLayers = warpLayers,
+            baseHeight = baseHeight,
+            offsetX = globalOffsetX,
+            offsetZ = globalOffsetZ,
+            border = lightBorderSize,
+            biomeNoiseSettings = biomeNoiseSettings,
+            heightCache = lightHeightCache,
+            heightStride = lightHeightSize
         };
-        dataHandle = lightJob.Schedule(chunkDataHandle);
+        JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
+
+        var populateLightOpacityJob = new PopulateLightOpacityJob
+        {
+            coord = coord,
+            heightCache = lightHeightCache,
+            opacity = lightOpacityData,
+            effectiveOpacityByBlock = effectiveOpacityByBlock,
+            border = lightBorderSize,
+            seaLevel = seaLevel,
+            baseHeight = baseHeight,
+            CliffTreshold = CliffTreshold,
+            biomeNoiseSettings = biomeNoiseSettings
+        };
+        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
+
+        var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
+        {
+            sourceBlockTypes = blockTypes,
+            effectiveOpacityByBlock = effectiveOpacityByBlock,
+            targetOpacity = lightOpacityData,
+            sourceVoxelSizeX = dataVoxelSizeX,
+            targetVoxelSizeX = lightVoxelSizeX,
+            targetVoxelPlaneSize = lightVoxelPlaneSize,
+            sourceBorder = dataBorderSize,
+            targetBorder = lightBorderSize
+        };
+        JobHandle copyGeneratedOpacityHandle = copyGeneratedOpacityJob.Schedule(
+            dataTotalVoxels,
+            128,
+            JobHandle.CombineDependencies(chunkDataHandle, populateLightOpacityHandle));
+
+        JobHandle lightOpacityHandle = copyGeneratedOpacityHandle;
+        if (blockEdits.IsCreated && blockEdits.Length > 0)
+        {
+            var opacityOverrideJob = new ApplyOpacityOverridesJob
+            {
+                overrides = blockEdits,
+                effectiveOpacityByBlock = effectiveOpacityByBlock,
+                opacity = lightOpacityData,
+                chunkMinX = coord.x * SizeX,
+                chunkMinZ = coord.y * SizeZ,
+                borderSize = lightBorderSize,
+                voxelSizeX = lightVoxelSizeX,
+                voxelSizeZ = lightVoxelSizeZ,
+                voxelPlaneSize = lightVoxelPlaneSize
+            };
+            lightOpacityHandle = opacityOverrideJob.Schedule(lightOpacityHandle);
+        }
+
+        var lightJob = new ChunkLighting.CroppedChunkLightingJob
+        {
+            opacity = lightOpacityData,
+            light = light,
+            blockLightData = lightData,
+            inputVoxelSizeX = lightVoxelSizeX,
+            inputVoxelSizeZ = lightVoxelSizeZ,
+            inputTotalVoxels = lightTotalVoxels,
+            inputVoxelPlaneSize = lightVoxelPlaneSize,
+            outputVoxelSizeX = dataVoxelSizeX,
+            outputVoxelSizeZ = dataVoxelSizeZ,
+            outputVoxelPlaneSize = dataVoxelPlaneSize,
+            outputOffsetX = lightBorderSize - dataBorderSize,
+            outputOffsetZ = lightBorderSize - dataBorderSize,
+            SizeY = SizeY
+        };
+        dataHandle = lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle));
     }
 
     public static void ScheduleMeshJob(

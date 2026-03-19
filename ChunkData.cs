@@ -168,6 +168,7 @@ public static class ChunkData
                     TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
                     int surfaceY = columnContext.surfaceHeight;
                     if (surfaceY <= 0 || surfaceY >= SizeY) continue;
+                    if (surfaceY < seaLevel) continue;
 
                     BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
                     if (biome != rule.biome) continue;
@@ -194,6 +195,7 @@ public static class ChunkData
                     {
                         worldX = worldX,
                         worldZ = worldZ,
+                        surfaceY = surfaceY,
                         trunkHeight = trunkH,
                         canopyRadius = canopyRadius,
                         canopyHeight = canopyHeight,
