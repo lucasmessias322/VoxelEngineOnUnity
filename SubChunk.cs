@@ -35,19 +35,50 @@ public class Subchunk : MonoBehaviour
 
     public void Initialize(Material[] materials, int subchunkIndex)
     {
-        meshFilter = GetComponent<MeshFilter>();
-        meshRenderer = GetComponent<MeshRenderer>();
-        meshRenderer.materials = materials;
+        meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
+        meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
 
-        mesh = new Mesh { indexFormat = IndexFormat.UInt32 };
-        mesh.MarkDynamic();
-        meshFilter.sharedMesh = mesh;
+        Material[] sharedMaterials = materials ?? System.Array.Empty<Material>();
+        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
+            meshRenderer.sharedMaterials = sharedMaterials;
+
+        mesh = mesh != null ? mesh : meshFilter.sharedMesh;
+        if (mesh == null)
+        {
+            mesh = new Mesh
+            {
+                name = $"SubchunkMesh_{subchunkIndex}",
+                indexFormat = IndexFormat.UInt32
+            };
+            mesh.MarkDynamic();
+        }
+
+        if (meshFilter.sharedMesh != mesh)
+            meshFilter.sharedMesh = mesh;
 
         MeshCollider legacyMeshCollider = GetComponent<MeshCollider>();
         if (legacyMeshCollider != null)
             Destroy(legacyMeshCollider);
 
         transform.localPosition = Vector3.zero;
+    }
+
+    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
+    {
+        if (ReferenceEquals(current, desired))
+            return true;
+        if (current == null || desired == null)
+            return current == desired;
+        if (current.Length != desired.Length)
+            return false;
+
+        for (int i = 0; i < current.Length; i++)
+        {
+            if (current[i] != desired[i])
+                return false;
+        }
+
+        return true;
     }
 
     public void ApplyMeshData(

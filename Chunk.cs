@@ -18,6 +18,11 @@ public class Chunk : MonoBehaviour
     public bool hasVoxelData = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
+    public bool HasInitializedSubchunks =>
+        subchunks != null &&
+        subchunks.Length == SubchunksPerColumn &&
+        subRenderers != null &&
+        subRenderers.Length == SubchunksPerColumn;
 
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
@@ -57,30 +62,42 @@ public class Chunk : MonoBehaviour
 
     public void InitializeSubchunks(Material[] materials)
     {
-        // Cria os subchunks apenas na primeira vez (pooling)
         if (subchunks == null || subchunks.Length != SubchunksPerColumn)
-        {
             subchunks = new Subchunk[SubchunksPerColumn];
-            subRenderers = new MeshRenderer[SubchunksPerColumn];   // ← corrigido e ativado
 
-            for (int i = 0; i < SubchunksPerColumn; i++)
+        if (subRenderers == null || subRenderers.Length != SubchunksPerColumn)
+            subRenderers = new MeshRenderer[SubchunksPerColumn];
+
+        for (int i = 0; i < SubchunksPerColumn; i++)
+        {
+            Subchunk sc = subchunks[i];
+            if (sc == null)
             {
-                GameObject subObj = new GameObject($"Subchunk_{i}");
-                subObj.transform.SetParent(this.transform, false); // false = mantém posição world
-                subObj.transform.localPosition = Vector3.zero;
-
-                Subchunk sc = subObj.AddComponent<Subchunk>();
-                sc.Initialize(materials, i);
-
+                sc = CreateSubchunk(materials, i);
                 subchunks[i] = sc;
-                subRenderers[i] = sc.meshRenderer;   // cache correto agora
-
-                subObj.SetActive(true);
             }
+            else
+            {
+                sc.Initialize(materials, i);
+            }
+
+            subRenderers[i] = sc != null ? sc.meshRenderer : null;
         }
 
-        // SEMPRE atualiza os bounds (CRÍTICO para pooling!)
         UpdateWorldBounds();
+    }
+
+    private Subchunk CreateSubchunk(Material[] materials, int subchunkIndex)
+    {
+        GameObject subObj = new GameObject($"Subchunk_{subchunkIndex}");
+        subObj.transform.SetParent(transform, false);
+        subObj.transform.localPosition = Vector3.zero;
+        subObj.layer = gameObject.layer;
+
+        Subchunk sc = subObj.AddComponent<Subchunk>();
+        sc.Initialize(materials, subchunkIndex);
+        subObj.SetActive(false);
+        return sc;
     }
 
     public void UpdateWorldBounds()

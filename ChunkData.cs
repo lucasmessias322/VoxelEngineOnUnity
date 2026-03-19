@@ -33,6 +33,7 @@ public static class ChunkData
         public WormCaveSettings caveSettings;
         public int treeMargin;
         public int border;
+        public int detailBorder;
         public int maxTreeRadius;
         public int baseHeight;
         public float offsetX;
@@ -75,7 +76,7 @@ public static class ChunkData
                 // AplicaÃ§Ã£o existente (agora com trees local)
                 TreePlacement.ApplyTreeInstancesToVoxels(
                     blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
-                    SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
+                    detailBorder, SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
                 );
 
                 trees.Dispose();  // Cleanup
@@ -295,10 +296,11 @@ public static class ChunkData
 
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
-            int boundsMinX = chunkMinX - border;
-            int boundsMaxX = chunkMinX + SizeX + border - 1;
-            int boundsMinZ = chunkMinZ - border;
-            int boundsMaxZ = chunkMinZ + SizeZ + border - 1;
+            int activeBorder = math.max(0, math.min(detailBorder, border));
+            int boundsMinX = chunkMinX - activeBorder;
+            int boundsMaxX = chunkMinX + SizeX + activeBorder - 1;
+            int boundsMinZ = chunkMinZ - activeBorder;
+            int boundsMaxZ = chunkMinZ + SizeZ + activeBorder - 1;
             int boundsMinY = 3;
             int boundsMaxY = SizeY - 1;
 
@@ -656,10 +658,14 @@ public static class ChunkData
             int worldCenterZ = (int)math.floor(centerWorldZ);
             int maxOffset = math.max(1, (int)math.ceil(radius));
             float radiusSq = radius * radius;
-            int minLocalX = math.max(0, worldCenterX - maxOffset - chunkMinX + border);
-            int maxLocalX = math.min(voxelSizeX - 1, worldCenterX + maxOffset - chunkMinX + border);
-            int minLocalZ = math.max(0, worldCenterZ - maxOffset - chunkMinZ + border);
-            int maxLocalZ = math.min(voxelSizeZ - 1, worldCenterZ + maxOffset - chunkMinZ + border);
+            int activeMinLocalX = math.max(0, border - detailBorder);
+            int activeMaxLocalX = math.min(voxelSizeX - 1, border + SizeX + detailBorder - 1);
+            int activeMinLocalZ = math.max(0, border - detailBorder);
+            int activeMaxLocalZ = math.min(voxelSizeZ - 1, border + SizeZ + detailBorder - 1);
+            int minLocalX = math.max(activeMinLocalX, worldCenterX - maxOffset - chunkMinX + border);
+            int maxLocalX = math.min(activeMaxLocalX, worldCenterX + maxOffset - chunkMinX + border);
+            int minLocalZ = math.max(activeMinLocalZ, worldCenterZ - maxOffset - chunkMinZ + border);
+            int maxLocalZ = math.min(activeMaxLocalZ, worldCenterZ + maxOffset - chunkMinZ + border);
             int minWorldY = math.max(3, worldCenterY - maxOffset);
             int maxWorldY = math.min(SizeY - 1, worldCenterY + maxOffset);
 
@@ -848,19 +854,23 @@ public static class ChunkData
             int worldCenterY = (int)math.floor(centerWorldY);
             int worldCenterZ = (int)math.floor(centerWorldZ);
             int radiusSq = radius * radius;
+            int activeMinLocalX = math.max(0, border - detailBorder);
+            int activeMaxLocalX = math.min(voxelSizeX - 1, border + SizeX + detailBorder - 1);
+            int activeMinLocalZ = math.max(0, border - detailBorder);
+            int activeMaxLocalZ = math.min(voxelSizeZ - 1, border + SizeZ + detailBorder - 1);
 
             for (int oz = -radius; oz <= radius; oz++)
             {
                 int worldZ = worldCenterZ + oz;
                 int localZ = worldZ - chunkMinZ + border;
-                if (localZ < 0 || localZ >= voxelSizeZ)
+                if (localZ < activeMinLocalZ || localZ > activeMaxLocalZ)
                     continue;
 
                 for (int ox = -radius; ox <= radius; ox++)
                 {
                     int worldX = worldCenterX + ox;
                     int localX = worldX - chunkMinX + border;
-                    if (localX < 0 || localX >= voxelSizeX)
+                    if (localX < activeMinLocalX || localX > activeMaxLocalX)
                         continue;
 
                     int columnSurfaceY = heightCache[localX + localZ * heightStride];

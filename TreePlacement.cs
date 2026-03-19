@@ -13,6 +13,7 @@ public static class TreePlacement
         NativeArray<TreeInstance> treeInstances,
         Vector2Int coord,
         int border,
+        int writePadding,
         int chunkSizeX,
         int chunkSizeZ,
         int chunkSizeY,
@@ -45,8 +46,18 @@ public static class TreePlacement
             int canopyR = math.max(0, t.canopyRadius);
             int horizontalReach = TreeGenerationMetrics.GetHorizontalReach(t.treeStyle, t.trunkHeight, canopyR, canopyH);
 
-            if (localX < -horizontalReach || localX >= chunkSizeX + horizontalReach ||
-                localZ < -horizontalReach || localZ >= chunkSizeZ + horizontalReach)
+            int activeMinX = -writePadding;
+            int activeMaxX = chunkSizeX + writePadding - 1;
+            int activeMinZ = -writePadding;
+            int activeMaxZ = chunkSizeZ + writePadding - 1;
+
+            bool missesActiveArea =
+                localX + horizontalReach < activeMinX ||
+                localX - horizontalReach > activeMaxX ||
+                localZ + horizontalReach < activeMinZ ||
+                localZ - horizontalReach > activeMaxZ;
+
+            if (missesActiveArea)
                 continue;
 
             int ix = localX + border;

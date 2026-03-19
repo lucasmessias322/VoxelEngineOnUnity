@@ -259,6 +259,7 @@ public static class MeshGenerator
 
         int treeMargin,
         int borderSize,
+        int detailGenerationBorder,
         int maxTreeRadius,
         int CliffTreshold,
         bool enableTrees,
@@ -361,6 +362,7 @@ public static class MeshGenerator
 
             treeMargin = treeMargin,
             border = borderSize,
+            detailBorder = math.min(detailGenerationBorder, borderSize),
             maxTreeRadius = maxTreeRadius,
             CliffTreshold = CliffTreshold,
 
