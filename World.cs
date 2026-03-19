@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Jobs;
@@ -826,6 +826,7 @@ public partial class World : MonoBehaviour
 
         List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(12);
         AddTreeRulesFromBiomeDefinitions(rules);
+        SortTreeSpawnRules(rules);
 
         cachedTreeSpawnRules = rules.Count > 0 ? rules.ToArray() : Array.Empty<TreeSpawnRuleData>();
     }
@@ -859,6 +860,31 @@ public partial class World : MonoBehaviour
                 });
             }
         }
+    }
+
+    private static void SortTreeSpawnRules(List<TreeSpawnRuleData> rules)
+    {
+        if (rules == null || rules.Count <= 1)
+            return;
+
+        // Reserve space for larger canopies first so mixed-tree biomes behave more like Minecraft feature placement.
+        rules.Sort((a, b) =>
+        {
+            int biomeCompare = a.biome.CompareTo(b.biome);
+            if (biomeCompare != 0)
+                return biomeCompare;
+
+            int spacingCompare = TreeGenerationMetrics.GetPlacementSpacingRadius(b.treeStyle, b.settings)
+                .CompareTo(TreeGenerationMetrics.GetPlacementSpacingRadius(a.treeStyle, a.settings));
+            if (spacingCompare != 0)
+                return spacingCompare;
+
+            int densityCompare = a.settings.density.CompareTo(b.settings.density);
+            if (densityCompare != 0)
+                return densityCompare;
+
+            return a.treeStyle.CompareTo(b.treeStyle);
+        });
     }
 
     private TreeSettings SanitizeTreeSettings(TreeStyle treeStyle, TreeSettings raw)

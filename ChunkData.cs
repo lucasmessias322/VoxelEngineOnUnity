@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -146,9 +146,6 @@ public static class ChunkData
             int maxTrunk = math.max(minTrunk, settings.maxHeight);
             int canopyRadius = math.max(0, settings.canopyRadius);
             int canopyHeight = math.max(1, settings.canopyHeight);
-            int proximitySpacing = math.max(1, settings.minSpacing / 2);
-            if (rule.treeStyle == TreeStyle.FancyOak)
-                proximitySpacing = math.max(proximitySpacing, math.max(5, horizontalReach - 2));
 
             for (int cx = cellX0; cx <= cellX1; cx++)
             {
@@ -186,10 +183,11 @@ public static class ChunkData
                     }
 
                     if (columnContext.surface.isCliff) continue;
-                    if (HasNearbyTreeXZ(in trees, worldX, worldZ, proximitySpacing)) continue;
 
                     float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + ruleSeed * 0.001f, (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
                     int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
+                    int spacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, trunkH, canopyRadius, canopyHeight, settings.minSpacing);
+                    if (HasNearbyTreeXZ(in trees, worldX, worldZ, spacingRadius)) continue;
 
                     trees.Add(new TreeInstance
                     {
@@ -198,20 +196,22 @@ public static class ChunkData
                         trunkHeight = trunkH,
                         canopyRadius = canopyRadius,
                         canopyHeight = canopyHeight,
+                        spacingRadius = spacingRadius,
                         treeStyle = rule.treeStyle
                     });
                 }
             }
         }
 
-        private static bool HasNearbyTreeXZ(in NativeList<TreeInstance> trees, int worldX, int worldZ, int minDistance)
+        private static bool HasNearbyTreeXZ(in NativeList<TreeInstance> trees, int worldX, int worldZ, int spacingRadius)
         {
-            int minDistSq = minDistance * minDistance;
             for (int i = 0; i < trees.Length; i++)
             {
                 TreeInstance t = trees[i];
                 int dx = t.worldX - worldX;
                 int dz = t.worldZ - worldZ;
+                int requiredSpacing = math.max(spacingRadius, t.spacingRadius);
+                int minDistSq = requiredSpacing * requiredSpacing;
                 if (dx * dx + dz * dz <= minDistSq)
                     return true;
             }

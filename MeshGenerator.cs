@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using Unity.Collections;
@@ -23,6 +23,7 @@ public struct TreeInstance
     public int trunkHeight;
     public int canopyRadius;
     public int canopyHeight;
+    public int spacingRadius;
     public TreeStyle treeStyle;
 }
 
@@ -38,6 +39,18 @@ public static class TreeGenerationMetrics
     public static int GetHorizontalReach(TreeStyle treeStyle, TreeSettings settings)
     {
         return GetHorizontalReach(treeStyle, settings.maxHeight, settings.canopyRadius, settings.canopyHeight);
+    }
+
+    public static int GetPlacementSpacingRadius(TreeStyle treeStyle, TreeSettings settings)
+    {
+        return GetPlacementSpacingRadius(treeStyle, settings.maxHeight, settings.canopyRadius, settings.canopyHeight, settings.minSpacing);
+    }
+
+    public static int GetPlacementSpacingRadius(TreeStyle treeStyle, int heightValue, int canopyRadius, int canopyHeight, int minSpacing)
+    {
+        int spacingFromConfig = math.max(1, (math.max(1, minSpacing) + 1) / 2);
+        int horizontalReach = GetHorizontalReach(treeStyle, heightValue, canopyRadius, canopyHeight);
+        return math.max(spacingFromConfig, horizontalReach);
     }
 
     public static int GetHorizontalReach(TreeStyle treeStyle, int heightValue, int canopyRadius, int canopyHeight)
