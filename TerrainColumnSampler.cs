@@ -193,16 +193,24 @@ public static class TerrainColumnSampler
             return false;
         }
 
+        // Edge samples do not have a full 8-neighbor context inside the cache.
+        // Falling back to noise here keeps biome/cliff decisions consistent across chunk borders.
+        if (cacheX <= 0 || cacheX >= heightStride - 1 || cacheZ <= 0 || cacheZ >= heightDepth - 1)
+        {
+            columnContext = default;
+            return false;
+        }
+
         int centerIdx = cacheX + cacheZ * heightStride;
         int surfaceHeight = heightCache[centerIdx];
-        int northHeight = cacheZ + 1 < heightDepth ? heightCache[centerIdx + heightStride] : surfaceHeight;
-        int southHeight = cacheZ > 0 ? heightCache[centerIdx - heightStride] : surfaceHeight;
-        int eastHeight = cacheX + 1 < heightStride ? heightCache[centerIdx + 1] : surfaceHeight;
-        int westHeight = cacheX > 0 ? heightCache[centerIdx - 1] : surfaceHeight;
-        int northEastHeight = cacheX + 1 < heightStride && cacheZ + 1 < heightDepth ? heightCache[centerIdx + 1 + heightStride] : surfaceHeight;
-        int northWestHeight = cacheX > 0 && cacheZ + 1 < heightDepth ? heightCache[centerIdx - 1 + heightStride] : surfaceHeight;
-        int southEastHeight = cacheX + 1 < heightStride && cacheZ > 0 ? heightCache[centerIdx + 1 - heightStride] : surfaceHeight;
-        int southWestHeight = cacheX > 0 && cacheZ > 0 ? heightCache[centerIdx - 1 - heightStride] : surfaceHeight;
+        int northHeight = heightCache[centerIdx + heightStride];
+        int southHeight = heightCache[centerIdx - heightStride];
+        int eastHeight = heightCache[centerIdx + 1];
+        int westHeight = heightCache[centerIdx - 1];
+        int northEastHeight = heightCache[centerIdx + 1 + heightStride];
+        int northWestHeight = heightCache[centerIdx - 1 + heightStride];
+        int southEastHeight = heightCache[centerIdx + 1 - heightStride];
+        int southWestHeight = heightCache[centerIdx - 1 - heightStride];
 
         columnContext = CreateFromNeighborHeights(
             worldX,

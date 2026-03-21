@@ -140,70 +140,145 @@ public static class ChunkData
             int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
             int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
 
-            float freq = math.max(1e-4f, settings.noiseScale);
-            float density = math.saturate(settings.density);
-            int ruleSeed = settings.seed != 0 ? settings.seed : oreSeed;
-            int minTrunk = math.max(1, settings.minHeight);
-            int maxTrunk = math.max(minTrunk, settings.maxHeight);
-            int canopyRadius = math.max(0, settings.canopyRadius);
-            int canopyHeight = math.max(1, settings.canopyHeight);
-
             for (int cx = cellX0; cx <= cellX1; cx++)
             {
                 for (int cz = cellZ0; cz <= cellZ1; cz++)
                 {
-                    float noiseX = (cx * 12.9898f + ruleSeed) * freq;
-                    float noiseZ = (cz * 78.233f + ruleSeed) * freq;
-                    float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
-                    if (sample > density) continue;
+                    if (!TryCreateTreeCandidateForCell(rule, cx, cz, out TreeInstance candidate))
+                        continue;
 
-                    float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
-                    float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
-                    int worldX = cx * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
-                    int worldZ = cz * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
-
-                    if (worldX < chunkMinX - searchMargin || worldX > chunkMaxX + searchMargin ||
-                        worldZ < chunkMinZ - searchMargin || worldZ > chunkMaxZ + searchMargin) continue;
-
-                    TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
-                    int surfaceY = columnContext.surfaceHeight;
-                    if (surfaceY <= 0 || surfaceY >= SizeY) continue;
-                    if (surfaceY < seaLevel) continue;
-
-                    BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
-                    if (biome != rule.biome) continue;
-
-                    BlockType groundType = columnContext.surface.surfaceBlock;
-                    bool isCactus = rule.treeStyle == TreeStyle.Cactus;
-                    if (isCactus)
-                    {
-                        if (groundType != BlockType.Sand) continue;
-                    }
-                    else if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
+                    if (candidate.worldX < chunkMinX - searchMargin || candidate.worldX > chunkMaxX + searchMargin ||
+                        candidate.worldZ < chunkMinZ - searchMargin || candidate.worldZ > chunkMaxZ + searchMargin)
                     {
                         continue;
                     }
 
-                    if (columnContext.surface.isCliff) continue;
+                    if (HasHigherPriorityConflictingCell(rule, cx, cz, candidate))
+                        continue;
 
-                    float heightNoise = noise.cnoise(new float2((worldX + 0.1f) * 0.137f + ruleSeed * 0.001f, (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
-                    int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
-                    int spacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, trunkH, canopyRadius, canopyHeight, settings.minSpacing);
-                    if (HasNearbyTreeXZ(in trees, worldX, worldZ, spacingRadius)) continue;
+                    if (HasNearbyTreeXZ(in trees, candidate.worldX, candidate.worldZ, candidate.spacingRadius))
+                        continue;
 
-                    trees.Add(new TreeInstance
-                    {
-                        worldX = worldX,
-                        worldZ = worldZ,
-                        surfaceY = surfaceY,
-                        trunkHeight = trunkH,
-                        canopyRadius = canopyRadius,
-                        canopyHeight = canopyHeight,
-                        spacingRadius = spacingRadius,
-                        treeStyle = rule.treeStyle
-                    });
+                    trees.Add(candidate);
                 }
             }
+        }
+
+        private bool TryCreateTreeCandidateForCell(in TreeSpawnRuleData rule, int cellX, int cellZ, out TreeInstance candidate)
+        {
+            TreeSettings settings = rule.settings;
+            int cellSize = math.max(1, settings.minSpacing);
+            float freq = math.max(1e-4f, settings.noiseScale);
+            float density = math.saturate(settings.density);
+            int ruleSeed = settings.seed != 0 ? settings.seed : oreSeed;
+
+            float noiseX = (cellX * 12.9898f + ruleSeed) * freq;
+            float noiseZ = (cellZ * 78.233f + ruleSeed) * freq;
+            float sample = noise.cnoise(new float2(noiseX, noiseZ)) * 0.5f + 0.5f;
+            if (sample > density)
+            {
+                candidate = default;
+                return false;
+            }
+
+            float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
+            float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
+            int worldX = cellX * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
+            int worldZ = cellZ * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
+
+            TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
+            int surfaceY = columnContext.surfaceHeight;
+            if (surfaceY <= 0 || surfaceY >= SizeY || surfaceY < seaLevel)
+            {
+                candidate = default;
+                return false;
+            }
+
+            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+            if (biome != rule.biome)
+            {
+                candidate = default;
+                return false;
+            }
+
+            BlockType groundType = columnContext.surface.surfaceBlock;
+            bool isCactus = rule.treeStyle == TreeStyle.Cactus;
+            if (isCactus)
+            {
+                if (groundType != BlockType.Sand)
+                {
+                    candidate = default;
+                    return false;
+                }
+            }
+            else if (groundType != BlockType.Grass && groundType != BlockType.Dirt && groundType != BlockType.Snow)
+            {
+                candidate = default;
+                return false;
+            }
+
+            if (columnContext.surface.isCliff)
+            {
+                candidate = default;
+                return false;
+            }
+
+            int minTrunk = math.max(1, settings.minHeight);
+            int maxTrunk = math.max(minTrunk, settings.maxHeight);
+            int canopyRadius = math.max(0, settings.canopyRadius);
+            int canopyHeight = math.max(1, settings.canopyHeight);
+            float heightNoise = noise.cnoise(new float2(
+                (worldX + 0.1f) * 0.137f + ruleSeed * 0.001f,
+                (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
+            int trunkH = minTrunk + (int)math.round(heightNoise * (maxTrunk - minTrunk + 1));
+            int spacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(
+                rule.treeStyle, trunkH, canopyRadius, canopyHeight, settings.minSpacing);
+
+            candidate = new TreeInstance
+            {
+                worldX = worldX,
+                worldZ = worldZ,
+                surfaceY = surfaceY,
+                trunkHeight = trunkH,
+                canopyRadius = canopyRadius,
+                canopyHeight = canopyHeight,
+                spacingRadius = spacingRadius,
+                treeStyle = rule.treeStyle
+            };
+            return true;
+        }
+
+        private bool HasHigherPriorityConflictingCell(in TreeSpawnRuleData rule, int cellX, int cellZ, in TreeInstance candidate)
+        {
+            TreeSettings settings = rule.settings;
+            int cellSize = math.max(1, settings.minSpacing);
+            int maxSpacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, settings);
+            int neighborCellRadius = math.max(1, (maxSpacingRadius + cellSize - 1) / cellSize);
+
+            for (int neighborCellX = cellX - neighborCellRadius; neighborCellX <= cellX + neighborCellRadius; neighborCellX++)
+            {
+                for (int neighborCellZ = cellZ - neighborCellRadius; neighborCellZ <= cellZ + neighborCellRadius; neighborCellZ++)
+                {
+                    if (!IsHigherPriorityTreeCell(neighborCellX, neighborCellZ, cellX, cellZ))
+                        continue;
+
+                    if (!TryCreateTreeCandidateForCell(rule, neighborCellX, neighborCellZ, out TreeInstance other))
+                        continue;
+
+                    int dx = other.worldX - candidate.worldX;
+                    int dz = other.worldZ - candidate.worldZ;
+                    int requiredSpacing = math.max(candidate.spacingRadius, other.spacingRadius);
+                    if (dx * dx + dz * dz <= requiredSpacing * requiredSpacing)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsHigherPriorityTreeCell(int otherCellX, int otherCellZ, int cellX, int cellZ)
+        {
+            return otherCellX < cellX || (otherCellX == cellX && otherCellZ < cellZ);
         }
 
         private static bool HasNearbyTreeXZ(in NativeList<TreeInstance> trees, int worldX, int worldZ, int spacingRadius)
