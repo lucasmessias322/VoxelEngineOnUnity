@@ -318,6 +318,8 @@ public partial class World : MonoBehaviour
     public float grassBillboardJitter = 0.16f;
 
     [Header("Ambient Occlusion")]
+    [Tooltip("Liga/desliga o Ambient Occlusion da malha dos voxels para testes de performance.")]
+    public bool enableAmbientOcclusion = true;
     [Tooltip("Forca do AO. 1 = padrao, >1 escurece mais os cantos, 0 desativa o AO.")]
     [Range(0f, 2.5f)]
     public float aoStrength = 1.35f;
@@ -361,6 +363,8 @@ public partial class World : MonoBehaviour
     public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
 
     [Header("Lighting")]
+    [Tooltip("Liga/desliga o calculo de iluminacao voxel/skylight para testes de performance. Quando desligado, os chunks usam brilho uniforme.")]
+    public bool enableVoxelLighting = true;
     [Tooltip("Padding horizontal em voxels usado apenas pela suavizacao de skylight entre chunks. Valores altos melhoram costuras visuais, mas aumentam o custo do volume de luz.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
@@ -402,6 +406,8 @@ public partial class World : MonoBehaviour
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
+    private bool lastEnableVoxelLighting = true;
+    private bool lastEnableAmbientOcclusion = true;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
     private bool treeSpawnRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
@@ -632,6 +638,9 @@ public partial class World : MonoBehaviour
 
     private int GetLightSmoothingBorderSize()
     {
+        if (!enableVoxelLighting)
+            return GetMeshNeighborPadding();
+
         return Mathf.Max(GetMeshNeighborPadding(), sunlightSmoothingPadding);
     }
 
@@ -1307,6 +1316,8 @@ public partial class World : MonoBehaviour
         }
 
         lastEnableBlockColliders = enableBlockColliders;
+        lastEnableVoxelLighting = enableVoxelLighting;
+        lastEnableAmbientOcclusion = enableAmbientOcclusion;
     }
 
     private void OnDestroy()
@@ -1340,6 +1351,7 @@ public partial class World : MonoBehaviour
     private void Update()
     {
         HandleBlockColliderToggle();
+        HandleVisualFeatureToggle();
         meshesAppliedThisFrame = 0;
         ProcessQueuedChunkRebuilds();
         ProcessQueuedHighBuildMeshRebuilds();
@@ -1843,6 +1855,8 @@ public partial class World : MonoBehaviour
         JobHandle combinedMeshHandle = default;
         if (meshSubchunkMask != 0)
         {
+            float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
+
             MeshGenerator.ScheduleMeshJob(
                 pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
                 atlasTilesX, atlasTilesY, true, borderSize,
@@ -1850,7 +1864,7 @@ public partial class World : MonoBehaviour
                 meshSubchunkMask,
                 enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                 grassBillboardNoiseScale, grassBillboardJitter,
-                aoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
+                effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
                 out JobHandle meshHandle,
                 out NativeList<Vector3> vertices,
                 out NativeList<int> opaqueTriangles,
@@ -2194,9 +2208,12 @@ public partial class World : MonoBehaviour
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
-
-        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        NativeArray<byte> chunkLightData = default;
+        if (enableVoxelLighting)
+        {
+            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        }
         if (chunk.jobScheduled)
         {
             try { chunk.currentJob.Complete(); } catch { }
@@ -2214,6 +2231,7 @@ public partial class World : MonoBehaviour
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
             caveWormSettings,
+            enableVoxelLighting,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -2287,8 +2305,8 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
         NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
+        NativeArray<byte> lightOpacityData = default;
+        NativeArray<byte> blockLightData = default;
         NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
@@ -2297,7 +2315,12 @@ public partial class World : MonoBehaviour
 
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
-        InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
+        if (enableVoxelLighting)
+        {
+            lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+            blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
+            InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
+        }
 
         var copyPopulateJob = new FastRebuildPopulateBlocksJob
         {
@@ -2343,59 +2366,71 @@ public partial class World : MonoBehaviour
         };
         JobHandle deriveDataHandle = deriveDataJob.Schedule(copyOverrideHandle);
 
-        var opacityPopulateJob = new FastRebuildPopulateOpacityJob
+        JobHandle visualDataHandle;
+        if (enableVoxelLighting)
         {
-            snapshotVoxelData = snapshotVoxelData,
-            snapshotLoadedChunks = snapshotLoadedChunks,
-            effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
-            opacity = lightOpacityData,
-            borderSize = lightBorderSize,
-            voxelSizeX = lightVoxelSizeX,
-            snapshotChunkRadius = snapshotChunkRadius,
-            snapshotChunkDiameter = snapshotChunkDiameter
-        };
-        JobHandle opacityPopulateHandle = opacityPopulateJob.Schedule(lightTotalVoxels, 128);
-
-        JobHandle opacityOverrideHandle = opacityPopulateHandle;
-        if (nativeOverrides.IsCreated && nativeOverrides.Length > 0)
-        {
-            var opacityOverrideJob = new FastRebuildApplyOpacityOverridesJob
+            var opacityPopulateJob = new FastRebuildPopulateOpacityJob
             {
-                overrides = nativeOverrides,
+                snapshotVoxelData = snapshotVoxelData,
+                snapshotLoadedChunks = snapshotLoadedChunks,
                 effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
                 opacity = lightOpacityData,
-                chunkMinX = chunkMinX,
-                chunkMinZ = chunkMinZ,
                 borderSize = lightBorderSize,
                 voxelSizeX = lightVoxelSizeX,
-                voxelSizeZ = lightVoxelSizeZ,
-                voxelPlaneSize = lightVoxelPlaneSize
+                snapshotChunkRadius = snapshotChunkRadius,
+                snapshotChunkDiameter = snapshotChunkDiameter
             };
-            opacityOverrideHandle = opacityOverrideJob.Schedule(opacityPopulateHandle);
+            JobHandle opacityPopulateHandle = opacityPopulateJob.Schedule(lightTotalVoxels, 128);
+
+            JobHandle opacityOverrideHandle = opacityPopulateHandle;
+            if (nativeOverrides.IsCreated && nativeOverrides.Length > 0)
+            {
+                var opacityOverrideJob = new FastRebuildApplyOpacityOverridesJob
+                {
+                    overrides = nativeOverrides,
+                    effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
+                    opacity = lightOpacityData,
+                    chunkMinX = chunkMinX,
+                    chunkMinZ = chunkMinZ,
+                    borderSize = lightBorderSize,
+                    voxelSizeX = lightVoxelSizeX,
+                    voxelSizeZ = lightVoxelSizeZ,
+                    voxelPlaneSize = lightVoxelPlaneSize
+                };
+                opacityOverrideHandle = opacityOverrideJob.Schedule(opacityPopulateHandle);
+            }
+
+            var lightJob = new ChunkLighting.CroppedChunkLightingJob
+            {
+                opacity = lightOpacityData,
+                light = light,
+                blockLightData = blockLightData,
+                inputVoxelSizeX = lightVoxelSizeX,
+                inputVoxelSizeZ = lightVoxelSizeZ,
+                inputTotalVoxels = lightTotalVoxels,
+                inputVoxelPlaneSize = lightVoxelPlaneSize,
+                outputVoxelSizeX = copyVoxelSizeX,
+                outputVoxelSizeZ = copyVoxelSizeZ,
+                outputVoxelPlaneSize = copyVoxelPlaneSize,
+                outputOffsetX = lightBorderSize - copyBorderSize,
+                outputOffsetZ = lightBorderSize - copyBorderSize,
+                SizeY = Chunk.SizeY,
+            };
+
+            visualDataHandle = lightJob.Schedule(JobHandle.CombineDependencies(deriveDataHandle, opacityOverrideHandle));
         }
-
-        var lightJob = new ChunkLighting.CroppedChunkLightingJob
+        else
         {
-            opacity = lightOpacityData,
-            light = light,
-            blockLightData = blockLightData,
-            inputVoxelSizeX = lightVoxelSizeX,
-            inputVoxelSizeZ = lightVoxelSizeZ,
-            inputTotalVoxels = lightTotalVoxels,
-            inputVoxelPlaneSize = lightVoxelPlaneSize,
-            outputVoxelSizeX = copyVoxelSizeX,
-            outputVoxelSizeZ = copyVoxelSizeZ,
-            outputVoxelPlaneSize = copyVoxelPlaneSize,
-            outputOffsetX = lightBorderSize - copyBorderSize,
-            outputOffsetZ = lightBorderSize - copyBorderSize,
-            SizeY = Chunk.SizeY,
-        };
+            byte fullBright = LightUtils.PackLight(15, 0);
+            for (int i = 0; i < light.Length; i++)
+                light[i] = fullBright;
 
-        JobHandle lightHandle = lightJob.Schedule(JobHandle.CombineDependencies(deriveDataHandle, opacityOverrideHandle));
+            visualDataHandle = deriveDataHandle;
+        }
 
         pendingDataJobs.Add(new PendingData
         {
-            handle = lightHandle,
+            handle = visualDataHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
@@ -2415,7 +2450,7 @@ public partial class World : MonoBehaviour
             rebuildColliders = rebuildColliders
         });
 
-        chunk.currentJob = lightHandle;
+        chunk.currentJob = visualDataHandle;
         chunk.jobScheduled = true;
         chunk.state = Chunk.ChunkState.MeshReady;
         return true;
@@ -2807,9 +2842,12 @@ public partial class World : MonoBehaviour
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
-
-        InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        NativeArray<byte> chunkLightData = default;
+        if (enableVoxelLighting)
+        {
+            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        }
 
         MeshGenerator.ScheduleDataJob(
               coord,
@@ -2834,6 +2872,7 @@ public partial class World : MonoBehaviour
               cachedNativeOreSettings,
               cachedNativeTreeSpawnRules,
               caveWormSettings,
+              enableVoxelLighting,
               chunkLightData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
@@ -2966,6 +3005,22 @@ public partial class World : MonoBehaviour
         foreach (var kv in activeChunks)
         {
             RequestHighBuildMeshRebuild(kv.Key);
+        }
+    }
+
+    private void HandleVisualFeatureToggle()
+    {
+        bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;
+        bool aoChanged = lastEnableAmbientOcclusion != enableAmbientOcclusion;
+        if (!lightingChanged && !aoChanged)
+            return;
+
+        lastEnableVoxelLighting = enableVoxelLighting;
+        lastEnableAmbientOcclusion = enableAmbientOcclusion;
+
+        foreach (var kv in activeChunks)
+        {
+            RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
         }
     }
 

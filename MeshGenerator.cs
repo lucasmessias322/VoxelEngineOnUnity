@@ -412,6 +412,7 @@ public static class MeshGenerator
         NativeArray<OreSpawnSettings> oreSettings,
         NativeArray<TreeSpawnRuleData> treeSpawnRules,
         WormCaveSettings caveSettings,
+        bool enableVoxelLighting,
         NativeArray<byte> lightData,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
@@ -454,7 +455,7 @@ public static class MeshGenerator
         blockTypes = new NativeArray<BlockType>(dataTotalVoxels, Allocator.TempJob);
         solids = new NativeArray<bool>(dataTotalVoxels, Allocator.TempJob);
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.TempJob);
-        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
+        lightOpacityData = default;
 
 
 
@@ -544,6 +545,17 @@ public static class MeshGenerator
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
         JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
 
+        if (!enableVoxelLighting)
+        {
+            byte fullBright = LightUtils.PackLight(15, 0);
+            for (int i = 0; i < light.Length; i++)
+                light[i] = fullBright;
+
+            dataHandle = chunkDataHandle;
+            return;
+        }
+
+        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.TempJob);
         var lightHeightJob = new HeightmapJob
         {
