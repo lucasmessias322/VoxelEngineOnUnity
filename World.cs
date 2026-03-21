@@ -327,6 +327,8 @@ public partial class World : MonoBehaviour
     [Tooltip("Luz minima aplicada apos AO. Menor valor permite cantos mais escuros.")]
     [Range(0f, 1f)]
     public float aoMinLight = 0.08f;
+    [Tooltip("Quando ativado, usa um greedy meshing rapido com validacao barata de AO/luz. Mantem o AO correto na maior parte dos casos sem o custo alto da busca exaustiva.")]
+    public bool useFastBedrockStyleMeshing = true;
 
     [Header("Debug / Physics")]
     [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
@@ -572,7 +574,17 @@ public partial class World : MonoBehaviour
         for (int i = 0; i < pendingMeshes.Count; i++)
         {
             if (IsCoordInsideRenderDistance(pendingMeshes[i].coord, center))
-                count++;
+            {
+                int remaining = 0;
+                int mask = pendingMeshes[i].dirtySubchunkMask;
+                for (int sub = pendingMeshes[i].nextSubchunkApplyIndex; sub < Chunk.SubchunksPerColumn; sub++)
+                {
+                    if ((mask & (1 << sub)) != 0)
+                        remaining++;
+                }
+
+                count += Mathf.Max(1, remaining);
+            }
         }
 
         return count;
@@ -603,7 +615,7 @@ public partial class World : MonoBehaviour
             {
                 int distCmp = GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
                 if (distCmp != 0) return distCmp;
-                return a.subchunkIndex.CompareTo(b.subchunkIndex);
+                return a.nextSubchunkApplyIndex.CompareTo(b.nextSubchunkApplyIndex);
             });
         }
     }
@@ -976,8 +988,10 @@ public partial class World : MonoBehaviour
         public NativeList<byte> tintFlags;
         public Vector2Int coord;
         public int expectedGen;
-        public int subchunkIndex;
         public Chunk parentChunk;
+        public NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges;
+        public int dirtySubchunkMask;
+        public int nextSubchunkApplyIndex;
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
@@ -1559,33 +1573,51 @@ public partial class World : MonoBehaviour
 
             if (canApplyMesh)
             {
-                Subchunk sub = activeChunk.subchunks[pm.subchunkIndex];
-                bool hasSolidColliderGeometry = pm.opaqueTriangles.Length > 0 || pm.transparentTriangles.Length > 0;
-
-                if (pm.vertices.Length > 0)
+                while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
+                       meshesAppliedThisFrame < maxMeshAppliesPerFrame)
                 {
-                    sub.gameObject.SetActive(true);
-                    int startY = pm.subchunkIndex * Chunk.SubchunkHeight;
+                    int subchunkIndex = pm.nextSubchunkApplyIndex++;
+                    if ((pm.dirtySubchunkMask & (1 << subchunkIndex)) == 0)
+                        continue;
+
+                    Subchunk sub = activeChunk.subchunks[subchunkIndex];
+                    MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
+                    bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
+                    int startY = subchunkIndex * Chunk.SubchunkHeight;
                     int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-                    sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
-                                      pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
-                                      startY, endY);
 
-                    if (pm.buildColliders)
+                    if (range.vertexCount > 0)
                     {
-                        if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
-                            EnqueueColliderBuild(pm.coord, pm.expectedGen, pm.subchunkIndex);
-                        else
-                            sub.ClearColliderData();
+                        sub.gameObject.SetActive(true);
+                        sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
+                                          pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
+                                          range, startY, endY);
+
+                        if (pm.buildColliders)
+                        {
+                            if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
+                                EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                            else
+                                sub.ClearColliderData();
+                        }
                     }
+
+                    else
+                    {
+                        sub.ClearMesh();
+                    }
+
+                    meshesAppliedThisFrame++;
                 }
-                else
+
+                if (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn)
                 {
-                    sub.ClearMesh();
+                    pendingMeshes[i] = pm;
+                    i++;
+                    continue;
                 }
 
                 activeChunk.state = Chunk.ChunkState.Active;
-                meshesAppliedThisFrame++;
             }
 
             DisposePendingMesh(pm);
@@ -1788,12 +1820,12 @@ public partial class World : MonoBehaviour
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
-        NativeList<JobHandle> meshHandles = new NativeList<JobHandle>(Chunk.SubchunksPerColumn, Allocator.Temp);
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
             nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
+        int meshSubchunkMask = 0;
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
             if ((dirtySubchunkMask & (1 << sub)) == 0)
@@ -1805,23 +1837,20 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
-            int startY = sub * Chunk.SubchunkHeight;
-            if (startY >= Chunk.SizeY)
-            {
-                activeChunk.subchunks[sub].ClearMesh();
-                continue;
-            }
+            meshSubchunkMask |= 1 << sub;
+        }
 
-            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-
+        JobHandle combinedMeshHandle = default;
+        if (meshSubchunkMask != 0)
+        {
             MeshGenerator.ScheduleMeshJob(
                 pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
                 atlasTilesX, atlasTilesY, true, borderSize,
                 pd.coord.x, pd.coord.y,
-                startY, endY,
+                meshSubchunkMask,
                 enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                 grassBillboardNoiseScale, grassBillboardJitter,
-                aoStrength, aoCurveExponent, aoMinLight,
+                aoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
                 out JobHandle meshHandle,
                 out NativeList<Vector3> vertices,
                 out NativeList<int> opaqueTriangles,
@@ -1834,11 +1863,11 @@ public partial class World : MonoBehaviour
                 out NativeList<byte> vertexLights,
                 out NativeList<byte> tintFlags,
                 out NativeList<byte> vertexAO,
-                out NativeList<Vector4> extraUVs
+                out NativeList<Vector4> extraUVs,
+                out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges
             );
 
-            meshHandles.Add(meshHandle);
-
+            combinedMeshHandle = meshHandle;
             pendingMeshes.Add(new PendingMesh
             {
                 handle = meshHandle,
@@ -1856,8 +1885,10 @@ public partial class World : MonoBehaviour
                 extraUVs = extraUVs,
                 coord = pd.coord,
                 expectedGen = pd.expectedGen,
-                subchunkIndex = sub,
                 parentChunk = activeChunk,
+                subchunkRanges = subchunkRanges,
+                dirtySubchunkMask = meshSubchunkMask,
+                nextSubchunkApplyIndex = 0,
                 heightCache = pd.heightCache,
                 blockTypes = pd.blockTypes,
                 solids = pd.solids,
@@ -1866,12 +1897,6 @@ public partial class World : MonoBehaviour
                 buildColliders = pd.rebuildColliders
             });
         }
-
-        JobHandle combinedMeshHandle = meshHandles.Length > 0
-            ? JobHandle.CombineDependencies(meshHandles.AsArray())
-            : new JobHandle();
-
-        meshHandles.Dispose();
 
         var disposeJob = new MeshGenerator.DisposeChunkDataJob
         {
@@ -3148,6 +3173,7 @@ public partial class World : MonoBehaviour
         if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
         if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
+        if (pm.subchunkRanges.IsCreated) pm.subchunkRanges.Dispose();
     }
 
     #endregion

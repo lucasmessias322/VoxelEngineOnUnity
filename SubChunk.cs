@@ -94,13 +94,54 @@ public class Subchunk : MonoBehaviour
         int startY,
         int endY)
     {
-        if (vertices.Length == 0)
+        ApplyMeshData(
+            vertices,
+            opaqueTris,
+            transparentTris,
+            billboardTris,
+            waterTris,
+            uvs,
+            uv2,
+            normals,
+            extraUVs,
+            new MeshGenerator.SubchunkMeshRange
+            {
+                vertexStart = 0,
+                vertexCount = vertices.Length,
+                opaqueStart = 0,
+                opaqueCount = opaqueTris.Length,
+                transparentStart = 0,
+                transparentCount = transparentTris.Length,
+                billboardStart = 0,
+                billboardCount = billboardTris.Length,
+                waterStart = 0,
+                waterCount = waterTris.Length
+            },
+            startY,
+            endY);
+    }
+
+    public void ApplyMeshData(
+        NativeList<Vector3> vertices,
+        NativeList<int> opaqueTris,
+        NativeList<int> transparentTris,
+        NativeList<int> billboardTris,
+        NativeList<int> waterTris,
+        NativeList<Vector2> uvs,
+        NativeList<Vector2> uv2,
+        NativeList<Vector3> normals,
+        NativeList<Vector4> extraUVs,
+        MeshGenerator.SubchunkMeshRange range,
+        int startY,
+        int endY)
+    {
+        if (range.vertexCount == 0)
         {
             ClearMesh();
             return;
         }
 
-        int vertexCount = vertices.Length;
+        int vertexCount = range.vertexCount;
 
         var meshDataArray = Mesh.AllocateWritableMeshData(1);
         var meshData = meshDataArray[0];
@@ -118,44 +159,45 @@ public class Subchunk : MonoBehaviour
         var vertData = meshData.GetVertexData<ChunkVertex>();
         for (int i = 0; i < vertexCount; i++)
         {
+            int src = range.vertexStart + i;
             vertData[i] = new ChunkVertex
             {
-                position = vertices[i],
-                normal = normals[i],
-                uv0 = uvs[i],
-                uv1 = uv2[i],
-                uv2 = extraUVs[i]
+                position = vertices[src],
+                normal = normals[src],
+                uv0 = uvs[src],
+                uv1 = uv2[src],
+                uv2 = extraUVs[src]
             };
         }
 
-        int totalIndices = opaqueTris.Length + transparentTris.Length + billboardTris.Length + waterTris.Length;
+        int totalIndices = range.opaqueCount + range.transparentCount + range.billboardCount + range.waterCount;
         meshData.SetIndexBufferParams(totalIndices, IndexFormat.UInt32);
 
         var indexData = meshData.GetIndexData<int>();
         int indexOffset = 0;
         meshData.subMeshCount = 3;
 
-        int count = opaqueTris.Length;
-        indexData.Slice(indexOffset, count).CopyFrom(opaqueTris.AsArray());
+        int count = range.opaqueCount;
+        CopyTriangleRange(indexData, indexOffset, opaqueTris, range.opaqueStart, count, range.vertexStart);
         meshData.SetSubMesh(0, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
         indexOffset += count;
 
         int transparentStart = indexOffset;
-        int transparentCount = transparentTris.Length + billboardTris.Length;
-        if (transparentTris.Length > 0)
+        int transparentCount = range.transparentCount + range.billboardCount;
+        if (range.transparentCount > 0)
         {
-            indexData.Slice(indexOffset, transparentTris.Length).CopyFrom(transparentTris.AsArray());
-            indexOffset += transparentTris.Length;
+            CopyTriangleRange(indexData, indexOffset, transparentTris, range.transparentStart, range.transparentCount, range.vertexStart);
+            indexOffset += range.transparentCount;
         }
-        if (billboardTris.Length > 0)
+        if (range.billboardCount > 0)
         {
-            indexData.Slice(indexOffset, billboardTris.Length).CopyFrom(billboardTris.AsArray());
-            indexOffset += billboardTris.Length;
+            CopyTriangleRange(indexData, indexOffset, billboardTris, range.billboardStart, range.billboardCount, range.vertexStart);
+            indexOffset += range.billboardCount;
         }
         meshData.SetSubMesh(1, new SubMeshDescriptor(transparentStart, transparentCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
-        count = waterTris.Length;
-        indexData.Slice(indexOffset, count).CopyFrom(waterTris.AsArray());
+        count = range.waterCount;
+        CopyTriangleRange(indexData, indexOffset, waterTris, range.waterStart, count, range.vertexStart);
         meshData.SetSubMesh(2, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
         mesh.Clear();
@@ -165,7 +207,7 @@ public class Subchunk : MonoBehaviour
             MeshUpdateFlags.DontNotifyMeshUsers);
         mesh.bounds = CreateMeshBounds(startY, endY);
 
-        bool hasSolid = opaqueTris.Length > 0 || transparentTris.Length > 0;
+        bool hasSolid = range.opaqueCount > 0 || range.transparentCount > 0;
         canHaveColliders = hasSolid;
 
         hasGeometry = true;
@@ -177,6 +219,18 @@ public class Subchunk : MonoBehaviour
             hasColliderData = false;
             DisableAllBoxColliders();
         }
+    }
+
+    private static void CopyTriangleRange(
+        NativeArray<int> target,
+        int targetStart,
+        NativeList<int> source,
+        int sourceStart,
+        int count,
+        int vertexBase)
+    {
+        for (int i = 0; i < count; i++)
+            target[targetStart + i] = source[sourceStart + i] - vertexBase;
     }
 
     public void SetVisible(bool visible)

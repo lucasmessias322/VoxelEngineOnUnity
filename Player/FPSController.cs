@@ -3,6 +3,12 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class FPSController : MonoBehaviour
 {
+    private enum CameraViewMode
+    {
+        FirstPerson,
+        ThirdPerson
+    }
+
     [Header("Movement Settings")]
     [SerializeField] private float walkSpeed = 5f;
     [SerializeField] private float sprintSpeed = 9f;
@@ -15,6 +21,18 @@ public class FPSController : MonoBehaviour
     [Header("Camera Settings")]
     [SerializeField] private float mouseSensitivity = 100f;
     [SerializeField] private Transform cameraTransform;
+
+    [Header("View Mode Settings")]
+    [SerializeField] private KeyCode firstPersonKey = KeyCode.F1;
+    [SerializeField] private KeyCode thirdPersonKey = KeyCode.F2;
+    [SerializeField] private CameraViewMode defaultViewMode = CameraViewMode.FirstPerson;
+    [SerializeField] private float thirdPersonDistance = 3.25f;
+    [SerializeField] private float thirdPersonHeightOffset = 0.15f;
+    [SerializeField] private float thirdPersonShoulderOffset = 0f;
+    [SerializeField] private float thirdPersonCollisionRadius = 0.2f;
+    [SerializeField] private LayerMask thirdPersonCollisionMask = ~0;
+    [SerializeField] private bool hideCameraChildrenInThirdPerson = true;
+    [SerializeField] private GameObject[] firstPersonOnlyObjects;
 
     [Header("Crouch Settings")]
     [SerializeField] private float normalHeight = 2f;
@@ -58,8 +76,14 @@ public class FPSController : MonoBehaviour
     private bool isCrouching = false;
     private float targetHeight;
     public float cameraTargetY;
+    private float currentCameraPivotY;
     private float originalStepOffset;
     private bool worldLoadingLocked;
+    private CameraViewMode currentViewMode;
+    private Vector3 defaultCameraLocalPosition;
+    private Transform[] cachedCameraChildren;
+    private HeldBlockVisual cachedHeldBlockVisual;
+    private bool firstPersonVisualsVisible = true;
 
     void Start()
     {
@@ -72,16 +96,20 @@ public class FPSController : MonoBehaviour
         if (cameraTransform == null && Camera.main != null)
             cameraTransform = Camera.main.transform;
 
+        CacheFirstPersonOnlyReferences();
+
         targetHeight = normalHeight;
+        currentCameraPivotY = cameraTargetY;
         originalStepOffset = characterController.stepOffset;
         characterController.stepOffset = stepOffset;
+        currentViewMode = defaultViewMode;
 
         // inicial camera pos
         if (cameraTransform != null)
         {
-            Vector3 local = cameraTransform.localPosition;
-            local.y = cameraTargetY;
-            cameraTransform.localPosition = local;
+            defaultCameraLocalPosition = cameraTransform.localPosition;
+            defaultCameraLocalPosition.y = cameraTargetY;
+            UpdateCameraTransform(forceVisualRefresh: true);
         }
     }
 
@@ -95,6 +123,7 @@ public class FPSController : MonoBehaviour
             return;
         }
 
+        HandleViewModeInput();
         HandleRotation();
         // HandleCrouchInput(); // descoment se quiser ativar toggle crouch
         HandleFlightToggle();
@@ -113,10 +142,140 @@ public class FPSController : MonoBehaviour
         xRotation -= mouseY;
         xRotation = Mathf.Clamp(xRotation, -90f, 90f);
 
-        if (cameraTransform != null)
-            cameraTransform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
-
         transform.Rotate(Vector3.up * mouseX);
+        UpdateCameraTransform();
+    }
+
+    private void HandleViewModeInput()
+    {
+        if (Input.GetKeyDown(firstPersonKey))
+        {
+            SetViewMode(CameraViewMode.FirstPerson);
+        }
+        else if (Input.GetKeyDown(thirdPersonKey))
+        {
+            SetViewMode(CameraViewMode.ThirdPerson);
+        }
+    }
+
+    private void SetViewMode(CameraViewMode viewMode)
+    {
+        if (currentViewMode == viewMode)
+            return;
+
+        currentViewMode = viewMode;
+        UpdateCameraTransform(forceVisualRefresh: true);
+    }
+
+    private void CacheFirstPersonOnlyReferences()
+    {
+        if (cameraTransform != null)
+        {
+            cachedCameraChildren = new Transform[cameraTransform.childCount];
+            for (int i = 0; i < cameraTransform.childCount; i++)
+                cachedCameraChildren[i] = cameraTransform.GetChild(i);
+        }
+
+        if (cachedHeldBlockVisual == null)
+            cachedHeldBlockVisual = FindAnyObjectByType<HeldBlockVisual>();
+    }
+
+    private void UpdateCameraTransform(bool forceVisualRefresh = false)
+    {
+        if (cameraTransform == null)
+            return;
+
+        UpdateFirstPersonVisuals(forceVisualRefresh);
+        cameraTransform.localRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        cameraTransform.localPosition = GetTargetCameraLocalPosition();
+    }
+
+    private Vector3 GetTargetCameraLocalPosition()
+    {
+        Vector3 pivotLocal = defaultCameraLocalPosition;
+        pivotLocal.y = currentCameraPivotY;
+
+        if (currentViewMode == CameraViewMode.FirstPerson)
+            return pivotLocal;
+
+        Vector3 thirdPersonPivotLocal = pivotLocal + new Vector3(0f, thirdPersonHeightOffset, 0f);
+        Quaternion pitchRotation = Quaternion.Euler(xRotation, 0f, 0f);
+        Vector3 desiredLocalOffset = pitchRotation * new Vector3(thirdPersonShoulderOffset, 0f, -Mathf.Max(0f, thirdPersonDistance));
+        Vector3 desiredLocalPosition = thirdPersonPivotLocal + desiredLocalOffset;
+
+        float castDistance = desiredLocalOffset.magnitude;
+        if (castDistance <= 0.001f || thirdPersonCollisionRadius <= 0f)
+            return desiredLocalPosition;
+
+        Vector3 pivotWorld = transform.TransformPoint(thirdPersonPivotLocal);
+        Vector3 desiredWorld = transform.TransformPoint(desiredLocalPosition);
+        Vector3 direction = (desiredWorld - pivotWorld).normalized;
+        RaycastHit[] hits = Physics.SphereCastAll(
+            pivotWorld,
+            thirdPersonCollisionRadius,
+            direction,
+            castDistance,
+            thirdPersonCollisionMask,
+            QueryTriggerInteraction.Ignore);
+
+        float nearestHitDistance = castDistance;
+        bool hasBlockingHit = false;
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            RaycastHit hit = hits[i];
+            if (hit.collider == null)
+                continue;
+
+            Transform hitTransform = hit.collider.transform;
+            if (hitTransform == transform || hitTransform.IsChildOf(transform))
+                continue;
+
+            if (hit.distance < nearestHitDistance)
+            {
+                nearestHitDistance = hit.distance;
+                hasBlockingHit = true;
+            }
+        }
+
+        if (!hasBlockingHit)
+            return desiredLocalPosition;
+
+        float safeDistance = Mathf.Max(0f, nearestHitDistance - thirdPersonCollisionRadius);
+        Vector3 correctedWorldPosition = pivotWorld + direction * safeDistance;
+        return transform.InverseTransformPoint(correctedWorldPosition);
+    }
+
+    private void UpdateFirstPersonVisuals(bool forceRefresh)
+    {
+        bool shouldShowFirstPersonVisuals = currentViewMode == CameraViewMode.FirstPerson;
+        if (!forceRefresh && firstPersonVisualsVisible == shouldShowFirstPersonVisuals)
+            return;
+
+        firstPersonVisualsVisible = shouldShowFirstPersonVisuals;
+
+        if (hideCameraChildrenInThirdPerson && cachedCameraChildren != null)
+        {
+            for (int i = 0; i < cachedCameraChildren.Length; i++)
+            {
+                Transform child = cachedCameraChildren[i];
+                if (child != null)
+                    child.gameObject.SetActive(shouldShowFirstPersonVisuals);
+            }
+        }
+
+        if (firstPersonOnlyObjects != null)
+        {
+            for (int i = 0; i < firstPersonOnlyObjects.Length; i++)
+            {
+                GameObject firstPersonOnlyObject = firstPersonOnlyObjects[i];
+                if (firstPersonOnlyObject != null)
+                    firstPersonOnlyObject.SetActive(shouldShowFirstPersonVisuals);
+            }
+        }
+
+        if (cachedHeldBlockVisual != null)
+            cachedHeldBlockVisual.gameObject.SetActive(shouldShowFirstPersonVisuals);
     }
 
     private void HandleCrouchInput()
@@ -353,9 +512,8 @@ public class FPSController : MonoBehaviour
         // ajustar camera local position
         if (cameraTransform != null)
         {
-            Vector3 cp = cameraTransform.localPosition;
-            cp.y = Mathf.Lerp(cp.y, cameraTargetY, Time.deltaTime * crouchTransitionSpeed);
-            cameraTransform.localPosition = cp;
+            currentCameraPivotY = Mathf.Lerp(currentCameraPivotY, cameraTargetY, Time.deltaTime * crouchTransitionSpeed);
+            UpdateCameraTransform();
         }
     }
 
@@ -363,6 +521,7 @@ public class FPSController : MonoBehaviour
     public bool IsCrouching() => isCrouching;
     public bool IsSprinting() => sprintToggled || Input.GetKey(KeyCode.LeftShift);
     public bool IsFlying() => isFlying;
+    public bool IsThirdPerson() => currentViewMode == CameraViewMode.ThirdPerson;
 
     public void SetWorldLoadingState(bool isLoading)
     {

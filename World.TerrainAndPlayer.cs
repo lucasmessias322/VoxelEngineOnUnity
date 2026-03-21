@@ -270,6 +270,10 @@ public partial class World : MonoBehaviour
         if (localX == Chunk.SizeX - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right);
         if (localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.down);
         if (localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.up);
+        if (localX == 0 && localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.left + Vector2Int.down);
+        if (localX == 0 && localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.left + Vector2Int.up);
+        if (localX == Chunk.SizeX - 1 && localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.right + Vector2Int.down);
+        if (localX == Chunk.SizeX - 1 && localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right + Vector2Int.up);
 
         // Fora da altura simulada por chunk, mantemos apenas override:
         // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.

@@ -118,6 +118,19 @@ public static class MeshGenerator
     private const float DefaultAOCurveExponent = 1.12f;
 
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
+    public struct SubchunkMeshRange
+    {
+        public int vertexStart;
+        public int vertexCount;
+        public int opaqueStart;
+        public int opaqueCount;
+        public int transparentStart;
+        public int transparentCount;
+        public int billboardStart;
+        public int billboardCount;
+        public int waterStart;
+        public int waterCount;
+    }
     // ------------------- Tree Instance -------------------
 
 
@@ -627,8 +640,7 @@ public static class MeshGenerator
         int borderSize,
         int chunkCoordX,
         int chunkCoordZ,
-        int startY,
-        int endY,
+        int dirtySubchunkMask,
         bool enableGrassBillboards,
         float grassBillboardChance,
         BlockType grassBillboardBlockType,
@@ -638,6 +650,7 @@ public static class MeshGenerator
         float aoStrength,
         float aoCurveExponent,
         float aoMinLight,
+        bool useFastBedrockStyleMeshing,
         out JobHandle meshHandle,
         out NativeList<Vector3> vertices,
         out NativeList<int> opaqueTriangles,
@@ -650,7 +663,8 @@ public static class MeshGenerator
         out NativeList<byte> vertexLights,
         out NativeList<byte> tintFlags,
         out NativeList<byte> vertexAO,
-        out NativeList<Vector4> extraUVs
+        out NativeList<Vector4> extraUVs,
+        out NativeArray<SubchunkMeshRange> subchunkRanges
     )
     {
         // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
@@ -666,14 +680,15 @@ public static class MeshGenerator
         vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);
         uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
+        subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.TempJob);
 
         // ==========================================
         // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
-            startY = startY,
-            endY = endY,
+            startY = 0,
+            endY = 0,
             blockTypes = blockTypes,
             solids = solids,
             light = light, // Usa a luz previamente calculada e passada por parÃ¢metro
@@ -696,6 +711,9 @@ public static class MeshGenerator
             aoStrength = aoStrength,
             aoCurveExponent = aoCurveExponent,
             aoMinLight = aoMinLight,
+            useFastBedrockStyleMeshing = useFastBedrockStyleMeshing,
+            dirtySubchunkMask = dirtySubchunkMask,
+            subchunkRanges = subchunkRanges,
 
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
@@ -746,6 +764,9 @@ public static class MeshGenerator
         public float aoStrength;
         public float aoCurveExponent;
         public float aoMinLight;
+        public bool useFastBedrockStyleMeshing;
+        public int dirtySubchunkMask;
+        public NativeArray<SubchunkMeshRange> subchunkRanges;
 
         // LIMITES DO SUBCHUNK
         public int startY;
@@ -773,6 +794,10 @@ public static class MeshGenerator
             public byte ao1;
             public byte ao2;
             public byte ao3;
+            public byte light0;
+            public byte light1;
+            public byte light2;
+            public byte light3;
         }
 
         public void Execute()
@@ -780,9 +805,37 @@ public static class MeshGenerator
             float invAtlasTilesX = 1f / atlasTilesX;
             float invAtlasTilesY = 1f / atlasTilesY;
 
-            GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
-            GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
-            GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+            for (int sub = 0; sub < SubchunksPerColumn; sub++)
+            {
+                if ((dirtySubchunkMask & (1 << sub)) == 0)
+                {
+                    subchunkRanges[sub] = default;
+                    continue;
+                }
+
+                startY = sub * Chunk.SubchunkHeight;
+                endY = math.min(startY + Chunk.SubchunkHeight, SizeY);
+
+                SubchunkMeshRange range = new SubchunkMeshRange
+                {
+                    vertexStart = vertices.Length,
+                    opaqueStart = opaqueTriangles.Length,
+                    transparentStart = transparentTriangles.Length,
+                    billboardStart = billboardTriangles.Length,
+                    waterStart = waterTriangles.Length
+                };
+
+                GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+                GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+                GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+
+                range.vertexCount = vertices.Length - range.vertexStart;
+                range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
+                range.transparentCount = transparentTriangles.Length - range.transparentStart;
+                range.billboardCount = billboardTriangles.Length - range.billboardStart;
+                range.waterCount = waterTriangles.Length - range.waterStart;
+                subchunkRanges[sub] = range;
+            }
         }
 
         private static bool HasFace(in GreedyFaceData face)
@@ -803,14 +856,18 @@ public static class MeshGenerator
             // Merge only when the shared edge keeps the same AO signature.
             return HasSameSurface(left, right) &&
                    left.ao1 == right.ao0 &&
-                   left.ao2 == right.ao3;
+                   left.ao2 == right.ao3 &&
+                   left.light1 == right.light0 &&
+                   left.light2 == right.light3;
         }
 
         private static bool CanMergeAlongV(in GreedyFaceData bottom, in GreedyFaceData top)
         {
             return HasSameSurface(bottom, top) &&
                    bottom.ao3 == top.ao0 &&
-                   bottom.ao2 == top.ao1;
+                   bottom.ao2 == top.ao1 &&
+                   bottom.light3 == top.light0 &&
+                   bottom.light2 == top.light1;
         }
 
         private static Vector3Int GetFaceVertexPlanePos(
@@ -919,6 +976,90 @@ public static class MeshGenerator
             return true;
         }
 
+        private static byte GetRectVertexLight(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            int localX,
+            int localY)
+        {
+            int cellX = localX == width ? startI + width - 1 : startI + localX;
+            int cellY = localY == height ? startJ + height - 1 : startJ + localY;
+            GreedyFaceData face = mask[cellX + cellY * sizeU];
+
+            if (localX == width)
+                return localY == height ? face.light2 : face.light1;
+
+            return localY == height ? face.light3 : face.light0;
+        }
+
+        private static bool MatchesQuadInterpolationForLight(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            bool flipTriangle)
+        {
+            if (width <= 0 || height <= 0)
+                return false;
+
+            int scale = width * height;
+            int light00 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0);
+            int light10 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0);
+            int light11 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height);
+            int light01 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height);
+
+            for (int y = 0; y <= height; y++)
+            {
+                for (int x = 0; x <= width; x++)
+                {
+                    int actual = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, x, y);
+                    int expectedScaled;
+
+                    if (!flipTriangle)
+                    {
+                        if (x * height >= y * width)
+                        {
+                            expectedScaled = light00 * scale +
+                                             (light10 - light00) * x * height +
+                                             (light11 - light10) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = light00 * scale +
+                                             (light11 - light01) * x * height +
+                                             (light01 - light00) * y * width;
+                        }
+                    }
+                    else
+                    {
+                        if (x * height + y * width <= scale)
+                        {
+                            expectedScaled = light00 * scale +
+                                             (light10 - light00) * x * height +
+                                             (light01 - light00) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = light11 * scale +
+                                             (light10 - light11) * width * (height - y) +
+                                             (light01 - light11) * height * (width - x);
+                        }
+                    }
+
+                    if (actual * scale != expectedScaled)
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
         private static bool TryGetRepresentableRectFlip(
             NativeArray<GreedyFaceData> mask,
             int sizeU,
@@ -928,14 +1069,22 @@ public static class MeshGenerator
             int height,
             out bool flipTriangle)
         {
-            bool noFlipMatches = MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, false);
-            bool flipMatches = MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, true);
+            bool noFlipMatches =
+                MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, false) &&
+                MatchesQuadInterpolationForLight(mask, sizeU, startI, startJ, width, height, false);
+            bool flipMatches =
+                MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, true) &&
+                MatchesQuadInterpolationForLight(mask, sizeU, startI, startJ, width, height, true);
 
             int ao00 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, 0);
             int ao10 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, 0);
             int ao11 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, height);
             int ao01 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, height);
-            bool heuristicFlip = (ao00 + ao11) > (ao10 + ao01);
+            int light00 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0);
+            int light10 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0);
+            int light11 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height);
+            int light01 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height);
+            bool heuristicFlip = (ao00 + ao11 + light00 + light11) > (ao10 + ao01 + light10 + light01);
 
             if (noFlipMatches && flipMatches)
             {
@@ -957,6 +1106,106 @@ public static class MeshGenerator
 
             flipTriangle = heuristicFlip;
             return false;
+        }
+
+        private static bool TryGetRepresentableRectFast(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int maxWidth,
+            int maxHeight,
+            out int resolvedWidth,
+            out int resolvedHeight,
+            out bool flipTriangle)
+        {
+            if (TryGetRepresentableRectFlip(mask, sizeU, startI, startJ, maxWidth, maxHeight, out flipTriangle))
+            {
+                resolvedWidth = maxWidth;
+                resolvedHeight = maxHeight;
+                return true;
+            }
+
+            int widthFirstW;
+            int widthFirstH;
+            bool widthFirstFlip;
+            ShrinkRectUntilRepresentable(
+                mask, sizeU, startI, startJ, maxWidth, maxHeight, true,
+                out widthFirstW, out widthFirstH, out widthFirstFlip);
+
+            int heightFirstW;
+            int heightFirstH;
+            bool heightFirstFlip;
+            ShrinkRectUntilRepresentable(
+                mask, sizeU, startI, startJ, maxWidth, maxHeight, false,
+                out heightFirstW, out heightFirstH, out heightFirstFlip);
+
+            int widthFirstArea = widthFirstW * widthFirstH;
+            int heightFirstArea = heightFirstW * heightFirstH;
+
+            if (widthFirstArea >= heightFirstArea)
+            {
+                resolvedWidth = widthFirstW;
+                resolvedHeight = widthFirstH;
+                flipTriangle = widthFirstFlip;
+            }
+            else
+            {
+                resolvedWidth = heightFirstW;
+                resolvedHeight = heightFirstH;
+                flipTriangle = heightFirstFlip;
+            }
+
+            return true;
+        }
+
+        private static void ShrinkRectUntilRepresentable(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int maxWidth,
+            int maxHeight,
+            bool shrinkWidthFirst,
+            out int resolvedWidth,
+            out int resolvedHeight,
+            out bool flipTriangle)
+        {
+            int width = maxWidth;
+            int height = maxHeight;
+
+            while (true)
+            {
+                if (TryGetRepresentableRectFlip(mask, sizeU, startI, startJ, width, height, out flipTriangle))
+                {
+                    resolvedWidth = width;
+                    resolvedHeight = height;
+                    return;
+                }
+
+                if (width <= 1 && height <= 1)
+                    break;
+
+                if (shrinkWidthFirst)
+                {
+                    if (width > 1)
+                        width--;
+                    else
+                        height--;
+                }
+                else
+                {
+                    if (height > 1)
+                        height--;
+                    else
+                        width--;
+                }
+            }
+
+            resolvedWidth = 1;
+            resolvedHeight = 1;
+            flipTriangle = (mask[startI + startJ * sizeU].ao0 + mask[startI + startJ * sizeU].ao2) >
+                           (mask[startI + startJ * sizeU].ao1 + mask[startI + startJ * sizeU].ao3);
         }
 
         private void GenerateSpecialMeshes(
@@ -1768,6 +2017,24 @@ public static class MeshGenerator
                                     ao3 = GetVertexAO(aoPos, -stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 }
 
+                                byte light0 = GetVertexLight(aoPos, -stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                byte light1 = GetVertexLight(aoPos, stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                byte light2 = GetVertexLight(aoPos, stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                byte light3 = GetVertexLight(aoPos, -stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                if (IsEmissiveBlock(currentMapping))
+                                {
+                                    byte emission = currentMapping.lightEmission;
+                                    light0 = (byte)math.max((int)light0, (int)emission);
+                                    light1 = (byte)math.max((int)light1, (int)emission);
+                                    light2 = (byte)math.max((int)light2, (int)emission);
+                                    light3 = (byte)math.max((int)light3, (int)emission);
+                                }
+
+                                light0 = (byte)math.max((int)light0, (int)faceLight);
+                                light1 = (byte)math.max((int)light1, (int)faceLight);
+                                light2 = (byte)math.max((int)light2, (int)faceLight);
+                                light3 = (byte)math.max((int)light3, (int)faceLight);
+
                                 mask[maskIndex] = new GreedyFaceData
                                 {
                                     blockId = (int)current,
@@ -1776,7 +2043,11 @@ public static class MeshGenerator
                                     ao0 = ao0,
                                     ao1 = ao1,
                                     ao2 = ao2,
-                                    ao3 = ao3
+                                    ao3 = ao3,
+                                    light0 = light0,
+                                    light1 = light1,
+                                    light2 = light2,
+                                    light3 = light3
                                 };
                             }
                         }
@@ -1819,34 +2090,41 @@ public static class MeshGenerator
                                     h++;
                                 }
 
-                                int maxW = w;
-                                int maxH = h;
-                                int bestW = 1;
-                                int bestH = 1;
-                                int bestArea = 1;
                                 bool flipTriangle = (startFace.ao0 + startFace.ao2) > (startFace.ao1 + startFace.ao3);
-
-                                // Keep the largest sub-rectangle whose AO still fits one quad.
-                                for (int testH = 1; testH <= maxH; testH++)
+                                if (!useFastBedrockStyleMeshing)
                                 {
-                                    for (int testW = 1; testW <= maxW; testW++)
+                                    int maxW = w;
+                                    int maxH = h;
+                                    int bestW = 1;
+                                    int bestH = 1;
+                                    int bestArea = 1;
+
+                                    // Keep the largest sub-rectangle whose AO and light gradient still fit one quad.
+                                    for (int testH = 1; testH <= maxH; testH++)
                                     {
-                                        int area = testW * testH;
-                                        if (area < bestArea || (area == bestArea && testW <= bestW))
-                                            continue;
+                                        for (int testW = 1; testW <= maxW; testW++)
+                                        {
+                                            int area = testW * testH;
+                                            if (area < bestArea || (area == bestArea && testW <= bestW))
+                                                continue;
 
-                                        if (!TryGetRepresentableRectFlip(mask, sizeU, i, j, testW, testH, out bool candidateFlip))
-                                            continue;
+                                            if (!TryGetRepresentableRectFlip(mask, sizeU, i, j, testW, testH, out bool candidateFlip))
+                                                continue;
 
-                                        bestW = testW;
-                                        bestH = testH;
-                                        bestArea = area;
-                                        flipTriangle = candidateFlip;
+                                            bestW = testW;
+                                            bestH = testH;
+                                            bestArea = area;
+                                            flipTriangle = candidateFlip;
+                                        }
                                     }
-                                }
 
-                                w = bestW;
-                                h = bestH;
+                                    w = bestW;
+                                    h = bestH;
+                                }
+                                else
+                                {
+                                    TryGetRepresentableRectFast(mask, sizeU, i, j, w, h, out w, out h, out flipTriangle);
+                                }
 
                                 GreedyFaceData bottomLeftFace = mask[i + j * sizeU];
                                 GreedyFaceData bottomRightFace = mask[i + (w - 1) + j * sizeU];
@@ -1854,12 +2132,14 @@ public static class MeshGenerator
                                 GreedyFaceData topLeftFace = mask[i + (j + h - 1) * sizeU];
 
                                 BlockType bt = (BlockType)bottomLeftFace.blockId;
-                                byte finalLight = bottomLeftFace.faceLight;
-
                                 byte ao0 = bottomLeftFace.ao0;
                                 byte ao1 = bottomRightFace.ao1;
                                 byte ao2 = topRightFace.ao2;
                                 byte ao3 = topLeftFace.ao3;
+                                byte light0 = bottomLeftFace.light0;
+                                byte light1 = bottomRightFace.light1;
+                                byte light2 = topRightFace.light2;
+                                byte light3 = topLeftFace.light3;
 
                                 int vIndex = vertices.Length;
 
@@ -1892,14 +2172,8 @@ public static class MeshGenerator
                                                 faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
-                                    Vector3Int vertexPlanePos = GetFaceVertexPlanePos(axis, u, v, n, normalSign, i, j, du, dv);
-                                    Vector3Int lightStepU = (l == 1 || l == 2) ? stepU : -stepU;
-                                    Vector3Int lightStepV = (l == 2 || l == 3) ? stepV : -stepV;
-                                    byte vertexLight = GetVertexLight(vertexPlanePos, lightStepU, lightStepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                    if (IsEmissiveBlock(m))
-                                        vertexLight = (byte)math.max((int)vertexLight, (int)m.lightEmission);
-
-                                    float rawLight = math.max(finalLight / 15f, vertexLight / 15f);
+                                    byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
+                                    float rawLight = currentLight / 15f;
                                     float floatTint = tint ? 1f : 0f;
                                     float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
                                     float aoBase = currentAO / 3f;
