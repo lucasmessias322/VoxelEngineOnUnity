@@ -429,7 +429,7 @@ public static class MeshGenerator
 
         // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
-        subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.TempJob);
+        subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
 
         int dataHeightSize = SizeX + 2 * dataBorderSize;
         int dataTotalHeightPoints = dataHeightSize * dataHeightSize;
@@ -453,10 +453,10 @@ public static class MeshGenerator
         int voxelPlaneSize = dataVoxelPlaneSize;
         int totalVoxels = dataTotalVoxels;
 
-        heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.TempJob);
-        blockTypes = new NativeArray<BlockType>(dataTotalVoxels, Allocator.TempJob);
-        solids = new NativeArray<bool>(dataTotalVoxels, Allocator.TempJob);
-        light = new NativeArray<byte>(dataTotalVoxels, Allocator.TempJob);
+        heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.Persistent);
+        blockTypes = new NativeArray<BlockType>(dataTotalVoxels, Allocator.Persistent);
+        solids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
+        light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
 
 
@@ -559,7 +559,7 @@ public static class MeshGenerator
             return;
         }
 
-        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
+        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.TempJob);
         var lightHeightJob = new HeightmapJob
         {
@@ -686,20 +686,20 @@ public static class MeshGenerator
     )
     {
         // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
-        vertices = new NativeList<Vector3>(4096, Allocator.TempJob);
-        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        waterTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.TempJob);
-        billboardTriangles = new NativeList<int>(2048 * 3, Allocator.TempJob);
-        normals = new NativeList<Vector3>(4096, Allocator.TempJob);
-        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.TempJob);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        tintFlags = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.TempJob);
-        uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
-        uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
-        subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.TempJob);
-        subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.TempJob);
+        vertices = new NativeList<Vector3>(4096, Allocator.Persistent);
+        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
+        waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
+        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
+        billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
+        normals = new NativeList<Vector3>(4096, Allocator.Persistent);
+        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.Persistent);
+        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);
+        tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
+        vertexAO = new NativeList<byte>(4096 * 4, Allocator.Persistent);
+        uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
+        uv2 = new NativeList<Vector2>(4096, Allocator.Persistent);
+        subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.Persistent);
+        subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.Persistent);
 
         // ==========================================
         // JOB 2: GeraÃ§Ã£o da Malha (Mesh)

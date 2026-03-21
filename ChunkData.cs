@@ -24,6 +24,12 @@ public static class ChunkData
     [BurstCompile]
     public struct ChunkDataJob : IJob
     {
+        private struct TreeCandidateCacheEntry
+        {
+            public byte hasCandidate;
+            public TreeInstance candidate;
+        }
+
         public Vector2Int coord;
 
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
@@ -154,32 +160,67 @@ public static class ChunkData
             int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
             int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
             int cellZ1 = FloorDiv(chunkMaxZ + searchMargin, cellSize);
+            int maxSpacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, settings);
+            int neighborCellRadius = math.max(1, (maxSpacingRadius + cellSize - 1) / cellSize);
+            int cacheCapacity = GetTreeCandidateCacheCapacity(cellX0, cellX1, cellZ0, cellZ1, neighborCellRadius);
+            NativeHashMap<long, TreeCandidateCacheEntry> candidateCache = new NativeHashMap<long, TreeCandidateCacheEntry>(cacheCapacity, Allocator.Temp);
 
-            for (int cx = cellX0; cx <= cellX1; cx++)
+            try
             {
-                for (int cz = cellZ0; cz <= cellZ1; cz++)
+                for (int cx = cellX0; cx <= cellX1; cx++)
                 {
-                    if (!TryCreateTreeCandidateForCell(rule, cx, cz, out TreeInstance candidate))
-                        continue;
-
-                    if (candidate.worldX < chunkMinX - searchMargin || candidate.worldX > chunkMaxX + searchMargin ||
-                        candidate.worldZ < chunkMinZ - searchMargin || candidate.worldZ > chunkMaxZ + searchMargin)
+                    for (int cz = cellZ0; cz <= cellZ1; cz++)
                     {
-                        continue;
+                        if (!TryCreateTreeCandidateForCell(rule, cx, cz, ref candidateCache, out TreeInstance candidate))
+                            continue;
+
+                        if (candidate.worldX < chunkMinX - searchMargin || candidate.worldX > chunkMaxX + searchMargin ||
+                            candidate.worldZ < chunkMinZ - searchMargin || candidate.worldZ > chunkMaxZ + searchMargin)
+                        {
+                            continue;
+                        }
+
+                        if (HasHigherPriorityConflictingCell(rule, cx, cz, candidate, neighborCellRadius, ref candidateCache))
+                            continue;
+
+                        if (HasNearbyTreeXZ(in trees, candidate.worldX, candidate.worldZ, candidate.spacingRadius))
+                            continue;
+
+                        trees.Add(candidate);
                     }
-
-                    if (HasHigherPriorityConflictingCell(rule, cx, cz, candidate))
-                        continue;
-
-                    if (HasNearbyTreeXZ(in trees, candidate.worldX, candidate.worldZ, candidate.spacingRadius))
-                        continue;
-
-                    trees.Add(candidate);
                 }
+            }
+            finally
+            {
+                if (candidateCache.IsCreated)
+                    candidateCache.Dispose();
             }
         }
 
-        private bool TryCreateTreeCandidateForCell(in TreeSpawnRuleData rule, int cellX, int cellZ, out TreeInstance candidate)
+        private bool TryCreateTreeCandidateForCell(
+            in TreeSpawnRuleData rule,
+            int cellX,
+            int cellZ,
+            ref NativeHashMap<long, TreeCandidateCacheEntry> candidateCache,
+            out TreeInstance candidate)
+        {
+            long cacheKey = PackTreeCandidateCellKey(cellX, cellZ);
+            if (candidateCache.TryGetValue(cacheKey, out TreeCandidateCacheEntry cached))
+            {
+                candidate = cached.candidate;
+                return cached.hasCandidate != 0;
+            }
+
+            bool hasCandidate = TryCreateTreeCandidateForCellUncached(rule, cellX, cellZ, out candidate);
+            candidateCache.TryAdd(cacheKey, new TreeCandidateCacheEntry
+            {
+                hasCandidate = (byte)(hasCandidate ? 1 : 0),
+                candidate = candidate
+            });
+            return hasCandidate;
+        }
+
+        private bool TryCreateTreeCandidateForCellUncached(in TreeSpawnRuleData rule, int cellX, int cellZ, out TreeInstance candidate)
         {
             TreeSettings settings = rule.settings;
             int cellSize = math.max(1, settings.minSpacing);
@@ -263,13 +304,14 @@ public static class ChunkData
             return true;
         }
 
-        private bool HasHigherPriorityConflictingCell(in TreeSpawnRuleData rule, int cellX, int cellZ, in TreeInstance candidate)
+        private bool HasHigherPriorityConflictingCell(
+            in TreeSpawnRuleData rule,
+            int cellX,
+            int cellZ,
+            in TreeInstance candidate,
+            int neighborCellRadius,
+            ref NativeHashMap<long, TreeCandidateCacheEntry> candidateCache)
         {
-            TreeSettings settings = rule.settings;
-            int cellSize = math.max(1, settings.minSpacing);
-            int maxSpacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, settings);
-            int neighborCellRadius = math.max(1, (maxSpacingRadius + cellSize - 1) / cellSize);
-
             for (int neighborCellX = cellX - neighborCellRadius; neighborCellX <= cellX + neighborCellRadius; neighborCellX++)
             {
                 for (int neighborCellZ = cellZ - neighborCellRadius; neighborCellZ <= cellZ + neighborCellRadius; neighborCellZ++)
@@ -277,7 +319,7 @@ public static class ChunkData
                     if (!IsHigherPriorityTreeCell(neighborCellX, neighborCellZ, cellX, cellZ))
                         continue;
 
-                    if (!TryCreateTreeCandidateForCell(rule, neighborCellX, neighborCellZ, out TreeInstance other))
+                    if (!TryCreateTreeCandidateForCell(rule, neighborCellX, neighborCellZ, ref candidateCache, out TreeInstance other))
                         continue;
 
                     int dx = other.worldX - candidate.worldX;
@@ -289,6 +331,27 @@ public static class ChunkData
             }
 
             return false;
+        }
+
+        private static long PackTreeCandidateCellKey(int cellX, int cellZ)
+        {
+            return ((long)cellX << 32) | (uint)cellZ;
+        }
+
+        private static int GetTreeCandidateCacheCapacity(int cellX0, int cellX1, int cellZ0, int cellZ1, int neighborCellRadius)
+        {
+            int searchWidth = math.max(1, cellX1 - cellX0 + 1);
+            int searchDepth = math.max(1, cellZ1 - cellZ0 + 1);
+            long expandedWidth = searchWidth + neighborCellRadius * 2L;
+            long expandedDepth = searchDepth + neighborCellRadius * 2L;
+            long capacity = expandedWidth * expandedDepth;
+
+            if (capacity < 64L)
+                capacity = 64L;
+            if (capacity > int.MaxValue)
+                capacity = int.MaxValue;
+
+            return (int)capacity;
         }
 
         private static bool IsHigherPriorityTreeCell(int otherCellX, int otherCellZ, int cellX, int cellZ)

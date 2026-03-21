@@ -1642,6 +1642,7 @@ public partial class World : MonoBehaviour
 
             if (canApplyMesh)
             {
+                bool chunkProvidedBorderCoverBeforeApply = DoesChunkCurrentlyProvideBorderCover(pm.coord);
                 bool updatedSectionVisibility = false;
                 while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
                        meshesAppliedThisFrame < maxMeshAppliesPerFrame)
@@ -1691,6 +1692,8 @@ public partial class World : MonoBehaviour
                 }
 
                 activeChunk.state = Chunk.ChunkState.Active;
+                if (!chunkProvidedBorderCoverBeforeApply)
+                    RequestHorizontalNeighborVisualRefresh(pm.coord);
 
                 if (updatedSectionVisibility)
                     InvalidateSectionOcclusionGraph();
@@ -1896,8 +1899,9 @@ public partial class World : MonoBehaviour
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
+        SealMissingHorizontalChunkBorders(pd.coord, pd.blockTypes, pd.solids, borderSize);
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
-        NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.TempJob);
+        NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.Persistent);
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
             nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
@@ -2002,6 +2006,145 @@ public partial class World : MonoBehaviour
         JobHandle suppressedDisposeHandle = disposeSuppressedBillboardsJob.Schedule(combinedMeshHandle);
 
         activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, dataDisposeHandle, suppressedDisposeHandle);
+    }
+
+    private void SealMissingHorizontalChunkBorders(
+        Vector2Int coord,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        int borderSize)
+    {
+        if (!blockTypes.IsCreated || !solids.IsCreated || borderSize <= 0)
+            return;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int westCurrentX = borderSize;
+        int eastCurrentX = borderSize + Chunk.SizeX - 1;
+        int northCurrentZ = borderSize;
+        int southCurrentZ = borderSize + Chunk.SizeZ - 1;
+        int westNeighborX = borderSize - 1;
+        int eastNeighborX = borderSize + Chunk.SizeX;
+        int northNeighborZ = borderSize - 1;
+        int southNeighborZ = borderSize + Chunk.SizeZ;
+
+        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.left))
+            ClearBorderPaddingX(westCurrentX, westNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+
+        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.right))
+            ClearBorderPaddingX(eastCurrentX, eastNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+
+        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.down))
+            ClearBorderPaddingZ(northCurrentZ, northNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+
+        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.up))
+            ClearBorderPaddingZ(southCurrentZ, southNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+    }
+
+    private bool DoesChunkCurrentlyProvideBorderCover(Vector2Int coord)
+    {
+        if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+            return false;
+
+        if (chunk.state == Chunk.ChunkState.Active)
+            return true;
+
+        if (chunk.state == Chunk.ChunkState.Inactive || chunk.subchunks == null)
+            return false;
+
+        for (int i = 0; i < chunk.subchunks.Length; i++)
+        {
+            Subchunk subchunk = chunk.subchunks[i];
+            if (subchunk != null && subchunk.hasGeometry)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void ClearBorderPaddingX(
+        int currentLocalX,
+        int paddingLocalX,
+        int borderSize,
+        int voxelSizeX,
+        int voxelPlaneSize,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids)
+    {
+        if (currentLocalX < 0 || currentLocalX >= voxelSizeX || paddingLocalX < 0 || paddingLocalX >= voxelSizeX)
+            return;
+
+        for (int z = borderSize; z < borderSize + Chunk.SizeZ; z++)
+        {
+            int currentIdx = currentLocalX + z * voxelPlaneSize;
+            int paddingIdx = paddingLocalX + z * voxelPlaneSize;
+            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            {
+                if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
+                    continue;
+
+                blockTypes[paddingIdx] = BlockType.Air;
+                solids[paddingIdx] = false;
+            }
+        }
+    }
+
+    private static void ClearBorderPaddingZ(
+        int currentLocalZ,
+        int paddingLocalZ,
+        int borderSize,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids)
+    {
+        if (currentLocalZ < 0 || currentLocalZ >= voxelSizeZ || paddingLocalZ < 0 || paddingLocalZ >= voxelSizeZ)
+            return;
+
+        int currentSliceStart = currentLocalZ * voxelPlaneSize;
+        int paddingSliceStart = paddingLocalZ * voxelPlaneSize;
+        for (int x = borderSize; x < borderSize + Chunk.SizeX; x++)
+        {
+            int currentIdx = currentSliceStart + x;
+            int paddingIdx = paddingSliceStart + x;
+            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            {
+                if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
+                    continue;
+
+                blockTypes[paddingIdx] = BlockType.Air;
+                solids[paddingIdx] = false;
+            }
+        }
+    }
+
+    private static bool ShouldSealMissingHorizontalBorderForBlock(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        return blockType != BlockType.Leaves &&
+               blockType != BlockType.glass &&
+               !TorchPlacementUtility.IsTorchLike(blockType);
+    }
+
+    private void RequestHorizontalNeighborVisualRefresh(Vector2Int coord)
+    {
+        int dirtySubchunkMask = GetFullSubchunkMask();
+        RequestHorizontalNeighborVisualRefresh(coord + Vector2Int.left, dirtySubchunkMask);
+        RequestHorizontalNeighborVisualRefresh(coord + Vector2Int.right, dirtySubchunkMask);
+        RequestHorizontalNeighborVisualRefresh(coord + Vector2Int.down, dirtySubchunkMask);
+        RequestHorizontalNeighborVisualRefresh(coord + Vector2Int.up, dirtySubchunkMask);
+    }
+
+    private void RequestHorizontalNeighborVisualRefresh(Vector2Int coord, int dirtySubchunkMask)
+    {
+        if (!DoesChunkCurrentlyProvideBorderCover(coord))
+            return;
+
+        RequestChunkRebuild(coord, dirtySubchunkMask, false);
     }
 
     private List<int3> GetSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord)
@@ -2157,6 +2300,7 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
+                    RequestHorizontalNeighborVisualRefresh(coord);
                     activeSectionSetChanged = true;
 
                     RemoveHighBuildMesh(coord);
@@ -2289,7 +2433,7 @@ public partial class World : MonoBehaviour
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
             InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
         if (chunk.jobScheduled)
@@ -2380,15 +2524,15 @@ public partial class World : MonoBehaviour
 
         EnsureNativeGenerationCaches();
 
-        NativeArray<int> heightCache = new NativeArray<int>(copyTotalHeightPoints, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(copyTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<int> heightCache = new NativeArray<int>(copyTotalHeightPoints, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> lightOpacityData = default;
         NativeArray<byte> blockLightData = default;
-        NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
 
         CaptureFastRebuildSnapshot(coord, snapshotChunkRadius, snapshotVoxelData, snapshotLoadedChunks);
@@ -2397,8 +2541,8 @@ public partial class World : MonoBehaviour
         int chunkMinZ = coord.y * Chunk.SizeZ;
         if (enableVoxelLighting)
         {
-            lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
-            blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob);
+            lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+            blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
             InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
         }
 
@@ -2573,11 +2717,11 @@ public partial class World : MonoBehaviour
     private NativeArray<BlockEdit> BuildFastRebuildOverrideArray(Vector2Int coord, int borderSize)
     {
         if (blockOverrides.Count == 0)
-            return new NativeArray<BlockEdit>(0, Allocator.TempJob);
+            return new NativeArray<BlockEdit>(0, Allocator.Persistent);
 
         List<BlockEdit> editsList = new List<BlockEdit>(32);
         AppendRelevantBlockEdits(coord, borderSize, editsList);
-        NativeArray<BlockEdit> nativeOverrides = new NativeArray<BlockEdit>(editsList.Count, Allocator.TempJob, NativeArrayOptions.UninitializedMemory);
+        NativeArray<BlockEdit> nativeOverrides = new NativeArray<BlockEdit>(editsList.Count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         for (int i = 0; i < editsList.Count; i++)
             nativeOverrides[i] = editsList[i];
 
@@ -2925,7 +3069,7 @@ public partial class World : MonoBehaviour
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.TempJob);
+            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
             InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
 
