@@ -1053,6 +1053,7 @@ public partial class World : MonoBehaviour
         public int expectedGen;
         public Chunk parentChunk;
         public NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges;
+        public NativeArray<ulong> subchunkVisibilityMasks;
         public int dirtySubchunkMask;
         public int nextSubchunkApplyIndex;
 
@@ -1415,6 +1416,7 @@ public partial class World : MonoBehaviour
         RefreshSimulationDistanceStateIfNeeded();
         ProcessPendingColliderBuilds();
         ProcessChunkQueue();
+        UpdateSectionOcclusionVisibility();
     }
 
     #endregion
@@ -1640,6 +1642,7 @@ public partial class World : MonoBehaviour
 
             if (canApplyMesh)
             {
+                bool updatedSectionVisibility = false;
                 while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
                        meshesAppliedThisFrame < maxMeshAppliesPerFrame)
                 {
@@ -1649,6 +1652,8 @@ public partial class World : MonoBehaviour
 
                     Subchunk sub = activeChunk.subchunks[subchunkIndex];
                     MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
+                    if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
+                        updatedSectionVisibility = true;
                     bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
                     int startY = subchunkIndex * Chunk.SubchunkHeight;
                     int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
@@ -1659,6 +1664,7 @@ public partial class World : MonoBehaviour
                         sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
                                           pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
                                           range, startY, endY);
+                        ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
 
                         if (pm.buildColliders)
                         {
@@ -1685,6 +1691,9 @@ public partial class World : MonoBehaviour
                 }
 
                 activeChunk.state = Chunk.ChunkState.Active;
+
+                if (updatedSectionVisibility)
+                    InvalidateSectionOcclusionGraph();
             }
 
             DisposePendingMesh(pm);
@@ -1893,6 +1902,7 @@ public partial class World : MonoBehaviour
             nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
         int meshSubchunkMask = 0;
+        bool updatedEmptySectionVisibility = false;
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
             if ((dirtySubchunkMask & (1 << sub)) == 0)
@@ -1901,11 +1911,16 @@ public partial class World : MonoBehaviour
             if (!pd.subchunkNonEmpty[sub])
             {
                 activeChunk.subchunks[sub].ClearMesh();
+                if (activeChunk.SetSubchunkVisibilityData(sub, SubchunkOcclusion.AllVisibleMask))
+                    updatedEmptySectionVisibility = true;
                 continue;
             }
 
             meshSubchunkMask |= 1 << sub;
         }
+
+        if (updatedEmptySectionVisibility)
+            InvalidateSectionOcclusionGraph();
 
         JobHandle combinedMeshHandle = default;
         if (meshSubchunkMask != 0)
@@ -1914,6 +1929,7 @@ public partial class World : MonoBehaviour
 
             MeshGenerator.ScheduleMeshJob(
                 pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
+                pd.subchunkNonEmpty,
                 atlasTilesX, atlasTilesY, true, borderSize,
                 pd.coord.x, pd.coord.y,
                 meshSubchunkMask,
@@ -1933,7 +1949,8 @@ public partial class World : MonoBehaviour
                 out NativeList<byte> tintFlags,
                 out NativeList<byte> vertexAO,
                 out NativeList<Vector4> extraUVs,
-                out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges
+                out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+                out NativeArray<ulong> subchunkVisibilityMasks
             );
 
             combinedMeshHandle = meshHandle;
@@ -1956,6 +1973,7 @@ public partial class World : MonoBehaviour
                 expectedGen = pd.expectedGen,
                 parentChunk = activeChunk,
                 subchunkRanges = subchunkRanges,
+                subchunkVisibilityMasks = subchunkVisibilityMasks,
                 dirtySubchunkMask = meshSubchunkMask,
                 nextSubchunkApplyIndex = 0,
                 heightCache = pd.heightCache,
@@ -2113,6 +2131,7 @@ public partial class World : MonoBehaviour
         {
             _lastChunkCoord = currentChunkCoord;
             _tempNeededCoords.Clear();
+            bool activeSectionSetChanged = false;
 
             for (int x = -renderDistance; x <= renderDistance; x++)
             {
@@ -2138,10 +2157,14 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
+                    activeSectionSetChanged = true;
 
                     RemoveHighBuildMesh(coord);
                 }
             }
+
+            if (activeSectionSetChanged)
+                InvalidateSectionOcclusionGraph();
 
             // B. Limpar pendentes desnecessÃ¡rios
             for (int i = pendingChunks.Count - 1; i >= 0; i--)
@@ -3288,6 +3311,7 @@ public partial class World : MonoBehaviour
         if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
         if (pm.subchunkRanges.IsCreated) pm.subchunkRanges.Dispose();
+        if (pm.subchunkVisibilityMasks.IsCreated) pm.subchunkVisibilityMasks.Dispose();
     }
 
     #endregion

@@ -1,6 +1,7 @@
-using UnityEngine;
-using Unity.Collections;
 using System.Collections.Generic;
+using System;
+using Unity.Collections;
+using UnityEngine;
 
 
 public class Chunk : MonoBehaviour
@@ -18,6 +19,8 @@ public class Chunk : MonoBehaviour
     public bool hasVoxelData = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
+    [NonSerialized] public ulong[] subchunkVisibilityMasks;
+    [NonSerialized] public bool[] subchunkVisibilityValid;
     public bool HasInitializedSubchunks =>
         subchunks != null &&
         subchunks.Length == SubchunksPerColumn &&
@@ -62,6 +65,8 @@ public class Chunk : MonoBehaviour
 
     public void InitializeSubchunks(Material[] materials)
     {
+        EnsureVisibilityData();
+
         if (subchunks == null || subchunks.Length != SubchunksPerColumn)
             subchunks = new Subchunk[SubchunksPerColumn];
 
@@ -108,6 +113,54 @@ public class Chunk : MonoBehaviour
         );
     }
 
+    public void EnsureVisibilityData()
+    {
+        if (subchunkVisibilityMasks == null || subchunkVisibilityMasks.Length != SubchunksPerColumn)
+            subchunkVisibilityMasks = new ulong[SubchunksPerColumn];
+
+        if (subchunkVisibilityValid == null || subchunkVisibilityValid.Length != SubchunksPerColumn)
+            subchunkVisibilityValid = new bool[SubchunksPerColumn];
+    }
+
+    public bool SetSubchunkVisibilityData(int subchunkIndex, ulong visibilityMask)
+    {
+        EnsureVisibilityData();
+        bool changed = !subchunkVisibilityValid[subchunkIndex] ||
+                       subchunkVisibilityMasks[subchunkIndex] != visibilityMask;
+        subchunkVisibilityMasks[subchunkIndex] = visibilityMask;
+        subchunkVisibilityValid[subchunkIndex] = true;
+        return changed;
+    }
+
+    public void ClearSubchunkVisibilityData(int subchunkIndex)
+    {
+        EnsureVisibilityData();
+        subchunkVisibilityMasks[subchunkIndex] = 0UL;
+        subchunkVisibilityValid[subchunkIndex] = false;
+    }
+
+    public void ClearAllSubchunkVisibilityData()
+    {
+        EnsureVisibilityData();
+        Array.Clear(subchunkVisibilityMasks, 0, subchunkVisibilityMasks.Length);
+        Array.Clear(subchunkVisibilityValid, 0, subchunkVisibilityValid.Length);
+    }
+
+    public bool TryGetSubchunkVisibilityData(int subchunkIndex, out ulong visibilityMask)
+    {
+        if (subchunkVisibilityValid != null &&
+            subchunkIndex >= 0 &&
+            subchunkIndex < subchunkVisibilityValid.Length &&
+            subchunkVisibilityValid[subchunkIndex])
+        {
+            visibilityMask = subchunkVisibilityMasks[subchunkIndex];
+            return true;
+        }
+
+        visibilityMask = 0UL;
+        return false;
+    }
+
 
 
 
@@ -126,6 +179,7 @@ public class Chunk : MonoBehaviour
         state = ChunkState.Inactive;
         generation = -1;
         hasVoxelData = false;
+        ClearAllSubchunkVisibilityData();
 
         if (subchunks != null)
         {

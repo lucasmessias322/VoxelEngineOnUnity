@@ -650,6 +650,7 @@ public static class MeshGenerator
         NativeArray<byte> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
         NativeArray<int3> suppressedGrassBillboards,
+        NativeArray<bool> subchunkNonEmpty,
         int atlasTilesX,
         int atlasTilesY,
         bool generateSides,
@@ -680,7 +681,8 @@ public static class MeshGenerator
         out NativeList<byte> tintFlags,
         out NativeList<byte> vertexAO,
         out NativeList<Vector4> extraUVs,
-        out NativeArray<SubchunkMeshRange> subchunkRanges
+        out NativeArray<SubchunkMeshRange> subchunkRanges,
+        out NativeArray<ulong> subchunkVisibilityMasks
     )
     {
         // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
@@ -697,6 +699,7 @@ public static class MeshGenerator
         uvs = new NativeList<Vector2>(4096, Allocator.TempJob);
         uv2 = new NativeList<Vector2>(4096, Allocator.TempJob);
         subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.TempJob);
+        subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.TempJob);
 
         // ==========================================
         // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
@@ -711,6 +714,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
+            subchunkNonEmpty = subchunkNonEmpty,
 
             border = borderSize,
             atlasTilesX = atlasTilesX,
@@ -742,7 +746,8 @@ public static class MeshGenerator
             extraUVs = extraUVs,
             vertexLights = vertexLights,
             tintFlags = tintFlags,
-            vertexAO = vertexAO
+            vertexAO = vertexAO,
+            subchunkVisibilityMasks = subchunkVisibilityMasks
         };
         // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
         meshHandle = meshJob.Schedule();
@@ -764,6 +769,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> light;
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
+        [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
 
         public int border;
         public int atlasTilesX;
@@ -800,6 +806,7 @@ public static class MeshGenerator
         public NativeList<byte> vertexLights;
         public NativeList<byte> tintFlags;
         public NativeList<byte> vertexAO;
+        public NativeArray<ulong> subchunkVisibilityMasks;
 
         private struct GreedyFaceData
         {
@@ -821,38 +828,205 @@ public static class MeshGenerator
         {
             float invAtlasTilesX = 1f / atlasTilesX;
             float invAtlasTilesY = 1f / atlasTilesY;
+            NativeArray<byte> occlusionState = new NativeArray<byte>(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            NativeArray<int> occlusionQueue = new NativeArray<int>(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
 
-            for (int sub = 0; sub < SubchunksPerColumn; sub++)
+            try
             {
-                if ((dirtySubchunkMask & (1 << sub)) == 0)
+                for (int sub = 0; sub < SubchunksPerColumn; sub++)
                 {
-                    subchunkRanges[sub] = default;
-                    continue;
+                    if ((dirtySubchunkMask & (1 << sub)) == 0)
+                    {
+                        subchunkRanges[sub] = default;
+                        continue;
+                    }
+
+                    startY = sub * Chunk.SubchunkHeight;
+                    endY = math.min(startY + Chunk.SubchunkHeight, SizeY);
+
+                    if (!subchunkNonEmpty[sub])
+                    {
+                        subchunkVisibilityMasks[sub] = SubchunkOcclusion.AllVisibleMask;
+                        subchunkRanges[sub] = default;
+                        continue;
+                    }
+
+                    SubchunkMeshRange range = new SubchunkMeshRange
+                    {
+                        vertexStart = vertices.Length,
+                        opaqueStart = opaqueTriangles.Length,
+                        transparentStart = transparentTriangles.Length,
+                        billboardStart = billboardTriangles.Length,
+                        waterStart = waterTriangles.Length
+                    };
+
+                    subchunkVisibilityMasks[sub] = ComputeVisibilityMask(occlusionState, occlusionQueue);
+
+                    GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+                    GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+                    GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+
+                    range.vertexCount = vertices.Length - range.vertexStart;
+                    range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
+                    range.transparentCount = transparentTriangles.Length - range.transparentStart;
+                    range.billboardCount = billboardTriangles.Length - range.billboardStart;
+                    range.waterCount = waterTriangles.Length - range.waterStart;
+                    subchunkRanges[sub] = range;
                 }
-
-                startY = sub * Chunk.SubchunkHeight;
-                endY = math.min(startY + Chunk.SubchunkHeight, SizeY);
-
-                SubchunkMeshRange range = new SubchunkMeshRange
-                {
-                    vertexStart = vertices.Length,
-                    opaqueStart = opaqueTriangles.Length,
-                    transparentStart = transparentTriangles.Length,
-                    billboardStart = billboardTriangles.Length,
-                    waterStart = waterTriangles.Length
-                };
-
-                GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
-                GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
-                GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
-
-                range.vertexCount = vertices.Length - range.vertexStart;
-                range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
-                range.transparentCount = transparentTriangles.Length - range.transparentStart;
-                range.billboardCount = billboardTriangles.Length - range.billboardStart;
-                range.waterCount = waterTriangles.Length - range.waterStart;
-                subchunkRanges[sub] = range;
             }
+            finally
+            {
+                if (occlusionState.IsCreated) occlusionState.Dispose();
+                if (occlusionQueue.IsCreated) occlusionQueue.Dispose();
+            }
+        }
+
+        private ulong ComputeVisibilityMask(NativeArray<byte> occlusionState, NativeArray<int> queue)
+        {
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int opaqueCount = 0;
+
+            for (int localY = 0; localY < Chunk.SubchunkHeight; localY++)
+            {
+                int worldY = startY + localY;
+                for (int localZ = 0; localZ < SizeZ; localZ++)
+                {
+                    int sampleZ = localZ + border;
+                    for (int localX = 0; localX < SizeX; localX++)
+                    {
+                        int sampleX = localX + border;
+                        int sampleIndex = sampleX + worldY * voxelSizeX + sampleZ * voxelPlaneSize;
+                        int visIndex = localX | (localY << 8) | (localZ << 4);
+
+                        if (IsOcclusionOpaque(blockTypes[sampleIndex]))
+                        {
+                            occlusionState[visIndex] = 1;
+                            opaqueCount++;
+                        }
+                        else
+                        {
+                            occlusionState[visIndex] = 0;
+                        }
+                    }
+                }
+            }
+
+            if (opaqueCount < 256)
+                return SubchunkOcclusion.AllVisibleMask;
+
+            if (opaqueCount == 4096)
+                return 0UL;
+
+            ulong visibilityMask = 0UL;
+            for (int localY = 0; localY < Chunk.SubchunkHeight; localY++)
+            {
+                for (int localZ = 0; localZ < SizeZ; localZ++)
+                {
+                    for (int localX = 0; localX < SizeX; localX++)
+                    {
+                        bool isBoundary = localX == 0 || localX == SizeX - 1 ||
+                                          localY == 0 || localY == Chunk.SubchunkHeight - 1 ||
+                                          localZ == 0 || localZ == SizeZ - 1;
+                        if (!isBoundary)
+                            continue;
+
+                        int startIndex = localX | (localY << 8) | (localZ << 4);
+                        if (occlusionState[startIndex] != 0)
+                            continue;
+
+                        visibilityMask = FloodFillVisibilityMask(startIndex, occlusionState, queue, visibilityMask);
+                    }
+                }
+            }
+
+            return visibilityMask;
+        }
+
+        private ulong FloodFillVisibilityMask(int startIndex, NativeArray<byte> occlusionState, NativeArray<int> queue, ulong visibilityMask)
+        {
+            int head = 0;
+            int tail = 0;
+            byte faceMask = 0;
+
+            queue[tail++] = startIndex;
+            occlusionState[startIndex] = 1;
+
+            while (head < tail)
+            {
+                int index = queue[head++];
+                AddOcclusionEdges(index, ref faceMask);
+
+                for (int face = 0; face < SubchunkOcclusion.FaceCount; face++)
+                {
+                    int neighborIndex = GetNeighborIndexAtFace(index, face);
+                    if (neighborIndex >= 0 && occlusionState[neighborIndex] == 0)
+                    {
+                        occlusionState[neighborIndex] = 1;
+                        queue[tail++] = neighborIndex;
+                    }
+                }
+            }
+
+            return SubchunkOcclusion.AddFaceSet(visibilityMask, faceMask);
+        }
+
+        private static void AddOcclusionEdges(int index, ref byte faceMask)
+        {
+            int x = index & 15;
+            if (x == 0)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.West));
+            else if (x == 15)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.East));
+
+            int y = (index >> 8) & 15;
+            if (y == 0)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.Down));
+            else if (y == 15)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.Up));
+
+            int z = (index >> 4) & 15;
+            if (z == 0)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.North));
+            else if (z == 15)
+                faceMask = (byte)(faceMask | (1 << SubchunkOcclusion.South));
+        }
+
+        private static int GetNeighborIndexAtFace(int index, int face)
+        {
+            switch (face)
+            {
+                case SubchunkOcclusion.Down:
+                    return ((index >> 8) & 15) == 0 ? -1 : index - 256;
+                case SubchunkOcclusion.Up:
+                    return ((index >> 8) & 15) == 15 ? -1 : index + 256;
+                case SubchunkOcclusion.North:
+                    return ((index >> 4) & 15) == 0 ? -1 : index - 16;
+                case SubchunkOcclusion.South:
+                    return ((index >> 4) & 15) == 15 ? -1 : index + 16;
+                case SubchunkOcclusion.West:
+                    return (index & 15) == 0 ? -1 : index - 1;
+                case SubchunkOcclusion.East:
+                    return (index & 15) == 15 ? -1 : index + 1;
+                default:
+                    return -1;
+            }
+        }
+
+        private bool IsOcclusionOpaque(BlockType blockType)
+        {
+            if (blockType == BlockType.Air)
+                return false;
+
+            int blockIndex = (int)blockType;
+            if (blockIndex < 0 || blockIndex >= blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[blockIndex];
+            if (mapping.isEmpty || mapping.isTransparent || mapping.isLiquid)
+                return false;
+
+            return mapping.isSolid && mapping.renderShape == BlockRenderShape.Cube;
         }
 
         private static bool HasFace(in GreedyFaceData face)
