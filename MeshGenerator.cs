@@ -411,7 +411,9 @@ public static class MeshGenerator
         bool enableTrees,
         NativeArray<OreSpawnSettings> oreSettings,
         NativeArray<TreeSpawnRuleData> treeSpawnRules,
+        CaveGenerationMode caveGenerationMode,
         WormCaveSettings caveSettings,
+        SpaghettiCaveSettings spaghettiCaveSettings,
         bool enableVoxelLighting,
         NativeArray<byte> lightData,
         out JobHandle dataHandle,
@@ -537,7 +539,9 @@ public static class MeshGenerator
             treeSpawnRules = treeSpawnRules,
             oreSettings = oreSettings,
             oreSeed = oreSeed,
+            caveGenerationMode = caveGenerationMode,
             caveSettings = caveSettings,
+            spaghettiCaveSettings = spaghettiCaveSettings,
 
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty

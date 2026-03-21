@@ -15,6 +15,10 @@ public static class ChunkData
     // No topo da classe (junto com as outras const)
     private const int SubchunkHeight = Chunk.SubchunkHeight;
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
+    private const int SpaghettiHorizontalCellSize = 4;
+    private const int SpaghettiVerticalCellSize = 4;
+    private const float DoubleNoiseWarp = 1.0181269f;
+    private const float NoiseOffsetMagnitude = 2048f;
 
 
     [BurstCompile]
@@ -30,7 +34,9 @@ public static class ChunkData
         [ReadOnly] public NativeArray<OreSpawnSettings> oreSettings;
         [ReadOnly] public NativeArray<TreeSpawnRuleData> treeSpawnRules;
         public int oreSeed;
+        public CaveGenerationMode caveGenerationMode;
         public WormCaveSettings caveSettings;
+        public SpaghettiCaveSettings spaghettiCaveSettings;
         public int treeMargin;
         public int border;
         public int detailBorder;
@@ -64,7 +70,16 @@ public static class ChunkData
             // 2. Popular voxels (terreno, Ã¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            GenerateWormCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+            switch (caveGenerationMode)
+            {
+                case CaveGenerationMode.LegacyWorms:
+                    GenerateWormCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                    break;
+
+                default:
+                    GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                    break;
+            }
             GenerateOreVeins(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
             FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
@@ -808,6 +823,441 @@ public static class ChunkData
                    centerY - radius <= maxY &&
                    centerZ + radius >= minZ &&
                    centerZ - radius <= maxZ;
+        }
+
+        private void GenerateSpaghettiCaves(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride)
+        {
+            SpaghettiCaveSettings settings = spaghettiCaveSettings;
+            if (!settings.enabled)
+                return;
+
+            int minY = math.clamp(math.min(settings.minY, settings.maxY), 3, SizeY - 2);
+            int maxY = math.clamp(math.max(settings.minY, settings.maxY), 3, SizeY - 2);
+            if (maxY < minY)
+                return;
+
+            int minSurfaceDepth = math.max(0, settings.minSurfaceDepth);
+            int entranceSurfaceDepth = math.max(0, math.min(settings.entranceSurfaceDepth, minSurfaceDepth));
+            float densityBias = settings.densityBias;
+            int worldSeed = oreSeed ^ settings.seedOffset ^ 0x4b1d2e37;
+
+            int chunkMinX = coord.x * SizeX;
+            int chunkMinZ = coord.y * SizeZ;
+            int activeMinLocalX = math.max(0, border - detailBorder);
+            int activeMaxLocalX = math.min(voxelSizeX - 1, border + SizeX + detailBorder - 1);
+            int activeMinLocalZ = math.max(0, border - detailBorder);
+            int activeMaxLocalZ = math.min(voxelSizeZ - 1, border + SizeZ + detailBorder - 1);
+            int globalEntranceMaxY = minY - 1;
+            for (int localZ = activeMinLocalZ; localZ <= activeMaxLocalZ; localZ++)
+            {
+                for (int localX = activeMinLocalX; localX <= activeMaxLocalX; localX++)
+                {
+                    int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                    int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+                    globalEntranceMaxY = math.max(globalEntranceMaxY, entranceMaxY);
+                }
+            }
+
+            if (globalEntranceMaxY < minY)
+                return;
+
+            int sampleMaxY = math.min(maxY, globalEntranceMaxY);
+            int gridCountX = GetSpaghettiGridPointCount(activeMinLocalX, activeMaxLocalX, SpaghettiHorizontalCellSize);
+            int gridCountY = GetSpaghettiGridPointCount(minY, sampleMaxY, SpaghettiVerticalCellSize);
+            int gridCountZ = GetSpaghettiGridPointCount(activeMinLocalZ, activeMaxLocalZ, SpaghettiHorizontalCellSize);
+            NativeArray<float2> densityGrid = new NativeArray<float2>(gridCountX * gridCountY * gridCountZ, Allocator.Temp);
+
+            try
+            {
+                for (int gridZ = 0; gridZ < gridCountZ; gridZ++)
+                {
+                    int localZ = GetSpaghettiGridCoordinate(activeMinLocalZ, activeMaxLocalZ, SpaghettiHorizontalCellSize, gridZ);
+                    float sampleZ = localZ + chunkMinZ - border + 0.5f;
+
+                    for (int gridX = 0; gridX < gridCountX; gridX++)
+                    {
+                        int localX = GetSpaghettiGridCoordinate(activeMinLocalX, activeMaxLocalX, SpaghettiHorizontalCellSize, gridX);
+                        float sampleX = localX + chunkMinX - border + 0.5f;
+
+                        for (int gridY = 0; gridY < gridCountY; gridY++)
+                        {
+                            int voxelY = GetSpaghettiGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, gridY);
+                            float sampleY = voxelY + 0.5f;
+                            densityGrid[GetSpaghettiGridIndex(gridX, gridY, gridZ, gridCountX, gridCountY)] =
+                                SampleSpaghettiDensityPair(sampleX, sampleY, sampleZ, worldSeed, densityBias);
+                        }
+                    }
+                }
+
+                for (int cellZ = 0; cellZ < gridCountZ - 1; cellZ++)
+                {
+                    int localZ0 = GetSpaghettiGridCoordinate(activeMinLocalZ, activeMaxLocalZ, SpaghettiHorizontalCellSize, cellZ);
+                    int localZ1 = GetSpaghettiGridCoordinate(activeMinLocalZ, activeMaxLocalZ, SpaghettiHorizontalCellSize, cellZ + 1);
+                    int zSpan = math.max(1, localZ1 - localZ0);
+                    int localZMax = cellZ == gridCountZ - 2 ? localZ1 : localZ1 - 1;
+
+                    for (int cellX = 0; cellX < gridCountX - 1; cellX++)
+                    {
+                        int localX0 = GetSpaghettiGridCoordinate(activeMinLocalX, activeMaxLocalX, SpaghettiHorizontalCellSize, cellX);
+                        int localX1 = GetSpaghettiGridCoordinate(activeMinLocalX, activeMaxLocalX, SpaghettiHorizontalCellSize, cellX + 1);
+                        int xSpan = math.max(1, localX1 - localX0);
+                        int localXMax = cellX == gridCountX - 2 ? localX1 : localX1 - 1;
+
+                        for (int cellY = 0; cellY < gridCountY - 1; cellY++)
+                        {
+                            int voxelY0 = GetSpaghettiGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, cellY);
+                            int voxelY1 = GetSpaghettiGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, cellY + 1);
+                            int ySpan = math.max(1, voxelY1 - voxelY0);
+                            int voxelYMax = cellY == gridCountY - 2 ? voxelY1 : voxelY1 - 1;
+
+                            float2 d000 = densityGrid[GetSpaghettiGridIndex(cellX, cellY, cellZ, gridCountX, gridCountY)];
+                            float2 d100 = densityGrid[GetSpaghettiGridIndex(cellX + 1, cellY, cellZ, gridCountX, gridCountY)];
+                            float2 d010 = densityGrid[GetSpaghettiGridIndex(cellX, cellY + 1, cellZ, gridCountX, gridCountY)];
+                            float2 d110 = densityGrid[GetSpaghettiGridIndex(cellX + 1, cellY + 1, cellZ, gridCountX, gridCountY)];
+                            float2 d001 = densityGrid[GetSpaghettiGridIndex(cellX, cellY, cellZ + 1, gridCountX, gridCountY)];
+                            float2 d101 = densityGrid[GetSpaghettiGridIndex(cellX + 1, cellY, cellZ + 1, gridCountX, gridCountY)];
+                            float2 d011 = densityGrid[GetSpaghettiGridIndex(cellX, cellY + 1, cellZ + 1, gridCountX, gridCountY)];
+                            float2 d111 = densityGrid[GetSpaghettiGridIndex(cellX + 1, cellY + 1, cellZ + 1, gridCountX, gridCountY)];
+                            bool requiresExactCellSampling =
+                                cellX == 0 ||
+                                cellX == gridCountX - 2 ||
+                                cellZ == 0 ||
+                                cellZ == gridCountZ - 2;
+
+                            if (GetMinCarveDensity(d000, d100, d010, d110, d001, d101, d011, d111) >= 0f)
+                            {
+                                float centerWorldX = chunkMinX - border + (localX0 + localX1) * 0.5f + 0.5f;
+                                float centerWorldY = (voxelY0 + voxelY1) * 0.5f + 0.5f;
+                                float centerWorldZ = chunkMinZ - border + (localZ0 + localZ1) * 0.5f + 0.5f;
+                                float2 centerDensity = SampleSpaghettiDensityPair(centerWorldX, centerWorldY, centerWorldZ, worldSeed, densityBias);
+                                if (centerDensity.x >= 0f)
+                                    continue;
+
+                                requiresExactCellSampling = true;
+                            }
+
+                            for (int localZ = localZ0; localZ <= localZMax; localZ++)
+                            {
+                                float tz = (localZ - localZ0) / (float)zSpan;
+
+                                for (int localX = localX0; localX <= localXMax; localX++)
+                                {
+                                    int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                                    int regularMaxY = math.min(maxY, columnSurfaceY - minSurfaceDepth);
+                                    int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+                                    if (entranceMaxY < voxelY0)
+                                        continue;
+
+                                    float tx = (localX - localX0) / (float)xSpan;
+                                    int maxVoxelYForColumn = math.min(voxelYMax, entranceMaxY);
+                                    int voxelIndex = localX + voxelY0 * voxelSizeX + localZ * voxelPlaneSize;
+                                    float worldX = localX + chunkMinX - border + 0.5f;
+                                    float worldZ = localZ + chunkMinZ - border + 0.5f;
+
+                                    for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
+                                    {
+                                        BlockType existing = blockTypes[voxelIndex];
+                                        if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
+                                            continue;
+
+                                        float2 density;
+                                        if (requiresExactCellSampling)
+                                        {
+                                            density = SampleSpaghettiDensityPair(worldX, voxelY + 0.5f, worldZ, worldSeed, densityBias);
+                                        }
+                                        else
+                                        {
+                                            float ty = (voxelY - voxelY0) / (float)ySpan;
+                                            density = TrilinearInterpolate(d000, d100, d010, d110, d001, d101, d011, d111, tx, ty, tz);
+                                        }
+
+                                        if (voxelY > regularMaxY && density.y >= 0f)
+                                            continue;
+                                        if (density.x >= 0f)
+                                            continue;
+
+                                        blockTypes[voxelIndex] = BlockType.Air;
+                                        solids[voxelIndex] = false;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                if (densityGrid.IsCreated)
+                    densityGrid.Dispose();
+            }
+        }
+
+        private static int GetSpaghettiGridPointCount(int minInclusive, int maxInclusive, int step)
+        {
+            int safeStep = math.max(1, step);
+            return math.max(2, ((maxInclusive - minInclusive) / safeStep) + 2);
+        }
+
+        private static int GetSpaghettiGridCoordinate(int minInclusive, int maxInclusive, int step, int index)
+        {
+            return math.min(maxInclusive, minInclusive + index * math.max(1, step));
+        }
+
+        private static int GetSpaghettiGridIndex(int x, int y, int z, int xCount, int yCount)
+        {
+            return x + y * xCount + z * xCount * yCount;
+        }
+
+        private static float GetMinCarveDensity(
+            float2 d000,
+            float2 d100,
+            float2 d010,
+            float2 d110,
+            float2 d001,
+            float2 d101,
+            float2 d011,
+            float2 d111)
+        {
+            float minA = math.min(math.min(d000.x, d100.x), math.min(d010.x, d110.x));
+            float minB = math.min(math.min(d001.x, d101.x), math.min(d011.x, d111.x));
+            return math.min(minA, minB);
+        }
+
+        private static float2 TrilinearInterpolate(
+            float2 d000,
+            float2 d100,
+            float2 d010,
+            float2 d110,
+            float2 d001,
+            float2 d101,
+            float2 d011,
+            float2 d111,
+            float tx,
+            float ty,
+            float tz)
+        {
+            float2 x00 = math.lerp(d000, d100, tx);
+            float2 x10 = math.lerp(d010, d110, tx);
+            float2 x01 = math.lerp(d001, d101, tx);
+            float2 x11 = math.lerp(d011, d111, tx);
+            float2 y0 = math.lerp(x00, x10, ty);
+            float2 y1 = math.lerp(x01, x11, ty);
+            return math.lerp(y0, y1, tz);
+        }
+
+        private static float2 SampleSpaghettiDensityPair(float worldX, float worldY, float worldZ, int worldSeed, float densityBias)
+        {
+            float roughness = SampleSpaghettiRoughness(worldX, worldY, worldZ, worldSeed);
+            float spaghetti2d = SampleSpaghetti2d(worldX, worldY, worldZ, worldSeed);
+            float entrancesDensity = SampleSpaghettiEntrances(worldX, worldY, worldZ, worldSeed, roughness);
+            float carveDensity = math.min(spaghetti2d + roughness, entrancesDensity);
+            return new float2(carveDensity + densityBias, entrancesDensity + densityBias);
+        }
+
+        private static float SampleSpaghetti2d(float worldX, float worldY, float worldZ, int worldSeed)
+        {
+            float modulator = SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x4d0f12a1, -11, 2f, 1f);
+            float thicknessMod = -0.95f - 0.35f * SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x63be5ab9, -11, 2f, 1f);
+            float weirdScaled = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x7c159d51, modulator, false, -7);
+            float elevationNoise = SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x1f3d8a77, -8, 1f, 0f);
+            float elevationGradient = SampleYClampedGradient(worldY, -64f, 320f, 8f, -40f);
+            float elevationBand = math.abs(elevationNoise * 8f + elevationGradient);
+
+            float longitudinal = weirdScaled + 0.083f * thicknessMod;
+            float elevationTerm = Cube(elevationBand + thicknessMod);
+            return math.clamp(math.max(longitudinal, elevationTerm), -1f, 1f);
+        }
+
+        private static float SampleSpaghettiRoughness(float worldX, float worldY, float worldZ, int worldSeed)
+        {
+            float roughnessModulator = SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x2c8f3bd3, -8, 1f, 1f);
+            float roughness = SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x54e21f79, -5, 1f, 1f);
+            return (-0.05f - 0.05f * roughnessModulator) * (-0.4f + math.abs(roughness));
+        }
+
+        private static float SampleSpaghettiEntrances(float worldX, float worldY, float worldZ, int worldSeed, float roughness)
+        {
+            float entranceNoise = SampleOctavedCaveNoise(worldX, worldY, worldZ, worldSeed, 0x2714c2d1, -7, 0.75f, 0.5f, 3, 0.4f, 0.5f, 1f);
+            float entranceHead = 0.37f + entranceNoise + SampleYClampedGradient(worldY, -10f, 30f, 0.3f, 0f);
+
+            float rarityNoise = SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x1495f0e3, -11, 2f, 1f);
+            float spaghettiA = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x6a31dcb7, rarityNoise, true, -7);
+            float spaghettiB = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x0dc7612f, rarityNoise, true, -7);
+            float thicknessMod = -0.0765f - 0.0115f * SampleSingleAmplitudeCaveNoise(worldX, worldY, worldZ, worldSeed, 0x45fa21cd, -8, 1f, 1f);
+            float entranceBody = roughness + math.clamp(math.max(spaghettiA, spaghettiB) + thicknessMod, -1f, 1f);
+
+            return math.min(entranceHead, entranceBody);
+        }
+
+        private static float SampleWeirdScaledSampler(
+            float worldX,
+            float worldY,
+            float worldZ,
+            int worldSeed,
+            int noiseSalt,
+            float inputValue,
+            bool useType1Rarity,
+            int firstOctave)
+        {
+            float rarity = useType1Rarity
+                ? GetSpaghettiRarity3D(inputValue)
+                : GetSpaghettiRarity2D(inputValue);
+
+            float sample = SampleSingleAmplitudeCaveNoise(
+                worldX / rarity,
+                worldY / rarity,
+                worldZ / rarity,
+                worldSeed,
+                noiseSalt,
+                firstOctave,
+                1f,
+                1f);
+
+            return rarity * math.abs(sample);
+        }
+
+        private static float GetSpaghettiRarity2D(float rarity)
+        {
+            if (rarity < -0.75f)
+                return 0.5f;
+            if (rarity < -0.5f)
+                return 0.75f;
+            if (rarity < 0.5f)
+                return 1f;
+            if (rarity < 0.75f)
+                return 2f;
+            return 3f;
+        }
+
+        private static float GetSpaghettiRarity3D(float rarity)
+        {
+            if (rarity < -0.5f)
+                return 0.75f;
+            if (rarity < 0f)
+                return 1f;
+            if (rarity < 0.5f)
+                return 1.5f;
+            return 2f;
+        }
+
+        private static float SampleSingleAmplitudeCaveNoise(
+            float worldX,
+            float worldY,
+            float worldZ,
+            int worldSeed,
+            int noiseSalt,
+            int firstOctave,
+            float xzScale,
+            float yScale)
+        {
+            return SampleOctavedCaveNoise(worldX, worldY, worldZ, worldSeed, noiseSalt, firstOctave, xzScale, yScale, 1, 1f, 0f, 0f);
+        }
+
+        private static float SampleOctavedCaveNoise(
+            float worldX,
+            float worldY,
+            float worldZ,
+            int worldSeed,
+            int noiseSalt,
+            int firstOctave,
+            float xzScale,
+            float yScale,
+            int amplitudeCount,
+            float amplitude0,
+            float amplitude1,
+            float amplitude2)
+        {
+            float total = 0f;
+            float weightSum = 0f;
+
+            for (int octaveIndex = 0; octaveIndex < amplitudeCount; octaveIndex++)
+            {
+                float amplitude;
+                switch (octaveIndex)
+                {
+                    case 0:
+                        amplitude = amplitude0;
+                        break;
+                    case 1:
+                        amplitude = amplitude1;
+                        break;
+                    case 2:
+                        amplitude = amplitude2;
+                        break;
+                    default:
+                        amplitude = 0f;
+                        break;
+                }
+
+                if (math.abs(amplitude) <= 1e-5f)
+                    continue;
+
+                total += amplitude * SampleDoubleSimplexNoise(
+                    worldX,
+                    worldY,
+                    worldZ,
+                    worldSeed,
+                    noiseSalt + octaveIndex * 977,
+                    firstOctave + octaveIndex,
+                    xzScale,
+                    yScale);
+                weightSum += math.abs(amplitude);
+            }
+
+            if (weightSum <= 1e-5f)
+                return 0f;
+
+            return math.clamp(total / weightSum, -1f, 1f);
+        }
+
+        private static float SampleDoubleSimplexNoise(
+            float worldX,
+            float worldY,
+            float worldZ,
+            int worldSeed,
+            int noiseSalt,
+            int octave,
+            float xzScale,
+            float yScale)
+        {
+            float frequency = math.exp2((float)octave);
+            float3 samplePos = new float3(
+                worldX * xzScale * frequency,
+                worldY * yScale * frequency,
+                worldZ * xzScale * frequency);
+
+            uint state = Hash((uint)(worldSeed ^ noiseSalt));
+            float3 primaryOffset = NextNoiseOffset(ref state);
+            float3 secondaryOffset = NextNoiseOffset(ref state);
+
+            float primary = noise.snoise(samplePos + primaryOffset);
+            float secondary = noise.snoise(samplePos * DoubleNoiseWarp + secondaryOffset);
+            return math.clamp((primary + secondary) * 0.5f, -1f, 1f);
+        }
+
+        private static float3 NextNoiseOffset(ref uint state)
+        {
+            return new float3(
+                NextSignedFloat(ref state),
+                NextSignedFloat(ref state),
+                NextSignedFloat(ref state)) * NoiseOffsetMagnitude;
+        }
+
+        private static float SampleYClampedGradient(float y, float fromY, float toY, float fromValue, float toValue)
+        {
+            float t = math.saturate((y - fromY) / math.max(1e-5f, toY - fromY));
+            return math.lerp(fromValue, toValue, t);
+        }
+
+        private static float Cube(float value)
+        {
+            return value * value * value;
         }
 
         private void GenerateOreVeins(

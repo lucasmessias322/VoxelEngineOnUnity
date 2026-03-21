@@ -103,6 +103,54 @@ public struct WormCaveSettings
         maxRadius == 0f;
 }
 
+[Serializable]
+public enum CaveGenerationMode : byte
+{
+    ModernSpaghetti = 0,
+    LegacyWorms = 1
+}
+
+[Serializable]
+public struct SpaghettiCaveSettings
+{
+    public bool enabled;
+    [Min(0)] public int minY;
+    [Min(0)] public int maxY;
+    [Min(0)] public int minSurfaceDepth;
+    [Min(0)] public int entranceSurfaceDepth;
+    [Range(-0.35f, 0.35f)] public float densityBias;
+    public int seedOffset;
+
+    public static SpaghettiCaveSettings Default => new SpaghettiCaveSettings
+    {
+        enabled = true,
+        minY = 4,
+        maxY = 320,
+        minSurfaceDepth = 6,
+        entranceSurfaceDepth = 0,
+        densityBias = 0f,
+        seedOffset = 48271
+    };
+
+    public bool LooksUninitialized =>
+        !enabled &&
+        minY == 0 &&
+        maxY == 0 &&
+        minSurfaceDepth == 0 &&
+        entranceSurfaceDepth == 0 &&
+        densityBias == 0f &&
+        seedOffset == 0;
+
+    public bool LooksLikeInitialSurfaceClosedDefault =>
+        enabled &&
+        minY == 4 &&
+        maxY == 320 &&
+        minSurfaceDepth == 6 &&
+        entranceSurfaceDepth == 1 &&
+        densityBias == 0f &&
+        seedOffset == 48271;
+}
+
 
 
 #region Utilities
@@ -147,6 +195,8 @@ public partial class World : MonoBehaviour
 
         if (caveWormSettings.LooksUninitialized)
             caveWormSettings = WormCaveSettings.Default;
+        if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
+            caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
         EnsureLoadingBootstrapExists();
     }
@@ -282,7 +332,11 @@ public partial class World : MonoBehaviour
         }
     };
 
-    [Header("Worm Cave Settings")]
+    [Header("Cave Settings")]
+    [Tooltip("Modo de geracao das cavernas. Modern Spaghetti usa density functions inspiradas no Minecraft moderno; Legacy Worms preserva o algoritmo antigo baseado em worms.")]
+    public CaveGenerationMode caveGenerationMode = CaveGenerationMode.ModernSpaghetti;
+    public SpaghettiCaveSettings caveSpaghettiSettings = SpaghettiCaveSettings.Default;
+    [Header("Legacy Worm Cave Settings")]
     public WormCaveSettings caveWormSettings = WormCaveSettings.Default;
 
     [Header("Performance Settings")]
@@ -2084,7 +2138,7 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
-                    
+
                     RemoveHighBuildMesh(coord);
                 }
             }
@@ -2167,7 +2221,7 @@ public partial class World : MonoBehaviour
         chunk.transform.position = pos;
         chunk.UpdateWorldBounds(); // garante bounds atualizado
         chunk.SetCoord(coord);
-      
+
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
 
@@ -2231,7 +2285,9 @@ public partial class World : MonoBehaviour
             GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
+            caveGenerationMode,
             caveWormSettings,
+            caveSpaghettiSettings,
             enableVoxelLighting,
             chunkLightData,
             out JobHandle dataHandle,
@@ -2872,7 +2928,9 @@ public partial class World : MonoBehaviour
               enableTrees,
               cachedNativeOreSettings,
               cachedNativeTreeSpawnRules,
+              caveGenerationMode,
               caveWormSettings,
+              caveSpaghettiSettings,
               enableVoxelLighting,
               chunkLightData,
               out JobHandle dataHandle,
