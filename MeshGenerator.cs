@@ -802,6 +802,7 @@ public static class MeshGenerator
             public int blockId;
             public byte valid;
             public byte faceLight;
+            public byte surfaceHeight;
             public byte ao0;
             public byte ao1;
             public byte ao2;
@@ -860,7 +861,8 @@ public static class MeshGenerator
             return HasFace(a) &&
                    HasFace(b) &&
                    a.blockId == b.blockId &&
-                   a.faceLight == b.faceLight;
+                   a.faceLight == b.faceLight &&
+                   a.surfaceHeight == b.surfaceHeight;
         }
 
         private static bool CanMergeAlongU(in GreedyFaceData left, in GreedyFaceData right)
@@ -1438,7 +1440,7 @@ public static class MeshGenerator
             Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
             float tint = mapping.tintSide ? 1f : 0f;
 
-            NativeList<int> tris = blockType == BlockType.Water
+            NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
                 ? waterTriangles
                 : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
 
@@ -1468,7 +1470,7 @@ public static class MeshGenerator
         {
             ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-            NativeList<int> tris = blockType == BlockType.Water
+            NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
                 ? waterTriangles
                 : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
             byte emission = mapping.lightEmission;
@@ -1891,11 +1893,11 @@ public static class MeshGenerator
 
         private bool IsFaceVisibleForCurrentBlock(BlockType current, BlockType neighbor)
         {
-            if (current == neighbor &&
-                (current == BlockType.Water || blockMappings[(int)current].isTransparent))
-            {
+            if (FluidBlockUtility.IsWater(current) && FluidBlockUtility.IsWater(neighbor))
                 return false;
-            }
+
+            if (current == neighbor && blockMappings[(int)current].isTransparent)
+                return false;
 
             if (blockMappings[(int)neighbor].isEmpty)
                 return true;
@@ -2052,6 +2054,7 @@ public static class MeshGenerator
                                     blockId = (int)current,
                                     valid = 1,
                                     faceLight = faceLight,
+                                    surfaceHeight = 0,
                                     ao0 = ao0,
                                     ao1 = ao1,
                                     ao2 = ao2,
@@ -2076,12 +2079,13 @@ public static class MeshGenerator
                                     continue;
                                 }
 
+                                bool isWaterFace = FluidBlockUtility.IsWater((BlockType)startFace.blockId);
                                 int w = 1;
-                                while (i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
+                                while (!isWaterFace && i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
                                     w++;
 
                                 int h = 1;
-                                while (j + h < maxV)
+                                while (!isWaterFace && j + h < maxV)
                                 {
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
@@ -2152,6 +2156,10 @@ public static class MeshGenerator
                                 byte light1 = bottomRightFace.light1;
                                 byte light2 = topRightFace.light2;
                                 byte light3 = topLeftFace.light3;
+                                int baseBlockY = u == 1 ? i : v == 1 ? j : n;
+                                int blockX = u == 0 ? i : v == 0 ? j : n;
+                                int blockY = u == 1 ? i : v == 1 ? j : n;
+                                int blockZ = u == 2 ? i : v == 2 ? j : n;
 
                                 int vIndex = vertices.Length;
 
@@ -2163,13 +2171,15 @@ public static class MeshGenerator
                                     float rawU = i + du;
                                     float rawV = j + dv;
                                     float posD = n + (normalSign > 0 ? 1f : 0f);
+                                    int cornerUOffset = du > 0 ? 1 : 0;
+                                    int cornerVOffset = dv > 0 ? 1 : 0;
 
                                     float px = (u == 0 ? rawU : v == 0 ? rawV : posD) - border;
                                     float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
                                     float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
 
-                                    if (bt == BlockType.Water && axis == 1 && normalSign > 0)
-                                        py -= 0.15f;
+                                    if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
+                                        py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
                                     vertices.Add(new Vector3(px, py, pz));
                                     normals.Add(normal);
@@ -2201,8 +2211,9 @@ public static class MeshGenerator
                                     uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
                                 }
 
-                                NativeList<int> tris = bt == BlockType.Water ? waterTriangles :
-                                                       blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles;
+                                NativeList<int> tris = FluidBlockUtility.IsWater(bt)
+                                    ? waterTriangles
+                                    : (blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles);
 
                                 if (normalSign > 0)
                                 {
@@ -2283,6 +2294,162 @@ public static class MeshGenerator
             }
 
             return !mapping.isTransparent || blockType == BlockType.Leaves;
+        }
+
+        private float GetWaterVertexHeight01(
+            BlockType blockType,
+            int x,
+            int y,
+            int z,
+            int axis,
+            int normalSign,
+            int cornerUOffset,
+            int cornerVOffset,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!FluidBlockUtility.IsWater(blockType))
+                return 1f;
+
+            if (HasWaterAbove(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return 1f;
+
+            ResolveWaterCornerOffsets(axis, normalSign, cornerUOffset, cornerVOffset, out int cornerXOffset, out int cornerZOffset);
+            return GetWaterCornerHeight01(x, y, z, cornerXOffset, cornerZOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        }
+
+        private void ResolveWaterCornerOffsets(
+            int axis,
+            int normalSign,
+            int cornerUOffset,
+            int cornerVOffset,
+            out int cornerXOffset,
+            out int cornerZOffset)
+        {
+            if (axis == 0)
+            {
+                cornerXOffset = normalSign > 0 ? 1 : 0;
+                cornerZOffset = cornerVOffset;
+                return;
+            }
+
+            if (axis == 1)
+            {
+                cornerXOffset = cornerVOffset;
+                cornerZOffset = cornerUOffset;
+                return;
+            }
+
+            cornerXOffset = cornerUOffset;
+            cornerZOffset = normalSign > 0 ? 1 : 0;
+        }
+
+        private float GetWaterCornerHeight01(
+            int x,
+            int y,
+            int z,
+            int cornerXOffset,
+            int cornerZOffset,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            int sampleMinX = x + cornerXOffset - 1;
+            int sampleMinZ = z + cornerZOffset - 1;
+            float accumulatedHeight = 0f;
+            int accumulatedWeight = 0;
+
+            for (int dz = 0; dz < 2; dz++)
+            {
+                for (int dx = 0; dx < 2; dx++)
+                {
+                    int sampleX = sampleMinX + dx;
+                    int sampleZ = sampleMinZ + dz;
+
+                    if (HasWaterAbove(sampleX, y, sampleZ, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                        return 1f;
+
+                    BlockType sampleType = GetBlockTypeSafe(sampleX, y, sampleZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    if (FluidBlockUtility.IsWater(sampleType))
+                    {
+                        float sampleHeight = GetWaterOwnHeight01(sampleType, sampleX, y, sampleZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                        if (sampleHeight >= 0.8f)
+                        {
+                            accumulatedHeight += sampleHeight * 10f;
+                            accumulatedWeight += 10;
+                        }
+                        else
+                        {
+                            accumulatedHeight += sampleHeight;
+                            accumulatedWeight += 1;
+                        }
+                    }
+                    else if (!IsSolidWaterNeighbor(sampleType))
+                    {
+                        accumulatedWeight += 1;
+                    }
+                }
+            }
+
+            if (accumulatedWeight <= 0)
+                return FluidBlockUtility.GetWaterSurfaceHeight01(BlockType.WaterFlow7);
+
+            return accumulatedHeight / accumulatedWeight;
+        }
+
+        private float GetWaterOwnHeight01(
+            BlockType blockType,
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!FluidBlockUtility.IsWater(blockType))
+                return 0f;
+
+            if (HasWaterAbove(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return 1f;
+
+            if (FluidBlockUtility.IsFallingWater(blockType))
+                return 1f;
+
+            return FluidBlockUtility.GetWaterSurfaceHeight01(blockType);
+        }
+
+        private bool HasWaterAbove(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            if (x < 0 || x >= voxelSizeX || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            if (y + 1 >= SizeY || y < 0)
+                return false;
+
+            int aboveIndex = x + (y + 1) * voxelSizeX + z * voxelPlaneSize;
+            return FluidBlockUtility.IsWater(blockTypes[aboveIndex]);
+        }
+
+        private BlockType GetBlockTypeSafe(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return BlockType.Air;
+
+            int index = x + y * voxelSizeX + z * voxelPlaneSize;
+            return blockTypes[index];
+        }
+
+        private bool IsSolidWaterNeighbor(BlockType blockType)
+        {
+            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+                return false;
+
+            if (TorchPlacementUtility.IsTorchLike(blockType))
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[(int)blockType];
+            return mapping.isSolid;
         }
 
         private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)

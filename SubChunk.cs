@@ -472,10 +472,10 @@ public class Subchunk : MonoBehaviour
 
     private static bool IsBlockCollidable(byte blockId, BlockTextureMapping[] blockMappings)
     {
-        if (blockId == (byte)BlockType.Air || blockId == (byte)BlockType.Water)
+        BlockType blockType = (BlockType)blockId;
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
             return false;
 
-        BlockType blockType = (BlockType)blockId;
         if (TorchPlacementUtility.IsTorchLike(blockType))
             return false;
 

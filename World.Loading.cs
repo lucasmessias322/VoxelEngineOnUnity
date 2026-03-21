@@ -68,7 +68,7 @@ public partial class World : MonoBehaviour
 
     public bool IsSolidBlock(BlockType blockType)
     {
-        if (blockType == BlockType.Air || blockType == BlockType.Water)
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
             return false;
 
         if (blockData != null)
@@ -83,7 +83,7 @@ public partial class World : MonoBehaviour
 
     public bool IsLiquidBlock(BlockType blockType)
     {
-        if (blockType == BlockType.Water)
+        if (FluidBlockUtility.IsWater(blockType))
             return true;
 
         return blockData != null && blockData.IsLiquid(blockType);

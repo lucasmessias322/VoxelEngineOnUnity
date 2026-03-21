@@ -1353,6 +1353,7 @@ public partial class World : MonoBehaviour
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
         meshesAppliedThisFrame = 0;
+        ProcessQueuedWaterUpdates();
         ProcessQueuedChunkRebuilds();
         ProcessQueuedHighBuildMeshRebuilds();
         ProcessQueuedLeafDecay();

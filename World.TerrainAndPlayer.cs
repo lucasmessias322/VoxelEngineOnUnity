@@ -258,6 +258,7 @@ public partial class World : MonoBehaviour
 
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
+        HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
 
         int terrainDirtySubchunkMask = GetDirtySubchunkMaskForWorldY(worldPos.y);
         HashSet<Vector2Int> chunksToRebuild = new HashSet<Vector2Int>();
@@ -546,6 +547,389 @@ public partial class World : MonoBehaviour
         return blockType == BlockType.Log ||
                blockType == BlockType.birch_log ||
                blockType == BlockType.acacia_log;
+    }
+
+    [Header("Fluid Simulation")]
+    [SerializeField] private bool enableWaterSimulation = true;
+    [SerializeField, Min(1)] private int waterUpdatesPerFrame = 48;
+    [SerializeField, Min(0.01f)] private float waterTickInterval = 0.05f;
+    [SerializeField, Min(1)] private int waterSlopeSearchDistance = 4;
+
+    private readonly Queue<WaterUpdateCandidate> queuedWaterUpdates = new Queue<WaterUpdateCandidate>();
+    private readonly HashSet<Vector3Int> queuedWaterUpdateSet = new HashSet<Vector3Int>();
+    private readonly HashSet<Vector3Int> persistentWaterSources = new HashSet<Vector3Int>();
+
+    private static readonly Vector3Int[] WaterNeighborOffsets =
+    {
+        Vector3Int.up,
+        Vector3Int.down,
+        Vector3Int.left,
+        Vector3Int.right,
+        Vector3Int.forward,
+        Vector3Int.back
+    };
+
+    private static readonly Vector3Int[] HorizontalWaterOffsets =
+    {
+        Vector3Int.right,
+        Vector3Int.left,
+        Vector3Int.forward,
+        Vector3Int.back
+    };
+
+    private const int NoWaterSlopeDropCost = 1000;
+
+    private struct WaterUpdateCandidate
+    {
+        public Vector3Int position;
+        public float nextUpdateTime;
+    }
+
+    private void ProcessQueuedWaterUpdates()
+    {
+        if (!enableWaterSimulation || queuedWaterUpdates.Count == 0)
+            return;
+
+        float now = Time.time;
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        int processed = 0;
+        int attempts = queuedWaterUpdates.Count;
+        int perFrameLimit = Mathf.Max(1, waterUpdatesPerFrame);
+
+        while (processed < perFrameLimit && attempts-- > 0)
+        {
+            WaterUpdateCandidate candidate = queuedWaterUpdates.Dequeue();
+            queuedWaterUpdateSet.Remove(candidate.position);
+
+            if (candidate.nextUpdateTime > now)
+            {
+                RequeueWaterCandidate(candidate);
+                continue;
+            }
+
+            if (!IsWorldPositionInsideSimulationDistance(candidate.position, simulationCenter))
+            {
+                TryQueueWaterUpdate(candidate.position, Mathf.Max(waterTickInterval, 0.25f));
+                continue;
+            }
+
+            if (EvaluateWaterAt(candidate.position))
+                processed++;
+        }
+    }
+
+    private bool EvaluateWaterAt(Vector3Int worldPos)
+    {
+        if (worldPos.y <= 2 || worldPos.y >= Chunk.SizeY)
+            return false;
+
+        BlockType current = GetBlockAt(worldPos);
+        bool currentIsWater = FluidBlockUtility.IsWater(current);
+        if (!currentIsWater && !CanWaterOccupy(current))
+            return false;
+
+        if (IsFixedWaterSource(worldPos))
+            return SetWaterStateIfNeeded(worldPos, current, BlockType.Water);
+
+        if (TryGetWaterStateFromAbove(worldPos, out BlockType fallingState))
+            return SetWaterStateIfNeeded(worldPos, current, fallingState);
+
+        if (ShouldBecomeInfiniteWaterSource(worldPos))
+            return SetWaterStateIfNeeded(worldPos, current, BlockType.Water);
+
+        if (TryGetHorizontalWaterState(worldPos, out BlockType flowingState))
+            return SetWaterStateIfNeeded(worldPos, current, flowingState);
+
+        if (!currentIsWater)
+            return false;
+
+        return SetWaterStateIfNeeded(worldPos, current, BlockType.Air);
+    }
+
+    private bool TryGetWaterStateFromAbove(Vector3Int worldPos, out BlockType state)
+    {
+        BlockType above = GetBlockAt(worldPos + Vector3Int.up);
+        if (!FluidBlockUtility.IsWater(above))
+        {
+            state = BlockType.Air;
+            return false;
+        }
+
+        int distance = FluidBlockUtility.GetWaterDistance(above);
+        state = FluidBlockUtility.GetWaterBlockType(distance, true);
+        return true;
+    }
+
+    private bool TryGetHorizontalWaterState(Vector3Int worldPos, out BlockType state)
+    {
+        int bestDistance = int.MaxValue;
+        bool found = false;
+
+        for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
+        {
+            Vector3Int sourcePos = worldPos + HorizontalWaterOffsets[i];
+            if (!WouldWaterFlowFromTo(sourcePos, worldPos))
+                continue;
+
+            BlockType sourceType = GetBlockAt(sourcePos);
+            int candidateDistance = FluidBlockUtility.GetWaterDistance(sourceType) + 1;
+            if (candidateDistance > FluidBlockUtility.MaxWaterDistance)
+                continue;
+
+            if (candidateDistance < bestDistance)
+            {
+                bestDistance = candidateDistance;
+                found = true;
+            }
+        }
+
+        if (!found)
+        {
+            state = BlockType.Air;
+            return false;
+        }
+
+        state = FluidBlockUtility.GetWaterBlockType(bestDistance, false);
+        return true;
+    }
+
+    private bool WouldWaterFlowFromTo(Vector3Int sourcePos, Vector3Int targetPos)
+    {
+        BlockType sourceType = GetBlockAt(sourcePos);
+        if (!FluidBlockUtility.IsWater(sourceType))
+            return false;
+
+        BlockType targetType = GetBlockAt(targetPos);
+        if (!CanWaterOccupy(targetType) && !FluidBlockUtility.IsWater(targetType))
+            return false;
+
+        if (CanWaterFlowDownInto(GetBlockAt(sourcePos + Vector3Int.down)))
+            return false;
+
+        int directionIndex = GetHorizontalDirectionIndex(targetPos - sourcePos);
+        if (directionIndex < 0)
+            return false;
+
+        GetOptimalWaterFlowCosts(sourcePos, out int rightCost, out int leftCost, out int forwardCost, out int backCost, out int bestCost);
+        if (bestCost == int.MaxValue)
+            return false;
+
+        int directionCost = directionIndex switch
+        {
+            0 => rightCost,
+            1 => leftCost,
+            2 => forwardCost,
+            3 => backCost,
+            _ => int.MaxValue
+        };
+
+        return directionCost == bestCost;
+    }
+
+    private void GetOptimalWaterFlowCosts(
+        Vector3Int sourcePos,
+        out int rightCost,
+        out int leftCost,
+        out int forwardCost,
+        out int backCost,
+        out int bestCost)
+    {
+        rightCost = GetFlowCostForDirection(sourcePos, 0);
+        leftCost = GetFlowCostForDirection(sourcePos, 1);
+        forwardCost = GetFlowCostForDirection(sourcePos, 2);
+        backCost = GetFlowCostForDirection(sourcePos, 3);
+
+        bestCost = Mathf.Min(rightCost, leftCost);
+        bestCost = Mathf.Min(bestCost, forwardCost);
+        bestCost = Mathf.Min(bestCost, backCost);
+    }
+
+    private int GetFlowCostForDirection(Vector3Int sourcePos, int directionIndex)
+    {
+        Vector3Int targetPos = sourcePos + HorizontalWaterOffsets[directionIndex];
+        BlockType targetType = GetBlockAt(targetPos);
+        if (!CanWaterOccupy(targetType))
+            return int.MaxValue;
+
+        if (CanWaterFlowDownInto(GetBlockAt(targetPos + Vector3Int.down)))
+            return 0;
+
+        return GetWaterSlopeDistance(targetPos, 1, GetOppositeHorizontalDirection(directionIndex));
+    }
+
+    private int GetWaterSlopeDistance(Vector3Int origin, int depth, int blockedDirection)
+    {
+        int maxDepth = Mathf.Max(1, waterSlopeSearchDistance);
+        if (depth >= maxDepth)
+            return NoWaterSlopeDropCost;
+
+        int bestDistance = NoWaterSlopeDropCost;
+
+        for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
+        {
+            if (i == blockedDirection)
+                continue;
+
+            Vector3Int nextPos = origin + HorizontalWaterOffsets[i];
+            BlockType nextType = GetBlockAt(nextPos);
+            if (!CanWaterOccupy(nextType))
+                continue;
+
+            if (CanWaterFlowDownInto(GetBlockAt(nextPos + Vector3Int.down)))
+                return depth;
+
+            int candidate = GetWaterSlopeDistance(nextPos, depth + 1, GetOppositeHorizontalDirection(i));
+            if (candidate < bestDistance)
+                bestDistance = candidate;
+        }
+
+        return bestDistance;
+    }
+
+    private bool ShouldBecomeInfiniteWaterSource(Vector3Int worldPos)
+    {
+        BlockType below = GetBlockAt(worldPos + Vector3Int.down);
+        bool supportedBelow = IsSolidBlock(below) || IsSourceWaterState(worldPos + Vector3Int.down);
+        if (!supportedBelow)
+            return false;
+
+        int adjacentSources = 0;
+        for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
+        {
+            if (IsSourceWaterState(worldPos + HorizontalWaterOffsets[i]))
+            {
+                adjacentSources++;
+                if (adjacentSources >= 2)
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private bool SetWaterStateIfNeeded(Vector3Int worldPos, BlockType current, BlockType desired)
+    {
+        if (current == desired)
+            return false;
+
+        if (desired == BlockType.Air && !FluidBlockUtility.IsWater(current))
+            return false;
+
+        SetBlockAt(worldPos, desired);
+        return true;
+    }
+
+    private bool IsSourceWaterState(Vector3Int worldPos)
+    {
+        BlockType blockType = GetBlockAt(worldPos);
+        return FluidBlockUtility.IsStillWater(blockType) && !FluidBlockUtility.IsFallingWater(blockType);
+    }
+
+    private bool IsFixedWaterSource(Vector3Int worldPos)
+    {
+        if (persistentWaterSources.Contains(worldPos))
+            return true;
+
+        if (blockOverrides.ContainsKey(worldPos))
+            return false;
+
+        return GetProceduralBlockFast(worldPos) == BlockType.Water;
+    }
+
+    private bool CanWaterOccupy(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return true;
+
+        if (TorchPlacementUtility.IsTorchLike(blockType))
+            return true;
+
+        if (blockData != null)
+        {
+            BlockTextureMapping? mapping = blockData.GetMapping(blockType);
+            if (mapping != null)
+            {
+                BlockTextureMapping value = mapping.Value;
+                return !value.isSolid && !value.isLiquid;
+            }
+        }
+
+        return !IsSolidBlock(blockType) && !IsLiquidBlock(blockType);
+    }
+
+    private bool CanWaterFlowDownInto(BlockType blockType)
+    {
+        if (FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        return CanWaterOccupy(blockType);
+    }
+
+    private static int GetHorizontalDirectionIndex(Vector3Int delta)
+    {
+        if (delta == Vector3Int.right) return 0;
+        if (delta == Vector3Int.left) return 1;
+        if (delta == Vector3Int.forward) return 2;
+        if (delta == Vector3Int.back) return 3;
+        return -1;
+    }
+
+    private static int GetOppositeHorizontalDirection(int directionIndex)
+    {
+        return directionIndex switch
+        {
+            0 => 1,
+            1 => 0,
+            2 => 3,
+            3 => 2,
+            _ => -1
+        };
+    }
+
+    private void HandleWaterBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType, bool placedByPlayer)
+    {
+        if (newType != BlockType.Water)
+        {
+            persistentWaterSources.Remove(worldPos);
+        }
+        else if (placedByPlayer)
+        {
+            persistentWaterSources.Add(worldPos);
+        }
+
+        if (!enableWaterSimulation)
+            return;
+
+        float delay = Mathf.Max(0f, waterTickInterval);
+        TryQueueWaterUpdate(worldPos, delay);
+        for (int i = 0; i < WaterNeighborOffsets.Length; i++)
+            TryQueueWaterUpdate(worldPos + WaterNeighborOffsets[i], delay);
+    }
+
+    private void TryQueueWaterUpdate(Vector3Int worldPos, float delaySeconds = 0f)
+    {
+        if (!enableWaterSimulation)
+            return;
+
+        if (worldPos.y <= 2 || worldPos.y >= Chunk.SizeY)
+            return;
+
+        if (!queuedWaterUpdateSet.Add(worldPos))
+            return;
+
+        queuedWaterUpdates.Enqueue(new WaterUpdateCandidate
+        {
+            position = worldPos,
+            nextUpdateTime = Time.time + Mathf.Max(0f, delaySeconds)
+        });
+    }
+
+    private void RequeueWaterCandidate(WaterUpdateCandidate candidate)
+    {
+        if (!queuedWaterUpdateSet.Add(candidate.position))
+            return;
+
+        queuedWaterUpdates.Enqueue(candidate);
     }
 
     #endregion

@@ -35,6 +35,7 @@ public class BlockDataSO : ScriptableObject
         }
 
         PopulateTorchFallbackMappings();
+        PopulateWaterFallbackMappings();
     }
 
     /// <summary>
@@ -62,6 +63,28 @@ public class BlockDataSO : ScriptableObject
         EnsureFallbackMapping(BlockType.WallTorchWest, template);
         EnsureFallbackMapping(BlockType.WallTorchSouth, template);
         EnsureFallbackMapping(BlockType.WallTorchNorth, template);
+    }
+
+    private void PopulateWaterFallbackMappings()
+    {
+        if (!TryGetExplicitMapping(BlockType.Water, out BlockTextureMapping template))
+            return;
+
+        EnsureFallbackMapping(BlockType.WaterFlow1, template);
+        EnsureFallbackMapping(BlockType.WaterFlow2, template);
+        EnsureFallbackMapping(BlockType.WaterFlow3, template);
+        EnsureFallbackMapping(BlockType.WaterFlow4, template);
+        EnsureFallbackMapping(BlockType.WaterFlow5, template);
+        EnsureFallbackMapping(BlockType.WaterFlow6, template);
+        EnsureFallbackMapping(BlockType.WaterFlow7, template);
+        EnsureFallbackMapping(BlockType.WaterFall0, template);
+        EnsureFallbackMapping(BlockType.WaterFall1, template);
+        EnsureFallbackMapping(BlockType.WaterFall2, template);
+        EnsureFallbackMapping(BlockType.WaterFall3, template);
+        EnsureFallbackMapping(BlockType.WaterFall4, template);
+        EnsureFallbackMapping(BlockType.WaterFall5, template);
+        EnsureFallbackMapping(BlockType.WaterFall6, template);
+        EnsureFallbackMapping(BlockType.WaterFall7, template);
     }
 
     private bool TryGetTorchTemplateMapping(out BlockTextureMapping template)
@@ -130,7 +153,7 @@ public class BlockDataSO : ScriptableObject
     /// </summary>
     public bool IsLiquid(BlockType type)
     {
-        if (type == BlockType.Water)
+        if (FluidBlockUtility.IsWater(type))
             return true;
 
         BlockTextureMapping? mapping = GetMapping(type);

@@ -166,7 +166,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         World world = World.Instance;
         if (world == null || world.blockData == null)
-            return blockType == BlockType.Water;
+            return FluidBlockUtility.IsWater(blockType);
 
         return world.blockData.IsLiquid(blockType);
     }
@@ -456,7 +456,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         World world = World.Instance;
         if (world == null || world.blockData == null)
-            return supportType != BlockType.Air && supportType != BlockType.Water;
+            return supportType != BlockType.Air && !FluidBlockUtility.IsWater(supportType);
 
         BlockTextureMapping? mapping = world.blockData.GetMapping(supportType);
         if (mapping == null)

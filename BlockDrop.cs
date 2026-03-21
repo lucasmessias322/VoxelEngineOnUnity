@@ -241,7 +241,7 @@ public class BlockDrop : MonoBehaviour
         mesh.SetUVs(2, uv2);
         mesh.subMeshCount = 3;
 
-        if (blockType == BlockType.Water) submeshIndex = 2;
+        if (FluidBlockUtility.IsWater(blockType)) submeshIndex = 2;
         else if (mapping.isTransparent) submeshIndex = 1;
 
         List<int> empty = new List<int>(0);

@@ -230,9 +230,9 @@ public partial class World
                 uv2.Add(extra);
                 uv2.Add(extra);
 
-                List<int> targetTris = waterTris;
-                if (blockType != BlockType.Water)
-                    targetTris = mapping.isTransparent ? transparentTris : opaqueTris;
+                List<int> targetTris = FluidBlockUtility.IsWater(blockType)
+                    ? waterTris
+                    : (mapping.isTransparent ? transparentTris : opaqueTris);
 
                 targetTris.Add(baseIndex + 0);
                 targetTris.Add(baseIndex + 1);
@@ -592,7 +592,7 @@ public partial class World
 
     private static bool IsHighBuildColliderBlock(BlockType type, BlockTextureMapping mapping)
     {
-        if (type == BlockType.Air || type == BlockType.Water)
+        if (type == BlockType.Air || FluidBlockUtility.IsWater(type))
             return false;
 
         if (TorchPlacementUtility.IsTorchLike(type))
@@ -622,10 +622,13 @@ public partial class World
 
     private bool IsFaceVisibleForHighBuild(BlockType current, BlockType neighbor)
     {
+        if (FluidBlockUtility.IsWater(current) && FluidBlockUtility.IsWater(neighbor))
+            return false;
+
         if (current == neighbor)
         {
             BlockTextureMapping m = GetMappingSafe(current);
-            if (current == BlockType.Water || m.isTransparent) return false;
+            if (m.isTransparent) return false;
         }
 
         BlockTextureMapping n = GetMappingSafe(neighbor);

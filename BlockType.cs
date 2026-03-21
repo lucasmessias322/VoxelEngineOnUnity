@@ -32,6 +32,173 @@ public enum BlockType
     WallTorchWest = 27,
     WallTorchSouth = 28,
     WallTorchNorth = 29,
+    WaterFlow1 = 30,
+    WaterFlow2 = 31,
+    WaterFlow3 = 32,
+    WaterFlow4 = 33,
+    WaterFlow5 = 34,
+    WaterFlow6 = 35,
+    WaterFlow7 = 36,
+    WaterFall0 = 37,
+    WaterFall1 = 38,
+    WaterFall2 = 39,
+    WaterFall3 = 40,
+    WaterFall4 = 41,
+    WaterFall5 = 42,
+    WaterFall6 = 43,
+    WaterFall7 = 44,
+}
+
+public static class FluidBlockUtility
+{
+    public const int MaxWaterDistance = 7;
+    public const int FullWaterSurfaceStep = 9;
+    private const float SurfaceStepDivisor = 9f;
+
+    public static bool IsWater(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.Water:
+            case BlockType.WaterFlow1:
+            case BlockType.WaterFlow2:
+            case BlockType.WaterFlow3:
+            case BlockType.WaterFlow4:
+            case BlockType.WaterFlow5:
+            case BlockType.WaterFlow6:
+            case BlockType.WaterFlow7:
+            case BlockType.WaterFall0:
+            case BlockType.WaterFall1:
+            case BlockType.WaterFall2:
+            case BlockType.WaterFall3:
+            case BlockType.WaterFall4:
+            case BlockType.WaterFall5:
+            case BlockType.WaterFall6:
+            case BlockType.WaterFall7:
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    public static bool IsFallingWater(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.WaterFall0:
+            case BlockType.WaterFall1:
+            case BlockType.WaterFall2:
+            case BlockType.WaterFall3:
+            case BlockType.WaterFall4:
+            case BlockType.WaterFall5:
+            case BlockType.WaterFall6:
+            case BlockType.WaterFall7:
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    public static bool IsStillWater(BlockType type)
+    {
+        return type == BlockType.Water;
+    }
+
+    public static int GetWaterDistance(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.Water:
+            case BlockType.WaterFall0:
+                return 0;
+
+            case BlockType.WaterFlow1:
+            case BlockType.WaterFall1:
+                return 1;
+
+            case BlockType.WaterFlow2:
+            case BlockType.WaterFall2:
+                return 2;
+
+            case BlockType.WaterFlow3:
+            case BlockType.WaterFall3:
+                return 3;
+
+            case BlockType.WaterFlow4:
+            case BlockType.WaterFall4:
+                return 4;
+
+            case BlockType.WaterFlow5:
+            case BlockType.WaterFall5:
+                return 5;
+
+            case BlockType.WaterFlow6:
+            case BlockType.WaterFall6:
+                return 6;
+
+            case BlockType.WaterFlow7:
+            case BlockType.WaterFall7:
+                return 7;
+
+            default:
+                return MaxWaterDistance;
+        }
+    }
+
+    public static BlockType GetWaterBlockType(int distance, bool falling)
+    {
+        int clampedDistance = Mathf.Clamp(distance, 0, MaxWaterDistance);
+        if (!falling && clampedDistance == 0)
+            return BlockType.Water;
+
+        if (falling)
+        {
+            switch (clampedDistance)
+            {
+                case 0: return BlockType.WaterFall0;
+                case 1: return BlockType.WaterFall1;
+                case 2: return BlockType.WaterFall2;
+                case 3: return BlockType.WaterFall3;
+                case 4: return BlockType.WaterFall4;
+                case 5: return BlockType.WaterFall5;
+                case 6: return BlockType.WaterFall6;
+                default: return BlockType.WaterFall7;
+            }
+        }
+
+        switch (clampedDistance)
+        {
+            case 0: return BlockType.Water;
+            case 1: return BlockType.WaterFlow1;
+            case 2: return BlockType.WaterFlow2;
+            case 3: return BlockType.WaterFlow3;
+            case 4: return BlockType.WaterFlow4;
+            case 5: return BlockType.WaterFlow5;
+            case 6: return BlockType.WaterFlow6;
+            default: return BlockType.WaterFlow7;
+        }
+    }
+
+    public static int GetWaterSurfaceStep(BlockType type)
+    {
+        if (!IsWater(type))
+            return 0;
+
+        int distance = GetWaterDistance(type);
+        return Mathf.Clamp(8 - distance, 1, 8);
+    }
+
+    public static float GetWaterSurfaceHeight01(BlockType type)
+    {
+        return GetWaterSurfaceStep(type) / SurfaceStepDivisor;
+    }
+
+    public static BlockType NormalizeWaterType(BlockType type)
+    {
+        return IsWater(type) ? BlockType.Water : type;
+    }
 }
 
 public static class TorchPlacementUtility
