@@ -342,6 +342,9 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Quantidade de subchunks agrupados por job de mesh. Valores menores aumentam o paralelismo; valores maiores reduzem overhead.")]
+    [Min(1)]
+    public int meshSubchunksPerJob = 4;
     [Tooltip("Quantidade maxima de subchunks que podem reconstruir collider por frame.")]
     [Min(1)]
     public int maxColliderBuildsPerFrame = 1;
@@ -779,6 +782,26 @@ public partial class World : MonoBehaviour
 
         int scaledLimit = Mathf.RoundToInt(safeBase * Mathf.Max(0.25f, adaptiveChunkBudgetScale));
         return Mathf.Max(1, scaledLimit);
+    }
+
+    private int GetEffectiveMeshSubchunksPerJob()
+    {
+        return Mathf.Clamp(meshSubchunksPerJob, 1, Chunk.SubchunksPerColumn);
+    }
+
+    private static int GetSubchunkGroupMask(int sourceMask, int startSubchunk, int subchunkCount)
+    {
+        int endSubchunkExclusive = Mathf.Min(startSubchunk + Mathf.Max(1, subchunkCount), Chunk.SubchunksPerColumn);
+        int groupMask = 0;
+
+        for (int sub = startSubchunk; sub < endSubchunkExclusive; sub++)
+        {
+            int bit = 1 << sub;
+            if ((sourceMask & bit) != 0)
+                groupMask |= bit;
+        }
+
+        return groupMask;
     }
 
     private int GetMeshNeighborPadding()
@@ -1794,7 +1817,6 @@ public partial class World : MonoBehaviour
                     continue;
                 }
 
-                activeChunk.state = Chunk.ChunkState.Active;
                 if (!chunkProvidedBorderCoverBeforeApply)
                     RequestHorizontalNeighborVisualRefresh(pm.coord);
 
@@ -2033,63 +2055,76 @@ public partial class World : MonoBehaviour
         if (meshSubchunkMask != 0)
         {
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
+            int subchunksPerJob = GetEffectiveMeshSubchunksPerJob();
+            bool hasScheduledMeshJob = false;
 
-            MeshGenerator.ScheduleMeshJob(
-                pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
-                pd.subchunkNonEmpty,
-                atlasTilesX, atlasTilesY, true, borderSize,
-                pd.coord.x, pd.coord.y,
-                meshSubchunkMask,
-                enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
-                grassBillboardNoiseScale, grassBillboardJitter,
-                effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
-                out JobHandle meshHandle,
-                out NativeList<Vector3> vertices,
-                out NativeList<int> opaqueTriangles,
-                out NativeList<int> transparentTriangles,
-                out NativeList<int> billboardTriangles,
-                out NativeList<int> waterTriangles,
-                out NativeList<Vector2> uvs,
-                out NativeList<Vector2> uv2,
-                out NativeList<Vector3> normals,
-                out NativeList<byte> vertexLights,
-                out NativeList<byte> tintFlags,
-                out NativeList<byte> vertexAO,
-                out NativeList<Vector4> extraUVs,
-                out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
-                out NativeArray<ulong> subchunkVisibilityMasks
-            );
-
-            combinedMeshHandle = meshHandle;
-            pendingMeshes.Add(new PendingMesh
+            for (int groupStartSubchunk = 0; groupStartSubchunk < Chunk.SubchunksPerColumn; groupStartSubchunk += subchunksPerJob)
             {
-                handle = meshHandle,
-                vertices = vertices,
-                opaqueTriangles = opaqueTriangles,
-                transparentTriangles = transparentTriangles,
-                billboardTriangles = billboardTriangles,
-                waterTriangles = waterTriangles,
-                uvs = uvs,
-                uv2 = uv2,
-                normals = normals,
-                lightValues = vertexLights,
-                tintFlags = tintFlags,
-                vertexAO = vertexAO,
-                extraUVs = extraUVs,
-                coord = pd.coord,
-                expectedGen = pd.expectedGen,
-                parentChunk = activeChunk,
-                subchunkRanges = subchunkRanges,
-                subchunkVisibilityMasks = subchunkVisibilityMasks,
-                dirtySubchunkMask = meshSubchunkMask,
-                nextSubchunkApplyIndex = 0,
-                heightCache = pd.heightCache,
-                blockTypes = pd.blockTypes,
-                solids = pd.solids,
-                light = pd.light,
-                suppressedBillboards = default,
-                buildColliders = pd.rebuildColliders
-            });
+                int groupMask = GetSubchunkGroupMask(meshSubchunkMask, groupStartSubchunk, subchunksPerJob);
+                if (groupMask == 0)
+                    continue;
+
+                MeshGenerator.ScheduleMeshJob(
+                    pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
+                    pd.subchunkNonEmpty,
+                    atlasTilesX, atlasTilesY, true, borderSize,
+                    pd.coord.x, pd.coord.y,
+                    groupMask,
+                    enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
+                    grassBillboardNoiseScale, grassBillboardJitter,
+                    effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
+                    out JobHandle meshHandle,
+                    out NativeList<Vector3> vertices,
+                    out NativeList<int> opaqueTriangles,
+                    out NativeList<int> transparentTriangles,
+                    out NativeList<int> billboardTriangles,
+                    out NativeList<int> waterTriangles,
+                    out NativeList<Vector2> uvs,
+                    out NativeList<Vector2> uv2,
+                    out NativeList<Vector3> normals,
+                    out NativeList<byte> vertexLights,
+                    out NativeList<byte> tintFlags,
+                    out NativeList<byte> vertexAO,
+                    out NativeList<Vector4> extraUVs,
+                    out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+                    out NativeArray<ulong> subchunkVisibilityMasks
+                );
+
+                combinedMeshHandle = hasScheduledMeshJob
+                    ? JobHandle.CombineDependencies(combinedMeshHandle, meshHandle)
+                    : meshHandle;
+                hasScheduledMeshJob = true;
+
+                pendingMeshes.Add(new PendingMesh
+                {
+                    handle = meshHandle,
+                    vertices = vertices,
+                    opaqueTriangles = opaqueTriangles,
+                    transparentTriangles = transparentTriangles,
+                    billboardTriangles = billboardTriangles,
+                    waterTriangles = waterTriangles,
+                    uvs = uvs,
+                    uv2 = uv2,
+                    normals = normals,
+                    lightValues = vertexLights,
+                    tintFlags = tintFlags,
+                    vertexAO = vertexAO,
+                    extraUVs = extraUVs,
+                    coord = pd.coord,
+                    expectedGen = pd.expectedGen,
+                    parentChunk = activeChunk,
+                    subchunkRanges = subchunkRanges,
+                    subchunkVisibilityMasks = subchunkVisibilityMasks,
+                    dirtySubchunkMask = groupMask,
+                    nextSubchunkApplyIndex = groupStartSubchunk,
+                    heightCache = pd.heightCache,
+                    blockTypes = pd.blockTypes,
+                    solids = pd.solids,
+                    light = pd.light,
+                    suppressedBillboards = default,
+                    buildColliders = pd.rebuildColliders
+                });
+            }
         }
 
         var disposeJob = new MeshGenerator.DisposeChunkDataJob
