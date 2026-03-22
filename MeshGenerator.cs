@@ -677,9 +677,6 @@ public static class MeshGenerator
         out NativeList<Vector2> uvs,
         out NativeList<Vector2> uv2,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,
-        out NativeList<byte> tintFlags,
-        out NativeList<byte> vertexAO,
         out NativeList<Vector4> extraUVs,
         out NativeArray<SubchunkMeshRange> subchunkRanges,
         out NativeArray<ulong> subchunkVisibilityMasks
@@ -693,9 +690,6 @@ public static class MeshGenerator
         billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.Persistent);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-        tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.Persistent);
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         uv2 = new NativeList<Vector2>(4096, Allocator.Persistent);
         subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.Persistent);
@@ -744,9 +738,6 @@ public static class MeshGenerator
             uv2 = uv2,
             normals = normals,
             extraUVs = extraUVs,
-            vertexLights = vertexLights,
-            tintFlags = tintFlags,
-            vertexAO = vertexAO,
             subchunkVisibilityMasks = subchunkVisibilityMasks
         };
         // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
@@ -803,9 +794,6 @@ public static class MeshGenerator
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
         public NativeList<Vector4> extraUVs;
-        public NativeList<byte> vertexLights;
-        public NativeList<byte> tintFlags;
-        public NativeList<byte> vertexAO;
         public NativeArray<ulong> subchunkVisibilityMasks;
 
         private struct GreedyFaceData

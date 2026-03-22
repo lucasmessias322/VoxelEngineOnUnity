@@ -1171,8 +1171,6 @@ public partial class World : MonoBehaviour
         public NativeList<Vector2> uvs;
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
-        public NativeList<byte> lightValues;
-        public NativeList<byte> tintFlags;
         public Vector2Int coord;
         public int expectedGen;
         public Chunk parentChunk;
@@ -1180,6 +1178,7 @@ public partial class World : MonoBehaviour
         public NativeArray<ulong> subchunkVisibilityMasks;
         public int dirtySubchunkMask;
         public int nextSubchunkApplyIndex;
+        public bool requestNeighborVisualRefreshOnComplete;
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
@@ -1187,7 +1186,6 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public NativeArray<int3> suppressedBillboards;
-        public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
         public bool buildColliders;
     }
@@ -1768,7 +1766,7 @@ public partial class World : MonoBehaviour
 
             if (canApplyMesh)
             {
-                bool chunkProvidedBorderCoverBeforeApply = DoesChunkCurrentlyProvideBorderCover(pm.coord);
+                pm.requestNeighborVisualRefreshOnComplete |= !DoesChunkCurrentlyProvideBorderCover(pm.coord);
                 bool updatedSectionVisibility = false;
                 while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
                        meshesAppliedThisFrame < meshAppliesLimit)
@@ -1817,7 +1815,7 @@ public partial class World : MonoBehaviour
                     continue;
                 }
 
-                if (!chunkProvidedBorderCoverBeforeApply)
+                if (pm.requestNeighborVisualRefreshOnComplete)
                     RequestHorizontalNeighborVisualRefresh(pm.coord);
 
                 if (updatedSectionVisibility)
@@ -2082,9 +2080,6 @@ public partial class World : MonoBehaviour
                     out NativeList<Vector2> uvs,
                     out NativeList<Vector2> uv2,
                     out NativeList<Vector3> normals,
-                    out NativeList<byte> vertexLights,
-                    out NativeList<byte> tintFlags,
-                    out NativeList<byte> vertexAO,
                     out NativeList<Vector4> extraUVs,
                     out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
                     out NativeArray<ulong> subchunkVisibilityMasks
@@ -2106,9 +2101,6 @@ public partial class World : MonoBehaviour
                     uvs = uvs,
                     uv2 = uv2,
                     normals = normals,
-                    lightValues = vertexLights,
-                    tintFlags = tintFlags,
-                    vertexAO = vertexAO,
                     extraUVs = extraUVs,
                     coord = pd.coord,
                     expectedGen = pd.expectedGen,
@@ -2117,6 +2109,7 @@ public partial class World : MonoBehaviour
                     subchunkVisibilityMasks = subchunkVisibilityMasks,
                     dirtySubchunkMask = groupMask,
                     nextSubchunkApplyIndex = groupStartSubchunk,
+                    requestNeighborVisualRefreshOnComplete = false,
                     heightCache = pd.heightCache,
                     blockTypes = pd.blockTypes,
                     solids = pd.solids,
@@ -2166,18 +2159,70 @@ public partial class World : MonoBehaviour
         int eastNeighborX = borderSize + Chunk.SizeX;
         int northNeighborZ = borderSize - 1;
         int southNeighborZ = borderSize + Chunk.SizeZ;
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.left))
+        {
             ClearBorderPaddingX(westCurrentX, westNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+            RestoreMissingWaterBorderPaddingX(
+                westCurrentX,
+                westNeighborX,
+                borderSize,
+                voxelSizeX,
+                voxelPlaneSize,
+                chunkMinX - 1,
+                chunkMinZ,
+                blockTypes,
+                solids);
+        }
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.right))
+        {
             ClearBorderPaddingX(eastCurrentX, eastNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+            RestoreMissingWaterBorderPaddingX(
+                eastCurrentX,
+                eastNeighborX,
+                borderSize,
+                voxelSizeX,
+                voxelPlaneSize,
+                chunkMinX + Chunk.SizeX,
+                chunkMinZ,
+                blockTypes,
+                solids);
+        }
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.down))
+        {
             ClearBorderPaddingZ(northCurrentZ, northNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+            RestoreMissingWaterBorderPaddingZ(
+                northCurrentZ,
+                northNeighborZ,
+                borderSize,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                chunkMinX,
+                chunkMinZ - 1,
+                blockTypes,
+                solids);
+        }
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.up))
+        {
             ClearBorderPaddingZ(southCurrentZ, southNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+            RestoreMissingWaterBorderPaddingZ(
+                southCurrentZ,
+                southNeighborZ,
+                borderSize,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                chunkMinX,
+                chunkMinZ + Chunk.SizeZ,
+                blockTypes,
+                solids);
+        }
     }
 
     private bool DoesChunkCurrentlyProvideBorderCover(Vector2Int coord)
@@ -2253,6 +2298,81 @@ public partial class World : MonoBehaviour
                     continue;
 
                 blockTypes[paddingIdx] = BlockType.Air;
+                solids[paddingIdx] = false;
+            }
+        }
+    }
+
+    private void RestoreMissingWaterBorderPaddingX(
+        int currentLocalX,
+        int paddingLocalX,
+        int borderSize,
+        int voxelSizeX,
+        int voxelPlaneSize,
+        int worldNeighborX,
+        int chunkMinZ,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids)
+    {
+        if (currentLocalX < 0 || currentLocalX >= voxelSizeX || paddingLocalX < 0 || paddingLocalX >= voxelSizeX)
+            return;
+
+        for (int z = 0; z < Chunk.SizeZ; z++)
+        {
+            int localZ = z + borderSize;
+            int worldZ = chunkMinZ + z;
+            int currentIdx = currentLocalX + localZ * voxelPlaneSize;
+            int paddingIdx = paddingLocalX + localZ * voxelPlaneSize;
+
+            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            {
+                if (!FluidBlockUtility.IsWater(blockTypes[currentIdx]))
+                    continue;
+
+                BlockType neighborType = GetBlockAt(new Vector3Int(worldNeighborX, y, worldZ));
+                if (!FluidBlockUtility.IsWater(neighborType))
+                    continue;
+
+                blockTypes[paddingIdx] = neighborType;
+                solids[paddingIdx] = false;
+            }
+        }
+    }
+
+    private void RestoreMissingWaterBorderPaddingZ(
+        int currentLocalZ,
+        int paddingLocalZ,
+        int borderSize,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int chunkMinX,
+        int worldNeighborZ,
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids)
+    {
+        if (currentLocalZ < 0 || currentLocalZ >= voxelSizeZ || paddingLocalZ < 0 || paddingLocalZ >= voxelSizeZ)
+            return;
+
+        int currentSliceStart = currentLocalZ * voxelPlaneSize;
+        int paddingSliceStart = paddingLocalZ * voxelPlaneSize;
+        for (int x = 0; x < Chunk.SizeX; x++)
+        {
+            int localX = x + borderSize;
+            int worldX = chunkMinX + x;
+            int currentIdx = currentSliceStart + localX;
+            int paddingIdx = paddingSliceStart + localX;
+
+            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            {
+                if (!FluidBlockUtility.IsWater(blockTypes[currentIdx]))
+                    continue;
+
+                BlockType neighborType = GetBlockAt(new Vector3Int(worldX, y, worldNeighborZ));
+                if (!FluidBlockUtility.IsWater(neighborType))
+                    continue;
+
+                blockTypes[paddingIdx] = neighborType;
                 solids[paddingIdx] = false;
             }
         }
@@ -3589,10 +3709,7 @@ public partial class World : MonoBehaviour
         if (pm.uvs.IsCreated) pm.uvs.Dispose();
         if (pm.uv2.IsCreated) pm.uv2.Dispose();
         if (pm.normals.IsCreated) pm.normals.Dispose();
-        if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
-        if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
         if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
-        if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
         if (pm.subchunkRanges.IsCreated) pm.subchunkRanges.Dispose();
         if (pm.subchunkVisibilityMasks.IsCreated) pm.subchunkVisibilityMasks.Dispose();
