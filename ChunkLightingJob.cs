@@ -161,6 +161,8 @@ public static class ChunkLighting
         public int outputVoxelPlaneSize;
         public int outputOffsetX;
         public int outputOffsetZ;
+        public int outputSizeY;
+        public int outputOffsetY;
         public int SizeY;
 
         public void Execute()
@@ -239,13 +241,14 @@ public static class ChunkLighting
             for (int oz = 0; oz < outputVoxelSizeZ; oz++)
             {
                 int inputZ = oz + outputOffsetZ;
-                for (int y = 0; y < SizeY; y++)
+                for (int oy = 0; oy < outputSizeY; oy++)
                 {
+                    int inputY = oy + outputOffsetY;
                     for (int ox = 0; ox < outputVoxelSizeX; ox++)
                     {
                         int inputX = ox + outputOffsetX;
-                        int inputIdx = inputX + y * inputVoxelSizeX + inputZ * inputVoxelPlaneSize;
-                        int outputIdx = ox + y * outputVoxelSizeX + oz * outputVoxelPlaneSize;
+                        int inputIdx = inputX + inputY * inputVoxelSizeX + inputZ * inputVoxelPlaneSize;
+                        int outputIdx = ox + oy * outputVoxelSizeX + oz * outputVoxelPlaneSize;
 
                         byte blockL = 0;
                         if (blockLightData.IsCreated && inputIdx < blockLightData.Length)

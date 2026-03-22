@@ -52,6 +52,7 @@ public static class ChunkData
         public float offsetZ;
         public float seaLevel;
         public BiomeNoiseSettings biomeNoiseSettings;
+        public int activeHeight;
 
 
         public int CliffTreshold;
@@ -66,10 +67,11 @@ public static class ChunkData
         {
             int heightSize = SizeX + 2 * border;
             int heightStride = heightSize;
+            int effectiveHeight = math.clamp(activeHeight, 1, SizeY);
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * effectiveHeight;
 
 
 
@@ -97,7 +99,7 @@ public static class ChunkData
                 // AplicaÃ§Ã£o existente (agora com trees local)
                 TreePlacement.ApplyTreeInstancesToVoxels(
                     blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
-                    detailBorder, SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
+                    detailBorder, SizeX, SizeZ, effectiveHeight, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
                 );
 
                 trees.Dispose();  // Cleanup
@@ -112,13 +114,13 @@ public static class ChunkData
             for (int s = 0; s < SubchunksPerColumn; s++)
             {
                 int startY = s * SubchunkHeight;
-                if (startY >= SizeY)
+                if (startY >= effectiveHeight)
                 {
                     subchunkNonEmpty[s] = false;
                     continue;
                 }
 
-                int endY = math.min(startY + SubchunkHeight, SizeY);
+                int endY = math.min(startY + SubchunkHeight, effectiveHeight);
                 bool hasBlock = false;
 
                 for (int y = startY; y < endY && !hasBlock; y++)
@@ -244,7 +246,7 @@ public static class ChunkData
 
             TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
             int surfaceY = columnContext.surfaceHeight;
-            if (surfaceY <= 0 || surfaceY >= SizeY || surfaceY < seaLevel)
+            if (surfaceY <= 0 || surfaceY >= activeHeight || surfaceY < seaLevel)
             {
                 candidate = default;
                 return false;
@@ -403,7 +405,7 @@ public static class ChunkData
                 baseHeight,
                 offsetX,
                 offsetZ,
-                SizeY,
+                activeHeight,
                 CliffTreshold,
                 seaLevel,
                 biomeNoiseSettings);
@@ -420,12 +422,16 @@ public static class ChunkData
             if (!caveSettings.enabled)
                 return;
 
+            if (activeHeight <= 4)
+                return;
+
             float spawnChance = math.saturate(caveSettings.spawnChance);
             if (spawnChance <= 0f)
                 return;
 
-            int minY = math.clamp(math.min(caveSettings.minY, caveSettings.maxY), 3, SizeY - 2);
-            int maxY = math.clamp(math.max(caveSettings.minY, caveSettings.maxY), 3, SizeY - 2);
+            int maxGenerationY = activeHeight - 2;
+            int minY = math.clamp(math.min(caveSettings.minY, caveSettings.maxY), 3, maxGenerationY);
+            int maxY = math.clamp(math.max(caveSettings.minY, caveSettings.maxY), 3, maxGenerationY);
             if (maxY < minY)
                 return;
 
@@ -457,7 +463,7 @@ public static class ChunkData
             int boundsMinZ = chunkMinZ - activeBorder;
             int boundsMaxZ = chunkMinZ + SizeZ + activeBorder - 1;
             int boundsMinY = 3;
-            int boundsMaxY = SizeY - 1;
+            int boundsMaxY = activeHeight - 1;
 
             // Keep worm influence bounded by sourceChunkRadius to avoid border mismatches
             // (missing faces that only fix after neighbor rebuild).
@@ -822,7 +828,7 @@ public static class ChunkData
             int minLocalZ = math.max(activeMinLocalZ, worldCenterZ - maxOffset - chunkMinZ + border);
             int maxLocalZ = math.min(activeMaxLocalZ, worldCenterZ + maxOffset - chunkMinZ + border);
             int minWorldY = math.max(3, worldCenterY - maxOffset);
-            int maxWorldY = math.min(SizeY - 1, worldCenterY + maxOffset);
+            int maxWorldY = math.min(activeHeight - 1, worldCenterY + maxOffset);
 
             if (minLocalX > maxLocalX || minLocalZ > maxLocalZ || minWorldY > maxWorldY)
                 return;
@@ -900,8 +906,12 @@ public static class ChunkData
             if (!settings.enabled)
                 return;
 
-            int minY = math.clamp(math.min(settings.minY, settings.maxY), 3, SizeY - 2);
-            int maxY = math.clamp(math.max(settings.minY, settings.maxY), 3, SizeY - 2);
+            if (activeHeight <= 4)
+                return;
+
+            int maxGenerationY = activeHeight - 2;
+            int minY = math.clamp(math.min(settings.minY, settings.maxY), 3, maxGenerationY);
+            int maxY = math.clamp(math.max(settings.minY, settings.maxY), 3, maxGenerationY);
             if (maxY < minY)
                 return;
 
@@ -1334,6 +1344,9 @@ public static class ChunkData
             if (oreSettings.Length == 0)
                 return;
 
+            if (activeHeight <= 3)
+                return;
+
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
 
@@ -1348,8 +1361,9 @@ public static class ChunkData
                     continue;
                 bool oreIsSolid = blockMappings[oreBlockIndex].isSolid;
 
-                int minY = math.clamp(math.min(rule.minY, rule.maxY), 3, SizeY - 1);
-                int maxY = math.clamp(math.max(rule.minY, rule.maxY), 3, SizeY - 1);
+                int maxGenerationY = activeHeight - 1;
+                int minY = math.clamp(math.min(rule.minY, rule.maxY), 3, maxGenerationY);
+                int maxY = math.clamp(math.max(rule.minY, rule.maxY), 3, maxGenerationY);
                 if (maxY < minY)
                     continue;
 
@@ -1469,7 +1483,7 @@ public static class ChunkData
                     for (int oy = -radius; oy <= radius; oy++)
                     {
                         int worldY = worldCenterY + oy;
-                        if (worldY < minY || worldY > maxY || worldY < 3 || worldY >= SizeY)
+                        if (worldY < minY || worldY > maxY || worldY < 3 || worldY >= activeHeight)
                             continue;
                         if (worldY > maxAllowedY)
                             continue;
@@ -1564,7 +1578,7 @@ public static class ChunkData
         {
             if (blockEdits.Length == 0) return;
 
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
             int baseWorldX = coord.x * SizeX;
             int baseWorldZ = coord.y * SizeZ;
 
@@ -1578,7 +1592,7 @@ public static class ChunkData
                 int internalX = localX + border;
                 int internalZ = localZ + border;
 
-                if (internalX >= 0 && internalX < voxelSizeX && y >= 0 && y < SizeY && internalZ >= 0 && internalZ < voxelSizeZ)
+                if (internalX >= 0 && internalX < voxelSizeX && y >= 0 && y < activeHeight && internalZ >= 0 && internalZ < voxelSizeZ)
                 {
                     int idx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
                     BlockType bt = (BlockType)math.clamp(e.type, 0, 255);
@@ -1593,6 +1607,10 @@ public static class ChunkData
 
         private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
+            int maxWaterY = math.min((int)math.floor(seaLevel), activeHeight - 1);
+            if (maxWaterY < 0)
+                return;
+
             int heightStride = SizeX + 2 * border;
             for (int lx = -border; lx < SizeX + border; lx++)
             {
@@ -1603,7 +1621,8 @@ public static class ChunkData
                     int cacheIdx = cacheX + cacheZ * heightStride;
                     int h = heightCache[cacheIdx];
 
-                    for (int y = h + 1; y <= seaLevel; y++)
+                    int startWaterY = math.max(h + 1, 0);
+                    for (int y = startWaterY; y <= maxWaterY; y++)
                     {
                         int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
                         blockTypes[voxelIdx] = BlockType.Water;

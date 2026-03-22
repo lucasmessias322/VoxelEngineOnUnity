@@ -76,9 +76,8 @@ public partial class World : MonoBehaviour
                     {
                         for (int y = 0; y < sizeY; y++)
                         {
-                            int srcIdx = readX + readZ * sizeX + y * sizeX * sizeZ;
                             int dstIdx = (x + 1) + (z + 1) * padX + y * padX * padZ;
-                            paddedData[dstIdx] = c.voxelData[srcIdx];
+                            paddedData[dstIdx] = c.GetBlockId(readX, y, readZ);
                         }
                         continue;
                     }
@@ -121,10 +120,7 @@ public partial class World : MonoBehaviour
             int ly = worldPos.y;
 
             if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
-            {
-                int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
-                return (BlockType)chunk.voxelData[idx];
-            }
+                return (BlockType)chunk.GetBlockId(lx, ly, lz);
         }
 
         return GetProceduralBlockFast(worldPos);
@@ -344,7 +340,7 @@ public partial class World : MonoBehaviour
     private void ApplyBlockToLoadedChunkCache(Vector3Int worldPos, Vector2Int chunkCoord, BlockType type)
     {
         if (!activeChunks.TryGetValue(chunkCoord, out Chunk chunk)) return;
-        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated) return;
+        if (!chunk.hasVoxelData) return;
 
         int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
         int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
@@ -353,8 +349,7 @@ public partial class World : MonoBehaviour
         if (lx < 0 || lx >= Chunk.SizeX || lz < 0 || lz >= Chunk.SizeZ || ly < 0 || ly >= Chunk.SizeY)
             return;
 
-        int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
-        chunk.voxelData[idx] = (byte)type;
+        chunk.SetBlockId(lx, ly, lz, (byte)type);
     }
 
     private void ProcessQueuedLeafDecay()

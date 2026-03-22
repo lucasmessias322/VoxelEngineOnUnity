@@ -195,6 +195,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
 
         public int border;
+        public int activeHeight;
         public float seaLevel;
         public int baseHeight;
         public int CliffTreshold;
@@ -242,9 +243,9 @@ public static class MeshGenerator
             TerrainSurfaceData surfaceData = columnContext.surface;
 
             int voxelSizeX = SizeX + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
 
-            int maxSolidY = math.min(h, SizeY - 1);
+            int maxSolidY = math.min(h, activeHeight - 1);
             int idx = lx + lz * voxelPlaneSize;
 
             for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
@@ -265,6 +266,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
 
         public int border;
+        public int activeHeight;
         public float seaLevel;
         public int baseHeight;
         public int CliffTreshold;
@@ -312,8 +314,8 @@ public static class MeshGenerator
             TerrainSurfaceData surfaceData = columnContext.surface;
 
             int voxelSizeX = SizeX + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            int maxSolidY = math.min(h, SizeY - 1);
+            int voxelPlaneSize = voxelSizeX * activeHeight;
+            int maxSolidY = math.min(h, activeHeight - 1);
             int voxelIndex = lx + lz * voxelPlaneSize;
 
             for (int y = 0; y <= maxSolidY; y++, voxelIndex += voxelSizeX)
@@ -332,6 +334,7 @@ public static class MeshGenerator
         [NativeDisableParallelForRestriction] public NativeArray<byte> targetOpacity;
 
         public int sourceVoxelSizeX;
+        public int activeHeight;
         public int targetVoxelSizeX;
         public int targetVoxelPlaneSize;
         public int sourceBorder;
@@ -341,8 +344,8 @@ public static class MeshGenerator
         {
             int x = index % sourceVoxelSizeX;
             int temp = index / sourceVoxelSizeX;
-            int y = temp % SizeY;
-            int z = temp / SizeY;
+            int y = temp % activeHeight;
+            int z = temp / activeHeight;
 
             int targetX = x + (targetBorder - sourceBorder);
             int targetZ = z + (targetBorder - sourceBorder);
@@ -361,6 +364,7 @@ public static class MeshGenerator
         public int chunkMinX;
         public int chunkMinZ;
         public int borderSize;
+        public int activeHeight;
         public int voxelSizeX;
         public int voxelSizeZ;
         public int voxelPlaneSize;
@@ -370,7 +374,7 @@ public static class MeshGenerator
             for (int index = 0; index < overrides.Length; index++)
             {
                 BlockEdit edit = overrides[index];
-                if (edit.y < 0 || edit.y >= SizeY)
+                if (edit.y < 0 || edit.y >= activeHeight)
                     continue;
                 if (edit.type < 0 || edit.type >= effectiveOpacityByBlock.Length)
                     continue;
@@ -415,6 +419,7 @@ public static class MeshGenerator
         WormCaveSettings caveSettings,
         SpaghettiCaveSettings spaghettiCaveSettings,
         bool enableVoxelLighting,
+        int activeHeight,
         NativeArray<byte> lightData,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
@@ -428,6 +433,7 @@ public static class MeshGenerator
         // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
         // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
+        activeHeight = math.clamp(activeHeight, 1, SizeY);
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
 
@@ -435,15 +441,15 @@ public static class MeshGenerator
         int dataTotalHeightPoints = dataHeightSize * dataHeightSize;
         int dataVoxelSizeX = SizeX + 2 * dataBorderSize;
         int dataVoxelSizeZ = SizeZ + 2 * dataBorderSize;
-        int dataVoxelPlaneSize = dataVoxelSizeX * SizeY;
-        int dataTotalVoxels = dataVoxelSizeX * SizeY * dataVoxelSizeZ;
+        int dataVoxelPlaneSize = dataVoxelSizeX * activeHeight;
+        int dataTotalVoxels = dataVoxelSizeX * activeHeight * dataVoxelSizeZ;
 
         int lightHeightSize = SizeX + 2 * lightBorderSize;
         int lightTotalHeightPoints = lightHeightSize * lightHeightSize;
         int lightVoxelSizeX = SizeX + 2 * lightBorderSize;
         int lightVoxelSizeZ = SizeZ + 2 * lightBorderSize;
-        int lightVoxelPlaneSize = lightVoxelSizeX * SizeY;
-        int lightTotalVoxels = lightVoxelSizeX * SizeY * lightVoxelSizeZ;
+        int lightVoxelPlaneSize = lightVoxelSizeX * activeHeight;
+        int lightTotalVoxels = lightVoxelSizeX * activeHeight * lightVoxelSizeZ;
 
         int borderSize = dataBorderSize;
         int heightSize = dataHeightSize;
@@ -494,6 +500,7 @@ public static class MeshGenerator
             solids = solids,
             blockMappings = blockMappings,
             border = borderSize,
+            activeHeight = activeHeight,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
             CliffTreshold = CliffTreshold,
@@ -542,6 +549,7 @@ public static class MeshGenerator
             caveGenerationMode = caveGenerationMode,
             caveSettings = caveSettings,
             spaghettiCaveSettings = spaghettiCaveSettings,
+            activeHeight = activeHeight,
 
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty
@@ -583,6 +591,7 @@ public static class MeshGenerator
             opacity = lightOpacityData,
             effectiveOpacityByBlock = effectiveOpacityByBlock,
             border = lightBorderSize,
+            activeHeight = activeHeight,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
             CliffTreshold = CliffTreshold,
@@ -596,6 +605,7 @@ public static class MeshGenerator
             effectiveOpacityByBlock = effectiveOpacityByBlock,
             targetOpacity = lightOpacityData,
             sourceVoxelSizeX = dataVoxelSizeX,
+            activeHeight = activeHeight,
             targetVoxelSizeX = lightVoxelSizeX,
             targetVoxelPlaneSize = lightVoxelPlaneSize,
             sourceBorder = dataBorderSize,
@@ -617,6 +627,7 @@ public static class MeshGenerator
                 chunkMinX = coord.x * SizeX,
                 chunkMinZ = coord.y * SizeZ,
                 borderSize = lightBorderSize,
+                activeHeight = activeHeight,
                 voxelSizeX = lightVoxelSizeX,
                 voxelSizeZ = lightVoxelSizeZ,
                 voxelPlaneSize = lightVoxelPlaneSize
@@ -638,7 +649,9 @@ public static class MeshGenerator
             outputVoxelPlaneSize = dataVoxelPlaneSize,
             outputOffsetX = lightBorderSize - dataBorderSize,
             outputOffsetZ = lightBorderSize - dataBorderSize,
-            SizeY = SizeY
+            outputSizeY = activeHeight,
+            outputOffsetY = 0,
+            SizeY = activeHeight
         };
         dataHandle = lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle));
     }
@@ -657,6 +670,8 @@ public static class MeshGenerator
         int borderSize,
         int chunkCoordX,
         int chunkCoordZ,
+        int activeHeight,
+        int baseY,
         int dirtySubchunkMask,
         bool enableGrassBillboards,
         float grassBillboardChance,
@@ -711,6 +726,8 @@ public static class MeshGenerator
             subchunkNonEmpty = subchunkNonEmpty,
 
             border = borderSize,
+            activeHeight = activeHeight,
+            baseY = baseY,
             atlasTilesX = atlasTilesX,
             atlasTilesY = atlasTilesY,
             generateSides = generateSides,
@@ -763,6 +780,8 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
 
         public int border;
+        public int activeHeight;
+        public int baseY;
         public int atlasTilesX;
         public int atlasTilesY;
         public bool generateSides;
@@ -820,7 +839,8 @@ public static class MeshGenerator
             NativeArray<int> occlusionQueue = new NativeArray<int>(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
+            int effectiveHeight = math.max(1, activeHeight);
+            int maxMask = math.max(voxelSizeX * effectiveHeight, math.max(voxelSizeX * voxelSizeZ, effectiveHeight * voxelSizeZ));
             NativeArray<GreedyFaceData> greedyMask = new NativeArray<GreedyFaceData>(maxMask, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
 
             try
@@ -829,12 +849,22 @@ public static class MeshGenerator
                 {
                     if ((dirtySubchunkMask & (1 << sub)) == 0)
                     {
+                        subchunkVisibilityMasks[sub] = SubchunkOcclusion.AllVisibleMask;
                         subchunkRanges[sub] = default;
                         continue;
                     }
 
-                    startY = sub * Chunk.SubchunkHeight;
-                    endY = math.min(startY + Chunk.SubchunkHeight, SizeY);
+                    int worldStartY = sub * Chunk.SubchunkHeight;
+                    int worldEndY = math.min(worldStartY + Chunk.SubchunkHeight, Chunk.SizeY);
+                    startY = math.max(0, worldStartY - baseY);
+                    endY = math.min(effectiveHeight, worldEndY - baseY);
+
+                    if (endY <= startY)
+                    {
+                        subchunkVisibilityMasks[sub] = SubchunkOcclusion.AllVisibleMask;
+                        subchunkRanges[sub] = default;
+                        continue;
+                    }
 
                     if (!subchunkNonEmpty[sub])
                     {
@@ -877,7 +907,8 @@ public static class MeshGenerator
         private ulong ComputeVisibilityMask(NativeArray<byte> occlusionState, NativeArray<int> queue)
         {
             int voxelSizeX = SizeX + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
+            int localHeight = math.max(0, math.min(Chunk.SubchunkHeight, activeHeight - startY));
             int opaqueCount = 0;
 
             for (int localY = 0; localY < Chunk.SubchunkHeight; localY++)
@@ -888,9 +919,15 @@ public static class MeshGenerator
                     int sampleZ = localZ + border;
                     for (int localX = 0; localX < SizeX; localX++)
                     {
+                        int visIndex = localX | (localY << 8) | (localZ << 4);
+                        if (localY >= localHeight)
+                        {
+                            occlusionState[visIndex] = 0;
+                            continue;
+                        }
+
                         int sampleX = localX + border;
                         int sampleIndex = sampleX + worldY * voxelSizeX + sampleZ * voxelPlaneSize;
-                        int visIndex = localX | (localY << 8) | (localZ << 4);
 
                         if (IsOcclusionOpaque(blockTypes[sampleIndex]))
                         {
@@ -1401,7 +1438,7 @@ public static class MeshGenerator
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
 
             for (int y = startY; y < endY; y++)
             {
@@ -1418,8 +1455,8 @@ public static class MeshGenerator
                         if (mapping.isEmpty || mapping.renderShape == BlockRenderShape.Cube)
                             continue;
 
-                        float light01 = GetSpecialMeshLight01(idx, voxelSizeX, light);
-                        Vector3 origin = new Vector3(x - border, y, z - border);
+                        float light01 = GetSpecialMeshLight01(idx, y, voxelSizeX, light);
+                        Vector3 origin = new Vector3(x - border, baseY + y, z - border);
 
                         switch (mapping.renderShape)
                         {
@@ -1447,7 +1484,7 @@ public static class MeshGenerator
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
             float noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
             float jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
 
@@ -1459,7 +1496,7 @@ public static class MeshGenerator
             float tint = mapping.tintSide ? 1f : 0f;
 
             int minY = math.max(startY - 1, 0);
-            int maxY = math.min(endY - 1, SizeY - 2);
+            int maxY = math.min(endY - 1, activeHeight - 2);
 
             for (int y = minY; y <= maxY; y++)
             {
@@ -1491,12 +1528,13 @@ public static class MeshGenerator
                             grassBillboardChance * math.lerp(0.35f, 1.65f, n)
                         );
 
-                        uint h = math.hash(new int3(worldX, py, worldZ));
+                        int worldY = baseY + py;
+                        uint h = math.hash(new int3(worldX, worldY, worldZ));
                         float chance = (h & 0x00FFFFFF) / 16777215f;
                         if (chance > effectiveChance)
                             continue;
 
-                        if (IsSuppressedGrassBillboard(worldX, py, worldZ))
+                        if (IsSuppressedGrassBillboard(worldX, worldY, worldZ))
                             continue;
 
                         byte packed = light[upIdx];
@@ -1506,11 +1544,11 @@ public static class MeshGenerator
                         );
                         float light01 = billboardLight / 15f;
 
-                        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
+                        uint h2 = math.hash(new int3(worldX * 17 + 3, worldY * 31 + 5, worldZ * 13 + 7));
                         float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
                         float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
 
-                        Vector3 center = new Vector3((x - border) + 0.5f + jx, py - 0.02f, (z - border) + 0.5f + jz);
+                        Vector3 center = new Vector3((x - border) + 0.5f + jx, worldY - 0.02f, (z - border) + 0.5f + jz);
                         AddBillboardCross(center, grassBillboardHeight, atlasUv, light01, tint);
                     }
                 }
@@ -1932,7 +1970,7 @@ public static class MeshGenerator
             {
                 Vector3Int stepU = (corner == 1 || corner == 2) ? lightStepU : -lightStepU;
                 Vector3Int stepV = (corner == 2 || corner == 3) ? lightStepV : -lightStepV;
-                byte vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
+                byte vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * activeHeight);
                 if (emission > 0)
                     vertexLight = (byte)math.max((int)vertexLight, (int)emission);
 
@@ -2002,12 +2040,15 @@ public static class MeshGenerator
             tris.Add(vIndex + 2);
         }
 
-        private float GetSpecialMeshLight01(int idx, int voxelSizeX, NativeArray<byte> light)
+        private float GetSpecialMeshLight01(int idx, int voxelY, int voxelSizeX, NativeArray<byte> light)
         {
             float light01 = GetResolvedLight01(light[idx]);
-            int aboveIdx = idx + voxelSizeX;
-            if (aboveIdx >= 0 && aboveIdx < light.Length)
-                light01 = math.max(light01, GetResolvedLight01(light[aboveIdx]));
+            if (voxelY + 1 < activeHeight)
+            {
+                int aboveIdx = idx + voxelSizeX;
+                if (aboveIdx >= 0 && aboveIdx < light.Length)
+                    light01 = math.max(light01, GetResolvedLight01(light[aboveIdx]));
+            }
 
             return light01;
         }
@@ -2090,7 +2131,7 @@ public static class MeshGenerator
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelPlaneSize = voxelSizeX * activeHeight;
 
             for (int axis = 0; axis < 3; axis++)
             {
@@ -2101,9 +2142,9 @@ public static class MeshGenerator
                     int u = (axis + 1) % 3;
                     int v = (axis + 2) % 3;
 
-                    int sizeU = u == 0 ? voxelSizeX : u == 1 ? SizeY : voxelSizeZ;
-                    int sizeV = v == 0 ? voxelSizeX : v == 1 ? SizeY : voxelSizeZ;
-                    int chunkSize = axis == 0 ? SizeX : axis == 1 ? SizeY : SizeZ;
+                    int sizeU = u == 0 ? voxelSizeX : u == 1 ? activeHeight : voxelSizeZ;
+                    int sizeV = v == 0 ? voxelSizeX : v == 1 ? activeHeight : voxelSizeZ;
+                    int chunkSize = axis == 0 ? SizeX : axis == 1 ? activeHeight : SizeZ;
 
                     int minN = axis == 1 ? startY : border;
                     int maxN = axis == 1 ? endY : border + chunkSize;
@@ -2151,7 +2192,7 @@ public static class MeshGenerator
                                 int ny = y + (axis == 1 ? normalSign : 0);
                                 int nz = z + (axis == 2 ? normalSign : 0);
 
-                                bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= SizeY || nz < 0 || nz >= voxelSizeZ;
+                                bool outside = nx < 0 || nx >= voxelSizeX || ny < 0 || ny >= activeHeight || nz < 0 || nz >= voxelSizeZ;
                                 bool isVisible;
                                 if (outside)
                                 {
@@ -2356,7 +2397,7 @@ public static class MeshGenerator
                                     if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
                                         py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-                                    vertices.Add(new Vector3(px, py, pz));
+                                    vertices.Add(new Vector3(px, baseY + py, pz));
                                     normals.Add(normal);
 
                                     Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
@@ -2434,7 +2475,7 @@ public static class MeshGenerator
         }
         private bool IsOccluder(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= activeHeight || z < 0 || z >= voxelSizeZ)
                 return false;
 
             int idx = x + y * voxelSizeX + z * voxelPlaneSize;
@@ -2599,7 +2640,7 @@ public static class MeshGenerator
             if (x < 0 || x >= voxelSizeX || z < 0 || z >= voxelSizeZ)
                 return false;
 
-            if (y + 1 >= SizeY || y < 0)
+            if (y + 1 >= activeHeight || y < 0)
                 return false;
 
             int aboveIndex = x + (y + 1) * voxelSizeX + z * voxelPlaneSize;
@@ -2608,7 +2649,7 @@ public static class MeshGenerator
 
         private BlockType GetBlockTypeSafe(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= activeHeight || z < 0 || z >= voxelSizeZ)
                 return BlockType.Air;
 
             int index = x + y * voxelSizeX + z * voxelPlaneSize;
@@ -2641,7 +2682,7 @@ public static class MeshGenerator
         {
             if (pos.y < 0)
                 return 0;
-            if (pos.y >= SizeY)
+            if (pos.y >= activeHeight)
                 return 15;
             if (pos.x < 0 || pos.x >= voxelSizeX || pos.z < 0 || pos.z >= voxelSizeZ)
                 return 15;

@@ -342,6 +342,17 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Usa um limite de apply de mesh mais conservador em dispositivos moveis para aliviar o main thread.")]
+    public bool enablePlatformMeshApplyProfiles = true;
+    [Tooltip("Limite base de applies de mesh por frame em celulares medianos ou de pouca memoria.")]
+    [Min(1)]
+    public int mobileMeshAppliesPerFrame = 1;
+    [Tooltip("Limite base de applies de mesh por frame em celulares com bastante memoria.")]
+    [Min(1)]
+    public int highEndMobileMeshAppliesPerFrame = 2;
+    [Tooltip("Memoria minima em MB para usar o perfil mobile mais agressivo.")]
+    [Min(2048)]
+    public int highEndMobileMemoryThresholdMB = 6144;
     [Tooltip("Quantidade de subchunks agrupados por job de mesh. Valores menores aumentam o paralelismo; valores maiores reduzem overhead.")]
     [Min(1)]
     public int meshSubchunksPerJob = 4;
@@ -743,7 +754,7 @@ public partial class World : MonoBehaviour
 
     private int GetAdaptiveMeshApplyLimit()
     {
-        return GetAdaptiveScaledLimit(maxMeshAppliesPerFrame);
+        return GetAdaptiveScaledLimit(GetPlatformMeshApplyBaseLimit());
     }
 
     private int GetAdaptiveDataCompletionLimit()
@@ -782,6 +793,19 @@ public partial class World : MonoBehaviour
 
         int scaledLimit = Mathf.RoundToInt(safeBase * Mathf.Max(0.25f, adaptiveChunkBudgetScale));
         return Mathf.Max(1, scaledLimit);
+    }
+
+    private int GetPlatformMeshApplyBaseLimit()
+    {
+        int desktopBase = Mathf.Max(1, maxMeshAppliesPerFrame);
+        if (!enablePlatformMeshApplyProfiles || !Application.isMobilePlatform)
+            return desktopBase;
+
+        int memoryMB = SystemInfo.systemMemorySize;
+        if (memoryMB >= highEndMobileMemoryThresholdMB)
+            return Mathf.Max(1, highEndMobileMeshAppliesPerFrame);
+
+        return Mathf.Max(1, mobileMeshAppliesPerFrame);
     }
 
     private int GetEffectiveMeshSubchunksPerJob()
@@ -875,7 +899,6 @@ public partial class World : MonoBehaviour
                 chunk == null ||
                 chunk.generation != request.expectedGen ||
                 !chunk.hasVoxelData ||
-                !chunk.voxelData.IsCreated ||
                 chunk.subchunks == null ||
                 request.subchunkIndex < 0 ||
                 request.subchunkIndex >= chunk.subchunks.Length)
@@ -900,9 +923,14 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
+            if (!chunk.TryGetVoxelSectionData(request.subchunkIndex, out NativeArray<byte> sectionVoxelData))
+            {
+                subchunk.ClearColliderData();
+                continue;
+            }
+
             int startY = request.subchunkIndex * Chunk.SubchunkHeight;
-            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-            subchunk.RebuildColliders(chunk.voxelData, blockMappings, startY, endY);
+            subchunk.RebuildColliders(sectionVoxelData, blockMappings, startY);
             subchunk.SetColliderSystemEnabled(true);
             processed++;
         }
@@ -1188,6 +1216,9 @@ public partial class World : MonoBehaviour
         public NativeArray<int3> suppressedBillboards;
         public NativeList<Vector4> extraUVs;
         public bool buildColliders;
+        public bool clearOnly;
+        public int activeHeight;
+        public int baseY;
     }
 
     private struct PendingData
@@ -1205,13 +1236,17 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> chunkLightData;
         public NativeArray<byte> lightOpacityData;
         public NativeArray<BlockEdit> edits;
-        public NativeArray<byte> fastRebuildSnapshotVoxelData;
         public NativeArray<byte> fastRebuildSnapshotLoadedChunks;
+        public NativeArray<int> fastRebuildSnapshotSectionOffsets;
+        public NativeArray<byte> fastRebuildSnapshotSectionData;
         public NativeArray<BlockEdit> fastRebuildOverrides;
 
         public NativeArray<bool> subchunkNonEmpty;
         public int dirtySubchunkMask;
         public bool rebuildColliders;
+        public int activeHeight;
+        public int baseY;
+        public int fullHeight;
     }
 
     private struct PendingColliderBuild
@@ -1221,28 +1256,30 @@ public partial class World : MonoBehaviour
         public int subchunkIndex;
     }
 
-    private const int FastRebuildChunkVoxelCount = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
-
     [BurstCompile]
     private struct FastRebuildPopulateBlocksJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<byte> snapshotVoxelData;
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
+        [ReadOnly] public NativeArray<int> snapshotSectionOffsets;
+        [ReadOnly] public NativeArray<byte> snapshotSectionData;
 
         public NativeArray<BlockType> blockTypes;
 
         public int borderSize;
+        public int activeHeight;
+        public int baseY;
         public int voxelSizeX;
-        public int voxelPlaneSize;
         public int snapshotChunkRadius;
         public int snapshotChunkDiameter;
+        public int snapshotSubchunkCount;
 
         public void Execute(int index)
         {
             int x = index % voxelSizeX;
             int temp = index / voxelSizeX;
-            int y = temp % Chunk.SizeY;
-            int z = temp / Chunk.SizeY;
+            int y = temp % activeHeight;
+            int z = temp / activeHeight;
+            int worldY = baseY + y;
 
             int relX = x - borderSize;
             int relZ = z - borderSize;
@@ -1256,19 +1293,34 @@ public partial class World : MonoBehaviour
             int slotZ = chunkOffsetZ + snapshotChunkRadius;
             if (slotX < 0 || slotX >= snapshotChunkDiameter || slotZ < 0 || slotZ >= snapshotChunkDiameter)
             {
-                blockTypes[index] = y <= 2 ? BlockType.Bedrock : BlockType.Air;
+                blockTypes[index] = worldY <= 2 ? BlockType.Bedrock : BlockType.Air;
                 return;
             }
 
             int slot = slotX + slotZ * snapshotChunkDiameter;
             if (snapshotLoadedChunks[slot] == 0)
             {
-                blockTypes[index] = y <= 2 ? BlockType.Bedrock : BlockType.Air;
+                blockTypes[index] = worldY <= 2 ? BlockType.Bedrock : BlockType.Air;
                 return;
             }
 
-            int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
-            blockTypes[index] = (BlockType)snapshotVoxelData[srcIndex];
+            int subchunkIndex = worldY / Chunk.SubchunkHeight;
+            if (subchunkIndex < 0 || subchunkIndex >= snapshotSubchunkCount)
+            {
+                blockTypes[index] = BlockType.Air;
+                return;
+            }
+
+            int sectionOffset = snapshotSectionOffsets[slot * snapshotSubchunkCount + subchunkIndex];
+            if (sectionOffset < 0)
+            {
+                blockTypes[index] = BlockType.Air;
+                return;
+            }
+
+            int localY = worldY - subchunkIndex * Chunk.SubchunkHeight;
+            int srcIndex = sectionOffset + localX + localZ * Chunk.SizeX + localY * Chunk.VoxelsPerLayer;
+            blockTypes[index] = (BlockType)snapshotSectionData[srcIndex];
         }
 
         private static int FloorDiv(int value, int divisor)
@@ -1290,6 +1342,8 @@ public partial class World : MonoBehaviour
         public int chunkMinX;
         public int chunkMinZ;
         public int borderSize;
+        public int activeHeight;
+        public int baseY;
         public int voxelSizeX;
         public int voxelSizeZ;
         public int voxelPlaneSize;
@@ -1299,7 +1353,7 @@ public partial class World : MonoBehaviour
             for (int index = 0; index < overrides.Length; index++)
             {
                 BlockEdit edit = overrides[index];
-                if (edit.y < 0 || edit.y >= Chunk.SizeY)
+                if (edit.y < baseY || edit.y >= baseY + activeHeight)
                     continue;
 
                 int ix = edit.x - chunkMinX + borderSize;
@@ -1307,7 +1361,7 @@ public partial class World : MonoBehaviour
                 if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
                     continue;
 
-                int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
+                int dstIndex = ix + (edit.y - baseY) * voxelSizeX + iz * voxelPlaneSize;
                 blockTypes[dstIndex] = (BlockType)edit.type;
             }
         }
@@ -1324,6 +1378,8 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> subchunkNonEmpty;
 
         public int borderSize;
+        public int activeHeight;
+        public int baseY;
         public int voxelSizeX;
         public int voxelSizeZ;
         public int voxelPlaneSize;
@@ -1341,20 +1397,21 @@ public partial class World : MonoBehaviour
                     int relX = ix - borderSize;
                     int highestSolidY = 0;
 
-                    for (int y = 0; y < Chunk.SizeY; y++)
+                    for (int y = 0; y < activeHeight; y++)
                     {
+                        int worldY = baseY + y;
                         int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
                         BlockType blockType = blockTypes[idx];
                         bool isSolid = blockMappings[(int)blockType].isSolid;
                         solids[idx] = isSolid;
                         if (isSolid)
-                            highestSolidY = y;
+                            highestSolidY = worldY;
 
                         if (relX >= 0 && relX < Chunk.SizeX &&
                             relZ >= 0 && relZ < Chunk.SizeZ &&
                             blockType != BlockType.Air)
                         {
-                            int subIdx = y / Chunk.SubchunkHeight;
+                            int subIdx = worldY / Chunk.SubchunkHeight;
                             if (subIdx >= 0 && subIdx < Chunk.SubchunksPerColumn)
                                 subchunkNonEmpty[subIdx] = true;
                         }
@@ -1369,23 +1426,26 @@ public partial class World : MonoBehaviour
     [BurstCompile]
     private struct FastRebuildPopulateOpacityJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<byte> snapshotVoxelData;
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
+        [ReadOnly] public NativeArray<int> snapshotSectionOffsets;
+        [ReadOnly] public NativeArray<byte> snapshotSectionData;
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
 
         public NativeArray<byte> opacity;
 
         public int borderSize;
+        public int activeHeight;
         public int voxelSizeX;
         public int snapshotChunkRadius;
         public int snapshotChunkDiameter;
+        public int snapshotSubchunkCount;
 
         public void Execute(int index)
         {
             int x = index % voxelSizeX;
             int temp = index / voxelSizeX;
-            int y = temp % Chunk.SizeY;
-            int z = temp / Chunk.SizeY;
+            int y = temp % activeHeight;
+            int z = temp / activeHeight;
 
             int relX = x - borderSize;
             int relZ = z - borderSize;
@@ -1410,8 +1470,23 @@ public partial class World : MonoBehaviour
                 return;
             }
 
-            int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
-            opacity[index] = effectiveOpacityByBlock[snapshotVoxelData[srcIndex]];
+            int subchunkIndex = y / Chunk.SubchunkHeight;
+            if (subchunkIndex < 0 || subchunkIndex >= snapshotSubchunkCount)
+            {
+                opacity[index] = effectiveOpacityByBlock[(int)BlockType.Air];
+                return;
+            }
+
+            int sectionOffset = snapshotSectionOffsets[slot * snapshotSubchunkCount + subchunkIndex];
+            if (sectionOffset < 0)
+            {
+                opacity[index] = effectiveOpacityByBlock[(int)BlockType.Air];
+                return;
+            }
+
+            int localY = y - subchunkIndex * Chunk.SubchunkHeight;
+            int srcIndex = sectionOffset + localX + localZ * Chunk.SizeX + localY * Chunk.VoxelsPerLayer;
+            opacity[index] = effectiveOpacityByBlock[snapshotSectionData[srcIndex]];
         }
 
         private static int FloorDiv(int value, int divisor)
@@ -1434,6 +1509,7 @@ public partial class World : MonoBehaviour
         public int chunkMinX;
         public int chunkMinZ;
         public int borderSize;
+        public int activeHeight;
         public int voxelSizeX;
         public int voxelSizeZ;
         public int voxelPlaneSize;
@@ -1443,7 +1519,7 @@ public partial class World : MonoBehaviour
             for (int index = 0; index < overrides.Length; index++)
             {
                 BlockEdit edit = overrides[index];
-                if (edit.y < 0 || edit.y >= Chunk.SizeY)
+                if (edit.y < 0 || edit.y >= activeHeight)
                     continue;
 
                 int ix = edit.x - chunkMinX + borderSize;
@@ -1720,15 +1796,30 @@ public partial class World : MonoBehaviour
                     activeChunk.hasVoxelData = true;
                     activeChunk.state = Chunk.ChunkState.MeshReady;
 
-                    ApplyCurrentBlockOverridesToChunkData(
-                        pd.coord,
-                        pd.blockTypes,
-                        pd.solids,
-                        pd.subchunkNonEmpty,
-                        pd.heightCache,
-                        pd.borderSize);
+                    bool hasFullHeightDenseData = pd.baseY == 0 && pd.activeHeight == pd.fullHeight;
+                    if (hasFullHeightDenseData)
+                    {
+                        ApplyCurrentBlockOverridesToChunkData(
+                            pd.coord,
+                            pd.blockTypes,
+                            pd.solids,
+                            pd.subchunkNonEmpty,
+                            pd.heightCache,
+                            pd.borderSize,
+                            pd.activeHeight);
 
-                    CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData, pd.borderSize);
+                        CopyVoxelDataOptimized(pd.blockTypes, activeChunk, pd.borderSize, pd.subchunkNonEmpty);
+                    }
+                    else
+                    {
+                        CopyVoxelSliceDataOptimized(
+                            pd.blockTypes,
+                            activeChunk,
+                            pd.borderSize,
+                            pd.baseY,
+                            pd.activeHeight,
+                            pd.subchunkNonEmpty);
+                    }
 
                     ScheduleSubchunkMeshJobs(pd, activeChunk);
                 }
@@ -1776,36 +1867,47 @@ public partial class World : MonoBehaviour
                         continue;
 
                     Subchunk sub = activeChunk.subchunks[subchunkIndex];
-                    MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
-                    if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
-                        updatedSectionVisibility = true;
-                    bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
-                    int startY = subchunkIndex * Chunk.SubchunkHeight;
-                    int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
+                    bool consumedMainThreadMeshBudget = false;
 
-                    if (range.vertexCount > 0)
+                    if (pm.clearOnly)
                     {
-                        sub.gameObject.SetActive(true);
-                        sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
-                                          pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
-                                          range, startY, endY);
-                        ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
+                        if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, SubchunkOcclusion.AllVisibleMask))
+                            updatedSectionVisibility = true;
 
-                        if (pm.buildColliders)
+                        consumedMainThreadMeshBudget = sub.ClearMesh();
+                    }
+                    else
+                    {
+                        MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
+                        if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
+                            updatedSectionVisibility = true;
+                        bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
+                        int startY = subchunkIndex * Chunk.SubchunkHeight;
+                        int endY = Mathf.Min(startY + Chunk.SubchunkHeight, pm.baseY + pm.activeHeight);
+
+                        if (range.vertexCount > 0)
                         {
-                            if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
-                                EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
-                            else
-                                sub.ClearColliderData();
+                            consumedMainThreadMeshBudget = sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
+                                                                             pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
+                                                                             range, startY, endY);
+                            ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
+
+                            if (pm.buildColliders)
+                            {
+                                if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
+                                    EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                                else
+                                    sub.ClearColliderData();
+                            }
+                        }
+                        else
+                        {
+                            consumedMainThreadMeshBudget = sub.ClearMesh();
                         }
                     }
 
-                    else
-                    {
-                        sub.ClearMesh();
-                    }
-
-                    meshesAppliedThisFrame++;
+                    if (consumedMainThreadMeshBudget)
+                        meshesAppliedThisFrame++;
                 }
 
                 if (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn)
@@ -1833,25 +1935,20 @@ public partial class World : MonoBehaviour
 
     #region Voxel Data Copy & Mesh Scheduling
 
-    private void CopyVoxelDataOptimized(NativeArray<BlockType> src, NativeArray<byte> dst, int border)
+    private void CopyVoxelDataOptimized(NativeArray<BlockType> src, Chunk dstChunk, int border, NativeArray<bool> subchunkNonEmpty)
     {
-        // Copia bloco por bloco do native BlockType array para o voxelData (byte).
-        int vx = Chunk.SizeX + 2 * border;
-        int plane = vx * Chunk.SizeY;
+        dstChunk.CopyVoxelDataFromDense(src, border, subchunkNonEmpty);
+    }
 
-        int dstIndex = 0;
-
-        for (int y = 0; y < Chunk.SizeY; y++)
-        {
-            for (int z = 0; z < Chunk.SizeZ; z++)
-            {
-                int srcBase = (z + border) * plane + y * vx + border;
-                for (int x = 0; x < Chunk.SizeX; x++)
-                {
-                    dst[dstIndex++] = (byte)src[srcBase + x];
-                }
-            }
-        }
+    private void CopyVoxelSliceDataOptimized(
+        NativeArray<BlockType> src,
+        Chunk dstChunk,
+        int border,
+        int baseY,
+        int sliceHeight,
+        NativeArray<bool> subchunkNonEmpty)
+    {
+        dstChunk.CopyVoxelDataSliceFromDense(src, border, baseY, sliceHeight, subchunkNonEmpty);
     }
 
     private void ApplyCurrentBlockOverridesToChunkData(
@@ -1861,13 +1958,15 @@ public partial class World : MonoBehaviour
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache)
     {
+        int borderSize = InferBorderSizeFromChunkArrays(blockTypes, heightCache);
         ApplyCurrentBlockOverridesToChunkData(
             coord,
             blockTypes,
             solids,
             subchunkNonEmpty,
             heightCache,
-            InferBorderSizeFromChunkArrays(blockTypes, heightCache));
+            borderSize,
+            InferActiveHeightFromChunkArrays(blockTypes, heightCache, borderSize));
     }
 
     private Chunk CreateChunkPoolEntry()
@@ -1891,7 +1990,8 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache,
-        int borderSize)
+        int borderSize,
+        int activeHeight)
     {
         if (blockOverrides.Count == 0 ||
             !blockTypes.IsCreated ||
@@ -1907,7 +2007,7 @@ public partial class World : MonoBehaviour
 
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
 
@@ -1921,7 +2021,7 @@ public partial class World : MonoBehaviour
             Vector3Int worldPos = relevantTerrainOverridePositions[i];
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
-            if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            if (worldPos.y < 0 || worldPos.y >= activeHeight)
                 continue;
 
             int ix = worldPos.x - chunkMinX + borderSize;
@@ -1940,7 +2040,7 @@ public partial class World : MonoBehaviour
         if (!hasRelevantOverrides)
             return;
 
-        RefreshChunkDerivedData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+        RefreshChunkDerivedData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize, activeHeight);
     }
 
     private static int InferBorderSizeFromChunkArrays(NativeArray<BlockType> blockTypes, NativeArray<int> heightCache)
@@ -1969,10 +2069,11 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache,
-        int borderSize)
+        int borderSize,
+        int activeHeight)
     {
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int heightStride = voxelSizeX;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
@@ -1992,7 +2093,7 @@ public partial class World : MonoBehaviour
                 int ix = lx + borderSize;
                 int highestSolidY = 0;
 
-                for (int y = 0; y < Chunk.SizeY; y++)
+                for (int y = 0; y < activeHeight; y++)
                 {
                     int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
                     BlockType bt = blockTypes[idx];
@@ -2022,14 +2123,14 @@ public partial class World : MonoBehaviour
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
-        SealMissingHorizontalChunkBorders(pd.coord, pd.blockTypes, pd.solids, borderSize);
+        SealMissingHorizontalChunkBorders(pd.coord, pd.blockTypes, pd.solids, borderSize, pd.baseY, pd.activeHeight);
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.Persistent);
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
             nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
         int meshSubchunkMask = 0;
-        bool updatedEmptySectionVisibility = false;
+        int clearOnlySubchunkMask = 0;
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
             if ((dirtySubchunkMask & (1 << sub)) == 0)
@@ -2037,17 +2138,30 @@ public partial class World : MonoBehaviour
 
             if (!pd.subchunkNonEmpty[sub])
             {
-                activeChunk.subchunks[sub].ClearMesh();
-                if (activeChunk.SetSubchunkVisibilityData(sub, SubchunkOcclusion.AllVisibleMask))
-                    updatedEmptySectionVisibility = true;
+                clearOnlySubchunkMask |= 1 << sub;
                 continue;
             }
 
             meshSubchunkMask |= 1 << sub;
         }
 
-        if (updatedEmptySectionVisibility)
-            InvalidateSectionOcclusionGraph();
+        if (clearOnlySubchunkMask != 0)
+        {
+            pendingMeshes.Add(new PendingMesh
+            {
+                handle = default,
+                coord = pd.coord,
+                expectedGen = pd.expectedGen,
+                parentChunk = activeChunk,
+                dirtySubchunkMask = clearOnlySubchunkMask,
+                nextSubchunkApplyIndex = 0,
+                requestNeighborVisualRefreshOnComplete = false,
+                buildColliders = false,
+                clearOnly = true,
+                activeHeight = pd.activeHeight,
+                baseY = pd.baseY
+            });
+        }
 
         JobHandle combinedMeshHandle = default;
         if (meshSubchunkMask != 0)
@@ -2067,6 +2181,8 @@ public partial class World : MonoBehaviour
                     pd.subchunkNonEmpty,
                     atlasTilesX, atlasTilesY, true, borderSize,
                     pd.coord.x, pd.coord.y,
+                    pd.activeHeight,
+                    pd.baseY,
                     groupMask,
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter,
@@ -2115,7 +2231,10 @@ public partial class World : MonoBehaviour
                     solids = pd.solids,
                     light = pd.light,
                     suppressedBillboards = default,
-                    buildColliders = pd.rebuildColliders
+                    buildColliders = pd.rebuildColliders,
+                    clearOnly = false,
+                    activeHeight = pd.activeHeight,
+                    baseY = pd.baseY
                 });
             }
         }
@@ -2143,14 +2262,16 @@ public partial class World : MonoBehaviour
         Vector2Int coord,
         NativeArray<BlockType> blockTypes,
         NativeArray<bool> solids,
-        int borderSize)
+        int borderSize,
+        int baseY,
+        int activeHeight)
     {
         if (!blockTypes.IsCreated || !solids.IsCreated || borderSize <= 0)
             return;
 
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int westCurrentX = borderSize;
         int eastCurrentX = borderSize + Chunk.SizeX - 1;
         int northCurrentZ = borderSize;
@@ -2164,13 +2285,15 @@ public partial class World : MonoBehaviour
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.left))
         {
-            ClearBorderPaddingX(westCurrentX, westNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+            ClearBorderPaddingX(westCurrentX, westNeighborX, borderSize, voxelSizeX, voxelPlaneSize, activeHeight, blockTypes, solids);
             RestoreMissingWaterBorderPaddingX(
                 westCurrentX,
                 westNeighborX,
                 borderSize,
                 voxelSizeX,
                 voxelPlaneSize,
+                activeHeight,
+                baseY,
                 chunkMinX - 1,
                 chunkMinZ,
                 blockTypes,
@@ -2179,13 +2302,15 @@ public partial class World : MonoBehaviour
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.right))
         {
-            ClearBorderPaddingX(eastCurrentX, eastNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
+            ClearBorderPaddingX(eastCurrentX, eastNeighborX, borderSize, voxelSizeX, voxelPlaneSize, activeHeight, blockTypes, solids);
             RestoreMissingWaterBorderPaddingX(
                 eastCurrentX,
                 eastNeighborX,
                 borderSize,
                 voxelSizeX,
                 voxelPlaneSize,
+                activeHeight,
+                baseY,
                 chunkMinX + Chunk.SizeX,
                 chunkMinZ,
                 blockTypes,
@@ -2194,7 +2319,7 @@ public partial class World : MonoBehaviour
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.down))
         {
-            ClearBorderPaddingZ(northCurrentZ, northNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+            ClearBorderPaddingZ(northCurrentZ, northNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, activeHeight, blockTypes, solids);
             RestoreMissingWaterBorderPaddingZ(
                 northCurrentZ,
                 northNeighborZ,
@@ -2202,6 +2327,8 @@ public partial class World : MonoBehaviour
                 voxelSizeX,
                 voxelSizeZ,
                 voxelPlaneSize,
+                activeHeight,
+                baseY,
                 chunkMinX,
                 chunkMinZ - 1,
                 blockTypes,
@@ -2210,7 +2337,7 @@ public partial class World : MonoBehaviour
 
         if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.up))
         {
-            ClearBorderPaddingZ(southCurrentZ, southNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+            ClearBorderPaddingZ(southCurrentZ, southNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, activeHeight, blockTypes, solids);
             RestoreMissingWaterBorderPaddingZ(
                 southCurrentZ,
                 southNeighborZ,
@@ -2218,6 +2345,8 @@ public partial class World : MonoBehaviour
                 voxelSizeX,
                 voxelSizeZ,
                 voxelPlaneSize,
+                activeHeight,
+                baseY,
                 chunkMinX,
                 chunkMinZ + Chunk.SizeZ,
                 blockTypes,
@@ -2252,6 +2381,7 @@ public partial class World : MonoBehaviour
         int borderSize,
         int voxelSizeX,
         int voxelPlaneSize,
+        int activeHeight,
         NativeArray<BlockType> blockTypes,
         NativeArray<bool> solids)
     {
@@ -2262,7 +2392,7 @@ public partial class World : MonoBehaviour
         {
             int currentIdx = currentLocalX + z * voxelPlaneSize;
             int paddingIdx = paddingLocalX + z * voxelPlaneSize;
-            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            for (int y = 0; y < activeHeight; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
                 if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
                     continue;
@@ -2280,6 +2410,7 @@ public partial class World : MonoBehaviour
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
+        int activeHeight,
         NativeArray<BlockType> blockTypes,
         NativeArray<bool> solids)
     {
@@ -2292,7 +2423,7 @@ public partial class World : MonoBehaviour
         {
             int currentIdx = currentSliceStart + x;
             int paddingIdx = paddingSliceStart + x;
-            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            for (int y = 0; y < activeHeight; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
                 if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
                     continue;
@@ -2309,6 +2440,8 @@ public partial class World : MonoBehaviour
         int borderSize,
         int voxelSizeX,
         int voxelPlaneSize,
+        int activeHeight,
+        int baseY,
         int worldNeighborX,
         int chunkMinZ,
         NativeArray<BlockType> blockTypes,
@@ -2324,12 +2457,13 @@ public partial class World : MonoBehaviour
             int currentIdx = currentLocalX + localZ * voxelPlaneSize;
             int paddingIdx = paddingLocalX + localZ * voxelPlaneSize;
 
-            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            for (int y = 0; y < activeHeight; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
                 if (!FluidBlockUtility.IsWater(blockTypes[currentIdx]))
                     continue;
 
-                BlockType neighborType = GetBlockAt(new Vector3Int(worldNeighborX, y, worldZ));
+                int worldY = baseY + y;
+                BlockType neighborType = GetBlockAt(new Vector3Int(worldNeighborX, worldY, worldZ));
                 if (!FluidBlockUtility.IsWater(neighborType))
                     continue;
 
@@ -2346,6 +2480,8 @@ public partial class World : MonoBehaviour
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
+        int activeHeight,
+        int baseY,
         int chunkMinX,
         int worldNeighborZ,
         NativeArray<BlockType> blockTypes,
@@ -2363,12 +2499,13 @@ public partial class World : MonoBehaviour
             int currentIdx = currentSliceStart + localX;
             int paddingIdx = paddingSliceStart + localX;
 
-            for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
+            for (int y = 0; y < activeHeight; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
                 if (!FluidBlockUtility.IsWater(blockTypes[currentIdx]))
                     continue;
 
-                BlockType neighborType = GetBlockAt(new Vector3Int(worldX, y, worldNeighborZ));
+                int worldY = baseY + y;
+                BlockType neighborType = GetBlockAt(new Vector3Int(worldX, worldY, worldNeighborZ));
                 if (!FluidBlockUtility.IsWater(neighborType))
                     continue;
 
@@ -2463,7 +2600,8 @@ public partial class World : MonoBehaviour
         int borderSize,
         int voxelSizeX,
         int voxelSizeZ,
-        int voxelPlaneSize)
+        int voxelPlaneSize,
+        int activeHeight)
     {
         if (globalLightColumns.Count == 0) return;
 
@@ -2488,7 +2626,8 @@ public partial class World : MonoBehaviour
                 int padZ = wz - chunkMinZ + borderSize;
 
                 int idx = padX + padZ * voxelPlaneSize;
-                for (int y = 0; y < Chunk.SizeY; y++)
+                int maxInjectedY = Mathf.Min(activeHeight, column.Length);
+                for (int y = 0; y < maxInjectedY; y++)
                 {
                     chunkLightData[idx] = column[y];
                     idx += voxelSizeX;
@@ -2509,7 +2648,8 @@ public partial class World : MonoBehaviour
                 int padZ = wz - chunkMinZ + borderSize;
 
                 int idx = padX + padZ * voxelPlaneSize;
-                for (int y = 0; y < Chunk.SizeY; y++)
+                int maxInjectedY = Mathf.Min(activeHeight, column.Length);
+                for (int y = 0; y < maxInjectedY; y++)
                 {
                     chunkLightData[idx] = column[y];
                     idx += voxelSizeX;
@@ -2652,12 +2792,6 @@ public partial class World : MonoBehaviour
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
 
-        if (!chunk.voxelData.IsCreated)
-        {
-            chunk.voxelData = new NativeArray<byte>(Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ, Allocator.Persistent);
-            chunk.hasVoxelData = false;
-        }
-
         activeChunks.Add(coord, chunk);
         RequestHighBuildMeshRebuild(coord);
 
@@ -2683,18 +2817,19 @@ public partial class World : MonoBehaviour
         int detailBorderSize = GetDetailedGenerationBorderSize();
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
+        int activeHeight = EstimateInitialGenerationActiveHeight();
         EnsureNativeGenerationCaches();
 
         // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
-            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            chunkLightData = new NativeArray<byte>(voxelSizeX * activeHeight * voxelSizeZ, Allocator.Persistent);
+            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, activeHeight);
         }
         if (chunk.jobScheduled)
         {
@@ -2716,6 +2851,7 @@ public partial class World : MonoBehaviour
             caveWormSettings,
             caveSpaghettiSettings,
             enableVoxelLighting,
+            activeHeight,
             chunkLightData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
@@ -2740,12 +2876,16 @@ public partial class World : MonoBehaviour
             chunkLightData = chunkLightData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
-            fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
+            fastRebuildSnapshotSectionOffsets = default,
+            fastRebuildSnapshotSectionData = default,
             fastRebuildOverrides = default,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = GetFullSubchunkMask(),
-            rebuildColliders = enableBlockColliders
+            rebuildColliders = enableBlockColliders,
+            activeHeight = activeHeight,
+            baseY = 0,
+            fullHeight = activeHeight
         });
 
         chunk.currentJob = dataHandle;
@@ -2757,7 +2897,7 @@ public partial class World : MonoBehaviour
     {
         if (blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
             return false;
-        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated)
+        if (!chunk.hasVoxelData)
             return false;
 
         dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
@@ -2766,21 +2906,25 @@ public partial class World : MonoBehaviour
 
         int copyBorderSize = GetMeshNeighborPadding();
         int lightBorderSize = GetLightSmoothingBorderSize();
+        int fullActiveHeight = GetSparseActiveHeightForChunkNeighborhood(coord, Mathf.Max(copyBorderSize, lightBorderSize), dirtySubchunkMask);
+        GetFastRebuildSliceBounds(dirtySubchunkMask, fullActiveHeight, out int sliceBaseY, out int sliceHeight);
         int copyVoxelSizeX = Chunk.SizeX + 2 * copyBorderSize;
         int copyVoxelSizeZ = Chunk.SizeZ + 2 * copyBorderSize;
-        int copyVoxelPlaneSize = copyVoxelSizeX * Chunk.SizeY;
-        int copyTotalVoxels = copyVoxelSizeX * Chunk.SizeY * copyVoxelSizeZ;
+        int copyVoxelPlaneSize = copyVoxelSizeX * sliceHeight;
+        int copyTotalVoxels = copyVoxelSizeX * sliceHeight * copyVoxelSizeZ;
         int copyTotalHeightPoints = copyVoxelSizeX * copyVoxelSizeZ;
 
         int lightVoxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int lightVoxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
-        int lightVoxelPlaneSize = lightVoxelSizeX * Chunk.SizeY;
-        int lightTotalVoxels = lightVoxelSizeX * Chunk.SizeY * lightVoxelSizeZ;
+        int lightVoxelPlaneSize = lightVoxelSizeX * fullActiveHeight;
+        int lightTotalVoxels = lightVoxelSizeX * fullActiveHeight * lightVoxelSizeZ;
 
         int maxSnapshotBorder = Mathf.Max(copyBorderSize, lightBorderSize);
         int snapshotChunkRadius = Mathf.Max(1, Mathf.CeilToInt(maxSnapshotBorder / (float)Chunk.SizeX));
         int snapshotChunkDiameter = snapshotChunkRadius * 2 + 1;
-        int snapshotChunkCount = snapshotChunkDiameter * snapshotChunkDiameter;
+        int snapshotSubchunkCount = Mathf.Min(
+            Chunk.SubchunksPerColumn,
+            Mathf.Max(1, (fullActiveHeight + Chunk.SubchunkHeight - 1) / Chunk.SubchunkHeight));
 
         EnsureNativeGenerationCaches();
 
@@ -2791,11 +2935,18 @@ public partial class World : MonoBehaviour
         NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> lightOpacityData = default;
         NativeArray<byte> blockLightData = default;
-        NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> snapshotLoadedChunks;
+        NativeArray<int> snapshotSectionOffsets;
+        NativeArray<byte> snapshotSectionData;
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
 
-        CaptureFastRebuildSnapshot(coord, snapshotChunkRadius, snapshotVoxelData, snapshotLoadedChunks);
+        CaptureFastRebuildSparseSnapshot(
+            coord,
+            snapshotChunkRadius,
+            snapshotSubchunkCount,
+            out snapshotLoadedChunks,
+            out snapshotSectionOffsets,
+            out snapshotSectionData);
 
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
@@ -2803,19 +2954,22 @@ public partial class World : MonoBehaviour
         {
             lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
             blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
-            InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
+            InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize, fullActiveHeight);
         }
 
         var copyPopulateJob = new FastRebuildPopulateBlocksJob
         {
-            snapshotVoxelData = snapshotVoxelData,
             snapshotLoadedChunks = snapshotLoadedChunks,
+            snapshotSectionOffsets = snapshotSectionOffsets,
+            snapshotSectionData = snapshotSectionData,
             blockTypes = blockTypes,
             borderSize = copyBorderSize,
+            activeHeight = sliceHeight,
+            baseY = sliceBaseY,
             voxelSizeX = copyVoxelSizeX,
-            voxelPlaneSize = copyVoxelPlaneSize,
             snapshotChunkRadius = snapshotChunkRadius,
-            snapshotChunkDiameter = snapshotChunkDiameter
+            snapshotChunkDiameter = snapshotChunkDiameter,
+            snapshotSubchunkCount = snapshotSubchunkCount
         };
         JobHandle copyPopulateHandle = copyPopulateJob.Schedule(copyTotalVoxels, 128);
 
@@ -2829,6 +2983,8 @@ public partial class World : MonoBehaviour
                 chunkMinX = chunkMinX,
                 chunkMinZ = chunkMinZ,
                 borderSize = copyBorderSize,
+                activeHeight = sliceHeight,
+                baseY = sliceBaseY,
                 voxelSizeX = copyVoxelSizeX,
                 voxelSizeZ = copyVoxelSizeZ,
                 voxelPlaneSize = copyVoxelPlaneSize
@@ -2844,6 +3000,8 @@ public partial class World : MonoBehaviour
             heightCache = heightCache,
             subchunkNonEmpty = subchunkNonEmpty,
             borderSize = copyBorderSize,
+            activeHeight = sliceHeight,
+            baseY = sliceBaseY,
             voxelSizeX = copyVoxelSizeX,
             voxelSizeZ = copyVoxelSizeZ,
             voxelPlaneSize = copyVoxelPlaneSize
@@ -2855,14 +3013,17 @@ public partial class World : MonoBehaviour
         {
             var opacityPopulateJob = new FastRebuildPopulateOpacityJob
             {
-                snapshotVoxelData = snapshotVoxelData,
                 snapshotLoadedChunks = snapshotLoadedChunks,
+                snapshotSectionOffsets = snapshotSectionOffsets,
+                snapshotSectionData = snapshotSectionData,
                 effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
                 opacity = lightOpacityData,
                 borderSize = lightBorderSize,
+                activeHeight = fullActiveHeight,
                 voxelSizeX = lightVoxelSizeX,
                 snapshotChunkRadius = snapshotChunkRadius,
-                snapshotChunkDiameter = snapshotChunkDiameter
+                snapshotChunkDiameter = snapshotChunkDiameter,
+                snapshotSubchunkCount = snapshotSubchunkCount
             };
             JobHandle opacityPopulateHandle = opacityPopulateJob.Schedule(lightTotalVoxels, 128);
 
@@ -2877,6 +3038,7 @@ public partial class World : MonoBehaviour
                     chunkMinX = chunkMinX,
                     chunkMinZ = chunkMinZ,
                     borderSize = lightBorderSize,
+                    activeHeight = fullActiveHeight,
                     voxelSizeX = lightVoxelSizeX,
                     voxelSizeZ = lightVoxelSizeZ,
                     voxelPlaneSize = lightVoxelPlaneSize
@@ -2898,7 +3060,9 @@ public partial class World : MonoBehaviour
                 outputVoxelPlaneSize = copyVoxelPlaneSize,
                 outputOffsetX = lightBorderSize - copyBorderSize,
                 outputOffsetZ = lightBorderSize - copyBorderSize,
-                SizeY = Chunk.SizeY,
+                outputSizeY = sliceHeight,
+                outputOffsetY = sliceBaseY,
+                SizeY = fullActiveHeight,
             };
 
             visualDataHandle = lightJob.Schedule(JobHandle.CombineDependencies(deriveDataHandle, opacityOverrideHandle));
@@ -2926,12 +3090,16 @@ public partial class World : MonoBehaviour
             chunkLightData = blockLightData,
             lightOpacityData = lightOpacityData,
             edits = default,
-            fastRebuildSnapshotVoxelData = snapshotVoxelData,
             fastRebuildSnapshotLoadedChunks = snapshotLoadedChunks,
+            fastRebuildSnapshotSectionOffsets = snapshotSectionOffsets,
+            fastRebuildSnapshotSectionData = snapshotSectionData,
             fastRebuildOverrides = nativeOverrides,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
-            rebuildColliders = rebuildColliders
+            rebuildColliders = rebuildColliders,
+            activeHeight = sliceHeight,
+            baseY = sliceBaseY,
+            fullHeight = fullActiveHeight
         });
 
         chunk.currentJob = visualDataHandle;
@@ -2940,15 +3108,22 @@ public partial class World : MonoBehaviour
         return true;
     }
 
-    private void CaptureFastRebuildSnapshot(
+    private void CaptureFastRebuildSparseSnapshot(
         Vector2Int coord,
         int chunkRadius,
-        NativeArray<byte> snapshotVoxelData,
-        NativeArray<byte> snapshotLoadedChunks)
+        int snapshotSubchunkCount,
+        out NativeArray<byte> snapshotLoadedChunks,
+        out NativeArray<int> snapshotSectionOffsets,
+        out NativeArray<byte> snapshotSectionData)
     {
-        if (!snapshotVoxelData.IsCreated || !snapshotLoadedChunks.IsCreated)
-            return;
+        int snapshotChunkDiameter = chunkRadius * 2 + 1;
+        int snapshotChunkCount = snapshotChunkDiameter * snapshotChunkDiameter;
+        snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+        snapshotSectionOffsets = new NativeArray<int>(snapshotChunkCount * snapshotSubchunkCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        for (int i = 0; i < snapshotSectionOffsets.Length; i++)
+            snapshotSectionOffsets[i] = -1;
 
+        int sectionCount = 0;
         int slot = 0;
         for (int dz = -chunkRadius; dz <= chunkRadius; dz++)
         {
@@ -2957,19 +3132,45 @@ public partial class World : MonoBehaviour
                 Vector2Int sourceCoord = new Vector2Int(coord.x + dx, coord.y + dz);
                 bool isLoaded = activeChunks.TryGetValue(sourceCoord, out Chunk sourceChunk) &&
                                 sourceChunk != null &&
-                                sourceChunk.hasVoxelData &&
-                                sourceChunk.voxelData.IsCreated;
+                                sourceChunk.hasVoxelData;
 
                 snapshotLoadedChunks[slot] = isLoaded ? (byte)1 : (byte)0;
                 if (!isLoaded)
                     continue;
 
-                NativeArray<byte>.Copy(
-                    sourceChunk.voxelData,
-                    0,
-                    snapshotVoxelData,
-                    slot * FastRebuildChunkVoxelCount,
-                    FastRebuildChunkVoxelCount);
+                for (int subchunkIndex = 0; subchunkIndex < snapshotSubchunkCount; subchunkIndex++)
+                {
+                    if (sourceChunk.TryGetVoxelSectionData(subchunkIndex, out NativeArray<byte> _))
+                        sectionCount++;
+                }
+            }
+        }
+
+        snapshotSectionData = new NativeArray<byte>(sectionCount * Chunk.VoxelsPerSubchunk, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+
+        int nextSectionOffset = 0;
+        slot = 0;
+        for (int dz = -chunkRadius; dz <= chunkRadius; dz++)
+        {
+            for (int dx = -chunkRadius; dx <= chunkRadius; dx++, slot++)
+            {
+                Vector2Int sourceCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                bool isLoaded = activeChunks.TryGetValue(sourceCoord, out Chunk sourceChunk) &&
+                                sourceChunk != null &&
+                                sourceChunk.hasVoxelData;
+                if (!isLoaded)
+                    continue;
+
+                int slotSectionBase = slot * snapshotSubchunkCount;
+                for (int subchunkIndex = 0; subchunkIndex < snapshotSubchunkCount; subchunkIndex++)
+                {
+                    if (!sourceChunk.TryGetVoxelSectionData(subchunkIndex, out NativeArray<byte> sectionData))
+                        continue;
+
+                    snapshotSectionOffsets[slotSectionBase + subchunkIndex] = nextSectionOffset;
+                    NativeArray<byte>.Copy(sectionData, 0, snapshotSectionData, nextSectionOffset, Chunk.VoxelsPerSubchunk);
+                    nextSectionOffset += Chunk.VoxelsPerSubchunk;
+                }
             }
         }
     }
@@ -2996,9 +3197,10 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty)
     {
+        int activeHeight = InferActiveHeightFromChunkArrays(blockTypes, heightCache, borderSize);
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int heightStride = voxelSizeX;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
@@ -3018,16 +3220,14 @@ public partial class World : MonoBehaviour
                 int ix = lx + borderSize;
 
                 bool hasLoadedColumn = TryResolveLoadedColumn(worldX, worldZ, out Chunk srcChunk, out int srcX, out int srcZ);
-                int srcColumnBase = srcX + srcZ * Chunk.SizeX;
                 int highestSolidY = 0;
 
-                for (int y = 0; y < Chunk.SizeY; y++)
+                for (int y = 0; y < activeHeight; y++)
                 {
                     BlockType bt;
                     if (hasLoadedColumn)
                     {
-                        int srcIdx = srcColumnBase + y * Chunk.SizeX * Chunk.SizeZ;
-                        bt = (BlockType)srcChunk.voxelData[srcIdx];
+                        bt = (BlockType)srcChunk.GetBlockId(srcX, y, srcZ);
                     }
                     else
                     {
@@ -3053,7 +3253,14 @@ public partial class World : MonoBehaviour
             }
         }
 
-        ApplyCurrentBlockOverridesToChunkData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+        ApplyCurrentBlockOverridesToChunkData(
+            coord,
+            blockTypes,
+            solids,
+            subchunkNonEmpty,
+            heightCache,
+            borderSize,
+            activeHeight);
     }
 
     private void FillFastRebuildLightOpacityFromLoadedChunks(
@@ -3064,9 +3271,10 @@ public partial class World : MonoBehaviour
         if (!opacity.IsCreated || blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
             return;
 
+        int activeHeight = Mathf.Clamp(opacity.Length / ((Chunk.SizeX + 2 * borderSize) * (Chunk.SizeZ + 2 * borderSize)), 1, Chunk.SizeY);
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
         BlockTextureMapping[] mappings = blockData.mappings;
@@ -3082,15 +3290,13 @@ public partial class World : MonoBehaviour
                 int ix = lx + borderSize;
 
                 bool hasLoadedColumn = TryResolveLoadedColumn(worldX, worldZ, out Chunk srcChunk, out int srcX, out int srcZ);
-                int srcColumnBase = srcX + srcZ * Chunk.SizeX;
 
-                for (int y = 0; y < Chunk.SizeY; y++)
+                for (int y = 0; y < activeHeight; y++)
                 {
                     BlockType bt;
                     if (hasLoadedColumn)
                     {
-                        int srcIdx = srcColumnBase + y * Chunk.SizeX * Chunk.SizeZ;
-                        bt = (BlockType)srcChunk.voxelData[srcIdx];
+                        bt = (BlockType)srcChunk.GetBlockId(srcX, y, srcZ);
                     }
                     else
                     {
@@ -3103,13 +3309,14 @@ public partial class World : MonoBehaviour
             }
         }
 
-        ApplyCurrentBlockOverridesToLightOpacity(coord, borderSize, opacity);
+        ApplyCurrentBlockOverridesToLightOpacity(coord, borderSize, opacity, activeHeight);
     }
 
     private void ApplyCurrentBlockOverridesToLightOpacity(
         Vector2Int coord,
         int borderSize,
-        NativeArray<byte> opacity)
+        NativeArray<byte> opacity,
+        int activeHeight)
     {
         if (blockOverrides.Count == 0 ||
             !opacity.IsCreated ||
@@ -3122,7 +3329,7 @@ public partial class World : MonoBehaviour
 
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
 
@@ -3130,7 +3337,7 @@ public partial class World : MonoBehaviour
         for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
         {
             Vector3Int worldPos = relevantTerrainOverridePositions[i];
-            if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            if (worldPos.y < 0 || worldPos.y >= activeHeight)
                 continue;
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
@@ -3152,7 +3359,7 @@ public partial class World : MonoBehaviour
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
-        if (activeChunks.TryGetValue(coord, out chunk) && chunk.hasVoxelData && chunk.voxelData.IsCreated)
+        if (activeChunks.TryGetValue(coord, out chunk) && chunk.hasVoxelData)
         {
             localX = worldX - coord.x * Chunk.SizeX;
             localZ = worldZ - coord.y * Chunk.SizeZ;
@@ -3193,6 +3400,130 @@ public partial class World : MonoBehaviour
             mask |= 1 << (subchunkIndex + 1);
 
         return mask;
+    }
+
+    private static int AlignHeightToSubchunk(int height)
+    {
+        int clamped = Mathf.Clamp(height, 1, Chunk.SizeY);
+        int aligned = ((clamped + Chunk.SubchunkHeight - 1) / Chunk.SubchunkHeight) * Chunk.SubchunkHeight;
+        return Mathf.Clamp(aligned, Chunk.SubchunkHeight, Chunk.SizeY);
+    }
+
+    private int GetHighestDirtyWorldYFromMask(int dirtySubchunkMask)
+    {
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        for (int sub = Chunk.SubchunksPerColumn - 1; sub >= 0; sub--)
+        {
+            if ((dirtySubchunkMask & (1 << sub)) != 0)
+                return Mathf.Min((sub + 1) * Chunk.SubchunkHeight, Chunk.SizeY) - 1;
+        }
+
+        return 0;
+    }
+
+    private static int GetLowestDirtySubchunkIndexFromMask(int dirtySubchunkMask)
+    {
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
+        {
+            if ((dirtySubchunkMask & (1 << sub)) != 0)
+                return sub;
+        }
+
+        return 0;
+    }
+
+    private static int GetHighestDirtySubchunkIndexFromMask(int dirtySubchunkMask)
+    {
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        for (int sub = Chunk.SubchunksPerColumn - 1; sub >= 0; sub--)
+        {
+            if ((dirtySubchunkMask & (1 << sub)) != 0)
+                return sub;
+        }
+
+        return 0;
+    }
+
+    private static void GetFastRebuildSliceBounds(int dirtySubchunkMask, int fullHeight, out int baseY, out int sliceHeight)
+    {
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        int fullSubchunkCount = Mathf.Clamp((fullHeight + Chunk.SubchunkHeight - 1) / Chunk.SubchunkHeight, 1, Chunk.SubchunksPerColumn);
+        int lowestDirtySubchunk = Mathf.Clamp(GetLowestDirtySubchunkIndexFromMask(dirtySubchunkMask), 0, fullSubchunkCount - 1);
+        int highestDirtySubchunk = Mathf.Clamp(GetHighestDirtySubchunkIndexFromMask(dirtySubchunkMask), 0, fullSubchunkCount - 1);
+
+        int sliceStartSubchunk = Mathf.Max(0, lowestDirtySubchunk - 1);
+        int sliceEndSubchunkExclusive = Mathf.Min(fullSubchunkCount, highestDirtySubchunk + 2);
+
+        baseY = sliceStartSubchunk * Chunk.SubchunkHeight;
+        sliceHeight = Mathf.Max(Chunk.SubchunkHeight, (sliceEndSubchunkExclusive - sliceStartSubchunk) * Chunk.SubchunkHeight);
+        if (baseY + sliceHeight > fullHeight)
+            sliceHeight = fullHeight - baseY;
+    }
+
+    private static int InferActiveHeightFromChunkArrays(NativeArray<BlockType> blockTypes, NativeArray<int> heightCache, int borderSize)
+    {
+        if (!blockTypes.IsCreated || blockTypes.Length == 0)
+            return Chunk.SizeY;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int area = voxelSizeX * voxelSizeZ;
+        if (area <= 0)
+            return Chunk.SizeY;
+
+        return Mathf.Clamp(blockTypes.Length / area, 1, Chunk.SizeY);
+    }
+
+    private int GetSparseActiveHeightForChunkNeighborhood(Vector2Int coord, int borderSize, int dirtySubchunkMask)
+    {
+        int highestY = Mathf.Max(3, GetHighestDirtyWorldYFromMask(dirtySubchunkMask), seaLevel + 1);
+        int chunkRadius = Mathf.Max(1, Mathf.CeilToInt(borderSize / (float)Chunk.SizeX));
+
+        for (int dz = -chunkRadius; dz <= chunkRadius; dz++)
+        {
+            for (int dx = -chunkRadius; dx <= chunkRadius; dx++)
+            {
+                Vector2Int sampleCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                if (activeChunks.TryGetValue(sampleCoord, out Chunk chunk) && chunk != null && chunk.hasVoxelData)
+                    highestY = Mathf.Max(highestY, chunk.GetHighestFilledWorldY());
+            }
+        }
+
+        CollectRelevantTerrainOverridePositions(coord, borderSize, relevantTerrainOverridePositions);
+        for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
+        {
+            Vector3Int worldPos = relevantTerrainOverridePositions[i];
+            if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+                continue;
+            if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType) || overrideType == BlockType.Air)
+                continue;
+
+            highestY = Mathf.Max(highestY, worldPos.y);
+        }
+
+        return AlignHeightToSubchunk(highestY + 2);
+    }
+
+    private int EstimateInitialGenerationActiveHeight()
+    {
+        float terrainBudget = Mathf.Max(0f, heightVariation) + 48f;
+        if (noiseLayers != null)
+        {
+            for (int i = 0; i < noiseLayers.Length; i++)
+            {
+                if (!noiseLayers[i].enabled)
+                    continue;
+
+                float amplitude = Mathf.Max(0f, noiseLayers[i].amplitude);
+                float maxAmp = noiseLayers[i].maxAmp > 0f ? noiseLayers[i].maxAmp : 1f;
+                terrainBudget += amplitude * maxAmp * 16f;
+            }
+        }
+
+        int treeBudget = enableTrees ? GetMaxTreeMarginForGeneration() + 2 : 2;
+        int estimatedTop = Mathf.CeilToInt(Mathf.Max(seaLevel + 2f, baseHeight + terrainBudget)) + treeBudget;
+        return AlignHeightToSubchunk(estimatedTop);
     }
 
     private static void AddDirtySubchunkMask(Dictionary<Vector2Int, int> dirtyMasks, Vector2Int coord, int dirtySubchunkMask)
@@ -3320,17 +3651,18 @@ public partial class World : MonoBehaviour
         int detailBorderSize = GetDetailedGenerationBorderSize();
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
+        int activeHeight = GetSparseActiveHeightForChunkNeighborhood(coord, Mathf.Max(dataBorderSize, lightBorderSize), dirtySubchunkMask);
         EnsureNativeGenerationCaches();
 
         // Light injection corrected for rebuild (uses borderSize)
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int voxelPlaneSize = voxelSizeX * activeHeight;
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
-            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            chunkLightData = new NativeArray<byte>(voxelSizeX * activeHeight * voxelSizeZ, Allocator.Persistent);
+            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, activeHeight);
         }
 
         MeshGenerator.ScheduleDataJob(
@@ -3359,6 +3691,7 @@ public partial class World : MonoBehaviour
               caveWormSettings,
               caveSpaghettiSettings,
               enableVoxelLighting,
+              activeHeight,
               chunkLightData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
@@ -3383,12 +3716,16 @@ public partial class World : MonoBehaviour
             chunkLightData = chunkLightData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
-            fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
+            fastRebuildSnapshotSectionOffsets = default,
+            fastRebuildSnapshotSectionData = default,
             fastRebuildOverrides = default,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
-            rebuildColliders = rebuildColliders
+            rebuildColliders = rebuildColliders,
+            activeHeight = activeHeight,
+            baseY = 0,
+            fullHeight = activeHeight
         });
 
         chunk.currentJob = dataHandle;
@@ -3531,7 +3868,7 @@ public partial class World : MonoBehaviour
                     continue;
                 }
 
-                if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated || !sc.hasGeometry || !sc.CanHaveColliders)
+                if (!chunk.hasVoxelData || !sc.hasGeometry || !sc.CanHaveColliders || !chunk.HasVoxelSectionData(i))
                 {
                     sc.SetColliderSystemEnabled(false);
                     continue;
@@ -3679,8 +4016,9 @@ public partial class World : MonoBehaviour
         SafeDisposeNativeArray(ref pd.edits);
         SafeDisposeNativeArray(ref pd.chunkLightData);
         SafeDisposeNativeArray(ref pd.lightOpacityData);
-        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotVoxelData);
         SafeDisposeNativeArray(ref pd.fastRebuildSnapshotLoadedChunks);
+        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotSectionOffsets);
+        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotSectionData);
         SafeDisposeNativeArray(ref pd.fastRebuildOverrides);
     }
 
@@ -3693,8 +4031,9 @@ public partial class World : MonoBehaviour
         SafeDisposeNativeArray(ref pd.chunkLightData);
         SafeDisposeNativeArray(ref pd.lightOpacityData);
         SafeDisposeNativeArray(ref pd.edits);
-        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotVoxelData);
         SafeDisposeNativeArray(ref pd.fastRebuildSnapshotLoadedChunks);
+        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotSectionOffsets);
+        SafeDisposeNativeArray(ref pd.fastRebuildSnapshotSectionData);
         SafeDisposeNativeArray(ref pd.fastRebuildOverrides);
         SafeDisposeNativeArray(ref pd.subchunkNonEmpty);
     }

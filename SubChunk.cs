@@ -30,6 +30,7 @@ public class Subchunk : MonoBehaviour
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
+    private bool meshHasUploadedData = false;
     private bool hasColliderData = false;
     private bool canHaveColliders = false;
     private readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
@@ -46,6 +47,9 @@ public class Subchunk : MonoBehaviour
     {
         meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
         meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
+
+        if (!gameObject.activeSelf)
+            gameObject.SetActive(true);
 
         Material[] sharedMaterials = materials ?? System.Array.Empty<Material>();
         if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
@@ -64,6 +68,9 @@ public class Subchunk : MonoBehaviour
 
         if (meshFilter.sharedMesh != mesh)
             meshFilter.sharedMesh = mesh;
+
+        if (meshRenderer.enabled)
+            meshRenderer.enabled = false;
 
         MeshCollider legacyMeshCollider = GetComponent<MeshCollider>();
         if (legacyMeshCollider != null)
@@ -90,7 +97,7 @@ public class Subchunk : MonoBehaviour
         return true;
     }
 
-    public void ApplyMeshData(
+    public bool ApplyMeshData(
         NativeList<Vector3> vertices,
         NativeList<int> opaqueTris,
         NativeList<int> transparentTris,
@@ -103,7 +110,7 @@ public class Subchunk : MonoBehaviour
         int startY,
         int endY)
     {
-        ApplyMeshData(
+        return ApplyMeshData(
             vertices,
             opaqueTris,
             transparentTris,
@@ -130,7 +137,7 @@ public class Subchunk : MonoBehaviour
             endY);
     }
 
-    public void ApplyMeshData(
+    public bool ApplyMeshData(
         NativeList<Vector3> vertices,
         NativeList<int> opaqueTris,
         NativeList<int> transparentTris,
@@ -146,8 +153,7 @@ public class Subchunk : MonoBehaviour
     {
         if (range.vertexCount == 0)
         {
-            ClearMesh();
-            return;
+            return ClearMesh();
         }
 
         int vertexCount = range.vertexCount;
@@ -200,18 +206,17 @@ public class Subchunk : MonoBehaviour
         CopyTriangleRange(indexData, indexOffset, waterTris, range.waterStart, count, range.vertexStart);
         meshData.SetSubMesh(2, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
-        mesh.Clear();
         Mesh.ApplyAndDisposeWritableMeshData(meshDataArray, mesh,
             MeshUpdateFlags.DontRecalculateBounds |
             MeshUpdateFlags.DontValidateIndices |
             MeshUpdateFlags.DontNotifyMeshUsers);
         mesh.bounds = CreateMeshBounds(startY, endY);
+        meshHasUploadedData = true;
 
         bool hasSolid = range.opaqueCount > 0 || range.transparentCount > 0;
         canHaveColliders = hasSolid;
 
         hasGeometry = true;
-        gameObject.SetActive(true);
         meshRenderer.enabled = true;
 
         if (!hasSolid)
@@ -219,6 +224,8 @@ public class Subchunk : MonoBehaviour
             hasColliderData = false;
             DisableAllBoxColliders();
         }
+
+        return true;
     }
 
     private static void CopyTriangleRange(
@@ -251,15 +258,22 @@ public class Subchunk : MonoBehaviour
         }
     }
 
-    public void ClearMesh()
+    public bool ClearMesh()
     {
-        if (mesh != null) mesh.Clear();
+        bool hadMeshState = hasGeometry || meshHasUploadedData || canHaveColliders || hasColliderData;
+        if (!hadMeshState)
+            return false;
+
+        if (mesh != null && meshHasUploadedData)
+            mesh.Clear();
+
+        meshHasUploadedData = false;
         hasGeometry = false;
         canHaveColliders = false;
         hasColliderData = false;
         DisableAllBoxColliders();
         if (meshRenderer != null) meshRenderer.enabled = false;
-        gameObject.SetActive(false);
+        return true;
     }
 
     public void ClearColliderData()
@@ -269,10 +283,9 @@ public class Subchunk : MonoBehaviour
     }
 
     public void RebuildColliders(
-        NativeArray<byte> voxelData,
+        NativeArray<byte> sectionVoxelData,
         BlockTextureMapping[] blockMappings,
-        int startY,
-        int endY)
+        int startY)
     {
         if (!hasGeometry || !canHaveColliders)
         {
@@ -281,12 +294,12 @@ public class Subchunk : MonoBehaviour
             return;
         }
 
-        BuildGreedyBoxColliders(voxelData, blockMappings, startY, endY);
+        BuildGreedyBoxColliders(sectionVoxelData, blockMappings, startY);
     }
 
-    private void BuildGreedyBoxColliders(NativeArray<byte> voxelData, BlockTextureMapping[] blockMappings, int startY, int endY)
+    private void BuildGreedyBoxColliders(NativeArray<byte> sectionVoxelData, BlockTextureMapping[] blockMappings, int startY)
     {
-        if (!voxelData.IsCreated || blockMappings == null || blockMappings.Length == 0)
+        if (!sectionVoxelData.IsCreated || blockMappings == null || blockMappings.Length == 0)
         {
             hasColliderData = false;
             DisableAllBoxColliders();
@@ -294,7 +307,7 @@ public class Subchunk : MonoBehaviour
         }
 
         int clampedStartY = Mathf.Clamp(startY, 0, Chunk.SizeY);
-        int clampedEndY = Mathf.Clamp(endY, 0, Chunk.SizeY);
+        int clampedEndY = Mathf.Clamp(startY + Chunk.SubchunkHeight, 0, Chunk.SizeY);
         int height = clampedEndY - clampedStartY;
         if (height <= 0)
         {
@@ -316,19 +329,18 @@ public class Subchunk : MonoBehaviour
 
         for (int y = 0; y < height; y++)
         {
-            int worldY = clampedStartY + y;
-            int worldYBase = worldY * plane;
             int localYBase = y * sizeX;
+            int sectionYBase = y * plane;
 
             for (int z = 0; z < sizeZ; z++)
             {
-                int worldZBase = z * sizeX;
                 int localZBase = z * sizeX * height;
+                int sectionZBase = z * sizeX;
 
                 for (int x = 0; x < sizeX; x++)
                 {
-                    int worldIndex = worldYBase + worldZBase + x;
-                    byte blockId = voxelData[worldIndex];
+                    int sectionIndex = sectionYBase + sectionZBase + x;
+                    byte blockId = sectionVoxelData[sectionIndex];
                     if (!IsBlockCollidable(blockId, blockMappings))
                         continue;
 
