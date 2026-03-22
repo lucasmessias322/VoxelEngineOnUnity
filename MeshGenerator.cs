@@ -260,7 +260,7 @@ public static class MeshGenerator
     private struct PopulateLightOpacityJob : IJobParallelFor
     {
         public Vector2Int coord;
-        [ReadOnly, DeallocateOnJobCompletion] public NativeArray<int> heightCache;
+        [ReadOnly] public NativeArray<int> heightCache;
         [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
 
@@ -384,6 +384,57 @@ public static class MeshGenerator
                 opacity[dstIndex] = effectiveOpacityByBlock[edit.type];
             }
         }
+    }
+
+    [BurstCompile]
+    private struct BuildSpaghettiCaveCarveMaskJob : IJob
+    {
+        [ReadOnly] public NativeArray<int> heightCache;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> carveMask;
+
+        public Vector2Int coord;
+        public int borderSize;
+        public int oreSeed;
+        public SpaghettiCaveSettings spaghettiCaveSettings;
+
+        public void Execute()
+        {
+            LightOpacitySpaghettiCaveUtility.BuildCarveMask(
+                coord,
+                heightCache,
+                carveMask,
+                borderSize,
+                oreSeed,
+                spaghettiCaveSettings);
+        }
+    }
+
+    [BurstCompile]
+    private struct ApplySpaghettiCaveCarveMaskToOpacityJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<byte> carveMask;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
+        public byte airOpacity;
+
+        public void Execute(int index)
+        {
+            if (carveMask[index] != 0)
+                opacity[index] = airOpacity;
+        }
+    }
+
+    [BurstCompile]
+    private struct DisposeIntArrayJob : IJob
+    {
+        [DeallocateOnJobCompletion] public NativeArray<int> values;
+        public void Execute() { }
+    }
+
+    [BurstCompile]
+    private struct DisposeByteArrayJob : IJob
+    {
+        [DeallocateOnJobCompletion] public NativeArray<byte> values;
+        public void Execute() { }
     }
 
     public static void ScheduleDataJob(
@@ -544,13 +595,18 @@ public static class MeshGenerator
             spaghettiCaveSettings = spaghettiCaveSettings,
 
             enableTrees = enableTrees,
-            subchunkNonEmpty = subchunkNonEmpty
+            subchunkNonEmpty = subchunkNonEmpty,
+            spaghettiCarveMask = default,
+            spaghettiCarveMaskVoxelSizeX = 0,
+            spaghettiCarveMaskVoxelPlaneSize = 0,
+            spaghettiCarveMaskOffsetX = 0,
+            spaghettiCarveMaskOffsetZ = 0
         };
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
-        JobHandle chunkDataHandle = chunkDataJob.Schedule(populateHandle);
-
+        JobHandle chunkDataHandle;
         if (!enableVoxelLighting)
         {
+            chunkDataHandle = chunkDataJob.Schedule(populateHandle);
             byte fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
@@ -575,6 +631,37 @@ public static class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
+        bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
+            dataBorderSize,
+            lightBorderSize,
+            caveGenerationMode,
+            spaghettiCaveSettings);
+        NativeArray<byte> spaghettiCarveMask = default;
+        JobHandle spaghettiCarveMaskHandle = default;
+        if (useSharedSpaghettiCarveMask)
+        {
+            spaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+            var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
+            {
+                coord = coord,
+                heightCache = lightHeightCache,
+                carveMask = spaghettiCarveMask,
+                borderSize = lightBorderSize,
+                oreSeed = oreSeed,
+                spaghettiCaveSettings = spaghettiCaveSettings
+            };
+            spaghettiCarveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(lightHeightHandle);
+
+            chunkDataJob.spaghettiCarveMask = spaghettiCarveMask;
+            chunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
+            chunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
+            chunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
+            chunkDataJob.spaghettiCarveMaskOffsetZ = lightBorderSize - dataBorderSize;
+        }
+
+        chunkDataHandle = useSharedSpaghettiCarveMask
+            ? chunkDataJob.Schedule(JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle))
+            : chunkDataJob.Schedule(populateHandle);
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
@@ -590,6 +677,37 @@ public static class MeshGenerator
         };
         JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
 
+        JobHandle lightOpacityTerrainHandle = populateLightOpacityHandle;
+        if (useSharedSpaghettiCarveMask)
+        {
+            var spaghettiCaveOpacityJob = new ApplySpaghettiCaveCarveMaskToOpacityJob
+            {
+                carveMask = spaghettiCarveMask,
+                opacity = lightOpacityData,
+                airOpacity = effectiveOpacityByBlock[(int)BlockType.Air]
+            };
+            lightOpacityTerrainHandle = spaghettiCaveOpacityJob.Schedule(
+                lightTotalVoxels,
+                128,
+                JobHandle.CombineDependencies(populateLightOpacityHandle, spaghettiCarveMaskHandle));
+        }
+
+        var disposeLightHeightCacheJob = new DisposeIntArrayJob
+        {
+            values = lightHeightCache
+        };
+        JobHandle disposeLightHeightCacheHandle = disposeLightHeightCacheJob.Schedule(lightOpacityTerrainHandle);
+        JobHandle disposeSpaghettiCarveMaskHandle = default;
+        if (useSharedSpaghettiCarveMask)
+        {
+            var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
+            {
+                values = spaghettiCarveMask
+            };
+            disposeSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(
+                JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
+        }
+
         var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
         {
             sourceBlockTypes = blockTypes,
@@ -604,9 +722,12 @@ public static class MeshGenerator
         JobHandle copyGeneratedOpacityHandle = copyGeneratedOpacityJob.Schedule(
             dataTotalVoxels,
             128,
-            JobHandle.CombineDependencies(chunkDataHandle, populateLightOpacityHandle));
+            JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
 
-        JobHandle lightOpacityHandle = copyGeneratedOpacityHandle;
+        JobHandle lightOpacityHandle = JobHandle.CombineDependencies(
+            copyGeneratedOpacityHandle,
+            disposeLightHeightCacheHandle,
+            disposeSpaghettiCarveMaskHandle);
         if (blockEdits.IsCreated && blockEdits.Length > 0)
         {
             var opacityOverrideJob = new ApplyOpacityOverridesJob
@@ -677,9 +798,6 @@ public static class MeshGenerator
         out NativeList<Vector2> uvs,
         out NativeList<Vector2> uv2,
         out NativeList<Vector3> normals,
-        out NativeList<byte> vertexLights,
-        out NativeList<byte> tintFlags,
-        out NativeList<byte> vertexAO,
         out NativeList<Vector4> extraUVs,
         out NativeArray<SubchunkMeshRange> subchunkRanges,
         out NativeArray<ulong> subchunkVisibilityMasks
@@ -693,9 +811,6 @@ public static class MeshGenerator
         billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
         normals = new NativeList<Vector3>(4096, Allocator.Persistent);
         extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.Persistent);
-        vertexLights = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-        tintFlags = new NativeList<byte>(4096 * 4, Allocator.Persistent);
-        vertexAO = new NativeList<byte>(4096 * 4, Allocator.Persistent);
         uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
         uv2 = new NativeList<Vector2>(4096, Allocator.Persistent);
         subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.Persistent);
@@ -744,9 +859,6 @@ public static class MeshGenerator
             uv2 = uv2,
             normals = normals,
             extraUVs = extraUVs,
-            vertexLights = vertexLights,
-            tintFlags = tintFlags,
-            vertexAO = vertexAO,
             subchunkVisibilityMasks = subchunkVisibilityMasks
         };
         // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
@@ -803,9 +915,6 @@ public static class MeshGenerator
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
         public NativeList<Vector4> extraUVs;
-        public NativeList<byte> vertexLights;
-        public NativeList<byte> tintFlags;
-        public NativeList<byte> vertexAO;
         public NativeArray<ulong> subchunkVisibilityMasks;
 
         private struct GreedyFaceData
@@ -2646,10 +2755,11 @@ public static class MeshGenerator
                 return 0;
             if (pos.y >= SizeY)
                 return 15;
-            if (pos.x < 0 || pos.x >= voxelSizeX || pos.z < 0 || pos.z >= voxelSizeZ)
-                return 15;
 
-            int idx = pos.x + pos.y * voxelSizeX + pos.z * voxelPlaneSize;
+            int clampedX = math.clamp(pos.x, 0, voxelSizeX - 1);
+            int clampedZ = math.clamp(pos.z, 0, voxelSizeZ - 1);
+
+            int idx = clampedX + pos.y * voxelSizeX + clampedZ * voxelPlaneSize;
             byte packed = light[idx];
             return math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
         }
@@ -2701,6 +2811,371 @@ public class MeshBuildResult
         transparentTriangles = transparentT;
         uvs = u;
         normals = n;
+    }
+}
+
+public static class LightOpacitySpaghettiCaveUtility
+{
+    private const int SizeX = Chunk.SizeX;
+    private const int SizeY = Chunk.SizeY;
+    private const int SizeZ = Chunk.SizeZ;
+    private const int SpaghettiHorizontalCellSize = 4;
+    private const int SpaghettiVerticalCellSize = 4;
+    private const float DoubleNoiseWarp = 1.0181269f;
+    private const float NoiseOffsetMagnitude = 2048f;
+
+    public static bool ShouldApply(int dataBorderSize, int lightBorderSize, CaveGenerationMode caveGenerationMode, in SpaghettiCaveSettings settings)
+    {
+        return lightBorderSize > dataBorderSize &&
+               caveGenerationMode == CaveGenerationMode.ModernSpaghetti &&
+               settings.enabled;
+    }
+
+    public static void BuildCarveMask(
+        Vector2Int coord,
+        NativeArray<int> heightCache,
+        NativeArray<byte> carveMask,
+        int border,
+        int oreSeed,
+        SpaghettiCaveSettings settings)
+    {
+        if (!heightCache.IsCreated || !carveMask.IsCreated || !settings.enabled || border <= 0)
+            return;
+
+        int minY = math.clamp(math.min(settings.minY, settings.maxY), 3, SizeY - 2);
+        int maxY = math.clamp(math.max(settings.minY, settings.maxY), 3, SizeY - 2);
+        if (maxY < minY)
+            return;
+
+        int voxelSizeX = SizeX + 2 * border;
+        int voxelSizeZ = SizeZ + 2 * border;
+        int voxelPlaneSize = voxelSizeX * SizeY;
+        int heightStride = voxelSizeX;
+        int minSurfaceDepth = math.max(0, settings.minSurfaceDepth);
+        int entranceSurfaceDepth = math.max(0, math.min(settings.entranceSurfaceDepth, minSurfaceDepth));
+        float densityBias = settings.densityBias;
+        int worldSeed = oreSeed ^ settings.seedOffset ^ 0x4b1d2e37;
+        int chunkMinX = coord.x * SizeX;
+        int chunkMinZ = coord.y * SizeZ;
+
+        int globalEntranceMaxY = minY - 1;
+        for (int localZ = 0; localZ < voxelSizeZ; localZ++)
+        {
+            for (int localX = 0; localX < voxelSizeX; localX++)
+            {
+                int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+                globalEntranceMaxY = math.max(globalEntranceMaxY, entranceMaxY);
+            }
+        }
+
+        if (globalEntranceMaxY < minY)
+            return;
+
+        int sampleMaxY = math.min(maxY, globalEntranceMaxY);
+        int gridCountX = GetGridPointCount(0, voxelSizeX - 1, SpaghettiHorizontalCellSize);
+        int gridCountY = GetGridPointCount(minY, sampleMaxY, SpaghettiVerticalCellSize);
+        int gridCountZ = GetGridPointCount(0, voxelSizeZ - 1, SpaghettiHorizontalCellSize);
+        NativeArray<float2> densityGrid = new NativeArray<float2>(gridCountX * gridCountY * gridCountZ, Allocator.Temp);
+
+        try
+        {
+            for (int gridZ = 0; gridZ < gridCountZ; gridZ++)
+            {
+                int localZ = GetGridCoordinate(0, voxelSizeZ - 1, SpaghettiHorizontalCellSize, gridZ);
+                float sampleZ = localZ + chunkMinZ - border + 0.5f;
+
+                for (int gridX = 0; gridX < gridCountX; gridX++)
+                {
+                    int localX = GetGridCoordinate(0, voxelSizeX - 1, SpaghettiHorizontalCellSize, gridX);
+                    float sampleX = localX + chunkMinX - border + 0.5f;
+
+                    for (int gridY = 0; gridY < gridCountY; gridY++)
+                    {
+                        int voxelY = GetGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, gridY);
+                        float sampleY = voxelY + 0.5f;
+                        densityGrid[GetGridIndex(gridX, gridY, gridZ, gridCountX, gridCountY)] =
+                            SampleDensityPair(sampleX, sampleY, sampleZ, worldSeed, densityBias);
+                    }
+                }
+            }
+
+            for (int cellZ = 0; cellZ < gridCountZ - 1; cellZ++)
+            {
+                int localZ0 = GetGridCoordinate(0, voxelSizeZ - 1, SpaghettiHorizontalCellSize, cellZ);
+                int localZ1 = GetGridCoordinate(0, voxelSizeZ - 1, SpaghettiHorizontalCellSize, cellZ + 1);
+                int zSpan = math.max(1, localZ1 - localZ0);
+                int localZMax = cellZ == gridCountZ - 2 ? localZ1 : localZ1 - 1;
+
+                for (int cellX = 0; cellX < gridCountX - 1; cellX++)
+                {
+                    int localX0 = GetGridCoordinate(0, voxelSizeX - 1, SpaghettiHorizontalCellSize, cellX);
+                    int localX1 = GetGridCoordinate(0, voxelSizeX - 1, SpaghettiHorizontalCellSize, cellX + 1);
+                    int xSpan = math.max(1, localX1 - localX0);
+                    int localXMax = cellX == gridCountX - 2 ? localX1 : localX1 - 1;
+
+                    for (int cellY = 0; cellY < gridCountY - 1; cellY++)
+                    {
+                        int voxelY0 = GetGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, cellY);
+                        int voxelY1 = GetGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, cellY + 1);
+                        int ySpan = math.max(1, voxelY1 - voxelY0);
+                        int voxelYMax = cellY == gridCountY - 2 ? voxelY1 : voxelY1 - 1;
+
+                        float2 d000 = densityGrid[GetGridIndex(cellX, cellY, cellZ, gridCountX, gridCountY)];
+                        float2 d100 = densityGrid[GetGridIndex(cellX + 1, cellY, cellZ, gridCountX, gridCountY)];
+                        float2 d010 = densityGrid[GetGridIndex(cellX, cellY + 1, cellZ, gridCountX, gridCountY)];
+                        float2 d110 = densityGrid[GetGridIndex(cellX + 1, cellY + 1, cellZ, gridCountX, gridCountY)];
+                        float2 d001 = densityGrid[GetGridIndex(cellX, cellY, cellZ + 1, gridCountX, gridCountY)];
+                        float2 d101 = densityGrid[GetGridIndex(cellX + 1, cellY, cellZ + 1, gridCountX, gridCountY)];
+                        float2 d011 = densityGrid[GetGridIndex(cellX, cellY + 1, cellZ + 1, gridCountX, gridCountY)];
+                        float2 d111 = densityGrid[GetGridIndex(cellX + 1, cellY + 1, cellZ + 1, gridCountX, gridCountY)];
+
+                        bool requiresExactCellSampling =
+                            cellX == 0 ||
+                            cellX == gridCountX - 2 ||
+                            cellZ == 0 ||
+                            cellZ == gridCountZ - 2;
+
+                        if (GetMinCarveDensity(d000, d100, d010, d110, d001, d101, d011, d111) >= 0f)
+                        {
+                            float centerWorldX = chunkMinX - border + (localX0 + localX1) * 0.5f + 0.5f;
+                            float centerWorldY = (voxelY0 + voxelY1) * 0.5f + 0.5f;
+                            float centerWorldZ = chunkMinZ - border + (localZ0 + localZ1) * 0.5f + 0.5f;
+                            float2 centerDensity = SampleDensityPair(centerWorldX, centerWorldY, centerWorldZ, worldSeed, densityBias);
+                            if (centerDensity.x >= 0f)
+                                continue;
+
+                            requiresExactCellSampling = true;
+                        }
+
+                        for (int localZ = localZ0; localZ <= localZMax; localZ++)
+                        {
+                            float tz = (localZ - localZ0) / (float)zSpan;
+
+                            for (int localX = localX0; localX <= localXMax; localX++)
+                            {
+                                int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                                int regularMaxY = math.min(maxY, columnSurfaceY - minSurfaceDepth);
+                                int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+                                if (entranceMaxY < voxelY0)
+                                    continue;
+
+                                float tx = (localX - localX0) / (float)xSpan;
+                                int maxVoxelYForColumn = math.min(voxelYMax, entranceMaxY);
+                                int voxelIndex = localX + voxelY0 * voxelSizeX + localZ * voxelPlaneSize;
+                                float worldX = localX + chunkMinX - border + 0.5f;
+                                float worldZ = localZ + chunkMinZ - border + 0.5f;
+
+                                for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
+                                {
+                                    float2 density;
+                                    if (requiresExactCellSampling)
+                                    {
+                                        density = SampleDensityPair(worldX, voxelY + 0.5f, worldZ, worldSeed, densityBias);
+                                    }
+                                    else
+                                    {
+                                        float ty = (voxelY - voxelY0) / (float)ySpan;
+                                        density = TrilinearInterpolate(d000, d100, d010, d110, d001, d101, d011, d111, tx, ty, tz);
+                                    }
+
+                                    if (voxelY > regularMaxY && density.y >= 0f)
+                                        continue;
+                                    if (density.x >= 0f)
+                                        continue;
+
+                                    carveMask[voxelIndex] = 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        finally
+        {
+            if (densityGrid.IsCreated)
+                densityGrid.Dispose();
+        }
+    }
+
+    private static int GetGridPointCount(int minInclusive, int maxInclusive, int step)
+    {
+        int safeStep = math.max(1, step);
+        return math.max(2, ((maxInclusive - minInclusive) / safeStep) + 2);
+    }
+
+    private static int GetGridCoordinate(int minInclusive, int maxInclusive, int step, int index)
+    {
+        return math.min(maxInclusive, minInclusive + index * math.max(1, step));
+    }
+
+    private static int GetGridIndex(int x, int y, int z, int xCount, int yCount)
+    {
+        return x + y * xCount + z * xCount * yCount;
+    }
+
+    private static float GetMinCarveDensity(float2 d000, float2 d100, float2 d010, float2 d110, float2 d001, float2 d101, float2 d011, float2 d111)
+    {
+        float minA = math.min(math.min(d000.x, d100.x), math.min(d010.x, d110.x));
+        float minB = math.min(math.min(d001.x, d101.x), math.min(d011.x, d111.x));
+        return math.min(minA, minB);
+    }
+
+    private static float2 TrilinearInterpolate(float2 d000, float2 d100, float2 d010, float2 d110, float2 d001, float2 d101, float2 d011, float2 d111, float tx, float ty, float tz)
+    {
+        float2 x00 = math.lerp(d000, d100, tx);
+        float2 x10 = math.lerp(d010, d110, tx);
+        float2 x01 = math.lerp(d001, d101, tx);
+        float2 x11 = math.lerp(d011, d111, tx);
+        float2 y0 = math.lerp(x00, x10, ty);
+        float2 y1 = math.lerp(x01, x11, ty);
+        return math.lerp(y0, y1, tz);
+    }
+
+    private static float2 SampleDensityPair(float worldX, float worldY, float worldZ, int worldSeed, float densityBias)
+    {
+        float roughness = SampleRoughness(worldX, worldY, worldZ, worldSeed);
+        float spaghetti2d = SampleSpaghetti2d(worldX, worldY, worldZ, worldSeed);
+        float entrancesDensity = SampleEntrances(worldX, worldY, worldZ, worldSeed, roughness);
+        float carveDensity = math.min(spaghetti2d + roughness, entrancesDensity);
+        return new float2(carveDensity + densityBias, entrancesDensity + densityBias);
+    }
+
+    private static float SampleSpaghetti2d(float worldX, float worldY, float worldZ, int worldSeed)
+    {
+        float modulator = SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x4d0f12a1, -11, 2f, 1f);
+        float thicknessMod = -0.95f - 0.35f * SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x63be5ab9, -11, 2f, 1f);
+        float weirdScaled = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x7c159d51, modulator, false, -7);
+        float elevationNoise = SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x1f3d8a77, -8, 1f, 0f);
+        float elevationGradient = SampleYClampedGradient(worldY, -64f, 320f, 8f, -40f);
+        float elevationBand = math.abs(elevationNoise * 8f + elevationGradient);
+
+        float longitudinal = weirdScaled + 0.083f * thicknessMod;
+        float elevationTerm = Cube(elevationBand + thicknessMod);
+        return math.clamp(math.max(longitudinal, elevationTerm), -1f, 1f);
+    }
+
+    private static float SampleRoughness(float worldX, float worldY, float worldZ, int worldSeed)
+    {
+        float roughnessModulator = SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x2c8f3bd3, -8, 1f, 1f);
+        float roughness = SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x54e21f79, -5, 1f, 1f);
+        return (-0.05f - 0.05f * roughnessModulator) * (-0.4f + math.abs(roughness));
+    }
+
+    private static float SampleEntrances(float worldX, float worldY, float worldZ, int worldSeed, float roughness)
+    {
+        float entranceNoise = SampleOctavedNoise(worldX, worldY, worldZ, worldSeed, 0x2714c2d1, -7, 0.75f, 0.5f, 3, 0.4f, 0.5f, 1f);
+        float entranceHead = 0.37f + entranceNoise + SampleYClampedGradient(worldY, -10f, 30f, 0.3f, 0f);
+
+        float rarityNoise = SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x1495f0e3, -11, 2f, 1f);
+        float spaghettiA = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x6a31dcb7, rarityNoise, true, -7);
+        float spaghettiB = SampleWeirdScaledSampler(worldX, worldY, worldZ, worldSeed, 0x0dc7612f, rarityNoise, true, -7);
+        float thicknessMod = -0.0765f - 0.0115f * SampleSingleAmplitudeNoise(worldX, worldY, worldZ, worldSeed, 0x45fa21cd, -8, 1f, 1f);
+        float entranceBody = roughness + math.clamp(math.max(spaghettiA, spaghettiB) + thicknessMod, -1f, 1f);
+
+        return math.min(entranceHead, entranceBody);
+    }
+
+    private static float SampleWeirdScaledSampler(float worldX, float worldY, float worldZ, int worldSeed, int noiseSalt, float inputValue, bool useType1Rarity, int firstOctave)
+    {
+        float rarity = useType1Rarity ? GetRarity3D(inputValue) : GetRarity2D(inputValue);
+        float sample = SampleSingleAmplitudeNoise(worldX / rarity, worldY / rarity, worldZ / rarity, worldSeed, noiseSalt, firstOctave, 1f, 1f);
+        return rarity * math.abs(sample);
+    }
+
+    private static float GetRarity2D(float rarity)
+    {
+        if (rarity < -0.75f) return 0.5f;
+        if (rarity < -0.5f) return 0.75f;
+        if (rarity < 0.5f) return 1f;
+        if (rarity < 0.75f) return 2f;
+        return 3f;
+    }
+
+    private static float GetRarity3D(float rarity)
+    {
+        if (rarity < -0.5f) return 0.75f;
+        if (rarity < 0f) return 1f;
+        if (rarity < 0.5f) return 1.5f;
+        return 2f;
+    }
+
+    private static float SampleSingleAmplitudeNoise(float worldX, float worldY, float worldZ, int worldSeed, int noiseSalt, int firstOctave, float xzScale, float yScale)
+    {
+        return SampleOctavedNoise(worldX, worldY, worldZ, worldSeed, noiseSalt, firstOctave, xzScale, yScale, 1, 1f, 0f, 0f);
+    }
+
+    private static float SampleOctavedNoise(float worldX, float worldY, float worldZ, int worldSeed, int noiseSalt, int firstOctave, float xzScale, float yScale, int amplitudeCount, float amplitude0, float amplitude1, float amplitude2)
+    {
+        float total = 0f;
+        float weightSum = 0f;
+
+        for (int octaveIndex = 0; octaveIndex < amplitudeCount; octaveIndex++)
+        {
+            float amplitude = octaveIndex == 0 ? amplitude0 : octaveIndex == 1 ? amplitude1 : octaveIndex == 2 ? amplitude2 : 0f;
+            if (math.abs(amplitude) <= 1e-5f)
+                continue;
+
+            total += amplitude * SampleDoubleSimplexNoise(worldX, worldY, worldZ, worldSeed, noiseSalt + octaveIndex * 977, firstOctave + octaveIndex, xzScale, yScale);
+            weightSum += math.abs(amplitude);
+        }
+
+        if (weightSum <= 1e-5f)
+            return 0f;
+
+        return math.clamp(total / weightSum, -1f, 1f);
+    }
+
+    private static float SampleDoubleSimplexNoise(float worldX, float worldY, float worldZ, int worldSeed, int noiseSalt, int octave, float xzScale, float yScale)
+    {
+        float frequency = math.exp2((float)octave);
+        float3 samplePos = new float3(worldX * xzScale * frequency, worldY * yScale * frequency, worldZ * xzScale * frequency);
+
+        uint state = Hash((uint)(worldSeed ^ noiseSalt));
+        float3 primaryOffset = NextNoiseOffset(ref state);
+        float3 secondaryOffset = NextNoiseOffset(ref state);
+
+        float primary = noise.snoise(samplePos + primaryOffset);
+        float secondary = noise.snoise(samplePos * DoubleNoiseWarp + secondaryOffset);
+        return math.clamp((primary + secondary) * 0.5f, -1f, 1f);
+    }
+
+    private static float3 NextNoiseOffset(ref uint state)
+    {
+        return new float3(NextSignedFloat(ref state), NextSignedFloat(ref state), NextSignedFloat(ref state)) * NoiseOffsetMagnitude;
+    }
+
+    private static float SampleYClampedGradient(float y, float fromY, float toY, float fromValue, float toValue)
+    {
+        float t = math.saturate((y - fromY) / math.max(1e-5f, toY - fromY));
+        return math.lerp(fromValue, toValue, t);
+    }
+
+    private static float Cube(float value)
+    {
+        return value * value * value;
+    }
+
+    private static uint Hash(uint v)
+    {
+        v ^= v >> 16;
+        v *= 0x7feb352du;
+        v ^= v >> 15;
+        v *= 0x846ca68bu;
+        v ^= v >> 16;
+        return v;
+    }
+
+    private static float NextFloat01(ref uint state)
+    {
+        state = Hash(state + 0x9e3779b9u);
+        return (state & 0x00ffffffu) / 16777215f;
+    }
+
+    private static float NextSignedFloat(ref uint state)
+    {
+        return NextFloat01(ref state) * 2f - 1f;
     }
 }
 

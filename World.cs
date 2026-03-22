@@ -703,6 +703,13 @@ public partial class World : MonoBehaviour
         return Mathf.Max(GetDetailedGenerationBorderSize(), GetLightSmoothingBorderSize());
     }
 
+    private static bool CanChunkProvideVoxelSnapshot(Chunk chunk)
+    {
+        return chunk != null &&
+               chunk.voxelData.IsCreated &&
+               chunk.hasVoxelSnapshot;
+    }
+
     private static Vector3Int GetColliderBuildKey(Vector2Int coord, int subchunkIndex)
     {
         return new Vector3Int(coord.x, subchunkIndex, coord.y);
@@ -1047,8 +1054,6 @@ public partial class World : MonoBehaviour
         public NativeList<Vector2> uvs;
         public NativeList<Vector2> uv2;
         public NativeList<Vector3> normals;
-        public NativeList<byte> lightValues;
-        public NativeList<byte> tintFlags;
         public Vector2Int coord;
         public int expectedGen;
         public Chunk parentChunk;
@@ -1063,7 +1068,6 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public NativeArray<int3> suppressedBillboards;
-        public NativeList<byte> vertexAO;
         public NativeList<Vector4> extraUVs;
         public bool buildColliders;
     }
@@ -1605,6 +1609,7 @@ public partial class World : MonoBehaviour
                         pd.borderSize);
 
                     CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData, pd.borderSize);
+                    activeChunk.hasVoxelSnapshot = true;
 
                     ScheduleSubchunkMeshJobs(pd, activeChunk);
                 }
@@ -1949,9 +1954,6 @@ public partial class World : MonoBehaviour
                 out NativeList<Vector2> uvs,
                 out NativeList<Vector2> uv2,
                 out NativeList<Vector3> normals,
-                out NativeList<byte> vertexLights,
-                out NativeList<byte> tintFlags,
-                out NativeList<byte> vertexAO,
                 out NativeList<Vector4> extraUVs,
                 out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
                 out NativeArray<ulong> subchunkVisibilityMasks
@@ -1969,9 +1971,6 @@ public partial class World : MonoBehaviour
                 uvs = uvs,
                 uv2 = uv2,
                 normals = normals,
-                lightValues = vertexLights,
-                tintFlags = tintFlags,
-                vertexAO = vertexAO,
                 extraUVs = extraUVs,
                 coord = pd.coord,
                 expectedGen = pd.expectedGen,
@@ -2497,7 +2496,7 @@ public partial class World : MonoBehaviour
     {
         if (blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
             return false;
-        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated)
+        if (!CanChunkProvideVoxelSnapshot(chunk))
             return false;
 
         dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
@@ -2696,9 +2695,7 @@ public partial class World : MonoBehaviour
             {
                 Vector2Int sourceCoord = new Vector2Int(coord.x + dx, coord.y + dz);
                 bool isLoaded = activeChunks.TryGetValue(sourceCoord, out Chunk sourceChunk) &&
-                                sourceChunk != null &&
-                                sourceChunk.hasVoxelData &&
-                                sourceChunk.voxelData.IsCreated;
+                                CanChunkProvideVoxelSnapshot(sourceChunk);
 
                 snapshotLoadedChunks[slot] = isLoaded ? (byte)1 : (byte)0;
                 if (!isLoaded)
@@ -2892,7 +2889,7 @@ public partial class World : MonoBehaviour
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
-        if (activeChunks.TryGetValue(coord, out chunk) && chunk.hasVoxelData && chunk.voxelData.IsCreated)
+        if (activeChunks.TryGetValue(coord, out chunk) && CanChunkProvideVoxelSnapshot(chunk))
         {
             localX = worldX - coord.x * Chunk.SizeX;
             localZ = worldZ - coord.y * Chunk.SizeZ;
@@ -3449,10 +3446,7 @@ public partial class World : MonoBehaviour
         if (pm.uvs.IsCreated) pm.uvs.Dispose();
         if (pm.uv2.IsCreated) pm.uv2.Dispose();
         if (pm.normals.IsCreated) pm.normals.Dispose();
-        if (pm.lightValues.IsCreated) pm.lightValues.Dispose();
-        if (pm.tintFlags.IsCreated) pm.tintFlags.Dispose();
         if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
-        if (pm.vertexAO.IsCreated) pm.vertexAO.Dispose();
         if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
         if (pm.subchunkRanges.IsCreated) pm.subchunkRanges.Dispose();
         if (pm.subchunkVisibilityMasks.IsCreated) pm.subchunkVisibilityMasks.Dispose();

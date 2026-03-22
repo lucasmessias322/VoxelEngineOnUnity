@@ -72,7 +72,7 @@ public partial class World : MonoBehaviour
 
                 if (activeChunks.TryGetValue(new Vector2Int(currentCX, currentCZ), out Chunk c))
                 {
-                    if (c.hasVoxelData)
+                    if (CanChunkProvideVoxelSnapshot(c))
                     {
                         for (int y = 0; y < sizeY; y++)
                         {
@@ -114,7 +114,7 @@ public partial class World : MonoBehaviour
             Mathf.FloorToInt((float)worldZ / Chunk.SizeZ)
         );
 
-        if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && chunk.hasVoxelData)
+        if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && CanChunkProvideVoxelSnapshot(chunk))
         {
             int lx = worldX - chunkCoord.x * Chunk.SizeX;
             int lz = worldZ - chunkCoord.y * Chunk.SizeZ;
@@ -194,7 +194,7 @@ public partial class World : MonoBehaviour
 
     private bool IsChunkLoaded(Vector2Int coord)
     {
-        return activeChunks.TryGetValue(coord, out Chunk chunk) && chunk.hasVoxelData;
+        return activeChunks.TryGetValue(coord, out Chunk chunk) && CanChunkProvideVoxelSnapshot(chunk);
     }
 
 
@@ -344,7 +344,7 @@ public partial class World : MonoBehaviour
     private void ApplyBlockToLoadedChunkCache(Vector3Int worldPos, Vector2Int chunkCoord, BlockType type)
     {
         if (!activeChunks.TryGetValue(chunkCoord, out Chunk chunk)) return;
-        if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated) return;
+        if (!CanChunkProvideVoxelSnapshot(chunk)) return;
 
         int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
         int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
@@ -355,6 +355,7 @@ public partial class World : MonoBehaviour
 
         int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
         chunk.voxelData[idx] = (byte)type;
+        chunk.hasVoxelSnapshot = true;
     }
 
     private void ProcessQueuedLeafDecay()

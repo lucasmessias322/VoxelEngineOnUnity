@@ -61,6 +61,11 @@ public static class ChunkData
         public NativeArray<bool> solids;
 
         public NativeArray<bool> subchunkNonEmpty;
+        [ReadOnly] public NativeArray<byte> spaghettiCarveMask;
+        public int spaghettiCarveMaskVoxelSizeX;
+        public int spaghettiCarveMaskVoxelPlaneSize;
+        public int spaghettiCarveMaskOffsetX;
+        public int spaghettiCarveMaskOffsetZ;
 
         public void Execute()
         {
@@ -83,7 +88,10 @@ public static class ChunkData
                     break;
 
                 default:
-                    GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                    if (HasSharedSpaghettiCarveMask())
+                        ApplySharedSpaghettiCarveMask(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                    else
+                        GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
                     break;
             }
             GenerateOreVeins(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
@@ -134,6 +142,113 @@ public static class ChunkData
                         }
                 subchunkNonEmpty[s] = hasBlock;
             }
+        }
+
+        private bool HasSharedSpaghettiCarveMask()
+        {
+            return spaghettiCarveMask.IsCreated &&
+                   spaghettiCarveMask.Length > 0 &&
+                   spaghettiCaveSettings.enabled &&
+                   spaghettiCarveMaskVoxelSizeX > 0 &&
+                   spaghettiCarveMaskVoxelPlaneSize > 0;
+        }
+
+        private void ApplySharedSpaghettiCarveMask(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride)
+        {
+            int maskVoxelSizeX = spaghettiCarveMaskVoxelSizeX;
+            int maskVoxelPlaneSize = spaghettiCarveMaskVoxelPlaneSize;
+            if (maskVoxelSizeX <= 0 ||
+                maskVoxelPlaneSize <= 0 ||
+                spaghettiCarveMaskOffsetX < 0 ||
+                spaghettiCarveMaskOffsetZ < 0 ||
+                spaghettiCarveMask.Length % maskVoxelPlaneSize != 0)
+            {
+                GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                return;
+            }
+
+            int maskVoxelSizeZ = spaghettiCarveMask.Length / maskVoxelPlaneSize;
+            if (spaghettiCarveMaskOffsetX + voxelSizeX > maskVoxelSizeX ||
+                spaghettiCarveMaskOffsetZ + voxelSizeZ > maskVoxelSizeZ)
+            {
+                GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                return;
+            }
+
+            for (int localZ = 0; localZ < voxelSizeZ; localZ++)
+            {
+                int maskZ = localZ + spaghettiCarveMaskOffsetZ;
+                int targetRowBase = localZ * voxelPlaneSize;
+                int maskRowBase = maskZ * maskVoxelPlaneSize + spaghettiCarveMaskOffsetX;
+
+                for (int voxelY = 0; voxelY < SizeY; voxelY++)
+                {
+                    int targetIndex = targetRowBase + voxelY * voxelSizeX;
+                    int maskIndex = maskRowBase + voxelY * maskVoxelSizeX;
+
+                    for (int localX = 0; localX < voxelSizeX; localX++, targetIndex++, maskIndex++)
+                    {
+                        if (spaghettiCarveMask[maskIndex] == 0)
+                            continue;
+
+                        BlockType existing = blockTypes[targetIndex];
+                        if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
+                            continue;
+
+                        blockTypes[targetIndex] = BlockType.Air;
+                        solids[targetIndex] = false;
+                    }
+                }
+            }
+
+            ApplySharedSpaghettiCarveMaskSeam(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+        }
+
+        private void ApplySharedSpaghettiCarveMaskSeam(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride)
+        {
+            SpaghettiCaveSettings settings = spaghettiCaveSettings;
+            if (!settings.enabled)
+                return;
+
+            int minY = math.clamp(math.min(settings.minY, settings.maxY), 3, SizeY - 2);
+            int maxY = math.clamp(math.max(settings.minY, settings.maxY), 3, SizeY - 2);
+            if (maxY < minY)
+                return;
+
+            int minSurfaceDepth = math.max(0, settings.minSurfaceDepth);
+            int entranceSurfaceDepth = math.max(0, math.min(settings.entranceSurfaceDepth, minSurfaceDepth));
+            int worldSeed = oreSeed ^ settings.seedOffset ^ 0x4b1d2e37;
+            float densityBias = settings.densityBias;
+            int chunkMinX = coord.x * SizeX;
+            int chunkMinZ = coord.y * SizeZ;
+
+            CarveSpaghettiChunkBorderColumnsExact(
+                blockTypes,
+                solids,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                heightStride,
+                chunkMinX,
+                chunkMinZ,
+                minY,
+                maxY,
+                minSurfaceDepth,
+                entranceSurfaceDepth,
+                worldSeed,
+                densityBias);
         }
 
         private NativeList<TreeInstance> GenerateTreeInstances()
@@ -301,6 +416,31 @@ public static class ChunkData
                 spacingRadius = spacingRadius,
                 treeStyle = rule.treeStyle
             };
+
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            if (TreeGroundSupport.TryEvaluateStableSupportAtWorldColumn(
+                    blockTypes,
+                    solids,
+                    coord,
+                    border,
+                    SizeX,
+                    SizeZ,
+                    SizeY,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    worldX,
+                    surfaceY,
+                    worldZ,
+                    out bool hasStableSupport) &&
+                !hasStableSupport)
+            {
+                candidate = default;
+                return false;
+            }
+
             return true;
         }
 
@@ -1058,6 +1198,117 @@ public static class ChunkData
             {
                 if (densityGrid.IsCreated)
                     densityGrid.Dispose();
+            }
+
+            CarveSpaghettiChunkBorderColumnsExact(
+                blockTypes,
+                solids,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                heightStride,
+                chunkMinX,
+                chunkMinZ,
+                minY,
+                maxY,
+                minSurfaceDepth,
+                entranceSurfaceDepth,
+                worldSeed,
+                densityBias);
+        }
+
+        private void CarveSpaghettiChunkBorderColumnsExact(
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride,
+            int chunkMinX,
+            int chunkMinZ,
+            int minY,
+            int maxY,
+            int minSurfaceDepth,
+            int entranceSurfaceDepth,
+            int worldSeed,
+            float densityBias)
+        {
+            // Only the chunk edge columns and the immediate padding columns can hide
+            // faces when neighboring chunks disagree, so we re-sample just that seam.
+            int westPaddingX = border - 1;
+            int westInnerX = border;
+            int eastInnerX = border + SizeX - 1;
+            int eastPaddingX = border + SizeX;
+            int northPaddingZ = border - 1;
+            int northInnerZ = border;
+            int southInnerZ = border + SizeZ - 1;
+            int southPaddingZ = border + SizeZ;
+
+            for (int localZ = 0; localZ < voxelSizeZ; localZ++)
+            {
+                CarveSpaghettiColumnExact(localZ, westPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localZ, westInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localZ, eastInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localZ, eastPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+            }
+
+            for (int localX = 0; localX < voxelSizeX; localX++)
+            {
+                CarveSpaghettiColumnExact(localX, northPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localX, northInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localX, southInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localX, southPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+            }
+        }
+
+        private void CarveSpaghettiColumnExact(
+            int primary,
+            int secondary,
+            bool primaryIsZ,
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            int heightStride,
+            int chunkMinX,
+            int chunkMinZ,
+            int minY,
+            int maxY,
+            int minSurfaceDepth,
+            int entranceSurfaceDepth,
+            int worldSeed,
+            float densityBias)
+        {
+            int localX = primaryIsZ ? secondary : primary;
+            int localZ = primaryIsZ ? primary : secondary;
+            if (localX < 0 || localX >= voxelSizeX || localZ < 0 || localZ >= voxelSizeZ)
+                return;
+
+            int columnSurfaceY = heightCache[localX + localZ * heightStride];
+            int regularMaxY = math.min(maxY, columnSurfaceY - minSurfaceDepth);
+            int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+            if (entranceMaxY < minY)
+                return;
+
+            float worldX = localX + chunkMinX - border + 0.5f;
+            float worldZ = localZ + chunkMinZ - border + 0.5f;
+            int voxelIndex = localX + minY * voxelSizeX + localZ * voxelPlaneSize;
+
+            for (int voxelY = minY; voxelY <= entranceMaxY; voxelY++, voxelIndex += voxelSizeX)
+            {
+                BlockType existing = blockTypes[voxelIndex];
+                if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
+                    continue;
+
+                float2 density = SampleSpaghettiDensityPair(worldX, voxelY + 0.5f, worldZ, worldSeed, densityBias);
+                if (voxelY > regularMaxY && density.y >= 0f)
+                    continue;
+                if (density.x >= 0f)
+                    continue;
+
+                blockTypes[voxelIndex] = BlockType.Air;
+                solids[voxelIndex] = false;
             }
         }
 

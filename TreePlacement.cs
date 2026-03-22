@@ -66,6 +66,22 @@ public static class TreePlacement
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
 
+            if (TreeGroundSupport.TryEvaluateStableSupportAtLocalColumn(
+                    blockTypes,
+                    solids,
+                    ix,
+                    surfaceY,
+                    iz,
+                    chunkSizeY,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    out bool hasStableSupport) &&
+                !hasStableSupport)
+            {
+                continue;
+            }
+
             int leafBottom = surfaceY + t.trunkHeight - 1;
 
             if (isFancyOak)
@@ -1060,6 +1076,121 @@ public static class TreePlacement
 
         blockTypes[lidx] = BlockType.Leaves;
         solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
+    }
+}
+
+public static class TreeGroundSupport
+{
+    [BurstCompile]
+    public static bool TryEvaluateStableSupportAtWorldColumn(
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        Vector2Int coord,
+        int border,
+        int chunkSizeX,
+        int chunkSizeZ,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int worldX,
+        int surfaceY,
+        int worldZ,
+        out bool hasStableSupport)
+    {
+        int baseWorldX = coord.x * chunkSizeX;
+        int baseWorldZ = coord.y * chunkSizeZ;
+        int ix = worldX - baseWorldX + border;
+        int iz = worldZ - baseWorldZ + border;
+
+        return TryEvaluateStableSupportAtLocalColumn(
+            blockTypes,
+            solids,
+            ix,
+            surfaceY,
+            iz,
+            chunkSizeY,
+            voxelSizeX,
+            voxelSizeZ,
+            voxelPlaneSize,
+            out hasStableSupport);
+    }
+
+    [BurstCompile]
+    public static bool TryEvaluateStableSupportAtLocalColumn(
+        NativeArray<BlockType> blockTypes,
+        NativeArray<bool> solids,
+        int ix,
+        int surfaceY,
+        int iz,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        out bool hasStableSupport)
+    {
+        hasStableSupport = false;
+
+        if (surfaceY <= 0 || surfaceY >= chunkSizeY - 1)
+            return false;
+        if (!IsInsideVoxelBounds(ix, surfaceY - 1, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+            return false;
+        if (!IsInsideVoxelBounds(ix, surfaceY, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+            return false;
+        if (!IsInsideVoxelBounds(ix, surfaceY + 1, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+            return false;
+
+        int belowIdx = ix + (surfaceY - 1) * voxelSizeX + iz * voxelPlaneSize;
+        int groundIdx = ix + surfaceY * voxelSizeX + iz * voxelPlaneSize;
+        int trunkBaseIdx = ix + (surfaceY + 1) * voxelSizeX + iz * voxelPlaneSize;
+
+        // Exige um "pé" realmente apoiado no terreno e não em um teto fino de caverna.
+        if (!IsStableGroundBlock(blockTypes[groundIdx], solids[groundIdx]))
+            return true;
+        if (!IsStableGroundBlock(blockTypes[belowIdx], solids[belowIdx]))
+            return true;
+        if (!IsTreeReplaceable(blockTypes[trunkBaseIdx], solids[trunkBaseIdx]))
+            return true;
+
+        hasStableSupport = true;
+        return true;
+    }
+
+    private static bool IsStableGroundBlock(BlockType blockType, bool isSolid)
+    {
+        if (!isSolid)
+            return false;
+        if (blockType == BlockType.Air || blockType == BlockType.Leaves)
+            return false;
+        if (FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        return !IsWoodBlock(blockType);
+    }
+
+    private static bool IsTreeReplaceable(BlockType blockType, bool isSolid)
+    {
+        if (blockType == BlockType.Air || blockType == BlockType.Leaves)
+            return true;
+        if (FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        return !isSolid;
+    }
+
+    private static bool IsWoodBlock(BlockType blockType)
+    {
+        return blockType == BlockType.Log ||
+               blockType == BlockType.birch_log ||
+               blockType == BlockType.acacia_log ||
+               blockType == BlockType.Cactus;
+    }
+
+    private static bool IsInsideVoxelBounds(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int chunkSizeY)
+    {
+        return x >= 0 && x < voxelSizeX &&
+               z >= 0 && z < voxelSizeZ &&
+               y >= 0 && y < chunkSizeY;
     }
 }
 

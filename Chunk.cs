@@ -17,10 +17,13 @@ public class Chunk : MonoBehaviour
     public Subchunk[] subchunks;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
+    [NonSerialized] public bool hasVoxelSnapshot = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] public ulong[] subchunkVisibilityMasks;
     [NonSerialized] public bool[] subchunkVisibilityValid;
+    [NonSerialized] public ulong lastLightingContextHash;
+    [NonSerialized] public bool lightingContextHashValid;
     public bool HasInitializedSubchunks =>
         subchunks != null &&
         subchunks.Length == SubchunksPerColumn &&
@@ -179,7 +182,10 @@ public class Chunk : MonoBehaviour
         state = ChunkState.Inactive;
         generation = -1;
         hasVoxelData = false;
+        hasVoxelSnapshot = false;
         ClearAllSubchunkVisibilityData();
+        lightingContextHashValid = false;
+        lastLightingContextHash = 0;
 
         if (subchunks != null)
         {
