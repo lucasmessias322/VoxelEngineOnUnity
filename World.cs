@@ -356,6 +356,25 @@ public partial class World : MonoBehaviour
     [Min(1)]
     public int maxChunkRebuildsPerFrame = 1;
 
+    [Header("Adaptive Chunk Budget")]
+    [Tooltip("Ajusta dinamicamente os limites de geracao e aplicacao de chunk conforme o frame atual.")]
+    public bool enableAdaptiveChunkBudget = true;
+    [Tooltip("Tempo de frame alvo em milissegundos. Abaixo desse valor o sistema libera mais trabalho; acima dele reduz.")]
+    [Min(4f)]
+    public float adaptiveTargetFrameTimeMS = 16.6f;
+    [Tooltip("Velocidade de resposta da adaptacao. Valores maiores reagem mais rapido, mas podem oscilar mais.")]
+    [Range(0.01f, 1f)]
+    public float adaptiveChunkBudgetResponsiveness = 0.18f;
+    [Tooltip("Menor multiplicador aplicado aos limites base quando o frame estiver pressionado.")]
+    [Min(0.25f)]
+    public float adaptiveChunkBudgetMinScale = 0.75f;
+    [Tooltip("Maior multiplicador aplicado aos limites base quando houver folga de frame.")]
+    [Min(1f)]
+    public float adaptiveChunkBudgetMaxScale = 3f;
+    [Tooltip("Folga em ms abaixo do alvo necessaria para dar um pequeno boost extra no processamento.")]
+    [Min(0f)]
+    public float adaptiveChunkBudgetHeadroomMS = 1.5f;
+
     [Header("Features Toggle")]
     public bool enableTrees = true;
 
@@ -459,6 +478,7 @@ public partial class World : MonoBehaviour
     private int nextChunkGeneration = 0;
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
+    private float adaptiveChunkBudgetScale = 1f;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableAmbientOcclusion = true;
@@ -678,6 +698,87 @@ public partial class World : MonoBehaviour
                 return a.nextSubchunkApplyIndex.CompareTo(b.nextSubchunkApplyIndex);
             });
         }
+    }
+
+    private void RefreshAdaptiveChunkBudgetState()
+    {
+        if (!enableAdaptiveChunkBudget)
+        {
+            adaptiveChunkBudgetScale = 1f;
+            frameTimeAccumulator = 0f;
+            return;
+        }
+
+        float currentFrameMS = Mathf.Clamp(Time.unscaledDeltaTime * 1000f, 0.1f, 250f);
+        float response = Mathf.Clamp01(adaptiveChunkBudgetResponsiveness);
+
+        if (frameTimeAccumulator <= 0f)
+            frameTimeAccumulator = currentFrameMS;
+        else
+            frameTimeAccumulator = Mathf.Lerp(frameTimeAccumulator, currentFrameMS, response);
+
+        float targetFrameMS = Mathf.Max(4f, adaptiveTargetFrameTimeMS);
+        float minScale = Mathf.Max(0.25f, adaptiveChunkBudgetMinScale);
+        float maxScale = Mathf.Max(minScale, adaptiveChunkBudgetMaxScale);
+        float desiredScale = Mathf.Clamp(targetFrameMS / Mathf.Max(1f, frameTimeAccumulator), minScale, maxScale);
+
+        if (frameTimeAccumulator + Mathf.Max(0f, adaptiveChunkBudgetHeadroomMS) < targetFrameMS)
+            desiredScale = Mathf.Min(maxScale, desiredScale * 1.1f);
+
+        if (adaptiveChunkBudgetScale <= 0f)
+            adaptiveChunkBudgetScale = desiredScale;
+        else
+            adaptiveChunkBudgetScale = Mathf.Lerp(adaptiveChunkBudgetScale, desiredScale, response);
+
+        adaptiveChunkBudgetScale = Mathf.Clamp(adaptiveChunkBudgetScale, minScale, maxScale);
+    }
+
+    private int GetAdaptiveChunkRequestLimit()
+    {
+        return GetAdaptiveScaledLimit(maxChunksPerFrame);
+    }
+
+    private int GetAdaptiveMeshApplyLimit()
+    {
+        return GetAdaptiveScaledLimit(maxMeshAppliesPerFrame);
+    }
+
+    private int GetAdaptiveDataCompletionLimit()
+    {
+        return GetAdaptiveScaledLimit(maxDataCompletionsPerFrame);
+    }
+
+    private int GetAdaptivePendingDataJobsLimit()
+    {
+        int safeBase = Mathf.Max(1, maxPendingDataJobs);
+        if (!enableAdaptiveChunkBudget)
+            return safeBase;
+
+        float scaled = adaptiveChunkBudgetScale;
+        if (scaled > 1f)
+            scaled = Mathf.Min(scaled, 2f);
+
+        int scaledLimit = Mathf.RoundToInt(safeBase * scaled);
+        return Mathf.Clamp(scaledLimit, 1, Mathf.Max(1, safeBase * 2));
+    }
+
+    private float GetAdaptiveFrameTimeBudgetSeconds()
+    {
+        float safeBaseMS = Mathf.Max(0.25f, frameTimeBudgetMS);
+        float scaledMS = enableAdaptiveChunkBudget
+            ? safeBaseMS * Mathf.Max(0.25f, adaptiveChunkBudgetScale)
+            : safeBaseMS;
+        return scaledMS / 1000f;
+    }
+
+    private int GetAdaptiveScaledLimit(int baseLimit)
+    {
+        int safeBase = Mathf.Max(1, baseLimit);
+        if (!enableAdaptiveChunkBudget)
+            return safeBase;
+
+        int scaledLimit = Mathf.RoundToInt(safeBase * Mathf.Max(0.25f, adaptiveChunkBudgetScale));
+        return Mathf.Max(1, scaledLimit);
     }
 
     private int GetMeshNeighborPadding()
@@ -1407,6 +1508,7 @@ public partial class World : MonoBehaviour
     {
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
+        RefreshAdaptiveChunkBudgetState();
         meshesAppliedThisFrame = 0;
         ProcessQueuedWaterUpdates();
         ProcessQueuedChunkRebuilds();
@@ -1549,11 +1651,12 @@ public partial class World : MonoBehaviour
     private void ProcessChunkQueue()
     {
         float frameStartTime = Time.realtimeSinceStartup;
-        float budgetSeconds = frameTimeBudgetMS / 1000f;
+        float budgetSeconds = GetAdaptiveFrameTimeBudgetSeconds();
         PrioritizePendingJobsByDistance();
 
         int dataProcessedThisFrame = 0;
-        int dataCompletionsLimit = Mathf.Max(1, maxDataCompletionsPerFrame);
+        int dataCompletionsLimit = GetAdaptiveDataCompletionLimit();
+        int meshAppliesLimit = GetAdaptiveMeshApplyLimit();
 
         // === STAGE 1: DATA JOBS (voxel generation) ===
         int i = 0;
@@ -1624,7 +1727,7 @@ public partial class World : MonoBehaviour
         while (i < pendingMeshes.Count)
         {
             if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds) break;
-            if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame) break;
+            if (meshesAppliedThisFrame >= meshAppliesLimit) break;
 
             var pm = pendingMeshes[i];
             if (!pm.handle.IsCompleted)
@@ -1645,7 +1748,7 @@ public partial class World : MonoBehaviour
                 bool chunkProvidedBorderCoverBeforeApply = DoesChunkCurrentlyProvideBorderCover(pm.coord);
                 bool updatedSectionVisibility = false;
                 while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
-                       meshesAppliedThisFrame < maxMeshAppliesPerFrame)
+                       meshesAppliedThisFrame < meshAppliesLimit)
                 {
                     int subchunkIndex = pm.nextSubchunkApplyIndex++;
                     if ((pm.dirtySubchunkMask & (1 << subchunkIndex)) == 0)
@@ -2342,14 +2445,16 @@ public partial class World : MonoBehaviour
             int pendingDataInRange = CountPendingDataJobsInRenderDistance(currentChunkCoord);
             int pendingMeshesInRange = CountPendingMeshesInRenderDistance(currentChunkCoord);
             int realPending = pendingDataInRange + Mathf.CeilToInt(pendingMeshesInRange / (float)subchunksPerChunk);
-            int hardPendingDataLimit = Mathf.Max(maxPendingDataJobs, maxPendingDataJobs * 3);
-            bool jobsCongested = realPending > maxChunksPerFrame * 4;
+            int chunkRequestLimit = GetAdaptiveChunkRequestLimit();
+            int pendingDataJobsLimit = GetAdaptivePendingDataJobsLimit();
+            int hardPendingDataLimit = Mathf.Max(pendingDataJobsLimit, pendingDataJobsLimit * 3);
+            bool jobsCongested = realPending > chunkRequestLimit * 4;
 
             if (!jobsCongested)
             {
-                while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
+                while (processed < chunkRequestLimit && pendingChunks.Count > 0)
                 {
-                    if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
+                    if (pendingDataInRange >= pendingDataJobsLimit || pendingDataJobs.Count >= hardPendingDataLimit)
                         break;
 
                     var item = pendingChunks[0];
