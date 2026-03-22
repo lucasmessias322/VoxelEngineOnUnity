@@ -830,6 +830,10 @@ public static class MeshGenerator
             float invAtlasTilesY = 1f / atlasTilesY;
             NativeArray<byte> occlusionState = new NativeArray<byte>(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
             NativeArray<int> occlusionQueue = new NativeArray<int>(4096, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
+            int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
+            NativeArray<GreedyFaceData> greedyMask = new NativeArray<GreedyFaceData>(maxMask, Allocator.Temp, NativeArrayOptions.UninitializedMemory);
 
             try
             {
@@ -862,7 +866,7 @@ public static class MeshGenerator
 
                     subchunkVisibilityMasks[sub] = ComputeVisibilityMask(occlusionState, occlusionQueue);
 
-                    GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
+                    GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY, greedyMask);
                     GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
                     GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
 
@@ -876,6 +880,7 @@ public static class MeshGenerator
             }
             finally
             {
+                if (greedyMask.IsCreated) greedyMask.Dispose();
                 if (occlusionState.IsCreated) occlusionState.Dispose();
                 if (occlusionQueue.IsCreated) occlusionQueue.Dispose();
             }
@@ -2086,14 +2091,18 @@ public static class MeshGenerator
             return !neighborOpaque;
         }
 
-        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
+        private void GenerateMesh(
+            NativeArray<int> heightCache,
+            NativeArray<BlockType> blockTypes,
+            NativeArray<bool> solids,
+            NativeArray<byte> light,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeArray<GreedyFaceData> mask)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-
-            int maxMask = math.max(voxelSizeX * SizeY, math.max(voxelSizeX * voxelSizeZ, SizeY * voxelSizeZ));
-            NativeArray<GreedyFaceData> mask = new NativeArray<GreedyFaceData>(maxMask, Allocator.Temp);
 
             for (int axis = 0; axis < 3; axis++)
             {

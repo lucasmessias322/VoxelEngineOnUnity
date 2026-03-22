@@ -18,6 +18,15 @@ public class Subchunk : MonoBehaviour
         public Vector4 uv2;
     }
 
+    private static readonly VertexAttributeDescriptor[] ChunkVertexLayout =
+    {
+        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
+    };
+
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
@@ -145,16 +154,7 @@ public class Subchunk : MonoBehaviour
 
         var meshDataArray = Mesh.AllocateWritableMeshData(1);
         var meshData = meshDataArray[0];
-
-        var vertexAttributes = new NativeArray<VertexAttributeDescriptor>(5, Allocator.Temp);
-        vertexAttributes[0] = new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3);
-        vertexAttributes[1] = new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3);
-        vertexAttributes[2] = new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2);
-        vertexAttributes[3] = new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2);
-        vertexAttributes[4] = new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4);
-
-        meshData.SetVertexBufferParams(vertexCount, vertexAttributes);
-        vertexAttributes.Dispose();
+        meshData.SetVertexBufferParams(vertexCount, ChunkVertexLayout);
 
         var vertData = meshData.GetVertexData<ChunkVertex>();
         for (int i = 0; i < vertexCount; i++)
