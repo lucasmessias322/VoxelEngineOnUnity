@@ -17,6 +17,15 @@ public static class ChunkData
     private const float DoubleNoiseWarp = 1.0181269f;
     private const float NoiseOffsetMagnitude = 2048f;
 
+    [Flags]
+    public enum ChunkDataStageFlags : byte
+    {
+        None = 0,
+        Caves = 1 << 0,
+        Ores = 1 << 1,
+        Trees = 1 << 2,
+        BlockEdits = 1 << 3
+    }
 
     [BurstCompile]
     public struct ChunkDataJob : IJob
@@ -64,6 +73,7 @@ public static class ChunkData
         public int spaghettiCarveMaskVoxelPlaneSize;
         public int spaghettiCarveMaskOffsetX;
         public int spaghettiCarveMaskOffsetZ;
+        public ChunkDataStageFlags stages;
 
         public void Execute()
         {
@@ -79,23 +89,27 @@ public static class ChunkData
             // 2. Popular voxels (terreno, ÃƒÂ¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            switch (caveGenerationMode)
+            if ((stages & ChunkDataStageFlags.Caves) != 0)
             {
-                case CaveGenerationMode.LegacyWorms:
-                    GenerateWormCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
-                    break;
+                switch (caveGenerationMode)
+                {
+                    case CaveGenerationMode.LegacyWorms:
+                        GenerateWormCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                        break;
 
-                default:
-                    if (HasSharedSpaghettiCarveMask())
-                        ApplySharedSpaghettiCarveMask(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
-                    else
-                        GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
-                    break;
+                    default:
+                        if (HasSharedSpaghettiCarveMask())
+                            ApplySharedSpaghettiCarveMask(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                        else
+                            GenerateSpaghettiCaves(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+                        break;
+                }
             }
-            GenerateOreVeins(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
-            FillWaterAboveTerrain(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            if (enableTrees)
+            if ((stages & ChunkDataStageFlags.Ores) != 0)
+                GenerateOreVeins(blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride);
+
+            if ((stages & ChunkDataStageFlags.Trees) != 0 && enableTrees)
             {
                 // NOVO: Gere as ÃƒÂ¡rvores aqui
                 NativeList<TreeInstance> trees = GenerateTreeInstances();
@@ -109,7 +123,8 @@ public static class ChunkData
                 trees.Dispose();  // Cleanup
             }
 
-            ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
+            if ((stages & ChunkDataStageFlags.BlockEdits) != 0)
+                ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
             // === NOVO: prÃƒÂ©-calcula quais subchunks tÃƒÂªm blocos ===
         }
@@ -1873,37 +1888,49 @@ public static class ChunkData
                 }
             }
         }
-
-
-
-        private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<byte> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
-        {
-            int heightStride = SizeX + 2 * border;
-            for (int lx = -border; lx < SizeX + border; lx++)
-            {
-                for (int lz = -border; lz < SizeZ + border; lz++)
-                {
-                    int cacheX = lx + border;
-                    int cacheZ = lz + border;
-                    int cacheIdx = cacheX + cacheZ * heightStride;
-                    int h = heightCache[cacheIdx];
-
-                    for (int y = h + 1; y <= seaLevel; y++)
-                    {
-                        int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
-                        blockTypes[voxelIdx] = (byte)BlockType.Water;
-                        solids[voxelIdx] = blockMappings[(int)BlockType.Water].isSolid;
-                    }
-                }
-            }
-        }
-
         private static int FloorDiv(int a, int b)
         {
             int q = a / b;
             int r = a % b;
             if (r != 0 && ((a < 0 && b > 0) || (a > 0 && b < 0))) q--;
             return q;
+        }
+    }
+
+    [BurstCompile]
+    public struct FillWaterAboveTerrainJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<int> heightCache;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
+        [NativeDisableParallelForRestriction] public NativeArray<bool> solids;
+
+        public int border;
+        public int seaLevel;
+        public byte waterBlockId;
+        public bool waterIsSolid;
+
+        public void Execute(int index)
+        {
+            int heightStride = SizeX + 2 * border;
+            int maxY = math.min(seaLevel, SizeY - 1);
+            if (maxY < 0)
+                return;
+
+            int cacheX = index % heightStride;
+            int cacheZ = index / heightStride;
+            int h = heightCache[index];
+            int startY = math.max(0, h + 1);
+            if (startY > maxY)
+                return;
+
+            int voxelSizeX = heightStride;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int voxelIndex = cacheX + startY * voxelSizeX + cacheZ * voxelPlaneSize;
+            for (int y = startY; y <= maxY; y++, voxelIndex += voxelSizeX)
+            {
+                blockTypes[voxelIndex] = waterBlockId;
+                solids[voxelIndex] = waterIsSolid;
+            }
         }
     }
 

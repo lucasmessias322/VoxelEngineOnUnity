@@ -55,10 +55,10 @@ public class Chunk : MonoBehaviour
     }
     private void OnDestroy()
     {
-        if (jobScheduled && currentJob.IsCompleted == false)
-        {
-            currentJob.Complete();
-        }
+        if (World.Instance != null && !World.Instance.IsShuttingDown)
+            World.Instance.CompletePendingJobsForChunk(this);
+
+        CompleteTrackedJob();
 
 
         // Segurança extra para pool
@@ -175,10 +175,10 @@ public class Chunk : MonoBehaviour
     }
     public void ResetChunk()
     {
-        if (jobScheduled && !currentJob.IsCompleted)
-            currentJob.Complete();
+        CompleteTrackedJob();
 
         jobScheduled = false;
+        currentJob = default;
         state = ChunkState.Inactive;
         generation = -1;
         hasVoxelData = false;
@@ -202,4 +202,18 @@ public class Chunk : MonoBehaviour
         gameObject.SetActive(false);
     }
     public int generation;
+
+    public void CompleteTrackedJob()
+    {
+        if (!jobScheduled)
+            return;
+
+        try
+        {
+            currentJob.Complete();
+        }
+        catch (InvalidOperationException)
+        {
+        }
+    }
 }

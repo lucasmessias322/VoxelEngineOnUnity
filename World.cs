@@ -183,6 +183,9 @@ public partial class World : MonoBehaviour
     #region Singleton
 
     public static World Instance { get; private set; }
+    internal bool IsShuttingDown => isShuttingDown;
+
+    private bool isShuttingDown;
 
     private void Awake()
     {
@@ -688,6 +691,21 @@ public partial class World : MonoBehaviour
         }
     }
 
+    private bool HasOtherPendingMeshJobs(Vector2Int coord, int expectedGen, int excludeIndex)
+    {
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            if (i == excludeIndex)
+                continue;
+
+            PendingMesh pm = pendingMeshes[i];
+            if (pm.coord == coord && pm.expectedGen == expectedGen)
+                return true;
+        }
+
+        return false;
+    }
+
     private int GetMeshNeighborPadding()
     {
         return 1;
@@ -1054,14 +1072,11 @@ public partial class World : MonoBehaviour
     {
         public JobHandle handle;
 
-        public NativeList<Vector3> vertices;
+        public NativeList<MeshGenerator.PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
-        public NativeList<Vector2> uvs;
-        public NativeList<Vector2> uv2;
-        public NativeList<Vector3> normals;
         public Vector2Int coord;
         public int expectedGen;
         public Chunk parentChunk;
@@ -1076,7 +1091,6 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public NativeArray<int3> suppressedBillboards;
-        public NativeList<Vector4> extraUVs;
         public bool buildColliders;
     }
 
@@ -1389,6 +1403,8 @@ public partial class World : MonoBehaviour
 
     private void OnDestroy()
     {
+        isShuttingDown = true;
+
         for (int i = 0; i < pendingDataJobs.Count; i++)
         {
             PendingData pd = pendingDataJobs[i];
@@ -1408,11 +1424,14 @@ public partial class World : MonoBehaviour
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
-            if (chunk != null && chunk.jobScheduled && !chunk.currentJob.IsCompleted)
-                chunk.currentJob.Complete();
+            if (chunk != null)
+                chunk.CompleteTrackedJob();
         }
 
         DisposeNativeGenerationCaches();
+
+        if (Instance == this)
+            Instance = null;
     }
 
     private void Update()
@@ -1651,10 +1670,10 @@ public partial class World : MonoBehaviour
             bool canApplyMesh = hasActiveChunk &&
                                 activeChunk.generation == pm.expectedGen &&
                                 !HasQueuedChunkRebuild(pm.coord);
+            bool chunkProvidedBorderCoverBeforeApply = canApplyMesh && DoesChunkCurrentlyProvideBorderCover(pm.coord);
 
             if (canApplyMesh)
             {
-                bool chunkProvidedBorderCoverBeforeApply = DoesChunkCurrentlyProvideBorderCover(pm.coord);
                 bool updatedSectionVisibility = false;
                 while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
                        meshesAppliedThisFrame < maxMeshAppliesPerFrame)
@@ -1674,8 +1693,7 @@ public partial class World : MonoBehaviour
                     if (range.vertexCount > 0)
                     {
                         sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
-                                          pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
-                                          range, startY, endY);
+                                          pm.waterTriangles, range, startY, endY);
                         ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
 
                         if (pm.buildColliders)
@@ -1695,25 +1713,24 @@ public partial class World : MonoBehaviour
                     meshesAppliedThisFrame++;
                 }
 
-                if (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn)
-                {
-                    pendingMeshes[i] = pm;
-                    i++;
-                    continue;
-                }
-
-                activeChunk.state = Chunk.ChunkState.Active;
-                if (!chunkProvidedBorderCoverBeforeApply)
-                    RequestHorizontalNeighborVisualRefresh(pm.coord);
-
                 if (updatedSectionVisibility)
                     InvalidateSectionOcclusionGraph();
             }
 
+            bool isLastPendingMeshForChunk = canApplyMesh && !HasOtherPendingMeshJobs(pm.coord, pm.expectedGen, i);
             DisposePendingMesh(pm);
             RemovePendingMeshAtSwapBack(i);
             if (hasActiveChunk)
+            {
+                if (isLastPendingMeshForChunk &&
+                    !chunkProvidedBorderCoverBeforeApply &&
+                    DoesChunkCurrentlyProvideBorderCover(pm.coord))
+                {
+                    RequestHorizontalNeighborVisualRefresh(pm.coord);
+                }
+
                 RefreshChunkJobTracking(pm.coord, activeChunk);
+            }
         }
     }
 
@@ -1947,60 +1964,64 @@ public partial class World : MonoBehaviour
             InvalidateSectionOcclusionGraph();
 
         JobHandle combinedMeshHandle = default;
+        bool hasScheduledMeshJobs = false;
         if (meshSubchunkMask != 0)
         {
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
 
-            MeshGenerator.ScheduleMeshJob(
-                pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
-                pd.subchunkNonEmpty,
-                atlasTilesX, atlasTilesY, true, borderSize,
-                pd.coord.x, pd.coord.y,
-                meshSubchunkMask,
-                enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
-                grassBillboardNoiseScale, grassBillboardJitter,
-                effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
-                out JobHandle meshHandle,
-                out NativeList<Vector3> vertices,
-                out NativeList<int> opaqueTriangles,
-                out NativeList<int> transparentTriangles,
-                out NativeList<int> billboardTriangles,
-                out NativeList<int> waterTriangles,
-                out NativeList<Vector2> uvs,
-                out NativeList<Vector2> uv2,
-                out NativeList<Vector3> normals,
-                out NativeList<Vector4> extraUVs,
-                out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
-                out NativeArray<ulong> subchunkVisibilityMasks
-            );
-
-            combinedMeshHandle = meshHandle;
-            pendingMeshes.Add(new PendingMesh
+            for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
             {
-                handle = meshHandle,
-                vertices = vertices,
-                opaqueTriangles = opaqueTriangles,
-                transparentTriangles = transparentTriangles,
-                billboardTriangles = billboardTriangles,
-                waterTriangles = waterTriangles,
-                uvs = uvs,
-                uv2 = uv2,
-                normals = normals,
-                extraUVs = extraUVs,
-                coord = pd.coord,
-                expectedGen = pd.expectedGen,
-                parentChunk = activeChunk,
-                subchunkRanges = subchunkRanges,
-                subchunkVisibilityMasks = subchunkVisibilityMasks,
-                dirtySubchunkMask = meshSubchunkMask,
-                nextSubchunkApplyIndex = 0,
-                heightCache = pd.heightCache,
-                blockTypes = pd.blockTypes,
-                solids = pd.solids,
-                light = pd.light,
-                suppressedBillboards = default,
-                buildColliders = pd.rebuildColliders
-            });
+                int subchunkMask = 1 << sub;
+                if ((meshSubchunkMask & subchunkMask) == 0)
+                    continue;
+
+                MeshGenerator.ScheduleMeshJob(
+                    pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
+                    pd.subchunkNonEmpty,
+                    atlasTilesX, atlasTilesY, true, borderSize,
+                    pd.coord.x, pd.coord.y,
+                    subchunkMask,
+                    enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
+                    grassBillboardNoiseScale, grassBillboardJitter,
+                    effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
+                    out JobHandle meshHandle,
+                    out NativeList<MeshGenerator.PackedChunkVertex> vertices,
+                    out NativeList<int> opaqueTriangles,
+                    out NativeList<int> transparentTriangles,
+                    out NativeList<int> billboardTriangles,
+                    out NativeList<int> waterTriangles,
+                    out NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+                    out NativeArray<ulong> subchunkVisibilityMasks
+                );
+
+                combinedMeshHandle = hasScheduledMeshJobs
+                    ? JobHandle.CombineDependencies(combinedMeshHandle, meshHandle)
+                    : meshHandle;
+                hasScheduledMeshJobs = true;
+
+                pendingMeshes.Add(new PendingMesh
+                {
+                    handle = meshHandle,
+                    vertices = vertices,
+                    opaqueTriangles = opaqueTriangles,
+                    transparentTriangles = transparentTriangles,
+                    billboardTriangles = billboardTriangles,
+                    waterTriangles = waterTriangles,
+                    coord = pd.coord,
+                    expectedGen = pd.expectedGen,
+                    parentChunk = activeChunk,
+                    subchunkRanges = subchunkRanges,
+                    subchunkVisibilityMasks = subchunkVisibilityMasks,
+                    dirtySubchunkMask = subchunkMask,
+                    nextSubchunkApplyIndex = sub,
+                    heightCache = pd.heightCache,
+                    blockTypes = pd.blockTypes,
+                    solids = pd.solids,
+                    light = pd.light,
+                    suppressedBillboards = default,
+                    buildColliders = pd.rebuildColliders
+                });
+            }
         }
 
         var disposeJob = new MeshGenerator.DisposeChunkDataJob
@@ -2473,8 +2494,9 @@ public partial class World : MonoBehaviour
         }
         if (chunk.jobScheduled)
         {
-            try { chunk.currentJob.Complete(); } catch { }
+            chunk.CompleteTrackedJob();
             chunk.jobScheduled = false;
+            chunk.currentJob = default;
         }
 
         // Agendamento do data job
@@ -3060,6 +3082,7 @@ public partial class World : MonoBehaviour
                 return;
             }
 
+            chunk.CompleteTrackedJob();
             chunk.jobScheduled = false;
             chunk.currentJob = default;
         }
@@ -3197,11 +3220,40 @@ public partial class World : MonoBehaviour
         if (chunk == null || IsChunkJobPending(coord))
             return;
 
+        chunk.CompleteTrackedJob();
         chunk.jobScheduled = false;
         chunk.currentJob = default;
 
         if (chunk.state == Chunk.ChunkState.MeshReady)
             chunk.state = Chunk.ChunkState.Active;
+    }
+
+    internal void CompletePendingJobsForChunk(Chunk chunk)
+    {
+        if (chunk == null)
+            return;
+
+        for (int i = pendingMeshes.Count - 1; i >= 0; i--)
+        {
+            PendingMesh pm = pendingMeshes[i];
+            if (!ReferenceEquals(pm.parentChunk, chunk))
+                continue;
+
+            pm.handle.Complete();
+            DisposePendingMesh(pm);
+            RemovePendingMeshAtSwapBack(i);
+        }
+
+        for (int i = pendingDataJobs.Count - 1; i >= 0; i--)
+        {
+            PendingData pd = pendingDataJobs[i];
+            if (!ReferenceEquals(pd.chunk, chunk))
+                continue;
+
+            pd.handle.Complete();
+            DisposeDataJobResources(ref pd);
+            RemovePendingDataJobAtSwapBack(i);
+        }
     }
 
     private void RemovePendingDataJobAtSwapBack(int index)
@@ -3484,11 +3536,7 @@ public partial class World : MonoBehaviour
         if (pm.transparentTriangles.IsCreated) pm.transparentTriangles.Dispose();
         if (pm.billboardTriangles.IsCreated) pm.billboardTriangles.Dispose();
         if (pm.waterTriangles.IsCreated) pm.waterTriangles.Dispose();
-        if (pm.uvs.IsCreated) pm.uvs.Dispose();
-        if (pm.uv2.IsCreated) pm.uv2.Dispose();
-        if (pm.normals.IsCreated) pm.normals.Dispose();
         if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
-        if (pm.extraUVs.IsCreated) pm.extraUVs.Dispose();
         if (pm.subchunkRanges.IsCreated) pm.subchunkRanges.Dispose();
         if (pm.subchunkVisibilityMasks.IsCreated) pm.subchunkVisibilityMasks.Dispose();
     }

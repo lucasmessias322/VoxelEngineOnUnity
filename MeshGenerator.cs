@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using UnityEngine;
 using Unity.Collections;
 using Unity.Jobs;
@@ -130,6 +131,16 @@ public static class MeshGenerator
         public int billboardCount;
         public int waterStart;
         public int waterCount;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PackedChunkVertex
+    {
+        public Vector3 position;
+        public Vector3 normal;
+        public Vector2 uv0;
+        public Vector2 uv1;
+        public Vector4 uv2;
     }
     // ------------------- Tree Instance -------------------
 
@@ -630,7 +641,7 @@ public static class MeshGenerator
         // ==========================================
         // JOB 1: GeraÃƒÂ§ÃƒÂ£o de Dados (Terreno)
         // ==========================================
-        var chunkDataJob = new ChunkData.ChunkDataJob
+        var baseChunkDataJob = new ChunkData.ChunkDataJob
         {
             coord = coord,
             noiseLayers = noiseLayers,
@@ -669,13 +680,53 @@ public static class MeshGenerator
             spaghettiCarveMaskVoxelSizeX = 0,
             spaghettiCarveMaskVoxelPlaneSize = 0,
             spaghettiCarveMaskOffsetX = 0,
-            spaghettiCarveMaskOffsetZ = 0
+            spaghettiCarveMaskOffsetZ = 0,
+            stages = ChunkData.ChunkDataStageFlags.None
         };
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃƒÂªncia no heightHandle
-        JobHandle chunkDataHandle;
+        JobHandle caveChunkDataHandle;
+        JobHandle oreChunkDataHandle;
+        JobHandle waterChunkDataHandle;
+        JobHandle treeChunkDataHandle;
+        JobHandle finalChunkDataHandle;
         if (!enableVoxelLighting)
         {
-            chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            var caveChunkDataJob = baseChunkDataJob;
+            caveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
+            caveChunkDataHandle = caveChunkDataJob.Schedule(populateHandle);
+
+            var oreChunkDataJob = baseChunkDataJob;
+            oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
+            oreChunkDataHandle = oreChunkDataJob.Schedule(caveChunkDataHandle);
+
+            var fillWaterAboveTerrainJob = new ChunkData.FillWaterAboveTerrainJob
+            {
+                heightCache = heightCache,
+                blockTypes = blockTypes,
+                solids = solids,
+                border = dataBorderSize,
+                seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
+                waterBlockId = (byte)BlockType.Water,
+                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+            };
+            waterChunkDataHandle = fillWaterAboveTerrainJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+
+            treeChunkDataHandle = waterChunkDataHandle;
+            if (enableTrees)
+            {
+                var treeChunkDataJob = baseChunkDataJob;
+                treeChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Trees;
+                treeChunkDataHandle = treeChunkDataJob.Schedule(waterChunkDataHandle);
+            }
+
+            finalChunkDataHandle = treeChunkDataHandle;
+            if (blockEdits.IsCreated && blockEdits.Length > 0)
+            {
+                var blockEditChunkDataJob = baseChunkDataJob;
+                blockEditChunkDataJob.stages = ChunkData.ChunkDataStageFlags.BlockEdits;
+                finalChunkDataHandle = blockEditChunkDataJob.Schedule(treeChunkDataHandle);
+            }
+
             var snapshotJob = new BuildChunkSnapshotAndFlagsJob
             {
                 blockTypes = blockTypes,
@@ -683,12 +734,12 @@ public static class MeshGenerator
                 subchunkNonEmpty = subchunkNonEmpty,
                 borderSize = dataBorderSize
             };
-            JobHandle snapshotHandle = snapshotJob.Schedule(chunkDataHandle);
+            JobHandle snapshotHandle = snapshotJob.Schedule(finalChunkDataHandle);
             var disposeDataColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
             {
                 values = dataColumnContexts
             };
-            JobHandle disposeDataColumnContextHandle = disposeDataColumnContextCacheJob.Schedule(chunkDataHandle);
+            JobHandle disposeDataColumnContextHandle = disposeDataColumnContextCacheJob.Schedule(finalChunkDataHandle);
             byte fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
@@ -747,16 +798,52 @@ public static class MeshGenerator
             };
             spaghettiCarveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(lightHeightHandle);
 
-            chunkDataJob.spaghettiCarveMask = spaghettiCarveMask;
-            chunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
-            chunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
-            chunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
-            chunkDataJob.spaghettiCarveMaskOffsetZ = lightBorderSize - dataBorderSize;
+            baseChunkDataJob.spaghettiCarveMask = spaghettiCarveMask;
+            baseChunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
+            baseChunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
+            baseChunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
+            baseChunkDataJob.spaghettiCarveMaskOffsetZ = lightBorderSize - dataBorderSize;
         }
 
-        chunkDataHandle = useSharedSpaghettiCarveMask
-            ? chunkDataJob.Schedule(JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle))
-            : chunkDataJob.Schedule(populateHandle);
+        JobHandle caveChunkDependency = useSharedSpaghettiCarveMask
+            ? JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle)
+            : populateHandle;
+
+        var stagedCaveChunkDataJob = baseChunkDataJob;
+        stagedCaveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
+        caveChunkDataHandle = stagedCaveChunkDataJob.Schedule(caveChunkDependency);
+
+        var stagedOreChunkDataJob = baseChunkDataJob;
+        stagedOreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
+        oreChunkDataHandle = stagedOreChunkDataJob.Schedule(caveChunkDataHandle);
+
+        var stagedFillWaterAboveTerrainJob = new ChunkData.FillWaterAboveTerrainJob
+        {
+            heightCache = heightCache,
+            blockTypes = blockTypes,
+            solids = solids,
+            border = dataBorderSize,
+            seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
+            waterBlockId = (byte)BlockType.Water,
+            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+        };
+        waterChunkDataHandle = stagedFillWaterAboveTerrainJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+
+        treeChunkDataHandle = waterChunkDataHandle;
+        if (enableTrees)
+        {
+            var stagedTreeChunkDataJob = baseChunkDataJob;
+            stagedTreeChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Trees;
+            treeChunkDataHandle = stagedTreeChunkDataJob.Schedule(waterChunkDataHandle);
+        }
+
+        finalChunkDataHandle = treeChunkDataHandle;
+        if (blockEdits.IsCreated && blockEdits.Length > 0)
+        {
+            var stagedBlockEditChunkDataJob = baseChunkDataJob;
+            stagedBlockEditChunkDataJob.stages = ChunkData.ChunkDataStageFlags.BlockEdits;
+            finalChunkDataHandle = stagedBlockEditChunkDataJob.Schedule(treeChunkDataHandle);
+        }
         var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
         {
             blockTypes = blockTypes,
@@ -764,7 +851,7 @@ public static class MeshGenerator
             subchunkNonEmpty = subchunkNonEmpty,
             borderSize = dataBorderSize
         };
-        JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(chunkDataHandle);
+        JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(finalChunkDataHandle);
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
@@ -808,7 +895,7 @@ public static class MeshGenerator
                 values = spaghettiCarveMask
             };
             disposeSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(
-                JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
+                JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityTerrainHandle));
         }
 
         var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
@@ -825,7 +912,7 @@ public static class MeshGenerator
         JobHandle copyGeneratedOpacityHandle = copyGeneratedOpacityJob.Schedule(
             dataTotalVoxels,
             128,
-            JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
+            JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityTerrainHandle));
 
         JobHandle lightOpacityCleanupHandle = JobHandle.CombineDependencies(
             disposeLightHeightCacheHandle,
@@ -873,9 +960,9 @@ public static class MeshGenerator
         {
             values = dataColumnContexts
         };
-        JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(chunkDataHandle);
+        JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(finalChunkDataHandle);
         dataHandle = JobHandle.CombineDependencies(
-            lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
+            lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle)),
             disposeDataColumnContextAfterLightingHandle,
             buildChunkSnapshotHandle);
     }
@@ -906,29 +993,21 @@ public static class MeshGenerator
         float aoMinLight,
         bool useFastBedrockStyleMeshing,
         out JobHandle meshHandle,
-        out NativeList<Vector3> vertices,
+        out NativeList<PackedChunkVertex> vertices,
         out NativeList<int> opaqueTriangles,
         out NativeList<int> transparentTriangles,
         out NativeList<int> billboardTriangles,
         out NativeList<int> waterTriangles,
-        out NativeList<Vector2> uvs,
-        out NativeList<Vector2> uv2,
-        out NativeList<Vector3> normals,
-        out NativeList<Vector4> extraUVs,
         out NativeArray<SubchunkMeshRange> subchunkRanges,
         out NativeArray<ulong> subchunkVisibilityMasks
     )
     {
         // 1. AlocaÃƒÂ§ÃƒÂµes das Listas de Mesh (Output)
-        vertices = new NativeList<Vector3>(4096, Allocator.Persistent);
+        vertices = new NativeList<PackedChunkVertex>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
-        normals = new NativeList<Vector3>(4096, Allocator.Persistent);
-        extraUVs = new NativeList<Vector4>(4096 * 4, Allocator.Persistent);
-        uvs = new NativeList<Vector2>(4096, Allocator.Persistent);
-        uv2 = new NativeList<Vector2>(4096, Allocator.Persistent);
         subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.Persistent);
         subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.Persistent);
 
@@ -971,10 +1050,6 @@ public static class MeshGenerator
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             billboardTriangles = billboardTriangles,
-            uvs = uvs,
-            uv2 = uv2,
-            normals = normals,
-            extraUVs = extraUVs,
             subchunkVisibilityMasks = subchunkVisibilityMasks
         };
         // O MeshJob agora ÃƒÂ© agendado independentemente, assumindo que os dados intermediÃƒÂ¡rios jÃƒÂ¡ estÃƒÂ£o prontos
@@ -1022,16 +1097,13 @@ public static class MeshGenerator
         public int startY;
         public int endY;
 
-        public NativeList<Vector3> vertices;
+        public NativeList<PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
-        public NativeList<Vector2> uvs;
-        public NativeList<Vector2> uv2;
-        public NativeList<Vector3> normals;
-        public NativeList<Vector4> extraUVs;
         public NativeArray<ulong> subchunkVisibilityMasks;
+        private int currentSubchunkVertexStart;
 
         private struct GreedyFaceData
         {
@@ -1084,6 +1156,7 @@ public static class MeshGenerator
                         billboardStart = billboardTriangles.Length,
                         waterStart = waterTriangles.Length
                     };
+                    currentSubchunkVertexStart = range.vertexStart;
 
                     subchunkVisibilityMasks[sub] = ComputeVisibilityMask(occlusionState, occlusionQueue);
 
@@ -1103,6 +1176,23 @@ public static class MeshGenerator
                 if (occlusionState.IsCreated) occlusionState.Dispose();
                 if (occlusionQueue.IsCreated) occlusionQueue.Dispose();
             }
+        }
+
+        private int GetCurrentSubchunkLocalVertexIndex()
+        {
+            return vertices.Length - currentSubchunkVertexStart;
+        }
+
+        private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2)
+        {
+            vertices.Add(new PackedChunkVertex
+            {
+                position = position,
+                normal = normal,
+                uv0 = uv0,
+                uv1 = uv1,
+                uv2 = uv2
+            });
         }
 
         private ulong ComputeVisibilityMask(NativeArray<byte> occlusionState, NativeArray<int> queue)
@@ -1773,34 +1863,14 @@ public static class MeshGenerator
             float light01,
             float tint)
         {
-            int vIndex = vertices.Length;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector3 upNormal = new Vector3(0f, 1f, 0f);
 
-            vertices.Add(p0);
-            vertices.Add(p1);
-            vertices.Add(p2);
-            vertices.Add(p3);
-
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-
-            uvs.Add(new Vector2(0f, 0f));
-            uvs.Add(new Vector2(1f, 0f));
-            uvs.Add(new Vector2(1f, 1f));
-            uvs.Add(new Vector2(0f, 1f));
-
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
+            AddPackedVertex(p0, upNormal, new Vector2(0f, 0f), atlasUv, e);
+            AddPackedVertex(p1, upNormal, new Vector2(1f, 0f), atlasUv, e);
+            AddPackedVertex(p2, upNormal, new Vector2(1f, 1f), atlasUv, e);
+            AddPackedVertex(p3, upNormal, new Vector2(0f, 1f), atlasUv, e);
 
             billboardTriangles.Add(vIndex + 0);
             billboardTriangles.Add(vIndex + 1);
@@ -2013,37 +2083,17 @@ public static class MeshGenerator
             float invAtlasTilesY,
             NativeList<int> tris)
         {
-            int vIndex = vertices.Length;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector3 normal = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
             if (normal.sqrMagnitude < 0.0001f)
                 normal = Vector3.up;
 
-            vertices.Add(p0);
-            vertices.Add(p1);
-            vertices.Add(p2);
-            vertices.Add(p3);
-
-            normals.Add(normal);
-            normals.Add(normal);
-            normals.Add(normal);
-            normals.Add(normal);
-
-            uvs.Add(new Vector2(0f, 0f));
-            uvs.Add(new Vector2(1f, 0f));
-            uvs.Add(new Vector2(1f, 1f));
-            uvs.Add(new Vector2(0f, 1f));
-
             Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-
             Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
-            extraUVs.Add(extra);
-            extraUVs.Add(extra);
-            extraUVs.Add(extra);
-            extraUVs.Add(extra);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -2125,28 +2175,13 @@ public static class MeshGenerator
             float invAtlasTilesY,
             NativeList<int> tris)
         {
-            int vIndex = vertices.Length;
-
-            vertices.Add(p0);
-            vertices.Add(p1);
-            vertices.Add(p2);
-            vertices.Add(p3);
-
-            normals.Add(normal);
-            normals.Add(normal);
-            normals.Add(normal);
-            normals.Add(normal);
-
-            uvs.Add(new Vector2(0f, 0f));
-            uvs.Add(new Vector2(1f, 0f));
-            uvs.Add(new Vector2(1f, 1f));
-            uvs.Add(new Vector2(0f, 1f));
-
+            int vertexGlobalStart = vertices.Length;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, default);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, default);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, default);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, default);
 
             for (int corner = 0; corner < 4; corner++)
             {
@@ -2156,8 +2191,9 @@ public static class MeshGenerator
                 if (emission > 0)
                     vertexLight = (byte)math.max((int)vertexLight, (int)emission);
 
-                Vector4 extra = new Vector4(vertexLight / 15f, tint ? 1f : 0f, 1f, 0f);
-                extraUVs.Add(extra);
+                PackedChunkVertex vertex = vertices[vertexGlobalStart + corner];
+                vertex.uv2 = new Vector4(vertexLight / 15f, tint ? 1f : 0f, 1f, 0f);
+                vertices[vertexGlobalStart + corner] = vertex;
             }
 
             tris.Add(vIndex + 0);
@@ -2178,34 +2214,14 @@ public static class MeshGenerator
             float tint,
             NativeList<int> tris)
         {
-            int vIndex = vertices.Length;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector3 upNormal = new Vector3(0f, 1f, 0f);
 
-            vertices.Add(p0);
-            vertices.Add(p1);
-            vertices.Add(p2);
-            vertices.Add(p3);
-
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-            normals.Add(upNormal);
-
-            uvs.Add(new Vector2(0f, 0f));
-            uvs.Add(new Vector2(1f, 0f));
-            uvs.Add(new Vector2(1f, 1f));
-            uvs.Add(new Vector2(0f, 1f));
-
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-            uv2.Add(atlasUv);
-
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
-            extraUVs.Add(e);
+            AddPackedVertex(p0, upNormal, new Vector2(0f, 0f), atlasUv, e);
+            AddPackedVertex(p1, upNormal, new Vector2(1f, 0f), atlasUv, e);
+            AddPackedVertex(p2, upNormal, new Vector2(1f, 1f), atlasUv, e);
+            AddPackedVertex(p3, upNormal, new Vector2(0f, 1f), atlasUv, e);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -2552,7 +2568,13 @@ public static class MeshGenerator
                                 int blockY = u == 1 ? i : v == 1 ? j : n;
                                 int blockZ = u == 2 ? i : v == 2 ? j : n;
 
-                                int vIndex = vertices.Length;
+                                int vIndex = GetCurrentSubchunkLocalVertexIndex();
+                                BlockTextureMapping m = blockMappings[(int)bt];
+                                bool tint = faceType == BlockFace.Top ? m.tintTop :
+                                            faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
+                                Vector2Int tile = faceType == BlockFace.Top ? m.top :
+                                                  faceType == BlockFace.Bottom ? m.bottom : m.side;
+                                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
 
                                 for (int l = 0; l < 4; l++)
                                 {
@@ -2572,17 +2594,9 @@ public static class MeshGenerator
                                     if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
                                         py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-                                    vertices.Add(new Vector3(px, py, pz));
-                                    normals.Add(normal);
-
                                     Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
                                                       axis == 1 ? new Vector2(rawV, rawU) :
                                                                   new Vector2(rawU, rawV);
-                                    uvs.Add(uvCoord);
-
-                                    BlockTextureMapping m = blockMappings[(int)bt];
-                                    bool tint = faceType == BlockFace.Top ? m.tintTop :
-                                                faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
                                     byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
@@ -2593,13 +2607,12 @@ public static class MeshGenerator
                                     float aoCurved = math.pow(aoBase, aoCurve);
                                     float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
                                     float floatAO = math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
-
-                                    extraUVs.Add(new Vector4(rawLight, floatTint, floatAO, 0f));
-
-                                    Vector2Int tile = faceType == BlockFace.Top ? m.top :
-                                                      faceType == BlockFace.Bottom ? m.bottom : m.side;
-
-                                    uv2.Add(new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f));
+                                    AddPackedVertex(
+                                        new Vector3(px, py, pz),
+                                        normal,
+                                        uvCoord,
+                                        atlasUv,
+                                        new Vector4(rawLight, floatTint, floatAO, 0f));
                                 }
 
                                 NativeList<int> tris = FluidBlockUtility.IsWater(bt)

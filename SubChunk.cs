@@ -1,5 +1,4 @@
 using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -16,16 +15,6 @@ public class Subchunk : MonoBehaviour
         new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2),
         new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
     };
-
-    [StructLayout(LayoutKind.Sequential)]
-    private struct ChunkVertex
-    {
-        public Vector3 position;
-        public Vector3 normal;
-        public Vector2 uv0;
-        public Vector2 uv1;
-        public Vector4 uv2;
-    }
 
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
@@ -91,15 +80,11 @@ public class Subchunk : MonoBehaviour
     }
 
     public void ApplyMeshData(
-        NativeList<Vector3> vertices,
+        NativeList<MeshGenerator.PackedChunkVertex> vertices,
         NativeList<int> opaqueTris,
         NativeList<int> transparentTris,
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
-        NativeList<Vector2> uvs,
-        NativeList<Vector2> uv2,
-        NativeList<Vector3> normals,
-        NativeList<Vector4> extraUVs,
         int startY,
         int endY)
     {
@@ -109,10 +94,6 @@ public class Subchunk : MonoBehaviour
             transparentTris,
             billboardTris,
             waterTris,
-            uvs,
-            uv2,
-            normals,
-            extraUVs,
             new MeshGenerator.SubchunkMeshRange
             {
                 vertexStart = 0,
@@ -131,15 +112,11 @@ public class Subchunk : MonoBehaviour
     }
 
     public void ApplyMeshData(
-        NativeList<Vector3> vertices,
+        NativeList<MeshGenerator.PackedChunkVertex> vertices,
         NativeList<int> opaqueTris,
         NativeList<int> transparentTris,
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
-        NativeList<Vector2> uvs,
-        NativeList<Vector2> uv2,
-        NativeList<Vector3> normals,
-        NativeList<Vector4> extraUVs,
         MeshGenerator.SubchunkMeshRange range,
         int startY,
         int endY)
@@ -156,19 +133,8 @@ public class Subchunk : MonoBehaviour
         var meshData = meshDataArray[0];
         meshData.SetVertexBufferParams(vertexCount, ChunkVertexLayout);
 
-        var vertData = meshData.GetVertexData<ChunkVertex>();
-        for (int i = 0; i < vertexCount; i++)
-        {
-            int src = range.vertexStart + i;
-            vertData[i] = new ChunkVertex
-            {
-                position = vertices[src],
-                normal = normals[src],
-                uv0 = uvs[src],
-                uv1 = uv2[src],
-                uv2 = extraUVs[src]
-            };
-        }
+        var vertData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
+        CopyVertexRange(vertData, vertices, range.vertexStart, vertexCount);
 
         int totalIndices = range.opaqueCount + range.transparentCount + range.billboardCount + range.waterCount;
         meshData.SetIndexBufferParams(totalIndices, IndexFormat.UInt32);
@@ -178,7 +144,7 @@ public class Subchunk : MonoBehaviour
         meshData.subMeshCount = 3;
 
         int count = range.opaqueCount;
-        CopyTriangleRange(indexData, indexOffset, opaqueTris, range.opaqueStart, count, range.vertexStart);
+        CopyTriangleRange(indexData, indexOffset, opaqueTris, range.opaqueStart, count);
         meshData.SetSubMesh(0, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
         indexOffset += count;
 
@@ -186,18 +152,18 @@ public class Subchunk : MonoBehaviour
         int transparentCount = range.transparentCount + range.billboardCount;
         if (range.transparentCount > 0)
         {
-            CopyTriangleRange(indexData, indexOffset, transparentTris, range.transparentStart, range.transparentCount, range.vertexStart);
+            CopyTriangleRange(indexData, indexOffset, transparentTris, range.transparentStart, range.transparentCount);
             indexOffset += range.transparentCount;
         }
         if (range.billboardCount > 0)
         {
-            CopyTriangleRange(indexData, indexOffset, billboardTris, range.billboardStart, range.billboardCount, range.vertexStart);
+            CopyTriangleRange(indexData, indexOffset, billboardTris, range.billboardStart, range.billboardCount);
             indexOffset += range.billboardCount;
         }
         meshData.SetSubMesh(1, new SubMeshDescriptor(transparentStart, transparentCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
         count = range.waterCount;
-        CopyTriangleRange(indexData, indexOffset, waterTris, range.waterStart, count, range.vertexStart);
+        CopyTriangleRange(indexData, indexOffset, waterTris, range.waterStart, count);
         meshData.SetSubMesh(2, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
 
         Mesh.ApplyAndDisposeWritableMeshData(meshDataArray, mesh,
@@ -222,16 +188,29 @@ public class Subchunk : MonoBehaviour
         }
     }
 
+    private static void CopyVertexRange(
+        NativeArray<MeshGenerator.PackedChunkVertex> target,
+        NativeList<MeshGenerator.PackedChunkVertex> source,
+        int sourceStart,
+        int count)
+    {
+        if (count <= 0)
+            return;
+
+        NativeArray<MeshGenerator.PackedChunkVertex>.Copy(source.AsArray(), sourceStart, target, 0, count);
+    }
+
     private static void CopyTriangleRange(
         NativeArray<int> target,
         int targetStart,
         NativeList<int> source,
         int sourceStart,
-        int count,
-        int vertexBase)
+        int count)
     {
-        for (int i = 0; i < count; i++)
-            target[targetStart + i] = source[sourceStart + i] - vertexBase;
+        if (count <= 0)
+            return;
+
+        NativeArray<int>.Copy(source.AsArray(), sourceStart, target, targetStart, count);
     }
 
     public void SetVisible(bool visible)
