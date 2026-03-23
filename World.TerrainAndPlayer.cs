@@ -53,7 +53,7 @@ public partial class World : MonoBehaviour
         int padX = sizeX + border;
         int padZ = sizeZ + border;
 
-        NativeArray<byte> paddedData = new NativeArray<byte>(padX * sizeY * padZ, Allocator.TempJob);
+        NativeArray<byte> paddedData = new NativeArray<byte>(padX * sizeY * padZ, Allocator.Temp);
 
         for (int z = -border; z < sizeZ + border; z++)
         {

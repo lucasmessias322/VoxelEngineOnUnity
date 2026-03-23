@@ -512,12 +512,20 @@ public partial class World : MonoBehaviour
 
     private bool IsCoordInsideRenderDistance(Vector2Int coord, Vector2Int center)
     {
-        return IsCoordInsideDistance(coord, center, renderDistance);
+        return IsCoordInsideCircularDistance(coord, center, renderDistance);
     }
 
     private int GetEffectiveSimulationDistance()
     {
         return Mathf.Clamp(simulationDistance, 0, Mathf.Max(0, renderDistance));
+    }
+
+    private static bool IsCoordInsideCircularDistance(Vector2Int coord, Vector2Int center, int distanceInChunks)
+    {
+        int clampedDistance = Mathf.Max(0, distanceInChunks);
+        int dx = coord.x - center.x;
+        int dz = coord.y - center.y;
+        return dx * dx + dz * dz <= clampedDistance * clampedDistance;
     }
 
     private static bool IsCoordInsideDistance(Vector2Int coord, Vector2Int center, int distanceInChunks)
@@ -1606,9 +1614,8 @@ public partial class World : MonoBehaviour
                         pd.solids,
                         pd.subchunkNonEmpty,
                         pd.heightCache,
-                        pd.borderSize);
-
-                    CopyVoxelDataOptimized(pd.blockTypes, activeChunk.voxelData, pd.borderSize);
+                        pd.borderSize,
+                        activeChunk.voxelData);
                     activeChunk.hasVoxelSnapshot = true;
 
                     ScheduleSubchunkMeshJobs(pd, activeChunk);
@@ -1666,7 +1673,6 @@ public partial class World : MonoBehaviour
 
                     if (range.vertexCount > 0)
                     {
-                        sub.gameObject.SetActive(true);
                         sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
                                           pm.waterTriangles, pm.uvs, pm.uv2, pm.normals, pm.extraUVs,
                                           range, startY, endY);
@@ -1715,27 +1721,6 @@ public partial class World : MonoBehaviour
 
     #region Voxel Data Copy & Mesh Scheduling
 
-    private void CopyVoxelDataOptimized(NativeArray<BlockType> src, NativeArray<byte> dst, int border)
-    {
-        // Copia bloco por bloco do native BlockType array para o voxelData (byte).
-        int vx = Chunk.SizeX + 2 * border;
-        int plane = vx * Chunk.SizeY;
-
-        int dstIndex = 0;
-
-        for (int y = 0; y < Chunk.SizeY; y++)
-        {
-            for (int z = 0; z < Chunk.SizeZ; z++)
-            {
-                int srcBase = (z + border) * plane + y * vx + border;
-                for (int x = 0; x < Chunk.SizeX; x++)
-                {
-                    dst[dstIndex++] = (byte)src[srcBase + x];
-                }
-            }
-        }
-    }
-
     private void ApplyCurrentBlockOverridesToChunkData(
         Vector2Int coord,
         NativeArray<BlockType> blockTypes,
@@ -1749,7 +1734,8 @@ public partial class World : MonoBehaviour
             solids,
             subchunkNonEmpty,
             heightCache,
-            InferBorderSizeFromChunkArrays(blockTypes, heightCache));
+            InferBorderSizeFromChunkArrays(blockTypes, heightCache),
+            default);
     }
 
     private Chunk CreateChunkPoolEntry()
@@ -1773,7 +1759,8 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache,
-        int borderSize)
+        int borderSize,
+        NativeArray<byte> voxelSnapshot)
     {
         if (blockOverrides.Count == 0 ||
             !blockTypes.IsCreated ||
@@ -1816,6 +1803,7 @@ public partial class World : MonoBehaviour
                 continue;
 
             blockTypes[idx] = overrideType;
+            UpdateVoxelSnapshotCell(voxelSnapshot, chunkMinX, chunkMinZ, worldPos, overrideType);
             hasRelevantOverrides = true;
         }
 
@@ -1823,6 +1811,33 @@ public partial class World : MonoBehaviour
             return;
 
         RefreshChunkDerivedData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+    }
+
+    private static void UpdateVoxelSnapshotCell(
+        NativeArray<byte> voxelSnapshot,
+        int chunkMinX,
+        int chunkMinZ,
+        Vector3Int worldPos,
+        BlockType blockType)
+    {
+        if (!voxelSnapshot.IsCreated)
+            return;
+
+        int localX = worldPos.x - chunkMinX;
+        int localZ = worldPos.z - chunkMinZ;
+        int localY = worldPos.y;
+        if (localX < 0 || localX >= Chunk.SizeX ||
+            localZ < 0 || localZ >= Chunk.SizeZ ||
+            localY < 0 || localY >= Chunk.SizeY)
+        {
+            return;
+        }
+
+        int snapshotIndex = localX + localZ * Chunk.SizeX + localY * Chunk.SizeX * Chunk.SizeZ;
+        if (snapshotIndex < 0 || snapshotIndex >= voxelSnapshot.Length)
+            return;
+
+        voxelSnapshot[snapshotIndex] = (byte)blockType;
     }
 
     private static int InferBorderSizeFromChunkArrays(NativeArray<BlockType> blockTypes, NativeArray<int> heightCache)
@@ -2279,7 +2294,11 @@ public partial class World : MonoBehaviour
             {
                 for (int z = -renderDistance; z <= renderDistance; z++)
                 {
-                    _tempNeededCoords.Add(new Vector2Int(currentChunkCoord.x + x, currentChunkCoord.y + z));
+                    Vector2Int coord = new Vector2Int(currentChunkCoord.x + x, currentChunkCoord.y + z);
+                    if (!IsCoordInsideRenderDistance(coord, currentChunkCoord))
+                        continue;
+
+                    _tempNeededCoords.Add(coord);
                 }
             }
 
@@ -2456,6 +2475,7 @@ public partial class World : MonoBehaviour
             caveSpaghettiSettings,
             enableVoxelLighting,
             chunkLightData,
+            chunk.voxelData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
             out NativeArray<BlockType> blockTypes,
@@ -2790,7 +2810,7 @@ public partial class World : MonoBehaviour
             }
         }
 
-        ApplyCurrentBlockOverridesToChunkData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+        ApplyCurrentBlockOverridesToChunkData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize, default);
     }
 
     private void FillFastRebuildLightOpacityFromLoadedChunks(
@@ -3097,6 +3117,7 @@ public partial class World : MonoBehaviour
               caveSpaghettiSettings,
               enableVoxelLighting,
               chunkLightData,
+              chunk.voxelData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
               out NativeArray<BlockType> blockTypes,
@@ -3334,6 +3355,9 @@ public partial class World : MonoBehaviour
                 for (int z = -renderDistance; z <= renderDistance; z++)
                 {
                     Vector2Int coord = new Vector2Int(playerCoord.x + x, playerCoord.y + z);
+                    if (!IsCoordInsideRenderDistance(coord, playerCoord))
+                        continue;
+
                     DrawBoundsGizmo(GetChunkBoundsFromCoord(coord), debugRenderGridColor, false);
                 }
             }

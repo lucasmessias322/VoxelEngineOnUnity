@@ -223,6 +223,9 @@ public partial class World : MonoBehaviour
             for (int dz = -renderDistance; dz <= renderDistance; dz++)
             {
                 Vector2Int coord = new Vector2Int(cameraChunkCoord.x + dx, cameraChunkCoord.y + dz);
+                if (!IsCoordInsideRenderDistance(coord, cameraChunkCoord))
+                    continue;
+
                 if (!TryGetLoadedSection(coord, seedSubchunk, out _))
                     continue;
 

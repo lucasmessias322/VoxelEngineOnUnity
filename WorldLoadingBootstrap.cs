@@ -229,8 +229,18 @@ public class WorldLoadingBootstrap : MonoBehaviour
         if (world == null)
             return 0;
 
-        int diameter = world.renderDistance * 2 + 1;
-        return Mathf.Max(1, diameter * diameter);
+        int count = 0;
+        for (int x = -world.renderDistance; x <= world.renderDistance; x++)
+        {
+            for (int z = -world.renderDistance; z <= world.renderDistance; z++)
+            {
+                Vector2Int coord = new Vector2Int(initialLoadCenterChunk.x + x, initialLoadCenterChunk.y + z);
+                if (IsCoordInsideRenderDistance(coord, initialLoadCenterChunk))
+                    count++;
+            }
+        }
+
+        return Mathf.Max(1, count);
     }
 
     private int CountReadyInitialChunks()
@@ -606,9 +616,10 @@ public class WorldLoadingBootstrap : MonoBehaviour
         if (world == null)
             return false;
 
-        int dx = Mathf.Abs(coord.x - center.x);
-        int dz = Mathf.Abs(coord.y - center.y);
-        return dx <= world.renderDistance && dz <= world.renderDistance;
+        int dx = coord.x - center.x;
+        int dz = coord.y - center.y;
+        int renderRadius = Mathf.Max(0, world.renderDistance);
+        return dx * dx + dz * dz <= renderRadius * renderRadius;
     }
 
     private static Vector2Int GetChunkCoordFromWorldPosition(Vector3 worldPos)

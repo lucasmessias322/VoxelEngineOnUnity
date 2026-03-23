@@ -12,9 +12,6 @@ public static class ChunkData
     private const int SizeX = Chunk.SizeX;
     private const int SizeY = Chunk.SizeY;
     private const int SizeZ = Chunk.SizeZ;
-    // No topo da classe (junto com as outras const)
-    private const int SubchunkHeight = Chunk.SubchunkHeight;
-    private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
     private const int SpaghettiHorizontalCellSize = 4;
     private const int SpaghettiVerticalCellSize = 4;
     private const float DoubleNoiseWarp = 1.0181269f;
@@ -60,7 +57,6 @@ public static class ChunkData
         public NativeArray<BlockType> blockTypes;
         public NativeArray<bool> solids;
 
-        public NativeArray<bool> subchunkNonEmpty;
         [ReadOnly] public NativeArray<TerrainColumnContext> columnContextCache;
         public int columnContextCacheStride;
         [ReadOnly] public NativeArray<byte> spaghettiCarveMask;
@@ -116,34 +112,6 @@ public static class ChunkData
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
             // === NOVO: prÃ©-calcula quais subchunks tÃªm blocos ===
-            for (int s = 0; s < SubchunksPerColumn; s++)
-                subchunkNonEmpty[s] = false;
-
-            for (int s = 0; s < SubchunksPerColumn; s++)
-            {
-                int startY = s * SubchunkHeight;
-                if (startY >= SizeY)
-                {
-                    subchunkNonEmpty[s] = false;
-                    continue;
-                }
-
-                int endY = math.min(startY + SubchunkHeight, SizeY);
-                bool hasBlock = false;
-
-                for (int y = startY; y < endY && !hasBlock; y++)
-                    for (int z = border; z < border + SizeZ && !hasBlock; z++)
-                        for (int x = border; x < border + SizeX && !hasBlock; x++)
-                        {
-                            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-                            if (blockTypes[idx] != BlockType.Air)
-                            {
-                                hasBlock = true;
-                                break;
-                            }
-                        }
-                subchunkNonEmpty[s] = hasBlock;
-            }
         }
 
         private bool HasSharedSpaghettiCarveMask()

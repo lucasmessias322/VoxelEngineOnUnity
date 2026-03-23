@@ -425,6 +425,41 @@ public static class MeshGenerator
         public void Execute() { }
     }
 
+    [BurstCompile]
+    private struct BuildChunkSnapshotAndFlagsJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [WriteOnly] public NativeArray<byte> voxelSnapshot;
+        public NativeArray<bool> subchunkNonEmpty;
+        public int borderSize;
+
+        public void Execute()
+        {
+            for (int s = 0; s < SubchunksPerColumn; s++)
+                subchunkNonEmpty[s] = false;
+
+            int voxelSizeX = SizeX + 2 * borderSize;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int dstIndex = 0;
+
+            for (int y = 0; y < SizeY; y++)
+            {
+                int subchunkIndex = y / Chunk.SubchunkHeight;
+                for (int z = 0; z < SizeZ; z++)
+                {
+                    int srcBase = (z + borderSize) * voxelPlaneSize + y * voxelSizeX + borderSize;
+                    for (int x = 0; x < SizeX; x++, dstIndex++)
+                    {
+                        BlockType blockType = blockTypes[srcBase + x];
+                        voxelSnapshot[dstIndex] = (byte)blockType;
+                        if (blockType != BlockType.Air)
+                            subchunkNonEmpty[subchunkIndex] = true;
+                    }
+                }
+            }
+        }
+    }
+
     public static void ScheduleDataJob(
         Vector2Int coord,
         NativeArray<NoiseLayer> noiseLayers,
@@ -455,6 +490,7 @@ public static class MeshGenerator
         SpaghettiCaveSettings spaghettiCaveSettings,
         bool enableVoxelLighting,
         NativeArray<byte> lightData,
+        NativeArray<byte> chunkVoxelSnapshot,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
         out NativeArray<BlockType> blockTypes,
@@ -467,6 +503,8 @@ public static class MeshGenerator
         // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
 
         // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
+        // Em cenas pesadas essa chain pode durar mais de 4 frames, entÃƒÂ£o os buffers
+        // intermediÃƒÂ¡rios abaixo nÃƒÂ£o podem usar TempJob.
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
 
@@ -515,7 +553,7 @@ public static class MeshGenerator
             heightStride = dataHeightSize
         };
         JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
-        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.TempJob);
+        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
         var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
             coord = coord,
@@ -586,7 +624,6 @@ public static class MeshGenerator
             spaghettiCaveSettings = spaghettiCaveSettings,
 
             enableTrees = enableTrees,
-            subchunkNonEmpty = subchunkNonEmpty,
             columnContextCache = dataColumnContexts,
             columnContextCacheStride = dataHeightSize,
             spaghettiCarveMask = default,
@@ -600,6 +637,14 @@ public static class MeshGenerator
         if (!enableVoxelLighting)
         {
             chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            var snapshotJob = new BuildChunkSnapshotAndFlagsJob
+            {
+                blockTypes = blockTypes,
+                voxelSnapshot = chunkVoxelSnapshot,
+                subchunkNonEmpty = subchunkNonEmpty,
+                borderSize = dataBorderSize
+            };
+            JobHandle snapshotHandle = snapshotJob.Schedule(chunkDataHandle);
             var disposeDataColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
             {
                 values = dataColumnContexts
@@ -609,12 +654,12 @@ public static class MeshGenerator
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
-            dataHandle = disposeDataColumnContextHandle;
+            dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle);
             return;
         }
 
         lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
-        NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.TempJob);
+        NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
         var lightHeightJob = new HeightmapJob
         {
             coord = coord,
@@ -629,7 +674,7 @@ public static class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
-        NativeArray<TerrainColumnContext> lightColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.TempJob);
+        NativeArray<TerrainColumnContext> lightColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.Persistent);
         var buildLightColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
             coord = coord,
@@ -651,7 +696,7 @@ public static class MeshGenerator
         JobHandle spaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
         {
-            spaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.TempJob, NativeArrayOptions.ClearMemory);
+            spaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
             {
                 coord = coord,
@@ -673,6 +718,14 @@ public static class MeshGenerator
         chunkDataHandle = useSharedSpaghettiCarveMask
             ? chunkDataJob.Schedule(JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle))
             : chunkDataJob.Schedule(populateHandle);
+        var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
+        {
+            blockTypes = blockTypes,
+            voxelSnapshot = chunkVoxelSnapshot,
+            subchunkNonEmpty = subchunkNonEmpty,
+            borderSize = dataBorderSize
+        };
+        JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(chunkDataHandle);
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
@@ -784,7 +837,8 @@ public static class MeshGenerator
         JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(chunkDataHandle);
         dataHandle = JobHandle.CombineDependencies(
             lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
-            disposeDataColumnContextAfterLightingHandle);
+            disposeDataColumnContextAfterLightingHandle,
+            buildChunkSnapshotHandle);
     }
 
     public static void ScheduleMeshJob(
@@ -995,8 +1049,7 @@ public static class MeshGenerator
                     subchunkVisibilityMasks[sub] = ComputeVisibilityMask(occlusionState, occlusionQueue);
 
                     GenerateMesh(heightCache, blockTypes, solids, light, invAtlasTilesX, invAtlasTilesY);
-                    GenerateSpecialMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
-                    GenerateGrassBillboards(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
+                    GenerateDecorativeMeshes(blockTypes, light, invAtlasTilesX, invAtlasTilesY);
 
                     range.vertexCount = vertices.Length - range.vertexStart;
                     range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
@@ -1532,17 +1585,35 @@ public static class MeshGenerator
                            (mask[startI + startJ * sizeU].ao1 + mask[startI + startJ * sizeU].ao3);
         }
 
-        private void GenerateSpecialMeshes(
+        private void GenerateDecorativeMeshes(
             NativeArray<BlockType> blockTypes,
             NativeArray<byte> light,
             float invAtlasTilesX,
             float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
+            bool generateGrassBillboards = enableGrassBillboards && grassBillboardChance > 0f;
+            float noiseScale = 0f;
+            float jitter = 0f;
+            Vector2 grassBillboardAtlasUv = default;
+            float grassBillboardTint = 0f;
+            if (generateGrassBillboards)
+            {
+                BlockTextureMapping grassBillboardMapping = blockMappings[(int)grassBillboardBlockType];
+                grassBillboardAtlasUv = new Vector2(
+                    grassBillboardMapping.side.x * invAtlasTilesX + 0.001f,
+                    grassBillboardMapping.side.y * invAtlasTilesY + 0.001f
+                );
+                grassBillboardTint = grassBillboardMapping.tintSide ? 1f : 0f;
+                noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
+                jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
+            }
 
-            for (int y = startY; y < endY; y++)
+            int minY = math.max(startY - 1, 0);
+            int maxY = math.min(endY - 1, SizeY - 1);
+
+            for (int y = minY; y <= maxY; y++)
             {
                 for (int z = border; z < border + SizeZ; z++)
                 {
@@ -1550,110 +1621,81 @@ public static class MeshGenerator
                     {
                         int idx = x + y * voxelSizeX + z * voxelPlaneSize;
                         BlockType blockType = blockTypes[idx];
-                        if (blockType == BlockType.Air)
-                            continue;
 
-                        BlockTextureMapping mapping = blockMappings[(int)blockType];
-                        if (mapping.isEmpty || mapping.renderShape == BlockRenderShape.Cube)
-                            continue;
-
-                        float light01 = GetSpecialMeshLight01(idx, voxelSizeX, light);
-                        Vector3 origin = new Vector3(x - border, y, z - border);
-
-                        switch (mapping.renderShape)
+                        if (y >= startY && blockType != BlockType.Air)
                         {
-                            case BlockRenderShape.Cross:
-                                AddCrossShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, light01);
-                                break;
+                            BlockTextureMapping mapping = blockMappings[(int)blockType];
+                            if (!mapping.isEmpty && mapping.renderShape != BlockRenderShape.Cube)
+                            {
+                                float specialLight01 = GetSpecialMeshLight01(idx, voxelSizeX, light);
+                                Vector3 origin = new Vector3(x - border, y, z - border);
 
-                            case BlockRenderShape.Cuboid:
-                                AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, light01);
-                                break;
+                                switch (mapping.renderShape)
+                                {
+                                    case BlockRenderShape.Cross:
+                                        AddCrossShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Cuboid:
+                                        AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
+                                        break;
+                                }
+                            }
                         }
-                    }
-                }
-            }
-        }
 
-        private void GenerateGrassBillboards(
-            NativeArray<BlockType> blockTypes,
-            NativeArray<byte> light,
-            float invAtlasTilesX,
-            float invAtlasTilesY)
-        {
-            if (!enableGrassBillboards || grassBillboardChance <= 0f)
-                return;
+                        if (!generateGrassBillboards ||
+                            blockType != BlockType.Grass ||
+                            y + 1 >= SizeY)
+                        {
+                            continue;
+                        }
 
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            float noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
-            float jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
-
-            BlockTextureMapping mapping = blockMappings[(int)grassBillboardBlockType];
-            Vector2 atlasUv = new Vector2(
-                mapping.side.x * invAtlasTilesX + 0.001f,
-                mapping.side.y * invAtlasTilesY + 0.001f
-            );
-            float tint = mapping.tintSide ? 1f : 0f;
-
-            int minY = math.max(startY - 1, 0);
-            int maxY = math.min(endY - 1, SizeY - 2);
-
-            for (int y = minY; y <= maxY; y++)
-            {
-                int py = y + 1;
-                if (py < startY || py >= endY)
-                    continue;
-
-                for (int z = border; z < border + SizeZ; z++)
-                {
-                    int worldZ = chunkCoordZ * SizeZ + (z - border);
-                    for (int x = border; x < border + SizeX; x++)
-                    {
-                        int worldX = chunkCoordX * SizeX + (x - border);
-                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-
-                        if (blockTypes[idx] != BlockType.Grass)
+                        int py = y + 1;
+                        if (py < startY || py >= endY)
                             continue;
 
                         int upIdx = idx + voxelSizeX;
                         if (blockTypes[upIdx] != BlockType.Air)
                             continue;
 
-                        float n = noise.snoise(new float2(
-                            (worldX + 123.17f) * noiseScale,
-                            (worldZ - 91.73f) * noiseScale
-                        )) * 0.5f + 0.5f;
-
-                        float effectiveChance = math.saturate(
-                            grassBillboardChance * math.lerp(0.35f, 1.65f, n)
-                        );
-
-                        uint h = math.hash(new int3(worldX, py, worldZ));
-                        float chance = (h & 0x00FFFFFF) / 16777215f;
-                        if (chance > effectiveChance)
+                        int worldX = chunkCoordX * SizeX + (x - border);
+                        int worldZ = chunkCoordZ * SizeZ + (z - border);
+                        if (!ShouldGenerateGrassBillboard(worldX, py, worldZ, noiseScale))
                             continue;
 
-                        if (IsSuppressedGrassBillboard(worldX, py, worldZ))
-                            continue;
-
+                        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
+                        float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
+                        float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
                         byte packed = light[upIdx];
                         byte billboardLight = (byte)math.max(
                             (int)LightUtils.GetSkyLight(packed),
                             (int)LightUtils.GetBlockLight(packed)
                         );
                         float light01 = billboardLight / 15f;
-
-                        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
-                        float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
-                        float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
-
                         Vector3 center = new Vector3((x - border) + 0.5f + jx, py - 0.02f, (z - border) + 0.5f + jz);
-                        AddBillboardCross(center, grassBillboardHeight, atlasUv, light01, tint);
+                        AddBillboardCross(center, grassBillboardHeight, grassBillboardAtlasUv, light01, grassBillboardTint);
                     }
                 }
             }
+        }
+
+        private bool ShouldGenerateGrassBillboard(int worldX, int worldY, int worldZ, float noiseScale)
+        {
+            float n = noise.snoise(new float2(
+                (worldX + 123.17f) * noiseScale,
+                (worldZ - 91.73f) * noiseScale
+            )) * 0.5f + 0.5f;
+
+            float effectiveChance = math.saturate(
+                grassBillboardChance * math.lerp(0.35f, 1.65f, n)
+            );
+
+            uint h = math.hash(new int3(worldX, worldY, worldZ));
+            float chance = (h & 0x00FFFFFF) / 16777215f;
+            if (chance > effectiveChance)
+                return false;
+
+            return !IsSuppressedGrassBillboard(worldX, worldY, worldZ);
         }
 
         private void AddBillboardCross(Vector3 center, float height, Vector2 atlasUv, float light01, float tint)
