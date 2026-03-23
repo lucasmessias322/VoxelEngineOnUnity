@@ -806,6 +806,7 @@ public partial class World : MonoBehaviour
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
             subchunk.RebuildColliders(chunk.voxelData, blockMappings, startY, endY);
             subchunk.SetColliderSystemEnabled(true);
+            ProfilerIncrementColliderBuildCount();
             processed++;
         }
     }
@@ -1373,6 +1374,7 @@ public partial class World : MonoBehaviour
         EnsureDefaultWarpLayersConfigured();
         MarkBiomeCachesDirty();
         InvalidateNativeGenerationCaches();
+        ProfilerValidateSettings();
     }
 
     private void Start()
@@ -1400,6 +1402,7 @@ public partial class World : MonoBehaviour
         lastEnableBlockColliders = enableBlockColliders;
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
+        ProfilerInitialize();
     }
 
     private void OnDestroy()
@@ -1428,22 +1431,58 @@ public partial class World : MonoBehaviour
         }
 
         DisposeNativeGenerationCaches();
+        ProfilerShutdown();
     }
 
     private void Update()
     {
+        ProfilerHandleRuntimeInput();
+        ProfilerBeginFrame();
+
+        double stageStart = ProfilerBeginStage(SimpleProfilerStage.BlockColliderToggle);
         HandleBlockColliderToggle();
+        ProfilerEndStage(SimpleProfilerStage.BlockColliderToggle, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.VisualFeatureToggle);
         HandleVisualFeatureToggle();
+        ProfilerEndStage(SimpleProfilerStage.VisualFeatureToggle, stageStart);
+
         meshesAppliedThisFrame = 0;
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.WaterUpdates);
         ProcessQueuedWaterUpdates();
+        ProfilerEndStage(SimpleProfilerStage.WaterUpdates, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.ChunkRebuildQueue);
         ProcessQueuedChunkRebuilds();
+        ProfilerEndStage(SimpleProfilerStage.ChunkRebuildQueue, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.HighBuildRebuildQueue);
         ProcessQueuedHighBuildMeshRebuilds();
+        ProfilerEndStage(SimpleProfilerStage.HighBuildRebuildQueue, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.LeafDecay);
         ProcessQueuedLeafDecay();
+        ProfilerEndStage(SimpleProfilerStage.LeafDecay, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.UpdateChunks);
         UpdateChunks();
+        ProfilerEndStage(SimpleProfilerStage.UpdateChunks, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.SimulationRefresh);
         RefreshSimulationDistanceStateIfNeeded();
+        ProfilerEndStage(SimpleProfilerStage.SimulationRefresh, stageStart);
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.ColliderBuilds);
         ProcessPendingColliderBuilds();
+        ProfilerEndStage(SimpleProfilerStage.ColliderBuilds, stageStart);
+
         ProcessChunkQueue();
+
+        stageStart = ProfilerBeginStage(SimpleProfilerStage.SectionOcclusion);
         UpdateSectionOcclusionVisibility();
+        ProfilerEndStage(SimpleProfilerStage.SectionOcclusion, stageStart);
+
+        ProfilerEndFrame();
     }
 
     #endregion
@@ -1583,6 +1622,7 @@ public partial class World : MonoBehaviour
         int dataCompletionsLimit = Mathf.Max(1, maxDataCompletionsPerFrame);
 
         // === STAGE 1: DATA JOBS (voxel generation) ===
+        double profilerDataStageStart = ProfilerBeginStage(SimpleProfilerStage.DataJobProcessing);
         int i = 0;
         while (i < pendingDataJobs.Count)
         {
@@ -1599,6 +1639,7 @@ public partial class World : MonoBehaviour
             // Complete and process
             pd.handle.Complete();
             dataProcessedThisFrame++;
+            ProfilerIncrementDataJobCompletionCount();
 
             DisposeCompletedDataJobInputs(ref pd);
             pendingDataJobs[i] = pd;
@@ -1615,6 +1656,8 @@ public partial class World : MonoBehaviour
                 }
                 else
                 {
+                    ProfilerTrackDataJobCompleted(pd.expectedGen);
+
                     if (!activeChunk.HasInitializedSubchunks)
                         activeChunk.InitializeSubchunks(Material);
                     else
@@ -1645,8 +1688,10 @@ public partial class World : MonoBehaviour
             if (hasActiveChunk)
                 RefreshChunkJobTracking(pd.coord, activeChunk);
         }
+        ProfilerEndStage(SimpleProfilerStage.DataJobProcessing, profilerDataStageStart);
 
         // === STAGE 2: MESH JOBS (apply to GPU) ===
+        double profilerMeshStageStart = ProfilerBeginStage(SimpleProfilerStage.MeshApply);
         i = 0;
         while (i < pendingMeshes.Count)
         {
@@ -1707,6 +1752,7 @@ public partial class World : MonoBehaviour
                         sub.ClearMesh();
                     }
 
+                    ProfilerTrackSubchunkMeshApplied(pm.expectedGen);
                     meshesAppliedThisFrame++;
                 }
 
@@ -1723,6 +1769,8 @@ public partial class World : MonoBehaviour
 
                 if (updatedSectionVisibility)
                     InvalidateSectionOcclusionGraph();
+
+                ProfilerTrackChunkVisualReady(pm.coord, pm.expectedGen);
             }
 
             DisposePendingMesh(pm);
@@ -1730,6 +1778,7 @@ public partial class World : MonoBehaviour
             if (hasActiveChunk)
                 RefreshChunkJobTracking(pm.coord, activeChunk);
         }
+        ProfilerEndStage(SimpleProfilerStage.MeshApply, profilerMeshStageStart);
     }
 
     #endregion
@@ -2016,6 +2065,12 @@ public partial class World : MonoBehaviour
                 suppressedBillboards = default,
                 buildColliders = pd.rebuildColliders
             });
+
+            ProfilerTrackMeshJobScheduled(pd.expectedGen, meshSubchunkMask);
+        }
+        else
+        {
+            ProfilerTrackChunkVisualReady(pd.coord, pd.expectedGen);
         }
 
         var disposeJob = new MeshGenerator.DisposeChunkDataJob
@@ -2534,6 +2589,8 @@ public partial class World : MonoBehaviour
             rebuildColliders = enableBlockColliders
         });
 
+        ProfilerTrackChunkScheduled(coord, expectedGen, ChunkProfileKind.NewChunk, GetFullSubchunkMask());
+
         chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
         chunk.gameObject.SetActive(true);
@@ -2719,6 +2776,8 @@ public partial class World : MonoBehaviour
             dirtySubchunkMask = dirtySubchunkMask,
             rebuildColliders = rebuildColliders
         });
+
+        ProfilerTrackChunkScheduled(coord, expectedGen, ChunkProfileKind.FastRebuild, dirtySubchunkMask);
 
         chunk.currentJob = visualDataHandle;
         chunk.jobScheduled = true;
@@ -3093,6 +3152,7 @@ public partial class World : MonoBehaviour
             }
 
             RequestChunkRebuildImmediate(coord, dirtySubchunkMask, requiresColliderRebuild);
+            ProfilerIncrementChunkRebuildProcessedCount();
             processed++;
         }
     }
@@ -3230,6 +3290,8 @@ public partial class World : MonoBehaviour
             dirtySubchunkMask = dirtySubchunkMask,
             rebuildColliders = rebuildColliders
         });
+
+        ProfilerTrackChunkScheduled(coord, expectedGen, ChunkProfileKind.Rebuild, dirtySubchunkMask);
 
         chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;

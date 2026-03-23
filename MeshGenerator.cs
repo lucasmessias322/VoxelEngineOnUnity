@@ -238,6 +238,48 @@ public static class MeshGenerator
     }
 
     [BurstCompile]
+    private struct CropHeightCacheJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<int> sourceHeightCache;
+        [WriteOnly] public NativeArray<int> targetHeightCache;
+
+        public int sourceHeightStride;
+        public int targetHeightStride;
+        public int sourceBorder;
+        public int targetBorder;
+
+        public void Execute(int index)
+        {
+            int targetX = index % targetHeightStride;
+            int targetZ = index / targetHeightStride;
+            int borderOffset = sourceBorder - targetBorder;
+            int sourceIndex = (targetX + borderOffset) + (targetZ + borderOffset) * sourceHeightStride;
+            targetHeightCache[index] = sourceHeightCache[sourceIndex];
+        }
+    }
+
+    [BurstCompile]
+    private struct CropTerrainColumnContextCacheJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<TerrainColumnContext> sourceColumnContexts;
+        [WriteOnly] public NativeArray<TerrainColumnContext> targetColumnContexts;
+
+        public int sourceStride;
+        public int targetStride;
+        public int sourceBorder;
+        public int targetBorder;
+
+        public void Execute(int index)
+        {
+            int targetX = index % targetStride;
+            int targetZ = index / targetStride;
+            int borderOffset = sourceBorder - targetBorder;
+            int sourceIndex = (targetX + borderOffset) + (targetZ + borderOffset) * sourceStride;
+            targetColumnContexts[index] = sourceColumnContexts[sourceIndex];
+        }
+    }
+
+    [BurstCompile]
     struct PopulateTerrainJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
@@ -597,6 +639,93 @@ public static class MeshGenerator
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
 
+        bool useOpacitySnapshot = enableVoxelLighting &&
+                                  lightOpacitySnapshotVoxelData.IsCreated &&
+                                  lightOpacitySnapshotLoadedChunks.IsCreated &&
+                                  lightOpacitySnapshotLoadedChunks.Length > 0 &&
+                                  lightOpacitySnapshotChunkRadius > 0;
+
+        NativeArray<TerrainColumnContext> dataColumnContexts = default;
+        NativeArray<int> lightingHeightCache = default;
+        NativeArray<TerrainColumnContext> lightingColumnContexts = default;
+        JobHandle lightingHeightHandle = default;
+        JobHandle lightingColumnContextHandle = default;
+        JobHandle lightingHeightCropHandle = default;
+        JobHandle lightingColumnContextCropHandle = default;
+        JobHandle terrainPopulateHandle = default;
+        if (enableVoxelLighting && !useOpacitySnapshot)
+        {
+            int totalColumns = dataHeightSize * dataHeightSize;
+
+            // Build terrain/climate once at the lighting border, then crop the
+            // smaller mesh-data cache used by chunk generation.
+            lightingHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
+            var lightingHeightJob = new HeightmapJob
+            {
+                coord = coord,
+                noiseLayers = noiseLayers,
+                warpLayers = warpLayers,
+                baseHeight = baseHeight,
+                offsetX = globalOffsetX,
+                offsetZ = globalOffsetZ,
+                border = lightBorderSize,
+                biomeNoiseSettings = biomeNoiseSettings,
+                heightCache = lightingHeightCache,
+                heightStride = lightHeightSize
+            };
+            lightingHeightHandle = lightingHeightJob.Schedule(lightTotalHeightPoints, 32);
+
+            lightingColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.Persistent);
+            var buildLightingColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
+            {
+                coord = coord,
+                heightCache = lightingHeightCache,
+                columnContexts = lightingColumnContexts,
+                border = lightBorderSize,
+                seaLevel = seaLevel,
+                baseHeight = baseHeight,
+                CliffTreshold = CliffTreshold,
+                biomeNoiseSettings = biomeNoiseSettings
+            };
+            lightingColumnContextHandle = buildLightingColumnContextCacheJob.Schedule(lightTotalHeightPoints, 32, lightingHeightHandle);
+
+            var cropHeightCacheJob = new CropHeightCacheJob
+            {
+                sourceHeightCache = lightingHeightCache,
+                targetHeightCache = heightCache,
+                sourceHeightStride = lightHeightSize,
+                targetHeightStride = dataHeightSize,
+                sourceBorder = lightBorderSize,
+                targetBorder = dataBorderSize
+            };
+            lightingHeightCropHandle = cropHeightCacheJob.Schedule(dataTotalHeightPoints, 32, lightingHeightHandle);
+
+            dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
+            var cropColumnContextCacheJob = new CropTerrainColumnContextCacheJob
+            {
+                sourceColumnContexts = lightingColumnContexts,
+                targetColumnContexts = dataColumnContexts,
+                sourceStride = lightHeightSize,
+                targetStride = dataHeightSize,
+                sourceBorder = lightBorderSize,
+                targetBorder = dataBorderSize
+            };
+            lightingColumnContextCropHandle = cropColumnContextCacheJob.Schedule(dataTotalHeightPoints, 32, lightingColumnContextHandle);
+
+            var populateJob = new PopulateTerrainJob
+            {
+                columnContexts = dataColumnContexts,
+                blockTypes = blockTypes,
+                solids = solids,
+                blockMappings = blockMappings,
+                border = borderSize
+            };
+            JobHandle croppedTerrainInputsHandle = JobHandle.CombineDependencies(lightingHeightCropHandle, lightingColumnContextCropHandle);
+            terrainPopulateHandle = populateJob.Schedule(totalColumns, 32, croppedTerrainInputsHandle);
+        }
+        else
+        {
+
         // ==========================================
         // JOB 0: GeraÃƒÂ§ÃƒÂ£o do Heightmap (Paralelo)
         // ==========================================
@@ -614,7 +743,7 @@ public static class MeshGenerator
             heightStride = dataHeightSize
         };
         JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃƒÂ¡rio)
-        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
+        dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
         var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
             coord = coord,
@@ -645,13 +774,15 @@ public static class MeshGenerator
         int totalColumns = paddedSize * paddedSize;
 
         JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 ÃƒÂ© ÃƒÂ³timo
-
+        terrainPopulateHandle = populateHandle;
+        }
 
 
 
         // ==========================================
         // JOB 1: GeraÃƒÂ§ÃƒÂ£o de Dados (Terreno)
         // ==========================================
+        NativeArray<byte> fallbackSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
             coord = coord,
@@ -687,7 +818,7 @@ public static class MeshGenerator
             enableTrees = enableTrees,
             columnContextCache = dataColumnContexts,
             columnContextCacheStride = dataHeightSize,
-            spaghettiCarveMask = default,
+            spaghettiCarveMask = fallbackSpaghettiCarveMask,
             spaghettiCarveMaskVoxelSizeX = 0,
             spaghettiCarveMaskVoxelPlaneSize = 0,
             spaghettiCarveMaskOffsetX = 0,
@@ -697,7 +828,7 @@ public static class MeshGenerator
         JobHandle chunkDataHandle;
         if (!enableVoxelLighting)
         {
-            chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            chunkDataHandle = chunkDataJob.Schedule(terrainPopulateHandle);
             var snapshotJob = new BuildChunkSnapshotAndFlagsJob
             {
                 blockTypes = blockTypes,
@@ -706,6 +837,11 @@ public static class MeshGenerator
                 borderSize = dataBorderSize
             };
             JobHandle snapshotHandle = snapshotJob.Schedule(chunkDataHandle);
+            var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
+            {
+                values = chunkDataJob.spaghettiCarveMask
+            };
+            JobHandle disposeFallbackSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(chunkDataHandle);
             var disposeDataColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
             {
                 values = dataColumnContexts
@@ -715,15 +851,11 @@ public static class MeshGenerator
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
-            dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle);
+            dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle, disposeFallbackSpaghettiCarveMaskHandle);
             return;
         }
 
         lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
-        bool useOpacitySnapshot = lightOpacitySnapshotVoxelData.IsCreated &&
-                                  lightOpacitySnapshotLoadedChunks.IsCreated &&
-                                  lightOpacitySnapshotLoadedChunks.Length > 0 &&
-                                  lightOpacitySnapshotChunkRadius > 0;
 
         JobHandle lightOpacityHandle;
         if (useOpacitySnapshot)
@@ -739,7 +871,12 @@ public static class MeshGenerator
                 snapshotChunkRadius = lightOpacitySnapshotChunkRadius,
                 snapshotChunkDiameter = lightOpacitySnapshotChunkRadius * 2 + 1
             };
-            chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            chunkDataHandle = chunkDataJob.Schedule(terrainPopulateHandle);
+            var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
+            {
+                values = chunkDataJob.spaghettiCarveMask
+            };
+            JobHandle disposeSnapshotSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(chunkDataHandle);
             var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
             {
                 blockTypes = blockTypes,
@@ -804,61 +941,35 @@ public static class MeshGenerator
                 lightOpacityHandle = opacityOverrideJob.Schedule(lightOpacityHandle);
             }
 
+            JobHandle snapshotLightingHandle = snapshotLightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle));
             dataHandle = JobHandle.CombineDependencies(
-                snapshotLightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
-                disposeDataColumnContextAfterSnapshotLightingHandle,
-                buildChunkSnapshotHandle);
+                JobHandle.CombineDependencies(snapshotLightingHandle, disposeDataColumnContextAfterSnapshotLightingHandle),
+                JobHandle.CombineDependencies(buildChunkSnapshotHandle, disposeSnapshotSpaghettiCarveMaskHandle));
             return;
         }
 
-        NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
-        var lightHeightJob = new HeightmapJob
-        {
-            coord = coord,
-            noiseLayers = noiseLayers,
-            warpLayers = warpLayers,
-            baseHeight = baseHeight,
-            offsetX = globalOffsetX,
-            offsetZ = globalOffsetZ,
-            border = lightBorderSize,
-            biomeNoiseSettings = biomeNoiseSettings,
-            heightCache = lightHeightCache,
-            heightStride = lightHeightSize
-        };
-        JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
-        NativeArray<TerrainColumnContext> lightColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.Persistent);
-        var buildLightColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
-        {
-            coord = coord,
-            heightCache = lightHeightCache,
-            columnContexts = lightColumnContexts,
-            border = lightBorderSize,
-            seaLevel = seaLevel,
-            baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            biomeNoiseSettings = biomeNoiseSettings
-        };
-        JobHandle lightColumnContextHandle = buildLightColumnContextCacheJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
+        // Reuse the lighting-border cache assembled before chunk generation.
         bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
             dataBorderSize,
             lightBorderSize,
             caveGenerationMode,
             spaghettiCaveSettings);
-        NativeArray<byte> spaghettiCarveMask = default;
+        NativeArray<byte> spaghettiCarveMask = chunkDataJob.spaghettiCarveMask;
         JobHandle spaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
         {
+            fallbackSpaghettiCarveMask.Dispose();
             spaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
             {
                 coord = coord,
-                heightCache = lightHeightCache,
+                heightCache = lightingHeightCache,
                 carveMask = spaghettiCarveMask,
                 borderSize = lightBorderSize,
                 oreSeed = oreSeed,
                 spaghettiCaveSettings = spaghettiCaveSettings
             };
-            spaghettiCarveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(lightHeightHandle);
+            spaghettiCarveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(lightingHeightHandle);
 
             chunkDataJob.spaghettiCarveMask = spaghettiCarveMask;
             chunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
@@ -868,8 +979,8 @@ public static class MeshGenerator
         }
 
         chunkDataHandle = useSharedSpaghettiCarveMask
-            ? chunkDataJob.Schedule(JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle))
-            : chunkDataJob.Schedule(populateHandle);
+            ? chunkDataJob.Schedule(JobHandle.CombineDependencies(terrainPopulateHandle, spaghettiCarveMaskHandle))
+            : chunkDataJob.Schedule(terrainPopulateHandle);
         var buildChunkSnapshotJob2 = new BuildChunkSnapshotAndFlagsJob
         {
             blockTypes = blockTypes,
@@ -881,12 +992,12 @@ public static class MeshGenerator
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
-            columnContexts = lightColumnContexts,
+            columnContexts = lightingColumnContexts,
             opacity = lightOpacityData,
             effectiveOpacityByBlock = effectiveOpacityByBlock,
             border = lightBorderSize
         };
-        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightColumnContextHandle);
+        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightingColumnContextHandle);
 
         JobHandle lightOpacityTerrainHandle = populateLightOpacityHandle;
         if (useSharedSpaghettiCarveMask)
@@ -903,26 +1014,30 @@ public static class MeshGenerator
                 JobHandle.CombineDependencies(populateLightOpacityHandle, spaghettiCarveMaskHandle));
         }
 
+        JobHandle lightingHeightUsersHandle = JobHandle.CombineDependencies(
+            lightingHeightCropHandle,
+            lightingColumnContextHandle);
+        if (useSharedSpaghettiCarveMask)
+            lightingHeightUsersHandle = JobHandle.CombineDependencies(lightingHeightUsersHandle, spaghettiCarveMaskHandle);
+
         var disposeLightHeightCacheJob = new DisposeIntArrayJob
         {
-            values = lightHeightCache
+            values = lightingHeightCache
         };
-        JobHandle disposeLightHeightCacheHandle = disposeLightHeightCacheJob.Schedule(lightOpacityTerrainHandle);
+        JobHandle disposeLightHeightCacheHandle = disposeLightHeightCacheJob.Schedule(lightingHeightUsersHandle);
         var disposeLightColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
         {
-            values = lightColumnContexts
+            values = lightingColumnContexts
         };
-        JobHandle disposeLightColumnContextHandle = disposeLightColumnContextCacheJob.Schedule(lightOpacityTerrainHandle);
-        JobHandle disposeSpaghettiCarveMaskHandle = default;
-        if (useSharedSpaghettiCarveMask)
+        JobHandle disposeLightColumnContextHandle = disposeLightColumnContextCacheJob.Schedule(
+            JobHandle.CombineDependencies(lightingColumnContextCropHandle, populateLightOpacityHandle));
+        var disposeSpaghettiCarveMaskJob2 = new DisposeByteArrayJob
         {
-            var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
-            {
-                values = spaghettiCarveMask
-            };
-            disposeSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(
-                JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
-        }
+            values = chunkDataJob.spaghettiCarveMask
+        };
+        JobHandle disposeSpaghettiCarveMaskHandle = useSharedSpaghettiCarveMask
+            ? disposeSpaghettiCarveMaskJob2.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle))
+            : disposeSpaghettiCarveMaskJob2.Schedule(chunkDataHandle);
 
         var copyGeneratedOpacityJob2 = new CopyGeneratedOpacityToLightVolumeJob
         {
