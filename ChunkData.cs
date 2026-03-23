@@ -61,6 +61,8 @@ public static class ChunkData
         public NativeArray<bool> solids;
 
         public NativeArray<bool> subchunkNonEmpty;
+        [ReadOnly] public NativeArray<TerrainColumnContext> columnContextCache;
+        public int columnContextCacheStride;
         [ReadOnly] public NativeArray<byte> spaghettiCarveMask;
         public int spaghettiCarveMaskVoxelSizeX;
         public int spaghettiCarveMaskVoxelPlaneSize;
@@ -194,6 +196,9 @@ public static class ChunkData
 
                     for (int localX = 0; localX < voxelSizeX; localX++, targetIndex++, maskIndex++)
                     {
+                        if (IsSpaghettiSeamColumn(localX, localZ))
+                            continue;
+
                         if (spaghettiCarveMask[maskIndex] == 0)
                             continue;
 
@@ -249,6 +254,27 @@ public static class ChunkData
                 entranceSurfaceDepth,
                 worldSeed,
                 densityBias);
+        }
+
+        private bool IsSpaghettiSeamColumn(int localX, int localZ)
+        {
+            int westPaddingX = border - 1;
+            int westInnerX = border;
+            int eastInnerX = border + SizeX - 1;
+            int eastPaddingX = border + SizeX;
+            int northPaddingZ = border - 1;
+            int northInnerZ = border;
+            int southInnerZ = border + SizeZ - 1;
+            int southPaddingZ = border + SizeZ;
+
+            return localX == westPaddingX ||
+                   localX == westInnerX ||
+                   localX == eastInnerX ||
+                   localX == eastPaddingX ||
+                   localZ == northPaddingZ ||
+                   localZ == northInnerZ ||
+                   localZ == southInnerZ ||
+                   localZ == southPaddingZ;
         }
 
         private NativeList<TreeInstance> GenerateTreeInstances()
@@ -365,7 +391,7 @@ public static class ChunkData
                 return false;
             }
 
-            BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+            BiomeType biome = columnContext.surface.biome;
             if (biome != rule.biome)
             {
                 candidate = default;
@@ -517,6 +543,9 @@ public static class ChunkData
 
         private TerrainColumnContext GetColumnContextInternal(int worldX, int worldZ)
         {
+            if (TryGetColumnContextFromCache(worldX, worldZ, out TerrainColumnContext cachedColumnContext))
+                return cachedColumnContext;
+
             if (TerrainColumnSampler.TryCreateFromHeightCache(
                 worldX,
                 worldZ,
@@ -547,6 +576,43 @@ public static class ChunkData
                 CliffTreshold,
                 seaLevel,
                 biomeNoiseSettings);
+        }
+
+        private bool TryGetColumnContextFromCache(int worldX, int worldZ, out TerrainColumnContext columnContext)
+        {
+            if (!columnContextCache.IsCreated || columnContextCacheStride <= 0 || columnContextCache.Length == 0)
+            {
+                columnContext = default;
+                return false;
+            }
+
+            int cacheDepth = columnContextCache.Length / columnContextCacheStride;
+            if (cacheDepth <= 0 || columnContextCache.Length % columnContextCacheStride != 0)
+            {
+                columnContext = default;
+                return false;
+            }
+
+            int realLx = worldX - coord.x * SizeX;
+            int realLz = worldZ - coord.y * SizeZ;
+            int cacheX = realLx + border;
+            int cacheZ = realLz + border;
+
+            if (cacheX <= 0 || cacheX >= columnContextCacheStride - 1 || cacheZ <= 0 || cacheZ >= cacheDepth - 1)
+            {
+                columnContext = default;
+                return false;
+            }
+
+            int index = cacheX + cacheZ * columnContextCacheStride;
+            if (index < 0 || index >= columnContextCache.Length)
+            {
+                columnContext = default;
+                return false;
+            }
+
+            columnContext = columnContextCache[index];
+            return true;
         }
 
         private void GenerateWormCaves(

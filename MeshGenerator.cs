@@ -183,86 +183,11 @@ public static class MeshGenerator
 
 
     [BurstCompile]
-    struct PopulateTerrainJob : IJobParallelFor
+    private struct BuildTerrainColumnContextCacheJob : IJobParallelFor
     {
         public Vector2Int coord;
         [ReadOnly] public NativeArray<int> heightCache;
-        [NativeDisableParallelForRestriction]
-        [WriteOnly] public NativeArray<BlockType> blockTypes;
-
-        [NativeDisableParallelForRestriction]
-        [WriteOnly] public NativeArray<bool> solids;
-        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-
-        public int border;
-        public float seaLevel;
-        public int baseHeight;
-        public int CliffTreshold;
-        public BiomeNoiseSettings biomeNoiseSettings;
-
-        public void Execute(int index)
-        {
-            int paddedSize = SizeX + 2 * border;
-            int heightStride = paddedSize;
-
-            int lx = index % paddedSize;   // cacheX
-            int lz = index / paddedSize;   // cacheZ
-            int realLx = lx - border;
-            int realLz = lz - border;
-            int worldX = coord.x * SizeX + realLx;
-            int worldZ = coord.y * SizeZ + realLz;
-
-            int h = heightCache[lx + lz * heightStride];
-            int centerIdx = lx + lz * heightStride;
-            int hN = lz + 1 < paddedSize ? heightCache[centerIdx + heightStride] : h;
-            int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
-            int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
-            int hW = lx > 0 ? heightCache[centerIdx - 1] : h;
-            int hNE = lx + 1 < paddedSize && lz + 1 < paddedSize ? heightCache[centerIdx + 1 + heightStride] : h;
-            int hNW = lx > 0 && lz + 1 < paddedSize ? heightCache[centerIdx - 1 + heightStride] : h;
-            int hSE = lx + 1 < paddedSize && lz > 0 ? heightCache[centerIdx + 1 - heightStride] : h;
-            int hSW = lx > 0 && lz > 0 ? heightCache[centerIdx - 1 - heightStride] : h;
-
-            TerrainColumnContext columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
-                worldX,
-                worldZ,
-                h,
-                hN,
-                hS,
-                hE,
-                hW,
-                hNE,
-                hNW,
-                hSE,
-                hSW,
-                CliffTreshold,
-                baseHeight,
-                seaLevel,
-                biomeNoiseSettings);
-            TerrainSurfaceData surfaceData = columnContext.surface;
-
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-
-            int maxSolidY = math.min(h, SizeY - 1);
-            int idx = lx + lz * voxelPlaneSize;
-
-            for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
-            {
-                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
-                blockTypes[idx] = bt;
-                solids[idx] = blockMappings[(int)bt].isSolid;
-            }
-        }
-    }
-
-    [BurstCompile]
-    private struct PopulateLightOpacityJob : IJobParallelFor
-    {
-        public Vector2Int coord;
-        [ReadOnly] public NativeArray<int> heightCache;
-        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
-        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+        [WriteOnly] public NativeArray<TerrainColumnContext> columnContexts;
 
         public int border;
         public float seaLevel;
@@ -282,8 +207,8 @@ public static class MeshGenerator
             int worldX = coord.x * SizeX + realLx;
             int worldZ = coord.y * SizeZ + realLz;
 
-            int h = heightCache[lx + lz * heightStride];
             int centerIdx = lx + lz * heightStride;
+            int h = heightCache[centerIdx];
             int hN = lz + 1 < paddedSize ? heightCache[centerIdx + heightStride] : h;
             int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
             int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
@@ -293,7 +218,7 @@ public static class MeshGenerator
             int hSE = lx + 1 < paddedSize && lz > 0 ? heightCache[centerIdx + 1 - heightStride] : h;
             int hSW = lx > 0 && lz > 0 ? heightCache[centerIdx - 1 - heightStride] : h;
 
-            TerrainColumnContext columnContext = TerrainColumnSampler.CreateFromNeighborHeights(
+            columnContexts[index] = TerrainColumnSampler.CreateFromNeighborHeights(
                 worldX,
                 worldZ,
                 h,
@@ -309,11 +234,67 @@ public static class MeshGenerator
                 baseHeight,
                 seaLevel,
                 biomeNoiseSettings);
+        }
+    }
+
+    [BurstCompile]
+    struct PopulateTerrainJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
+        [NativeDisableParallelForRestriction]
+        [WriteOnly] public NativeArray<BlockType> blockTypes;
+
+        [NativeDisableParallelForRestriction]
+        [WriteOnly] public NativeArray<bool> solids;
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+
+        public int border;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+
+            int lx = index % paddedSize;   // cacheX
+            int lz = index / paddedSize;   // cacheZ
+            TerrainColumnContext columnContext = columnContexts[index];
             TerrainSurfaceData surfaceData = columnContext.surface;
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int maxSolidY = math.min(h, SizeY - 1);
+
+            int maxSolidY = math.min(columnContext.surfaceHeight, SizeY - 1);
+            int idx = lx + lz * voxelPlaneSize;
+
+            for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
+            {
+                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
+                blockTypes[idx] = bt;
+                solids[idx] = blockMappings[(int)bt].isSolid;
+            }
+        }
+    }
+
+    [BurstCompile]
+    private struct PopulateLightOpacityJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
+        [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
+        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+
+        public int border;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+
+            int lx = index % paddedSize;
+            int lz = index / paddedSize;
+            TerrainColumnContext columnContext = columnContexts[index];
+            TerrainSurfaceData surfaceData = columnContext.surface;
+
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int maxSolidY = math.min(columnContext.surfaceHeight, SizeY - 1);
             int voxelIndex = lx + lz * voxelPlaneSize;
 
             for (int y = 0; y <= maxSolidY; y++, voxelIndex += voxelSizeX)
@@ -437,6 +418,13 @@ public static class MeshGenerator
         public void Execute() { }
     }
 
+    [BurstCompile]
+    private struct DisposeTerrainColumnContextArrayJob : IJob
+    {
+        [DeallocateOnJobCompletion] public NativeArray<TerrainColumnContext> values;
+        public void Execute() { }
+    }
+
     public static void ScheduleDataJob(
         Vector2Int coord,
         NativeArray<NoiseLayer> noiseLayers,
@@ -510,9 +498,6 @@ public static class MeshGenerator
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
 
-
-
-
         // ==========================================
         // JOB 0: GeraÃ§Ã£o do Heightmap (Paralelo)
         // ==========================================
@@ -530,25 +515,31 @@ public static class MeshGenerator
             heightStride = dataHeightSize
         };
         JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
-
-
-
+        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.TempJob);
+        var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
+        {
+            coord = coord,
+            heightCache = heightCache,
+            columnContexts = dataColumnContexts,
+            border = dataBorderSize,
+            seaLevel = seaLevel,
+            baseHeight = baseHeight,
+            CliffTreshold = CliffTreshold,
+            biomeNoiseSettings = biomeNoiseSettings
+        };
+        JobHandle dataColumnContextHandle = buildDataColumnContextCacheJob.Schedule(dataTotalHeightPoints, 32, heightHandle);
+        heightHandle = dataColumnContextHandle;
 
         // ==========================================
         // JOB 1a: Populate Terrain Columns (PARALELO!)
         // ==========================================
         var populateJob = new PopulateTerrainJob
         {
-            coord = coord,
-            heightCache = heightCache,
+            columnContexts = dataColumnContexts,
             blockTypes = blockTypes,
             solids = solids,
             blockMappings = blockMappings,
-            border = borderSize,
-            seaLevel = seaLevel,
-            baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            biomeNoiseSettings = biomeNoiseSettings
+            border = borderSize
         };
 
         int paddedSize = SizeX + 2 * borderSize;
@@ -596,6 +587,8 @@ public static class MeshGenerator
 
             enableTrees = enableTrees,
             subchunkNonEmpty = subchunkNonEmpty,
+            columnContextCache = dataColumnContexts,
+            columnContextCacheStride = dataHeightSize,
             spaghettiCarveMask = default,
             spaghettiCarveMaskVoxelSizeX = 0,
             spaghettiCarveMaskVoxelPlaneSize = 0,
@@ -607,11 +600,16 @@ public static class MeshGenerator
         if (!enableVoxelLighting)
         {
             chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            var disposeDataColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
+            {
+                values = dataColumnContexts
+            };
+            JobHandle disposeDataColumnContextHandle = disposeDataColumnContextCacheJob.Schedule(chunkDataHandle);
             byte fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
-            dataHandle = chunkDataHandle;
+            dataHandle = disposeDataColumnContextHandle;
             return;
         }
 
@@ -631,6 +629,19 @@ public static class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
+        NativeArray<TerrainColumnContext> lightColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.TempJob);
+        var buildLightColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
+        {
+            coord = coord,
+            heightCache = lightHeightCache,
+            columnContexts = lightColumnContexts,
+            border = lightBorderSize,
+            seaLevel = seaLevel,
+            baseHeight = baseHeight,
+            CliffTreshold = CliffTreshold,
+            biomeNoiseSettings = biomeNoiseSettings
+        };
+        JobHandle lightColumnContextHandle = buildLightColumnContextCacheJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
         bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
             dataBorderSize,
             lightBorderSize,
@@ -665,17 +676,12 @@ public static class MeshGenerator
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
-            coord = coord,
-            heightCache = lightHeightCache,
+            columnContexts = lightColumnContexts,
             opacity = lightOpacityData,
             effectiveOpacityByBlock = effectiveOpacityByBlock,
-            border = lightBorderSize,
-            seaLevel = seaLevel,
-            baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            biomeNoiseSettings = biomeNoiseSettings
+            border = lightBorderSize
         };
-        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
+        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightColumnContextHandle);
 
         JobHandle lightOpacityTerrainHandle = populateLightOpacityHandle;
         if (useSharedSpaghettiCarveMask)
@@ -697,6 +703,11 @@ public static class MeshGenerator
             values = lightHeightCache
         };
         JobHandle disposeLightHeightCacheHandle = disposeLightHeightCacheJob.Schedule(lightOpacityTerrainHandle);
+        var disposeLightColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
+        {
+            values = lightColumnContexts
+        };
+        JobHandle disposeLightColumnContextHandle = disposeLightColumnContextCacheJob.Schedule(lightOpacityTerrainHandle);
         JobHandle disposeSpaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
         {
@@ -724,10 +735,15 @@ public static class MeshGenerator
             128,
             JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
 
+        JobHandle lightOpacityCleanupHandle = JobHandle.CombineDependencies(
+            disposeLightHeightCacheHandle,
+            disposeLightColumnContextHandle);
+        lightOpacityCleanupHandle = JobHandle.CombineDependencies(
+            lightOpacityCleanupHandle,
+            disposeSpaghettiCarveMaskHandle);
         JobHandle lightOpacityHandle = JobHandle.CombineDependencies(
             copyGeneratedOpacityHandle,
-            disposeLightHeightCacheHandle,
-            disposeSpaghettiCarveMaskHandle);
+            lightOpacityCleanupHandle);
         if (blockEdits.IsCreated && blockEdits.Length > 0)
         {
             var opacityOverrideJob = new ApplyOpacityOverridesJob
@@ -761,7 +777,14 @@ public static class MeshGenerator
             outputOffsetZ = lightBorderSize - dataBorderSize,
             SizeY = SizeY
         };
-        dataHandle = lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle));
+        var disposeDataColumnContextCacheAfterLightingJob = new DisposeTerrainColumnContextArrayJob
+        {
+            values = dataColumnContexts
+        };
+        JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(chunkDataHandle);
+        dataHandle = JobHandle.CombineDependencies(
+            lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
+            disposeDataColumnContextAfterLightingHandle);
     }
 
     public static void ScheduleMeshJob(

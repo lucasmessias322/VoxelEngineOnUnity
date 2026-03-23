@@ -5,6 +5,7 @@ public struct TerrainSurfaceData
 {
     public int surfaceHeight;
     public int surfaceLayerDepth;
+    public BiomeType biome;
     public BlockType surfaceBlock;
     public BlockType subsurfaceBlock;
     public bool isBeach;
@@ -120,6 +121,7 @@ public static class TerrainSurfaceRules
         {
             surfaceHeight = surfaceHeight,
             surfaceLayerDepth = surfaceLayerDepth,
+            biome = climate.biome,
             surfaceBlock = surfaceBlock,
             subsurfaceBlock = subsurfaceBlock,
             isBeach = isBeach,
