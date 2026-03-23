@@ -138,12 +138,35 @@ public static class MeshGenerator
 
 
     [BurstCompile]
+    private struct BuildBiomeColumnCacheJob : IJobParallelFor
+    {
+        public Vector2Int coord;
+        public int border;
+        public BiomeNoiseSettings biomeNoiseSettings;
+
+        [WriteOnly] public NativeArray<BiomeColumnCache> biomeColumnCache;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+            int lx = index % paddedSize;
+            int lz = index / paddedSize;
+            int realLx = lx - border;
+            int realLz = lz - border;
+            int worldX = coord.x * SizeX + realLx;
+            int worldZ = coord.y * SizeZ + realLz;
+            biomeColumnCache[index] = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
+        }
+    }
+
+    [BurstCompile]
     private struct HeightmapJob : IJobParallelFor
     {
         public Vector2Int coord;
 
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
         [ReadOnly] public NativeArray<WarpLayer> warpLayers;
+        [ReadOnly] public NativeArray<BiomeColumnCache> biomeColumnCache;
 
         public int baseHeight;
         public float offsetX;
@@ -162,10 +185,10 @@ public static class MeshGenerator
             int realLz = lz - border;
             int worldX = coord.x * SizeX + realLx;
             int worldZ = coord.y * SizeZ + realLz;
-            heightCache[i] = GetSurfaceHeight(worldX, worldZ);
+            heightCache[i] = GetSurfaceHeight(worldX, worldZ, biomeColumnCache[i].terrainSettings);
         }
 
-        private int GetSurfaceHeight(int worldX, int worldZ)
+        private int GetSurfaceHeight(int worldX, int worldZ, in BiomeTerrainSettings terrainSettings)
         {
             return TerrainHeightSampler.SampleSurfaceHeight(
                 worldX,
@@ -176,7 +199,7 @@ public static class MeshGenerator
                 offsetX,
                 offsetZ,
                 SizeY,
-                biomeNoiseSettings);
+                terrainSettings);
         }
     }
 
@@ -187,6 +210,7 @@ public static class MeshGenerator
     {
         public Vector2Int coord;
         [ReadOnly] public NativeArray<int> heightCache;
+        [ReadOnly] public NativeArray<BiomeColumnCache> biomeColumnCache;
         [WriteOnly] public NativeArray<TerrainColumnContext> columnContexts;
 
         public int border;
@@ -233,6 +257,7 @@ public static class MeshGenerator
                 CliffTreshold,
                 baseHeight,
                 seaLevel,
+                biomeColumnCache[index],
                 biomeNoiseSettings);
         }
     }
@@ -526,6 +551,13 @@ public static class MeshGenerator
     }
 
     [BurstCompile]
+    private struct DisposeBiomeColumnCacheArrayJob : IJob
+    {
+        [DeallocateOnJobCompletion] public NativeArray<BiomeColumnCache> values;
+        public void Execute() { }
+    }
+
+    [BurstCompile]
     private struct BuildChunkSnapshotAndFlagsJob : IJob
     {
         [ReadOnly] public NativeArray<byte> blockTypes;
@@ -645,9 +677,11 @@ public static class MeshGenerator
                                   lightOpacitySnapshotLoadedChunks.Length > 0 &&
                                   lightOpacitySnapshotChunkRadius > 0;
 
+        NativeArray<BiomeColumnCache> terrainBiomeColumnCache = default;
         NativeArray<TerrainColumnContext> dataColumnContexts = default;
         NativeArray<int> lightingHeightCache = default;
         NativeArray<TerrainColumnContext> lightingColumnContexts = default;
+        JobHandle terrainBiomeCacheDisposeHandle = default;
         JobHandle lightingHeightHandle = default;
         JobHandle lightingColumnContextHandle = default;
         JobHandle lightingHeightCropHandle = default;
@@ -659,12 +693,23 @@ public static class MeshGenerator
 
             // Build terrain/climate once at the lighting border, then crop the
             // smaller mesh-data cache used by chunk generation.
+            terrainBiomeColumnCache = new NativeArray<BiomeColumnCache>(lightTotalHeightPoints, Allocator.Persistent);
+            var buildLightingBiomeColumnCacheJob = new BuildBiomeColumnCacheJob
+            {
+                coord = coord,
+                border = lightBorderSize,
+                biomeNoiseSettings = biomeNoiseSettings,
+                biomeColumnCache = terrainBiomeColumnCache
+            };
+            JobHandle lightingBiomeCacheHandle = buildLightingBiomeColumnCacheJob.Schedule(lightTotalHeightPoints, 32);
+
             lightingHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
             var lightingHeightJob = new HeightmapJob
             {
                 coord = coord,
                 noiseLayers = noiseLayers,
                 warpLayers = warpLayers,
+                biomeColumnCache = terrainBiomeColumnCache,
                 baseHeight = baseHeight,
                 offsetX = globalOffsetX,
                 offsetZ = globalOffsetZ,
@@ -673,13 +718,14 @@ public static class MeshGenerator
                 heightCache = lightingHeightCache,
                 heightStride = lightHeightSize
             };
-            lightingHeightHandle = lightingHeightJob.Schedule(lightTotalHeightPoints, 32);
+            lightingHeightHandle = lightingHeightJob.Schedule(lightTotalHeightPoints, 32, lightingBiomeCacheHandle);
 
             lightingColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.Persistent);
             var buildLightingColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
             {
                 coord = coord,
                 heightCache = lightingHeightCache,
+                biomeColumnCache = terrainBiomeColumnCache,
                 columnContexts = lightingColumnContexts,
                 border = lightBorderSize,
                 seaLevel = seaLevel,
@@ -688,6 +734,11 @@ public static class MeshGenerator
                 biomeNoiseSettings = biomeNoiseSettings
             };
             lightingColumnContextHandle = buildLightingColumnContextCacheJob.Schedule(lightTotalHeightPoints, 32, lightingHeightHandle);
+            var disposeLightingBiomeColumnCacheJob = new DisposeBiomeColumnCacheArrayJob
+            {
+                values = terrainBiomeColumnCache
+            };
+            terrainBiomeCacheDisposeHandle = disposeLightingBiomeColumnCacheJob.Schedule(lightingColumnContextHandle);
 
             var cropHeightCacheJob = new CropHeightCacheJob
             {
@@ -726,6 +777,16 @@ public static class MeshGenerator
         else
         {
 
+        terrainBiomeColumnCache = new NativeArray<BiomeColumnCache>(dataTotalHeightPoints, Allocator.Persistent);
+        var buildDataBiomeColumnCacheJob = new BuildBiomeColumnCacheJob
+        {
+            coord = coord,
+            border = dataBorderSize,
+            biomeNoiseSettings = biomeNoiseSettings,
+            biomeColumnCache = terrainBiomeColumnCache
+        };
+        JobHandle dataBiomeCacheHandle = buildDataBiomeColumnCacheJob.Schedule(dataTotalHeightPoints, 32);
+
         // ==========================================
         // JOB 0: GeraÃƒÂ§ÃƒÂ£o do Heightmap (Paralelo)
         // ==========================================
@@ -734,6 +795,7 @@ public static class MeshGenerator
             coord = coord,
             noiseLayers = noiseLayers,
             warpLayers = warpLayers,
+            biomeColumnCache = terrainBiomeColumnCache,
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
@@ -742,12 +804,13 @@ public static class MeshGenerator
             heightCache = heightCache,
             heightStride = dataHeightSize
         };
-        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃƒÂ¡rio)
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32, dataBiomeCacheHandle); // batch 64 para paralelismo
         dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
         var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
             coord = coord,
             heightCache = heightCache,
+            biomeColumnCache = terrainBiomeColumnCache,
             columnContexts = dataColumnContexts,
             border = dataBorderSize,
             seaLevel = seaLevel,
@@ -756,6 +819,11 @@ public static class MeshGenerator
             biomeNoiseSettings = biomeNoiseSettings
         };
         JobHandle dataColumnContextHandle = buildDataColumnContextCacheJob.Schedule(dataTotalHeightPoints, 32, heightHandle);
+        var disposeDataBiomeColumnCacheJob = new DisposeBiomeColumnCacheArrayJob
+        {
+            values = terrainBiomeColumnCache
+        };
+        terrainBiomeCacheDisposeHandle = disposeDataBiomeColumnCacheJob.Schedule(dataColumnContextHandle);
         heightHandle = dataColumnContextHandle;
 
         // ==========================================
@@ -851,7 +919,9 @@ public static class MeshGenerator
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
-            dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle, disposeFallbackSpaghettiCarveMaskHandle);
+            dataHandle = JobHandle.CombineDependencies(
+                JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle),
+                JobHandle.CombineDependencies(disposeFallbackSpaghettiCarveMaskHandle, terrainBiomeCacheDisposeHandle));
             return;
         }
 
@@ -944,7 +1014,8 @@ public static class MeshGenerator
             JobHandle snapshotLightingHandle = snapshotLightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle));
             dataHandle = JobHandle.CombineDependencies(
                 JobHandle.CombineDependencies(snapshotLightingHandle, disposeDataColumnContextAfterSnapshotLightingHandle),
-                JobHandle.CombineDependencies(buildChunkSnapshotHandle, disposeSnapshotSpaghettiCarveMaskHandle));
+                JobHandle.CombineDependencies(buildChunkSnapshotHandle, disposeSnapshotSpaghettiCarveMaskHandle),
+                terrainBiomeCacheDisposeHandle);
             return;
         }
 
@@ -1103,9 +1174,12 @@ public static class MeshGenerator
         };
         JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(chunkDataHandle);
         dataHandle = JobHandle.CombineDependencies(
-            lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
-            disposeDataColumnContextAfterLightingHandle,
-            buildChunkSnapshotHandle2);
+            JobHandle.CombineDependencies(
+                lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
+                disposeDataColumnContextAfterLightingHandle),
+            JobHandle.CombineDependencies(
+                buildChunkSnapshotHandle2,
+                terrainBiomeCacheDisposeHandle));
     }
 
     public static void ScheduleMeshJob(

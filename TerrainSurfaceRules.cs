@@ -67,24 +67,46 @@ public static class TerrainSurfaceRules
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        BiomeColumnCache biomeColumnCache = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
+        return EvaluateColumnSurface(
+            worldX,
+            worldZ,
+            surfaceHeight,
+            slope,
+            slope01,
+            isCliff,
+            baseHeight,
+            seaLevel,
+            biomeColumnCache,
+            biomeNoiseSettings);
+    }
+
+    [BurstCompile]
+    public static TerrainSurfaceData EvaluateColumnSurface(
+        int worldX,
+        int worldZ,
+        int surfaceHeight,
+        float slope,
+        float slope01,
+        bool isCliff,
+        int baseHeight,
+        float seaLevel,
+        in BiomeColumnCache biomeColumnCache,
+        in BiomeNoiseSettings biomeNoiseSettings)
+    {
         bool isBeach = surfaceHeight <= seaLevel + BeachHeightMargin;
         bool isHighMountain = surfaceHeight >= baseHeight + HighMountainHeightOffset;
         float highMountain01 = math.saturate((surfaceHeight - (baseHeight + HighMountainHeightOffset - 12f)) / 20f);
 
-        BiomeClimateSample climate = BiomeUtility.SampleClimate(worldX, worldZ, biomeNoiseSettings);
-        BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(climate.temperature, climate.humidity, biomeNoiseSettings);
-        BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(climate.biome, biomeNoiseSettings);
-        BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(climate.biome, biomeNoiseSettings);
-
-        BlockType surfaceBlock = isBeach ? BlockType.Sand : biomeSurfaceBlock;
-        BlockType subsurfaceBlock = isBeach ? BlockType.Sand : biomeSubsurfaceBlock;
+        BlockType surfaceBlock = isBeach ? BlockType.Sand : biomeColumnCache.surfaceBlock;
+        BlockType subsurfaceBlock = isBeach ? BlockType.Sand : biomeColumnCache.subsurfaceBlock;
 
         float surfaceNoiseScale = math.max(0.018f, biomeNoiseSettings.coldSurfaceNoiseScale * 0.75f);
         float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, surfaceNoiseScale);
         float slopeStoneMask = math.saturate((slope01 - SlopeStoneStart01) / math.max(0.01f, SlopeStoneFull01 - SlopeStoneStart01));
         float exposedStoneMask = math.saturate(math.max(highMountain01, slopeStoneMask * 0.92f + highMountain01 * 0.25f));
         float stoneThreshold = 0.60f + (surfaceNoise - 0.5f) * 0.16f;
-        int surfaceLayerDepth = ResolveSurfaceLayerDepth(terrainSettings, slope01, isBeach, highMountain01, exposedStoneMask);
+        int surfaceLayerDepth = ResolveSurfaceLayerDepth(biomeColumnCache.terrainSettings, slope01, isBeach, highMountain01, exposedStoneMask);
 
         if (!isBeach)
         {
@@ -107,8 +129,8 @@ public static class TerrainSurfaceRules
                 slope01,
                 isHighMountain,
                 baseHeight,
-                climate.temperature,
-                climate.humidity,
+                biomeColumnCache.temperature,
+                biomeColumnCache.terrainBlendWeights,
                 biomeNoiseSettings,
                 ref surfaceBlock,
                 ref subsurfaceBlock);
@@ -121,7 +143,7 @@ public static class TerrainSurfaceRules
         {
             surfaceHeight = surfaceHeight,
             surfaceLayerDepth = surfaceLayerDepth,
-            biome = climate.biome,
+            biome = biomeColumnCache.biome,
             surfaceBlock = surfaceBlock,
             subsurfaceBlock = subsurfaceBlock,
             isBeach = isBeach,
@@ -179,13 +201,12 @@ public static class TerrainSurfaceRules
         bool isHighMountain,
         int baseHeight,
         float temperature,
-        float humidity,
+        in BiomeTerrainBlendWeights terrainBlendWeights,
         in BiomeNoiseSettings biomeNoiseSettings,
         ref BlockType surfaceBlock,
         ref BlockType subsurfaceBlock)
     {
-        BiomeTerrainBlendWeights weights = BiomeUtility.GetTerrainBlendWeights(temperature, humidity, biomeNoiseSettings);
-        float coldMask = weights.taiga;
+        float coldMask = terrainBlendWeights.taiga;
         if (coldMask <= 1e-3f)
             return;
 

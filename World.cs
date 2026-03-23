@@ -452,6 +452,8 @@ public partial class World : MonoBehaviour
     private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>();
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     private readonly List<Vector3Int> relevantTerrainOverridePositions = new List<Vector3Int>(128);
+    private readonly List<int> dirtyTerrainColumnIndices = new List<int>(128);
+    private readonly HashSet<int> dirtyTerrainColumnIndexSet = new HashSet<int>();
     private bool terrainOverrideIndexInitialized = false;
 
     // Overrides and light
@@ -1848,13 +1850,19 @@ public partial class World : MonoBehaviour
         if (relevantTerrainOverridePositions.Count == 0)
             return;
 
+        dirtyTerrainColumnIndices.Clear();
+        dirtyTerrainColumnIndexSet.Clear();
+
         bool hasRelevantOverrides = false;
+        int dirtyInteriorSubchunkMask = 0;
         for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
         {
             Vector3Int worldPos = relevantTerrainOverridePositions[i];
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
             if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+                continue;
+            if ((int)overrideType < 0 || (int)overrideType >= blockData.mappings.Length)
                 continue;
 
             int ix = worldPos.x - chunkMinX + borderSize;
@@ -1867,14 +1875,45 @@ public partial class World : MonoBehaviour
                 continue;
 
             blockTypes[idx] = (byte)overrideType;
+            solids[idx] = blockData.mappings[(int)overrideType].isSolid;
             UpdateVoxelSnapshotCell(voxelSnapshot, chunkMinX, chunkMinZ, worldPos, overrideType);
+
+            int columnIndex = ix + iz * voxelSizeX;
+            if (dirtyTerrainColumnIndexSet.Add(columnIndex))
+                dirtyTerrainColumnIndices.Add(columnIndex);
+
+            if (worldPos.x >= chunkMinX &&
+                worldPos.x < chunkMinX + Chunk.SizeX &&
+                worldPos.z >= chunkMinZ &&
+                worldPos.z < chunkMinZ + Chunk.SizeZ)
+            {
+                int subchunkIndex = worldPos.y / Chunk.SubchunkHeight;
+                if (subchunkIndex >= 0 && subchunkIndex < Chunk.SubchunksPerColumn)
+                    dirtyInteriorSubchunkMask |= 1 << subchunkIndex;
+            }
+
             hasRelevantOverrides = true;
         }
 
         if (!hasRelevantOverrides)
             return;
 
-        RefreshChunkDerivedData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+        int totalColumns = voxelSizeX * voxelSizeZ;
+        bool shouldRefreshWholeChunk = dirtyTerrainColumnIndices.Count >= Mathf.Max(1, totalColumns / 2);
+        if (shouldRefreshWholeChunk)
+        {
+            RefreshChunkDerivedData(coord, blockTypes, solids, subchunkNonEmpty, heightCache, borderSize);
+            return;
+        }
+
+        RefreshChunkDerivedDataIncremental(
+            blockTypes,
+            solids,
+            subchunkNonEmpty,
+            heightCache,
+            borderSize,
+            dirtyTerrainColumnIndices,
+            dirtyInteriorSubchunkMask);
     }
 
     private static void UpdateVoxelSnapshotCell(
@@ -1976,6 +2015,82 @@ public partial class World : MonoBehaviour
 
                 heightCache[ix + iz * heightStride] = highestSolidY;
             }
+        }
+    }
+
+    private void RefreshChunkDerivedDataIncremental(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> solids,
+        NativeArray<bool> subchunkNonEmpty,
+        NativeArray<int> heightCache,
+        int borderSize,
+        List<int> dirtyColumnIndices,
+        int dirtyInteriorSubchunkMask)
+    {
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        BlockTextureMapping[] mappings = blockData.mappings;
+
+        for (int i = 0; i < dirtyColumnIndices.Count; i++)
+        {
+            int columnIndex = dirtyColumnIndices[i];
+            int ix = columnIndex % voxelSizeX;
+            int iz = columnIndex / voxelSizeX;
+            int highestSolidY = 0;
+
+            for (int y = 0; y < Chunk.SizeY; y++)
+            {
+                int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
+                BlockType blockType = (BlockType)blockTypes[idx];
+                bool isSolid = mappings[(int)blockType].isSolid;
+                solids[idx] = isSolid;
+                if (isSolid)
+                    highestSolidY = y;
+            }
+
+            heightCache[columnIndex] = highestSolidY;
+        }
+
+        if (dirtyInteriorSubchunkMask != 0)
+            RefreshSubchunkNonEmptyForMask(blockTypes, subchunkNonEmpty, borderSize, dirtyInteriorSubchunkMask);
+    }
+
+    private static void RefreshSubchunkNonEmptyForMask(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> subchunkNonEmpty,
+        int borderSize,
+        int dirtyInteriorSubchunkMask)
+    {
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+
+        for (int subchunkIndex = 0; subchunkIndex < Chunk.SubchunksPerColumn; subchunkIndex++)
+        {
+            if ((dirtyInteriorSubchunkMask & (1 << subchunkIndex)) == 0)
+                continue;
+
+            bool hasNonAirBlocks = false;
+            int startY = subchunkIndex * Chunk.SubchunkHeight;
+            int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
+
+            for (int y = startY; y < endY && !hasNonAirBlocks; y++)
+            {
+                int yOffset = y * voxelSizeX;
+                for (int z = 0; z < Chunk.SizeZ && !hasNonAirBlocks; z++)
+                {
+                    int rowBase = borderSize + yOffset + (z + borderSize) * voxelPlaneSize;
+                    for (int x = 0; x < Chunk.SizeX; x++)
+                    {
+                        if ((BlockType)blockTypes[rowBase + x] == BlockType.Air)
+                            continue;
+
+                        hasNonAirBlocks = true;
+                        break;
+                    }
+                }
+            }
+
+            subchunkNonEmpty[subchunkIndex] = hasNonAirBlocks;
         }
     }
 

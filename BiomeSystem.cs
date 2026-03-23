@@ -91,6 +91,17 @@ public struct BiomeTerrainBlendWeights
     public float taiga;
 }
 
+public struct BiomeColumnCache
+{
+    public float temperature;
+    public float humidity;
+    public BiomeType biome;
+    public BiomeTerrainBlendWeights terrainBlendWeights;
+    public BiomeTerrainSettings terrainSettings;
+    public BlockType surfaceBlock;
+    public BlockType subsurfaceBlock;
+}
+
 public struct BiomeNoiseSettings
 {
     public float temperatureScale;
@@ -173,6 +184,26 @@ public static class BiomeUtility
             return BiomeType.Savanna;
 
         return BiomeType.Meadow;
+    }
+
+    [BurstCompile]
+    public static BiomeColumnCache SampleColumnCache(int worldX, int worldZ, in BiomeNoiseSettings settings)
+    {
+        float temperature = SampleTemperature(worldX, worldZ, settings);
+        float humidity = SampleHumidity(worldX, worldZ, settings);
+        BiomeType biome = GetBiomeType(temperature, humidity, settings);
+        BiomeTerrainBlendWeights terrainBlendWeights = GetTerrainBlendWeights(temperature, humidity, settings);
+
+        return new BiomeColumnCache
+        {
+            temperature = temperature,
+            humidity = humidity,
+            biome = biome,
+            terrainBlendWeights = terrainBlendWeights,
+            terrainSettings = BlendTerrainSettings(terrainBlendWeights, settings),
+            surfaceBlock = GetSurfaceBlock(biome, settings),
+            subsurfaceBlock = GetSubsurfaceBlock(biome, settings)
+        };
     }
 
     [BurstCompile]
@@ -279,8 +310,12 @@ public static class BiomeUtility
     [BurstCompile]
     public static BiomeTerrainSettings BlendTerrainSettings(float temperature, float humidity, in BiomeNoiseSettings settings)
     {
-        BiomeTerrainBlendWeights weights = GetTerrainBlendWeights(temperature, humidity, settings);
+        return BlendTerrainSettings(GetTerrainBlendWeights(temperature, humidity, settings), settings);
+    }
 
+    [BurstCompile]
+    public static BiomeTerrainSettings BlendTerrainSettings(in BiomeTerrainBlendWeights weights, in BiomeNoiseSettings settings)
+    {
         return new BiomeTerrainSettings
         {
             reliefMultiplier =

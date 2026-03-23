@@ -41,6 +41,22 @@ public static class TerrainHeightSampler
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
 
+    [BurstCompile]
+    public static int SampleSurfaceHeight(
+        int worldX,
+        int worldZ,
+        NativeArray<NoiseLayer> noiseLayers,
+        NativeArray<WarpLayer> warpLayers,
+        int baseHeight,
+        float offsetX,
+        float offsetZ,
+        int worldHeight,
+        in BiomeTerrainSettings terrainSettings)
+    {
+        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ, terrainSettings);
+        return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
+    }
+
     public static int SampleSurfaceHeight(
         int worldX,
         int worldZ,
@@ -53,6 +69,21 @@ public static class TerrainHeightSampler
         in BiomeNoiseSettings biomeNoiseSettings)
     {
         float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ, biomeNoiseSettings);
+        return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
+    }
+
+    public static int SampleSurfaceHeight(
+        int worldX,
+        int worldZ,
+        NoiseLayer[] noiseLayers,
+        WarpLayer[] warpLayers,
+        int baseHeight,
+        float offsetX,
+        float offsetZ,
+        int worldHeight,
+        in BiomeTerrainSettings terrainSettings)
+    {
+        float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, warpLayers, offsetX, offsetZ, terrainSettings);
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
 
@@ -75,6 +106,25 @@ public static class TerrainHeightSampler
         return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, biomeNoiseSettings, ref sampleState);
     }
 
+    [BurstCompile]
+    public static float SampleTerrainSignal(
+        int worldX,
+        int worldZ,
+        NativeArray<NoiseLayer> noiseLayers,
+        NativeArray<WarpLayer> warpLayers,
+        float offsetX,
+        float offsetZ,
+        in BiomeTerrainSettings terrainSettings)
+    {
+        ComputeWarpOffset(worldX, worldZ, warpLayers, out float warpX, out float warpZ);
+        TerrainNoiseSampleState sampleState = default;
+
+        for (int i = 0; i < noiseLayers.Length; i++)
+            SampleNoiseLayer(worldX, worldZ, warpX, warpZ, noiseLayers[i], ref sampleState);
+
+        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, terrainSettings, ref sampleState);
+    }
+
     public static float SampleTerrainSignal(
         int worldX,
         int worldZ,
@@ -94,6 +144,27 @@ public static class TerrainHeightSampler
         }
 
         return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, biomeNoiseSettings, ref sampleState);
+    }
+
+    public static float SampleTerrainSignal(
+        int worldX,
+        int worldZ,
+        NoiseLayer[] noiseLayers,
+        WarpLayer[] warpLayers,
+        float offsetX,
+        float offsetZ,
+        in BiomeTerrainSettings terrainSettings)
+    {
+        ComputeWarpOffset(worldX, worldZ, warpLayers, out float warpX, out float warpZ);
+        TerrainNoiseSampleState sampleState = default;
+
+        if (noiseLayers != null)
+        {
+            for (int i = 0; i < noiseLayers.Length; i++)
+                SampleNoiseLayer(worldX, worldZ, warpX, warpZ, noiseLayers[i], ref sampleState);
+        }
+
+        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, terrainSettings, ref sampleState);
     }
 
     [BurstCompile]
@@ -224,6 +295,21 @@ public static class TerrainHeightSampler
         in BiomeNoiseSettings biomeNoiseSettings,
         ref TerrainNoiseSampleState sampleState)
     {
+        BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(worldX, worldZ, biomeNoiseSettings);
+        return FinalizeTerrainSignal(worldX, worldZ, warpX, warpZ, offsetX, offsetZ, terrainSettings, ref sampleState);
+    }
+
+    [BurstCompile]
+    private static float FinalizeTerrainSignal(
+        int worldX,
+        int worldZ,
+        float warpX,
+        float warpZ,
+        float offsetX,
+        float offsetZ,
+        in BiomeTerrainSettings terrainSettings,
+        ref TerrainNoiseSampleState sampleState)
+    {
         if (!sampleState.hasActiveLayers)
         {
             float nx = (worldX + warpX) * LegacyFallbackScale + offsetX;
@@ -233,7 +319,6 @@ public static class TerrainHeightSampler
             sampleState.hasTypedRoles = false;
         }
 
-        BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(worldX, worldZ, biomeNoiseSettings);
         return sampleState.hasTypedRoles
             ? MyNoise.ComposeMinecraftLikeTerrainSignal(
                 sampleState.continentalTotal,

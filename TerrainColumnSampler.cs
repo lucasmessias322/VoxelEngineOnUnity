@@ -39,6 +39,45 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        BiomeColumnCache biomeColumnCache = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
+        return CreateFromNeighborHeights(
+            worldX,
+            worldZ,
+            surfaceHeight,
+            northHeight,
+            southHeight,
+            eastHeight,
+            westHeight,
+            northEastHeight,
+            northWestHeight,
+            southEastHeight,
+            southWestHeight,
+            cliffThreshold,
+            baseHeight,
+            seaLevel,
+            biomeColumnCache,
+            biomeNoiseSettings);
+    }
+
+    [BurstCompile]
+    public static TerrainColumnContext CreateFromNeighborHeights(
+        int worldX,
+        int worldZ,
+        int surfaceHeight,
+        int northHeight,
+        int southHeight,
+        int eastHeight,
+        int westHeight,
+        int northEastHeight,
+        int northWestHeight,
+        int southEastHeight,
+        int southWestHeight,
+        int cliffThreshold,
+        int baseHeight,
+        float seaLevel,
+        in BiomeColumnCache biomeColumnCache,
+        in BiomeNoiseSettings biomeNoiseSettings)
+    {
         float slope = TerrainSurfaceRules.GetSlopeFromNeighborHeights(
             northHeight,
             southHeight,
@@ -60,6 +99,7 @@ public static class TerrainColumnSampler
             isCliff,
             baseHeight,
             seaLevel,
+            biomeColumnCache,
             biomeNoiseSettings);
 
         return new TerrainColumnContext
@@ -95,7 +135,8 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
-        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        BiomeColumnCache biomeColumnCache = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
+        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeColumnCache.terrainSettings);
         int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
@@ -120,6 +161,7 @@ public static class TerrainColumnSampler
             cliffThreshold,
             baseHeight,
             seaLevel,
+            biomeColumnCache,
             biomeNoiseSettings);
     }
 
@@ -136,7 +178,8 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
-        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
+        BiomeColumnCache biomeColumnCache = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
+        int surfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeColumnCache.terrainSettings);
         int northHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ + 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int southHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX, worldZ - 1, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
         int eastHeight = TerrainHeightSampler.SampleSurfaceHeight(worldX + 1, worldZ, noiseLayers, warpLayers, baseHeight, offsetX, offsetZ, worldHeight, biomeNoiseSettings);
@@ -161,6 +204,7 @@ public static class TerrainColumnSampler
             cliffThreshold,
             baseHeight,
             seaLevel,
+            biomeColumnCache,
             biomeNoiseSettings);
     }
 
@@ -211,6 +255,7 @@ public static class TerrainColumnSampler
         int northWestHeight = heightCache[centerIdx - 1 + heightStride];
         int southEastHeight = heightCache[centerIdx + 1 - heightStride];
         int southWestHeight = heightCache[centerIdx - 1 - heightStride];
+        BiomeColumnCache biomeColumnCache = BiomeUtility.SampleColumnCache(worldX, worldZ, biomeNoiseSettings);
 
         columnContext = CreateFromNeighborHeights(
             worldX,
@@ -227,6 +272,7 @@ public static class TerrainColumnSampler
             cliffThreshold,
             baseHeight,
             seaLevel,
+            biomeColumnCache,
             biomeNoiseSettings);
         return true;
     }
