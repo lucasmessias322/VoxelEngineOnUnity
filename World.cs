@@ -419,9 +419,15 @@ public partial class World : MonoBehaviour
     [Header("Lighting")]
     [Tooltip("Liga/desliga o calculo de iluminacao voxel/skylight para testes de performance. Quando desligado, os chunks usam brilho uniforme.")]
     public bool enableVoxelLighting = true;
-    [Tooltip("Padding horizontal em voxels usado apenas pela suavizacao de skylight entre chunks. Valores altos melhoram costuras visuais, mas aumentam o custo do volume de luz.")]
+    [Tooltip("Padding horizontal base em voxels usado pela suavizacao de skylight. Este valor passa a ser tratado como perfil desktop/default.")]
     [Min(1)]
-    public int sunlightSmoothingPadding = 16;
+    public int sunlightSmoothingPadding = 4;
+    [Tooltip("Quando maior que zero, substitui o padding de skylight em Android/iOS para reduzir custo do volume de luz.")]
+    [Min(0)]
+    public int mobileSunlightSmoothingPadding = 2;
+    [Tooltip("Teto de seguranca para o padding de skylight em runtime. Evita que cenas antigas ou valores muito altos reativem volumes de luz caros.")]
+    [Min(1)]
+    public int maxRuntimeSunlightSmoothingPadding = 4;
     [Tooltip("Padding horizontal usado pelas etapas caras de geracao detalhada (arvores, cavernas e minerios). Mantido separado do padding de luz para reduzir custo.")]
     [Min(1)]
     public int detailedGenerationPadding = 1;
@@ -703,7 +709,12 @@ public partial class World : MonoBehaviour
         if (!enableVoxelLighting)
             return GetMeshNeighborPadding();
 
-        return Mathf.Max(GetMeshNeighborPadding(), sunlightSmoothingPadding);
+        int resolvedPadding = sunlightSmoothingPadding;
+        if (mobileSunlightSmoothingPadding > 0 && Application.isMobilePlatform)
+            resolvedPadding = mobileSunlightSmoothingPadding;
+
+        resolvedPadding = Mathf.Min(resolvedPadding, Mathf.Max(1, maxRuntimeSunlightSmoothingPadding));
+        return Mathf.Max(GetMeshNeighborPadding(), resolvedPadding);
     }
 
     private int GetChunkBorderSize()
@@ -1353,6 +1364,10 @@ public partial class World : MonoBehaviour
 
     private void OnValidate()
     {
+        sunlightSmoothingPadding = Mathf.Max(1, sunlightSmoothingPadding);
+        mobileSunlightSmoothingPadding = Mathf.Max(0, mobileSunlightSmoothingPadding);
+        maxRuntimeSunlightSmoothingPadding = Mathf.Max(1, maxRuntimeSunlightSmoothingPadding);
+        detailedGenerationPadding = Mathf.Max(1, detailedGenerationPadding);
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
         EnsureDefaultWarpLayersConfigured();
@@ -2449,10 +2464,19 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = default;
+        NativeArray<byte> lightOpacitySnapshotVoxelData = default;
+        NativeArray<byte> lightOpacitySnapshotLoadedChunks = default;
+        int lightOpacitySnapshotChunkRadius = 0;
         if (enableVoxelLighting)
         {
             chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
             InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            TryBuildNeighborLightOpacitySnapshot(
+                coord,
+                lightBorderSize,
+                out lightOpacitySnapshotVoxelData,
+                out lightOpacitySnapshotLoadedChunks,
+                out lightOpacitySnapshotChunkRadius);
         }
         if (chunk.jobScheduled)
         {
@@ -2476,6 +2500,9 @@ public partial class World : MonoBehaviour
             enableVoxelLighting,
             chunkLightData,
             chunk.voxelData,
+            lightOpacitySnapshotVoxelData,
+            lightOpacitySnapshotLoadedChunks,
+            lightOpacitySnapshotChunkRadius,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
             out NativeArray<byte> blockTypes,
@@ -2499,8 +2526,8 @@ public partial class World : MonoBehaviour
             chunkLightData = chunkLightData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
-            fastRebuildSnapshotVoxelData = default,
-            fastRebuildSnapshotLoadedChunks = default,
+            fastRebuildSnapshotVoxelData = lightOpacitySnapshotVoxelData,
+            fastRebuildSnapshotLoadedChunks = lightOpacitySnapshotLoadedChunks,
             fastRebuildOverrides = default,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = GetFullSubchunkMask(),
@@ -2743,6 +2770,49 @@ public partial class World : MonoBehaviour
             nativeOverrides[i] = editsList[i];
 
         return nativeOverrides;
+    }
+
+    private bool TryBuildNeighborLightOpacitySnapshot(
+        Vector2Int coord,
+        int lightBorderSize,
+        out NativeArray<byte> snapshotVoxelData,
+        out NativeArray<byte> snapshotLoadedChunks,
+        out int snapshotChunkRadius)
+    {
+        snapshotVoxelData = default;
+        snapshotLoadedChunks = default;
+        snapshotChunkRadius = 0;
+
+        if (!enableVoxelLighting)
+            return false;
+
+        int dataBorderSize = GetDetailedGenerationBorderSize();
+        if (lightBorderSize <= dataBorderSize)
+            return false;
+
+        snapshotChunkRadius = Mathf.Max(1, Mathf.CeilToInt(lightBorderSize / (float)Chunk.SizeX));
+        for (int dz = -snapshotChunkRadius; dz <= snapshotChunkRadius; dz++)
+        {
+            for (int dx = -snapshotChunkRadius; dx <= snapshotChunkRadius; dx++)
+            {
+                if (dx == 0 && dz == 0)
+                    continue;
+
+                Vector2Int neighborCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                if (!activeChunks.TryGetValue(neighborCoord, out Chunk neighborChunk) ||
+                    !CanChunkProvideVoxelSnapshot(neighborChunk))
+                {
+                    return false;
+                }
+            }
+        }
+
+        int snapshotChunkDiameter = snapshotChunkRadius * 2 + 1;
+        int snapshotChunkCount = snapshotChunkDiameter * snapshotChunkDiameter;
+        snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        CaptureFastRebuildSnapshot(coord, snapshotChunkRadius, snapshotVoxelData, snapshotLoadedChunks);
+        return true;
     }
 
     private void FillFastRebuildArraysFromLoadedChunks(
@@ -3084,10 +3154,19 @@ public partial class World : MonoBehaviour
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
         NativeArray<byte> chunkLightData = default;
+        NativeArray<byte> lightOpacitySnapshotVoxelData = default;
+        NativeArray<byte> lightOpacitySnapshotLoadedChunks = default;
+        int lightOpacitySnapshotChunkRadius = 0;
         if (enableVoxelLighting)
         {
             chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
             InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            TryBuildNeighborLightOpacitySnapshot(
+                coord,
+                lightBorderSize,
+                out lightOpacitySnapshotVoxelData,
+                out lightOpacitySnapshotLoadedChunks,
+                out lightOpacitySnapshotChunkRadius);
         }
 
         MeshGenerator.ScheduleDataJob(
@@ -3118,6 +3197,9 @@ public partial class World : MonoBehaviour
               enableVoxelLighting,
               chunkLightData,
               chunk.voxelData,
+              lightOpacitySnapshotVoxelData,
+              lightOpacitySnapshotLoadedChunks,
+              lightOpacitySnapshotChunkRadius,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
               out NativeArray<byte> blockTypes,
@@ -3141,8 +3223,8 @@ public partial class World : MonoBehaviour
             chunkLightData = chunkLightData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
-            fastRebuildSnapshotVoxelData = default,
-            fastRebuildSnapshotLoadedChunks = default,
+            fastRebuildSnapshotVoxelData = lightOpacitySnapshotVoxelData,
+            fastRebuildSnapshotLoadedChunks = lightOpacitySnapshotLoadedChunks,
             fastRebuildOverrides = default,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,

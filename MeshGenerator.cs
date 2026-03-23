@@ -333,6 +333,64 @@ public static class MeshGenerator
     }
 
     [BurstCompile]
+    private struct PopulateOpacityFromChunkSnapshotJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<byte> snapshotVoxelData;
+        [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
+        [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
+
+        [NativeDisableParallelForRestriction]
+        public NativeArray<byte> opacity;
+
+        public int borderSize;
+        public int voxelSizeX;
+        public int snapshotChunkRadius;
+        public int snapshotChunkDiameter;
+
+        public void Execute(int index)
+        {
+            int x = index % voxelSizeX;
+            int temp = index / voxelSizeX;
+            int y = temp % SizeY;
+            int z = temp / SizeY;
+
+            int relX = x - borderSize;
+            int relZ = z - borderSize;
+
+            int chunkOffsetX = FloorDiv(relX, SizeX);
+            int chunkOffsetZ = FloorDiv(relZ, SizeZ);
+            int localX = relX - chunkOffsetX * SizeX;
+            int localZ = relZ - chunkOffsetZ * SizeZ;
+
+            int slotX = chunkOffsetX + snapshotChunkRadius;
+            int slotZ = chunkOffsetZ + snapshotChunkRadius;
+            if (slotX < 0 || slotX >= snapshotChunkDiameter || slotZ < 0 || slotZ >= snapshotChunkDiameter)
+            {
+                opacity[index] = effectiveOpacityByBlock[(int)(y <= 2 ? BlockType.Bedrock : BlockType.Air)];
+                return;
+            }
+
+            int slot = slotX + slotZ * snapshotChunkDiameter;
+            if (snapshotLoadedChunks[slot] == 0)
+            {
+                opacity[index] = effectiveOpacityByBlock[(int)(y <= 2 ? BlockType.Bedrock : BlockType.Air)];
+                return;
+            }
+
+            int srcIndex = slot * SizeX * SizeY * SizeZ + localX + localZ * SizeX + y * SizeX * SizeZ;
+            opacity[index] = effectiveOpacityByBlock[snapshotVoxelData[srcIndex]];
+        }
+
+        private static int FloorDiv(int value, int divisor)
+        {
+            if (value >= 0)
+                return value / divisor;
+
+            return -((-value + divisor - 1) / divisor);
+        }
+    }
+
+    [BurstCompile]
     private struct ApplyOpacityOverridesJob : IJob
     {
         [ReadOnly] public NativeArray<BlockEdit> overrides;
@@ -491,6 +549,9 @@ public static class MeshGenerator
         bool enableVoxelLighting,
         NativeArray<byte> lightData,
         NativeArray<byte> chunkVoxelSnapshot,
+        NativeArray<byte> lightOpacitySnapshotVoxelData,
+        NativeArray<byte> lightOpacitySnapshotLoadedChunks,
+        int lightOpacitySnapshotChunkRadius,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
         out NativeArray<byte> blockTypes,
@@ -659,6 +720,97 @@ public static class MeshGenerator
         }
 
         lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
+        bool useOpacitySnapshot = lightOpacitySnapshotVoxelData.IsCreated &&
+                                  lightOpacitySnapshotLoadedChunks.IsCreated &&
+                                  lightOpacitySnapshotLoadedChunks.Length > 0 &&
+                                  lightOpacitySnapshotChunkRadius > 0;
+
+        JobHandle lightOpacityHandle;
+        if (useOpacitySnapshot)
+        {
+            var populateOpacityFromSnapshotJob = new PopulateOpacityFromChunkSnapshotJob
+            {
+                snapshotVoxelData = lightOpacitySnapshotVoxelData,
+                snapshotLoadedChunks = lightOpacitySnapshotLoadedChunks,
+                effectiveOpacityByBlock = effectiveOpacityByBlock,
+                opacity = lightOpacityData,
+                borderSize = lightBorderSize,
+                voxelSizeX = lightVoxelSizeX,
+                snapshotChunkRadius = lightOpacitySnapshotChunkRadius,
+                snapshotChunkDiameter = lightOpacitySnapshotChunkRadius * 2 + 1
+            };
+            chunkDataHandle = chunkDataJob.Schedule(populateHandle);
+            var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
+            {
+                blockTypes = blockTypes,
+                voxelSnapshot = chunkVoxelSnapshot,
+                subchunkNonEmpty = subchunkNonEmpty,
+                borderSize = dataBorderSize
+            };
+            JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(chunkDataHandle);
+
+            var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
+            {
+                sourceBlockTypes = blockTypes,
+                effectiveOpacityByBlock = effectiveOpacityByBlock,
+                targetOpacity = lightOpacityData,
+                sourceVoxelSizeX = dataVoxelSizeX,
+                targetVoxelSizeX = lightVoxelSizeX,
+                targetVoxelPlaneSize = lightVoxelPlaneSize,
+                sourceBorder = dataBorderSize,
+                targetBorder = lightBorderSize
+            };
+            JobHandle populateOpacityFromSnapshotHandle = populateOpacityFromSnapshotJob.Schedule(lightTotalVoxels, 128);
+            lightOpacityHandle = copyGeneratedOpacityJob.Schedule(
+                dataTotalVoxels,
+                128,
+                JobHandle.CombineDependencies(chunkDataHandle, populateOpacityFromSnapshotHandle));
+
+            var snapshotLightJob = new ChunkLighting.CroppedChunkLightingJob
+            {
+                opacity = lightOpacityData,
+                light = light,
+                blockLightData = lightData,
+                inputVoxelSizeX = lightVoxelSizeX,
+                inputVoxelSizeZ = lightVoxelSizeZ,
+                inputTotalVoxels = lightTotalVoxels,
+                inputVoxelPlaneSize = lightVoxelPlaneSize,
+                outputVoxelSizeX = dataVoxelSizeX,
+                outputVoxelSizeZ = dataVoxelSizeZ,
+                outputVoxelPlaneSize = dataVoxelPlaneSize,
+                outputOffsetX = lightBorderSize - dataBorderSize,
+                outputOffsetZ = lightBorderSize - dataBorderSize,
+                SizeY = SizeY
+            };
+            var disposeDataColumnContextAfterSnapshotLightingJob = new DisposeTerrainColumnContextArrayJob
+            {
+                values = dataColumnContexts
+            };
+            JobHandle disposeDataColumnContextAfterSnapshotLightingHandle = disposeDataColumnContextAfterSnapshotLightingJob.Schedule(chunkDataHandle);
+            if (blockEdits.IsCreated && blockEdits.Length > 0)
+            {
+                var opacityOverrideJob = new ApplyOpacityOverridesJob
+                {
+                    overrides = blockEdits,
+                    effectiveOpacityByBlock = effectiveOpacityByBlock,
+                    opacity = lightOpacityData,
+                    chunkMinX = coord.x * SizeX,
+                    chunkMinZ = coord.y * SizeZ,
+                    borderSize = lightBorderSize,
+                    voxelSizeX = lightVoxelSizeX,
+                    voxelSizeZ = lightVoxelSizeZ,
+                    voxelPlaneSize = lightVoxelPlaneSize
+                };
+                lightOpacityHandle = opacityOverrideJob.Schedule(lightOpacityHandle);
+            }
+
+            dataHandle = JobHandle.CombineDependencies(
+                snapshotLightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
+                disposeDataColumnContextAfterSnapshotLightingHandle,
+                buildChunkSnapshotHandle);
+            return;
+        }
+
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
         var lightHeightJob = new HeightmapJob
         {
@@ -718,14 +870,14 @@ public static class MeshGenerator
         chunkDataHandle = useSharedSpaghettiCarveMask
             ? chunkDataJob.Schedule(JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle))
             : chunkDataJob.Schedule(populateHandle);
-        var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
+        var buildChunkSnapshotJob2 = new BuildChunkSnapshotAndFlagsJob
         {
             blockTypes = blockTypes,
             voxelSnapshot = chunkVoxelSnapshot,
             subchunkNonEmpty = subchunkNonEmpty,
             borderSize = dataBorderSize
         };
-        JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(chunkDataHandle);
+        JobHandle buildChunkSnapshotHandle2 = buildChunkSnapshotJob2.Schedule(chunkDataHandle);
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
@@ -772,7 +924,7 @@ public static class MeshGenerator
                 JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
         }
 
-        var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
+        var copyGeneratedOpacityJob2 = new CopyGeneratedOpacityToLightVolumeJob
         {
             sourceBlockTypes = blockTypes,
             effectiveOpacityByBlock = effectiveOpacityByBlock,
@@ -783,7 +935,7 @@ public static class MeshGenerator
             sourceBorder = dataBorderSize,
             targetBorder = lightBorderSize
         };
-        JobHandle copyGeneratedOpacityHandle = copyGeneratedOpacityJob.Schedule(
+        JobHandle copyGeneratedOpacityHandle2 = copyGeneratedOpacityJob2.Schedule(
             dataTotalVoxels,
             128,
             JobHandle.CombineDependencies(chunkDataHandle, lightOpacityTerrainHandle));
@@ -794,8 +946,8 @@ public static class MeshGenerator
         lightOpacityCleanupHandle = JobHandle.CombineDependencies(
             lightOpacityCleanupHandle,
             disposeSpaghettiCarveMaskHandle);
-        JobHandle lightOpacityHandle = JobHandle.CombineDependencies(
-            copyGeneratedOpacityHandle,
+        lightOpacityHandle = JobHandle.CombineDependencies(
+            copyGeneratedOpacityHandle2,
             lightOpacityCleanupHandle);
         if (blockEdits.IsCreated && blockEdits.Length > 0)
         {
@@ -838,7 +990,7 @@ public static class MeshGenerator
         dataHandle = JobHandle.CombineDependencies(
             lightJob.Schedule(JobHandle.CombineDependencies(chunkDataHandle, lightOpacityHandle)),
             disposeDataColumnContextAfterLightingHandle,
-            buildChunkSnapshotHandle);
+            buildChunkSnapshotHandle2);
     }
 
     public static void ScheduleMeshJob(
