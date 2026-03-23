@@ -2043,17 +2043,34 @@ public partial class World : MonoBehaviour
         int northNeighborZ = borderSize - 1;
         int southNeighborZ = borderSize + Chunk.SizeZ;
 
-        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.left))
+        if (!WillChunkProvideHorizontalBorderCover(coord + Vector2Int.left))
             ClearBorderPaddingX(westCurrentX, westNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
 
-        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.right))
+        if (!WillChunkProvideHorizontalBorderCover(coord + Vector2Int.right))
             ClearBorderPaddingX(eastCurrentX, eastNeighborX, borderSize, voxelSizeX, voxelPlaneSize, blockTypes, solids);
 
-        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.down))
+        if (!WillChunkProvideHorizontalBorderCover(coord + Vector2Int.down))
             ClearBorderPaddingZ(northCurrentZ, northNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
 
-        if (!DoesChunkCurrentlyProvideBorderCover(coord + Vector2Int.up))
+        if (!WillChunkProvideHorizontalBorderCover(coord + Vector2Int.up))
             ClearBorderPaddingZ(southCurrentZ, southNeighborZ, borderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize, blockTypes, solids);
+    }
+
+    private bool WillChunkProvideHorizontalBorderCover(Vector2Int coord)
+    {
+        if (DoesChunkCurrentlyProvideBorderCover(coord))
+            return true;
+
+        if (activeChunks.TryGetValue(coord, out Chunk activeChunk) && activeChunk != null)
+            return true;
+
+        for (int i = 0; i < pendingChunks.Count; i++)
+        {
+            if (pendingChunks[i].coord == coord)
+                return true;
+        }
+
+        return false;
     }
 
     private bool DoesChunkCurrentlyProvideBorderCover(Vector2Int coord)

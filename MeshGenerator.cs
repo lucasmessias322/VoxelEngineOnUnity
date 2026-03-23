@@ -197,26 +197,38 @@ public static class MeshGenerator
 
         public void Execute(int index)
         {
-            int paddedSize = SizeX + 2 * border;
-            int heightStride = paddedSize;
+            if (!heightCache.IsCreated || !columnContexts.IsCreated)
+                return;
 
+            int paddedSize = ResolvePaddedSize(heightCache.Length, SizeX + 2 * border);
+            if (paddedSize <= 0)
+                return;
+
+            int safeLength = math.min(heightCache.Length, columnContexts.Length);
+            if ((uint)index >= (uint)safeLength)
+                return;
+
+            int effectiveBorder = math.max(0, (paddedSize - SizeX) / 2);
             int lx = index % paddedSize;
             int lz = index / paddedSize;
-            int realLx = lx - border;
-            int realLz = lz - border;
+            int realLx = lx - effectiveBorder;
+            int realLz = lz - effectiveBorder;
             int worldX = coord.x * SizeX + realLx;
             int worldZ = coord.y * SizeZ + realLz;
 
-            int centerIdx = lx + lz * heightStride;
+            int centerIdx = lx + lz * paddedSize;
+            if ((uint)centerIdx >= (uint)heightCache.Length)
+                return;
+
             int h = heightCache[centerIdx];
-            int hN = lz + 1 < paddedSize ? heightCache[centerIdx + heightStride] : h;
-            int hS = lz > 0 ? heightCache[centerIdx - heightStride] : h;
-            int hE = lx + 1 < paddedSize ? heightCache[centerIdx + 1] : h;
-            int hW = lx > 0 ? heightCache[centerIdx - 1] : h;
-            int hNE = lx + 1 < paddedSize && lz + 1 < paddedSize ? heightCache[centerIdx + 1 + heightStride] : h;
-            int hNW = lx > 0 && lz + 1 < paddedSize ? heightCache[centerIdx - 1 + heightStride] : h;
-            int hSE = lx + 1 < paddedSize && lz > 0 ? heightCache[centerIdx + 1 - heightStride] : h;
-            int hSW = lx > 0 && lz > 0 ? heightCache[centerIdx - 1 - heightStride] : h;
+            int hN = SampleHeightSafe(lx, lz + 1, paddedSize, h);
+            int hS = SampleHeightSafe(lx, lz - 1, paddedSize, h);
+            int hE = SampleHeightSafe(lx + 1, lz, paddedSize, h);
+            int hW = SampleHeightSafe(lx - 1, lz, paddedSize, h);
+            int hNE = SampleHeightSafe(lx + 1, lz + 1, paddedSize, h);
+            int hNW = SampleHeightSafe(lx - 1, lz + 1, paddedSize, h);
+            int hSE = SampleHeightSafe(lx + 1, lz - 1, paddedSize, h);
+            int hSW = SampleHeightSafe(lx - 1, lz - 1, paddedSize, h);
 
             columnContexts[index] = TerrainColumnSampler.CreateFromNeighborHeights(
                 worldX,
@@ -234,6 +246,33 @@ public static class MeshGenerator
                 baseHeight,
                 seaLevel,
                 biomeNoiseSettings);
+        }
+
+        private int SampleHeightSafe(int x, int z, int paddedSize, int fallback)
+        {
+            if (x < 0 || x >= paddedSize || z < 0 || z >= paddedSize)
+                return fallback;
+
+            int sampleIndex = x + z * paddedSize;
+            if ((uint)sampleIndex >= (uint)heightCache.Length)
+                return fallback;
+
+            return heightCache[sampleIndex];
+        }
+
+        private static int ResolvePaddedSize(int arrayLength, int preferredSize)
+        {
+            if (preferredSize > 0 && preferredSize * preferredSize == arrayLength)
+                return preferredSize;
+
+            if (arrayLength <= 0)
+                return 0;
+
+            int inferredSize = (int)math.round(math.sqrt(arrayLength));
+            if (inferredSize > 0 && inferredSize * inferredSize == arrayLength)
+                return inferredSize;
+
+            return 0;
         }
     }
 
