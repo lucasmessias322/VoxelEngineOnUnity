@@ -7,7 +7,7 @@ public static class TreePlacement
 {
     [BurstCompile]
     public static void ApplyTreeInstancesToVoxels(
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         NativeArray<TreeInstance> treeInstances,
@@ -150,10 +150,10 @@ public static class TreePlacement
                     continue;
 
                 int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                if (!IsWoodBlock(blockTypes[tidx]) &&
-                    (blockTypes[tidx] == BlockType.Air || blockTypes[tidx] == BlockType.Leaves))
+                if (!IsWoodBlock((BlockType)blockTypes[tidx]) &&
+                    (blockTypes[tidx] == (byte)BlockType.Air || blockTypes[tidx] == (byte)BlockType.Leaves))
                 {
-                    blockTypes[tidx] = trunkType;
+                    blockTypes[tidx] = (byte)trunkType;
                     solids[tidx] = blockMappings[(int)trunkType].isSolid;
                 }
             }
@@ -219,7 +219,7 @@ public static class TreePlacement
         int lx,
         int ly,
         int lz,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -238,7 +238,7 @@ public static class TreePlacement
             return false;
 
         int idx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-        BlockType existing = blockTypes[idx];
+        BlockType existing = (BlockType)blockTypes[idx];
         if (existing == trunkType)
             return true;
         if (IsWoodBlock(existing))
@@ -246,7 +246,7 @@ public static class TreePlacement
         if (!(existing == BlockType.Air || existing == BlockType.Leaves))
             return false;
 
-        blockTypes[idx] = trunkType;
+        blockTypes[idx] = (byte)trunkType;
         solids[idx] = blockMappings[mappingIndex].isSolid;
         return true;
     }
@@ -259,7 +259,7 @@ public static class TreePlacement
         int canopyH,
         int canopyR,
         int treeHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int chunkSizeY,
@@ -350,7 +350,7 @@ public static class TreePlacement
         int centerY,
         int centerZ,
         int leafDistanceLimit,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -376,7 +376,7 @@ public static class TreePlacement
         int layerY,
         int centerZ,
         float radius,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -428,7 +428,7 @@ public static class TreePlacement
         int centerY,
         int centerZ,
         int leafDistanceLimit,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
@@ -454,7 +454,7 @@ public static class TreePlacement
         int endX,
         int endY,
         int endZ,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
@@ -497,7 +497,7 @@ public static class TreePlacement
         int endX,
         int endY,
         int endZ,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -532,7 +532,7 @@ public static class TreePlacement
         int x,
         int y,
         int z,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
@@ -541,7 +541,7 @@ public static class TreePlacement
         if (!IsInsideVoxelBounds(x, y, z, voxelSizeX, voxelSizeZ, chunkSizeY))
             return false;
 
-        BlockType existing = blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
+        BlockType existing = (BlockType)blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
         return existing == BlockType.Air || existing == BlockType.Leaves;
     }
 
@@ -549,7 +549,7 @@ public static class TreePlacement
         int x,
         int y,
         int z,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
@@ -558,7 +558,7 @@ public static class TreePlacement
         if (!IsInsideVoxelBounds(x, y, z, voxelSizeX, voxelSizeZ, chunkSizeY))
             return false;
 
-        BlockType existing = blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
+        BlockType existing = (BlockType)blockTypes[x + y * voxelSizeX + z * voxelPlaneSize];
         return existing == BlockType.Air || existing == BlockType.Leaves || IsWoodBlock(existing);
     }
 
@@ -587,7 +587,7 @@ public static class TreePlacement
         int trunkHeight,
         int armReach,
         int treeHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int chunkSizeY,
@@ -666,7 +666,7 @@ public static class TreePlacement
         int lx,
         int ly,
         int lz,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -685,11 +685,11 @@ public static class TreePlacement
             return false;
 
         int idx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-        BlockType existing = blockTypes[idx];
+        BlockType existing = (BlockType)blockTypes[idx];
         if (!(existing == BlockType.Air || existing == BlockType.Leaves))
             return false;
 
-        blockTypes[idx] = cactusType;
+        blockTypes[idx] = (byte)cactusType;
         solids[idx] = blockMappings[mappingIndex].isSolid;
         return true;
     }
@@ -701,7 +701,7 @@ public static class TreePlacement
         int canopyH,
         int canopyR,
         int treeHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int chunkSizeY,
@@ -760,7 +760,7 @@ public static class TreePlacement
         int canopyH,
         int canopyR,
         int treeHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int chunkSizeY,
@@ -830,7 +830,7 @@ public static class TreePlacement
         int layerY,
         int radius,
         int layerHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -871,7 +871,7 @@ public static class TreePlacement
         int centerZ,
         int canopyY,
         int radius,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -900,7 +900,7 @@ public static class TreePlacement
         int centerZ,
         int layerY,
         int radius,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -930,7 +930,7 @@ public static class TreePlacement
         int canopyH,
         int canopyR,
         int treeHash,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int chunkSizeY,
@@ -988,7 +988,7 @@ public static class TreePlacement
         int ix,
         int iz,
         int trunkTopY,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -1006,7 +1006,7 @@ public static class TreePlacement
         int ix,
         int iz,
         int ly,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -1024,7 +1024,7 @@ public static class TreePlacement
         int iz,
         int ly,
         int radius,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -1050,7 +1050,7 @@ public static class TreePlacement
         int lx,
         int ly,
         int lz,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<BlockTextureMapping> blockMappings,
         int voxelSizeX,
@@ -1068,22 +1068,33 @@ public static class TreePlacement
             return;
 
         int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
-        BlockType existing = blockTypes[lidx];
+        BlockType existing = (BlockType)blockTypes[lidx];
         if (IsWoodBlock(existing))
             return;
         if (!(existing == BlockType.Air || existing == BlockType.Leaves))
             return;
 
-        blockTypes[lidx] = BlockType.Leaves;
+        blockTypes[lidx] = (byte)BlockType.Leaves;
         solids[lidx] = blockMappings[(int)BlockType.Leaves].isSolid;
     }
 }
 
 public static class TreeGroundSupport
 {
+    private const int FootprintRadius = 1;
+    private const int SupportDepthProbe = 4;
+    private const int NeighborSurfaceSearchUp = 1;
+    private const int NeighborSurfaceSearchDown = 2;
+    private const int MinCenterSupportDepth = 3;
+    private const int MinNeighborSupportDepth = 2;
+    private const int MinSupportedColumns = 6;
+    private const int MinStrongColumns = 4;
+    private const int MinSupportedCardinals = 3;
+    private const int SideOpeningProbeDistance = 2;
+    private const int SideOpeningMinOpenCells = 2;
     [BurstCompile]
     public static bool TryEvaluateStableSupportAtWorldColumn(
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         Vector2Int coord,
         int border,
@@ -1118,7 +1129,7 @@ public static class TreeGroundSupport
 
     [BurstCompile]
     public static bool TryEvaluateStableSupportAtLocalColumn(
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         int ix,
         int surfaceY,
@@ -1144,16 +1155,227 @@ public static class TreeGroundSupport
         int groundIdx = ix + surfaceY * voxelSizeX + iz * voxelPlaneSize;
         int trunkBaseIdx = ix + (surfaceY + 1) * voxelSizeX + iz * voxelPlaneSize;
 
-        // Exige um "pé" realmente apoiado no terreno e não em um teto fino de caverna.
-        if (!IsStableGroundBlock(blockTypes[groundIdx], solids[groundIdx]))
+        // Exige um "pÃ©" realmente apoiado no terreno e nÃ£o em um teto fino de caverna.
+        if (!IsStableGroundBlock((BlockType)blockTypes[groundIdx], solids[groundIdx]))
             return true;
-        if (!IsStableGroundBlock(blockTypes[belowIdx], solids[belowIdx]))
+        if (!IsStableGroundBlock((BlockType)blockTypes[belowIdx], solids[belowIdx]))
             return true;
-        if (!IsTreeReplaceable(blockTypes[trunkBaseIdx], solids[trunkBaseIdx]))
+        if (!IsTreeReplaceable((BlockType)blockTypes[trunkBaseIdx], solids[trunkBaseIdx]))
             return true;
+
+        int centerDepth = MeasureSupportDepthAtGround(
+            blockTypes,
+            solids,
+            ix,
+            surfaceY,
+            iz,
+            voxelSizeX,
+            voxelPlaneSize,
+            MinCenterSupportDepth);
+        if (centerDepth < MinCenterSupportDepth)
+            return true;
+
+        // Fill ratio over a 3x3 footprint keeps roots away from cave lips and thin overhangs.
+        int supportedColumns = 0;
+        int strongColumns = 0;
+        int supportedCardinals = 0;
+
+        for (int dz = -FootprintRadius; dz <= FootprintRadius; dz++)
+        {
+            for (int dx = -FootprintRadius; dx <= FootprintRadius; dx++)
+            {
+                int sampleDepth = MeasureSupportDepthNearSurface(
+                    blockTypes,
+                    solids,
+                    ix + dx,
+                    surfaceY,
+                    iz + dz,
+                    chunkSizeY,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize);
+
+                if (sampleDepth >= MinNeighborSupportDepth)
+                {
+                    supportedColumns++;
+                    if ((dx == 0) != (dz == 0))
+                        supportedCardinals++;
+                }
+
+                if (sampleDepth >= MinCenterSupportDepth)
+                    strongColumns++;
+            }
+        }
+
+        if (supportedColumns < MinSupportedColumns ||
+            strongColumns < MinStrongColumns ||
+            supportedCardinals < MinSupportedCardinals)
+        {
+            return true;
+        }
+
+        // A real cave mouth stays hollow for more than one block in a direction.
+        if (HasSideOpening(blockTypes, solids, ix, surfaceY, iz, 1, 0, chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize) ||
+            HasSideOpening(blockTypes, solids, ix, surfaceY, iz, -1, 0, chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize) ||
+            HasSideOpening(blockTypes, solids, ix, surfaceY, iz, 0, 1, chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize) ||
+            HasSideOpening(blockTypes, solids, ix, surfaceY, iz, 0, -1, chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+        {
+            return true;
+        }
 
         hasStableSupport = true;
         return true;
+    }
+
+    private static int MeasureSupportDepthNearSurface(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> solids,
+        int ix,
+        int surfaceY,
+        int iz,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        int maxGroundY = math.min(chunkSizeY - 2, surfaceY + NeighborSurfaceSearchUp);
+        int minGroundY = math.max(1, surfaceY - NeighborSurfaceSearchDown);
+
+        for (int groundY = maxGroundY; groundY >= minGroundY; groundY--)
+        {
+            if (!IsInsideVoxelBounds(ix, groundY, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+                continue;
+            if (!IsInsideVoxelBounds(ix, groundY + 1, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
+                continue;
+
+            int groundIndex = ix + groundY * voxelSizeX + iz * voxelPlaneSize;
+            int aboveIndex = ix + (groundY + 1) * voxelSizeX + iz * voxelPlaneSize;
+            if (!IsStableGroundBlock((BlockType)blockTypes[groundIndex], solids[groundIndex]))
+                continue;
+            if (!IsTreeReplaceable((BlockType)blockTypes[aboveIndex], solids[aboveIndex]))
+                continue;
+
+            return MeasureSupportDepthAtGround(
+                blockTypes,
+                solids,
+                ix,
+                groundY,
+                iz,
+                voxelSizeX,
+                voxelPlaneSize,
+                SupportDepthProbe);
+        }
+
+        return 0;
+    }
+
+    private static int MeasureSupportDepthAtGround(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> solids,
+        int ix,
+        int groundY,
+        int iz,
+        int voxelSizeX,
+        int voxelPlaneSize,
+        int maxDepth)
+    {
+        int depth = 0;
+        int minY = math.max(0, groundY - math.max(0, maxDepth - 1));
+
+        for (int y = groundY; y >= minY; y--)
+        {
+            int index = ix + y * voxelSizeX + iz * voxelPlaneSize;
+            if (!IsStableGroundBlock((BlockType)blockTypes[index], solids[index]))
+                break;
+
+            depth++;
+        }
+
+        return depth;
+    }
+
+    private static bool HasSideOpening(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> solids,
+        int ix,
+        int surfaceY,
+        int iz,
+        int dirX,
+        int dirZ,
+        int chunkSizeY,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        for (int step = 1; step <= SideOpeningProbeDistance; step++)
+        {
+            int sampleX = ix + dirX * step;
+            int sampleZ = iz + dirZ * step;
+            if (!IsInsideVoxelBounds(sampleX, surfaceY, sampleZ, voxelSizeX, voxelSizeZ, chunkSizeY))
+                return false;
+            if (!IsInsideVoxelBounds(sampleX, math.max(0, surfaceY - 2), sampleZ, voxelSizeX, voxelSizeZ, chunkSizeY))
+                return false;
+
+            int supportDepth = MeasureSupportDepthNearSurface(
+                blockTypes,
+                solids,
+                sampleX,
+                surfaceY,
+                sampleZ,
+                chunkSizeY,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+            if (supportDepth >= MinNeighborSupportDepth)
+                return false;
+
+            int openCells = CountOpenCellsNearSurface(
+                blockTypes,
+                solids,
+                sampleX,
+                surfaceY,
+                sampleZ,
+                voxelSizeX,
+                voxelPlaneSize,
+                3);
+            if (openCells < SideOpeningMinOpenCells)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static int CountOpenCellsNearSurface(
+        NativeArray<byte> blockTypes,
+        NativeArray<bool> solids,
+        int ix,
+        int surfaceY,
+        int iz,
+        int voxelSizeX,
+        int voxelPlaneSize,
+        int sampleDepth)
+    {
+        int openCells = 0;
+        int minY = math.max(0, surfaceY - math.max(0, sampleDepth - 1));
+
+        for (int y = surfaceY; y >= minY; y--)
+        {
+            int index = ix + y * voxelSizeX + iz * voxelPlaneSize;
+            if (IsOpenBelowGroundBlock((BlockType)blockTypes[index], solids[index]))
+                openCells++;
+        }
+
+        return openCells;
+    }
+
+    private static bool IsOpenBelowGroundBlock(BlockType blockType, bool isSolid)
+    {
+        if (FluidBlockUtility.IsWater(blockType))
+            return true;
+        if (blockType == BlockType.Leaves)
+            return true;
+
+        return !isSolid || blockType == BlockType.Air;
     }
 
     private static bool IsStableGroundBlock(BlockType blockType, bool isSolid)

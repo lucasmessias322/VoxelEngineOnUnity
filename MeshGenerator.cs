@@ -242,7 +242,7 @@ public static class MeshGenerator
     {
         [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
         [NativeDisableParallelForRestriction]
-        [WriteOnly] public NativeArray<BlockType> blockTypes;
+        [WriteOnly] public NativeArray<byte> blockTypes;
 
         [NativeDisableParallelForRestriction]
         [WriteOnly] public NativeArray<bool> solids;
@@ -268,7 +268,7 @@ public static class MeshGenerator
             for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
             {
                 BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
-                blockTypes[idx] = bt;
+                blockTypes[idx] = (byte)bt;
                 solids[idx] = blockMappings[(int)bt].isSolid;
             }
         }
@@ -308,7 +308,7 @@ public static class MeshGenerator
     [BurstCompile]
     private struct CopyGeneratedOpacityToLightVolumeJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<BlockType> sourceBlockTypes;
+        [ReadOnly] public NativeArray<byte> sourceBlockTypes;
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
         [NativeDisableParallelForRestriction] public NativeArray<byte> targetOpacity;
 
@@ -428,7 +428,7 @@ public static class MeshGenerator
     [BurstCompile]
     private struct BuildChunkSnapshotAndFlagsJob : IJob
     {
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<byte> blockTypes;
         [WriteOnly] public NativeArray<byte> voxelSnapshot;
         public NativeArray<bool> subchunkNonEmpty;
         public int borderSize;
@@ -450,7 +450,7 @@ public static class MeshGenerator
                     int srcBase = (z + borderSize) * voxelPlaneSize + y * voxelSizeX + borderSize;
                     for (int x = 0; x < SizeX; x++, dstIndex++)
                     {
-                        BlockType blockType = blockTypes[srcBase + x];
+                        BlockType blockType = (BlockType)blockTypes[srcBase + x];
                         voxelSnapshot[dstIndex] = (byte)blockType;
                         if (blockType != BlockType.Air)
                             subchunkNonEmpty[subchunkIndex] = true;
@@ -493,18 +493,18 @@ public static class MeshGenerator
         NativeArray<byte> chunkVoxelSnapshot,
         out JobHandle dataHandle,
         out NativeArray<int> heightCache,
-        out NativeArray<BlockType> blockTypes,
+        out NativeArray<byte> blockTypes,
         out NativeArray<bool> solids,
         out NativeArray<byte> light,
         out NativeArray<byte> lightOpacityData,
         out NativeArray<bool> subchunkNonEmpty
     )
     {
-        // 1. Fixar o borderSize em 1 (PadrÃ£o para Ambient Occlusion e Costura)
+        // 1. Fixar o borderSize em 1 (PadrÃƒÂ£o para Ambient Occlusion e Costura)
 
-        // 2. AlocaÃ§Ãµes dos Arrays IntermÃ©dios que fluem entre os Jobs (TempJob)
-        // Em cenas pesadas essa chain pode durar mais de 4 frames, entÃƒÂ£o os buffers
-        // intermediÃƒÂ¡rios abaixo nÃƒÂ£o podem usar TempJob.
+        // 2. AlocaÃƒÂ§ÃƒÂµes dos Arrays IntermÃƒÂ©dios que fluem entre os Jobs (TempJob)
+        // Em cenas pesadas essa chain pode durar mais de 4 frames, entÃƒÆ’Ã‚Â£o os buffers
+        // intermediÃƒÆ’Ã‚Â¡rios abaixo nÃƒÆ’Ã‚Â£o podem usar TempJob.
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
 
@@ -531,13 +531,13 @@ public static class MeshGenerator
         int totalVoxels = dataTotalVoxels;
 
         heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.Persistent);
-        blockTypes = new NativeArray<BlockType>(dataTotalVoxels, Allocator.Persistent);
+        blockTypes = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         solids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
 
         // ==========================================
-        // JOB 0: GeraÃ§Ã£o do Heightmap (Paralelo)
+        // JOB 0: GeraÃƒÂ§ÃƒÂ£o do Heightmap (Paralelo)
         // ==========================================
         var heightJob = new HeightmapJob
         {
@@ -552,7 +552,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             heightStride = dataHeightSize
         };
-        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃ¡rio)
+        JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃƒÂ¡rio)
         NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
         var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
@@ -583,13 +583,13 @@ public static class MeshGenerator
         int paddedSize = SizeX + 2 * borderSize;
         int totalColumns = paddedSize * paddedSize;
 
-        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 Ã© Ã³timo
+        JobHandle populateHandle = populateJob.Schedule(totalColumns, 32, heightHandle); // batch 64 ÃƒÂ© ÃƒÂ³timo
 
 
 
 
         // ==========================================
-        // JOB 1: GeraÃ§Ã£o de Dados (Terreno)
+        // JOB 1: GeraÃƒÂ§ÃƒÂ£o de Dados (Terreno)
         // ==========================================
         var chunkDataJob = new ChunkData.ChunkDataJob
         {
@@ -632,7 +632,7 @@ public static class MeshGenerator
             spaghettiCarveMaskOffsetX = 0,
             spaghettiCarveMaskOffsetZ = 0
         };
-        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃªncia no heightHandle
+        // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃƒÂªncia no heightHandle
         JobHandle chunkDataHandle;
         if (!enableVoxelLighting)
         {
@@ -843,7 +843,7 @@ public static class MeshGenerator
 
     public static void ScheduleMeshJob(
         NativeArray<int> heightCache,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<byte> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
@@ -880,7 +880,7 @@ public static class MeshGenerator
         out NativeArray<ulong> subchunkVisibilityMasks
     )
     {
-        // 1. AlocaÃ§Ãµes das Listas de Mesh (Output)
+        // 1. AlocaÃƒÂ§ÃƒÂµes das Listas de Mesh (Output)
         vertices = new NativeList<Vector3>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
@@ -894,7 +894,7 @@ public static class MeshGenerator
         subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.Persistent);
 
         // ==========================================
-        // JOB 2: GeraÃ§Ã£o da Malha (Mesh)
+        // JOB 2: GeraÃƒÂ§ÃƒÂ£o da Malha (Mesh)
         // ==========================================
         var meshJob = new ChunkMeshJob
         {
@@ -902,7 +902,7 @@ public static class MeshGenerator
             endY = 0,
             blockTypes = blockTypes,
             solids = solids,
-            light = light, // Usa a luz previamente calculada e passada por parÃ¢metro
+            light = light, // Usa a luz previamente calculada e passada por parÃƒÂ¢metro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
@@ -938,7 +938,7 @@ public static class MeshGenerator
             extraUVs = extraUVs,
             subchunkVisibilityMasks = subchunkVisibilityMasks
         };
-        // O MeshJob agora Ã© agendado independentemente, assumindo que os dados intermediÃ¡rios jÃ¡ estÃ£o prontos
+        // O MeshJob agora ÃƒÂ© agendado independentemente, assumindo que os dados intermediÃƒÂ¡rios jÃƒÂ¡ estÃƒÂ£o prontos
         meshHandle = meshJob.Schedule();
     }
 
@@ -953,7 +953,7 @@ public static class MeshGenerator
     {
         // DeallocateOnJobCompletion limpa todos estes arrays criados no Schedule.
         [ReadOnly] public NativeArray<int> heightCache;
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<byte> blockTypes;
         [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> light;
@@ -996,7 +996,7 @@ public static class MeshGenerator
 
         private struct GreedyFaceData
         {
-            public int blockId;
+            public byte blockId;
             public byte valid;
             public byte faceLight;
             public byte surfaceHeight;
@@ -1084,7 +1084,7 @@ public static class MeshGenerator
                         int sampleIndex = sampleX + worldY * voxelSizeX + sampleZ * voxelPlaneSize;
                         int visIndex = localX | (localY << 8) | (localZ << 4);
 
-                        if (IsOcclusionOpaque(blockTypes[sampleIndex]))
+                        if (IsOcclusionOpaque((BlockType)blockTypes[sampleIndex]))
                         {
                             occlusionState[visIndex] = 1;
                             opaqueCount++;
@@ -1586,7 +1586,7 @@ public static class MeshGenerator
         }
 
         private void GenerateDecorativeMeshes(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<byte> light,
             float invAtlasTilesX,
             float invAtlasTilesY)
@@ -1620,7 +1620,7 @@ public static class MeshGenerator
                     for (int x = border; x < border + SizeX; x++)
                     {
                         int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-                        BlockType blockType = blockTypes[idx];
+                        BlockType blockType = (BlockType)blockTypes[idx];
 
                         if (y >= startY && blockType != BlockType.Air)
                         {
@@ -1655,7 +1655,7 @@ public static class MeshGenerator
                             continue;
 
                         int upIdx = idx + voxelSizeX;
-                        if (blockTypes[upIdx] != BlockType.Air)
+                        if (blockTypes[upIdx] != (byte)BlockType.Air)
                             continue;
 
                         int worldX = chunkCoordX * SizeX + (x - border);
@@ -2260,7 +2260,7 @@ public static class MeshGenerator
             return !neighborOpaque;
         }
 
-        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
+        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<byte> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -2309,7 +2309,7 @@ public static class MeshGenerator
 
                                 int maskIndex = i + j * sizeU;
                                 int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-                                BlockType current = blockTypes[idx];
+                                BlockType current = (BlockType)blockTypes[idx];
 
                                 if (current == BlockType.Air)
                                 {
@@ -2337,7 +2337,7 @@ public static class MeshGenerator
                                 else
                                 {
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
-                                    BlockType neighbor = blockTypes[nIdx];
+                                    BlockType neighbor = (BlockType)blockTypes[nIdx];
                                     isVisible = IsFaceVisibleForCurrentBlock(current, neighbor);
                                 }
 
@@ -2403,7 +2403,7 @@ public static class MeshGenerator
 
                                 mask[maskIndex] = new GreedyFaceData
                                 {
-                                    blockId = (int)current,
+                                    blockId = (byte)current,
                                     valid = 1,
                                     faceLight = faceLight,
                                     surfaceHeight = 0,
@@ -2618,7 +2618,7 @@ public static class MeshGenerator
             if (!solids[idx])
                 return false;
 
-            BlockType blockType = blockTypes[idx];
+            BlockType blockType = (BlockType)blockTypes[idx];
             BlockTextureMapping mapping = blockMappings[(int)blockType];
             return CastsAmbientOcclusion(blockType, mapping);
         }
@@ -2635,8 +2635,8 @@ public static class MeshGenerator
 
         private static bool CastsAmbientOcclusion(BlockType blockType, BlockTextureMapping mapping)
         {
-            // AO deve vir de cubos cheios que realmente fecham a iluminaÃ§Ã£o ambiente.
-            // Folhas sÃ£o a exceÃ§Ã£o: mesmo transparentes, devem sombrear como no Minecraft.
+            // AO deve vir de cubos cheios que realmente fecham a iluminaÃƒÂ§ÃƒÂ£o ambiente.
+            // Folhas sÃƒÂ£o a exceÃƒÂ§ÃƒÂ£o: mesmo transparentes, devem sombrear como no Minecraft.
             if (mapping.renderShape != BlockRenderShape.Cube ||
                 mapping.isEmpty ||
                 mapping.isLiquid ||
@@ -2780,7 +2780,7 @@ public static class MeshGenerator
                 return false;
 
             int aboveIndex = x + (y + 1) * voxelSizeX + z * voxelPlaneSize;
-            return FluidBlockUtility.IsWater(blockTypes[aboveIndex]);
+            return FluidBlockUtility.IsWater((BlockType)blockTypes[aboveIndex]);
         }
 
         private BlockType GetBlockTypeSafe(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
@@ -2789,7 +2789,7 @@ public static class MeshGenerator
                 return BlockType.Air;
 
             int index = x + y * voxelSizeX + z * voxelPlaneSize;
-            return blockTypes[index];
+            return (BlockType)blockTypes[index];
         }
 
         private bool IsSolidWaterNeighbor(BlockType blockType)
@@ -2840,10 +2840,10 @@ public static class MeshGenerator
     public struct DisposeChunkDataJob : IJob
     {
         [DeallocateOnJobCompletion] public NativeArray<int> heightCache;
-        [DeallocateOnJobCompletion] public NativeArray<BlockType> blockTypes;
+        [DeallocateOnJobCompletion] public NativeArray<byte> blockTypes;
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
-        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // â† NOVO
+        [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // Ã¢â€ Â NOVO
         public void Execute() { }
     }
 

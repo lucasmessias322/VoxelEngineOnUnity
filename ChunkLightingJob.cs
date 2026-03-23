@@ -9,7 +9,7 @@ public static class ChunkLighting
     [BurstCompile]
     public struct ChunkLightingJob : IJob
     {
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<byte> blockTypes;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> blockLightData;
 

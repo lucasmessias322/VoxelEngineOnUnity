@@ -54,7 +54,7 @@ public static class ChunkData
         public int CliffTreshold;
         public bool enableTrees;
         public NativeArray<int> heightCache;
-        public NativeArray<BlockType> blockTypes;
+        public NativeArray<byte> blockTypes;
         public NativeArray<bool> solids;
 
         [ReadOnly] public NativeArray<TerrainColumnContext> columnContextCache;
@@ -76,7 +76,7 @@ public static class ChunkData
 
 
 
-            // 2. Popular voxels (terreno, Ã¡gua)
+            // 2. Popular voxels (terreno, ÃƒÂ¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
             switch (caveGenerationMode)
@@ -97,10 +97,10 @@ public static class ChunkData
 
             if (enableTrees)
             {
-                // NOVO: Gere as Ã¡rvores aqui
+                // NOVO: Gere as ÃƒÂ¡rvores aqui
                 NativeList<TreeInstance> trees = GenerateTreeInstances();
 
-                // AplicaÃ§Ã£o existente (agora com trees local)
+                // AplicaÃƒÂ§ÃƒÂ£o existente (agora com trees local)
                 TreePlacement.ApplyTreeInstancesToVoxels(
                     blockTypes, solids, blockMappings, trees.AsArray(), coord, border,
                     detailBorder, SizeX, SizeZ, SizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightCache, heightStride
@@ -111,7 +111,7 @@ public static class ChunkData
 
             ApplyBlockEditsToVoxels(blockTypes, solids, voxelSizeX, voxelSizeZ);
 
-            // === NOVO: prÃ©-calcula quais subchunks tÃªm blocos ===
+            // === NOVO: prÃƒÂ©-calcula quais subchunks tÃƒÂªm blocos ===
         }
 
         private bool HasSharedSpaghettiCarveMask()
@@ -124,7 +124,7 @@ public static class ChunkData
         }
 
         private void ApplySharedSpaghettiCarveMask(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -170,11 +170,11 @@ public static class ChunkData
                         if (spaghettiCarveMask[maskIndex] == 0)
                             continue;
 
-                        BlockType existing = blockTypes[targetIndex];
+                        BlockType existing = (BlockType)blockTypes[targetIndex];
                         if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                             continue;
 
-                        blockTypes[targetIndex] = BlockType.Air;
+                        blockTypes[targetIndex] = (byte)BlockType.Air;
                         solids[targetIndex] = false;
                     }
                 }
@@ -184,7 +184,7 @@ public static class ChunkData
         }
 
         private void ApplySharedSpaghettiCarveMaskSeam(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -584,7 +584,7 @@ public static class ChunkData
         }
 
         private void GenerateWormCaves(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -745,7 +745,7 @@ public static class ChunkData
             int boundsMaxY,
             int boundsMinZ,
             int boundsMaxZ,
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             ref uint state)
         {
@@ -898,7 +898,7 @@ public static class ChunkData
             int boundsMaxY,
             int boundsMinZ,
             int boundsMaxZ,
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             ref uint state)
         {
@@ -969,7 +969,7 @@ public static class ChunkData
             int boundsMaxY,
             int boundsMinZ,
             int boundsMaxZ,
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids)
         {
             if (radius <= 0f)
@@ -1031,11 +1031,11 @@ public static class ChunkData
                     for (int worldY = carveYMin; worldY <= carveYMax; worldY++)
                     {
                         int idx = localX + worldY * voxelSizeX + localZ * voxelPlaneSize;
-                        BlockType existing = blockTypes[idx];
+                        BlockType existing = (BlockType)blockTypes[idx];
                         if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                             continue;
 
-                        blockTypes[idx] = BlockType.Air;
+                        blockTypes[idx] = (byte)BlockType.Air;
                         solids[idx] = false;
                     }
                 }
@@ -1063,7 +1063,7 @@ public static class ChunkData
         }
 
         private void GenerateSpaghettiCaves(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -1199,7 +1199,7 @@ public static class ChunkData
 
                                     for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
                                     {
-                                        BlockType existing = blockTypes[voxelIndex];
+                                        BlockType existing = (BlockType)blockTypes[voxelIndex];
                                         if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                                             continue;
 
@@ -1219,7 +1219,7 @@ public static class ChunkData
                                         if (density.x >= 0f)
                                             continue;
 
-                                        blockTypes[voxelIndex] = BlockType.Air;
+                                        blockTypes[voxelIndex] = (byte)BlockType.Air;
                                         solids[voxelIndex] = false;
                                     }
                                 }
@@ -1252,7 +1252,7 @@ public static class ChunkData
         }
 
         private void CarveSpaghettiChunkBorderColumnsExact(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -1299,7 +1299,7 @@ public static class ChunkData
             int primary,
             int secondary,
             bool primaryIsZ,
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -1331,7 +1331,7 @@ public static class ChunkData
 
             for (int voxelY = minY; voxelY <= entranceMaxY; voxelY++, voxelIndex += voxelSizeX)
             {
-                BlockType existing = blockTypes[voxelIndex];
+                BlockType existing = (BlockType)blockTypes[voxelIndex];
                 if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                     continue;
 
@@ -1341,7 +1341,7 @@ public static class ChunkData
                 if (density.x >= 0f)
                     continue;
 
-                blockTypes[voxelIndex] = BlockType.Air;
+                blockTypes[voxelIndex] = (byte)BlockType.Air;
                 solids[voxelIndex] = false;
             }
         }
@@ -1609,7 +1609,7 @@ public static class ChunkData
         }
 
         private void GenerateOreVeins(
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             int voxelSizeX,
             int voxelSizeZ,
@@ -1721,7 +1721,7 @@ public static class ChunkData
             int voxelPlaneSize,
             int heightStride,
             bool oreIsSolid,
-            NativeArray<BlockType> blockTypes,
+            NativeArray<byte> blockTypes,
             NativeArray<bool> solids,
             ref uint state)
         {
@@ -1768,11 +1768,11 @@ public static class ChunkData
                             continue;
 
                         int idx = localX + worldY * voxelSizeX + localZ * voxelPlaneSize;
-                        BlockType existing = blockTypes[idx];
+                        BlockType existing = (BlockType)blockTypes[idx];
                         if (!CanReplaceForRule(existing, rule))
                             continue;
 
-                        blockTypes[idx] = rule.blockType;
+                        blockTypes[idx] = (byte)rule.blockType;
                         solids[idx] = oreIsSolid;
                     }
                 }
@@ -1845,7 +1845,7 @@ public static class ChunkData
         }
 
 
-        private void ApplyBlockEditsToVoxels(NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
+        private void ApplyBlockEditsToVoxels(NativeArray<byte> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
             if (blockEdits.Length == 0) return;
 
@@ -1866,8 +1866,8 @@ public static class ChunkData
                 if (internalX >= 0 && internalX < voxelSizeX && y >= 0 && y < SizeY && internalZ >= 0 && internalZ < voxelSizeZ)
                 {
                     int idx = internalX + y * voxelSizeX + internalZ * voxelPlaneSize;
-                    BlockType bt = (BlockType)math.clamp(e.type, 0, 255);
-                    blockTypes[idx] = bt;
+                    BlockType bt = (BlockType)math.clamp(e.type, 0, byte.MaxValue);
+                    blockTypes[idx] = (byte)bt;
                     BlockTextureMapping mapping = blockMappings[(int)bt];
                     solids[idx] = mapping.isSolid;
                 }
@@ -1876,7 +1876,7 @@ public static class ChunkData
 
 
 
-        private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<BlockType> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private void FillWaterAboveTerrain(NativeArray<int> heightCache, NativeArray<byte> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             int heightStride = SizeX + 2 * border;
             for (int lx = -border; lx < SizeX + border; lx++)
@@ -1891,7 +1891,7 @@ public static class ChunkData
                     for (int y = h + 1; y <= seaLevel; y++)
                     {
                         int voxelIdx = cacheX + y * voxelSizeX + cacheZ * voxelPlaneSize;
-                        blockTypes[voxelIdx] = BlockType.Water;
+                        blockTypes[voxelIdx] = (byte)BlockType.Water;
                         solids[voxelIdx] = blockMappings[(int)BlockType.Water].isSolid;
                     }
                 }

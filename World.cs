@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Unity.Burst;
 using Unity.Collections;
@@ -1072,7 +1072,7 @@ public partial class World : MonoBehaviour
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
-        public NativeArray<BlockType> blockTypes;
+        public NativeArray<byte> blockTypes;
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public NativeArray<int3> suppressedBillboards;
@@ -1084,7 +1084,7 @@ public partial class World : MonoBehaviour
     {
         public JobHandle handle;
         public NativeArray<int> heightCache;
-        public NativeArray<BlockType> blockTypes;
+        public NativeArray<byte> blockTypes;
         public NativeArray<bool> solids;
         public NativeArray<byte> light;
         public int borderSize;
@@ -1119,7 +1119,7 @@ public partial class World : MonoBehaviour
         [ReadOnly] public NativeArray<byte> snapshotVoxelData;
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
 
-        public NativeArray<BlockType> blockTypes;
+        public NativeArray<byte> blockTypes;
 
         public int borderSize;
         public int voxelSizeX;
@@ -1146,19 +1146,19 @@ public partial class World : MonoBehaviour
             int slotZ = chunkOffsetZ + snapshotChunkRadius;
             if (slotX < 0 || slotX >= snapshotChunkDiameter || slotZ < 0 || slotZ >= snapshotChunkDiameter)
             {
-                blockTypes[index] = y <= 2 ? BlockType.Bedrock : BlockType.Air;
+                blockTypes[index] = y <= 2 ? (byte)BlockType.Bedrock : (byte)BlockType.Air;
                 return;
             }
 
             int slot = slotX + slotZ * snapshotChunkDiameter;
             if (snapshotLoadedChunks[slot] == 0)
             {
-                blockTypes[index] = y <= 2 ? BlockType.Bedrock : BlockType.Air;
+                blockTypes[index] = y <= 2 ? (byte)BlockType.Bedrock : (byte)BlockType.Air;
                 return;
             }
 
             int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
-            blockTypes[index] = (BlockType)snapshotVoxelData[srcIndex];
+            blockTypes[index] = snapshotVoxelData[srcIndex];
         }
 
         private static int FloorDiv(int value, int divisor)
@@ -1175,7 +1175,7 @@ public partial class World : MonoBehaviour
     {
         [ReadOnly] public NativeArray<BlockEdit> overrides;
 
-        public NativeArray<BlockType> blockTypes;
+        public NativeArray<byte> blockTypes;
 
         public int chunkMinX;
         public int chunkMinZ;
@@ -1198,7 +1198,7 @@ public partial class World : MonoBehaviour
                     continue;
 
                 int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
-                blockTypes[dstIndex] = (BlockType)edit.type;
+                blockTypes[dstIndex] = (byte)math.clamp(edit.type, 0, byte.MaxValue);
             }
         }
     }
@@ -1206,7 +1206,7 @@ public partial class World : MonoBehaviour
     [BurstCompile]
     private struct FastRebuildDerivedDataJob : IJob
     {
-        [ReadOnly] public NativeArray<BlockType> blockTypes;
+        [ReadOnly] public NativeArray<byte> blockTypes;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
 
         public NativeArray<bool> solids;
@@ -1234,7 +1234,7 @@ public partial class World : MonoBehaviour
                     for (int y = 0; y < Chunk.SizeY; y++)
                     {
                         int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
-                        BlockType blockType = blockTypes[idx];
+                        BlockType blockType = (BlockType)blockTypes[idx];
                         bool isSolid = blockMappings[(int)blockType].isSolid;
                         solids[idx] = isSolid;
                         if (isSolid)
@@ -1723,7 +1723,7 @@ public partial class World : MonoBehaviour
 
     private void ApplyCurrentBlockOverridesToChunkData(
         Vector2Int coord,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache)
@@ -1755,7 +1755,7 @@ public partial class World : MonoBehaviour
 
     private void ApplyCurrentBlockOverridesToChunkData(
         Vector2Int coord,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache,
@@ -1802,7 +1802,7 @@ public partial class World : MonoBehaviour
             if (idx < 0 || idx >= blockTypes.Length)
                 continue;
 
-            blockTypes[idx] = overrideType;
+            blockTypes[idx] = (byte)overrideType;
             UpdateVoxelSnapshotCell(voxelSnapshot, chunkMinX, chunkMinZ, worldPos, overrideType);
             hasRelevantOverrides = true;
         }
@@ -1840,7 +1840,7 @@ public partial class World : MonoBehaviour
         voxelSnapshot[snapshotIndex] = (byte)blockType;
     }
 
-    private static int InferBorderSizeFromChunkArrays(NativeArray<BlockType> blockTypes, NativeArray<int> heightCache)
+    private static int InferBorderSizeFromChunkArrays(NativeArray<byte> blockTypes, NativeArray<int> heightCache)
     {
         if (heightCache.IsCreated && heightCache.Length > 0)
         {
@@ -1862,7 +1862,7 @@ public partial class World : MonoBehaviour
 
     private void RefreshChunkDerivedData(
         Vector2Int coord,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<int> heightCache,
@@ -1892,7 +1892,7 @@ public partial class World : MonoBehaviour
                 for (int y = 0; y < Chunk.SizeY; y++)
                 {
                     int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
-                    BlockType bt = blockTypes[idx];
+                    BlockType bt = (BlockType)blockTypes[idx];
                     bool isSolid = mappings[(int)bt].isSolid;
                     solids[idx] = isSolid;
                     if (isSolid)
@@ -2024,7 +2024,7 @@ public partial class World : MonoBehaviour
 
     private void SealMissingHorizontalChunkBorders(
         Vector2Int coord,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         int borderSize)
     {
@@ -2083,7 +2083,7 @@ public partial class World : MonoBehaviour
         int borderSize,
         int voxelSizeX,
         int voxelPlaneSize,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids)
     {
         if (currentLocalX < 0 || currentLocalX >= voxelSizeX || paddingLocalX < 0 || paddingLocalX >= voxelSizeX)
@@ -2095,10 +2095,10 @@ public partial class World : MonoBehaviour
             int paddingIdx = paddingLocalX + z * voxelPlaneSize;
             for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
-                if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
+                if (!ShouldSealMissingHorizontalBorderForBlock((BlockType)blockTypes[currentIdx]))
                     continue;
 
-                blockTypes[paddingIdx] = BlockType.Air;
+                blockTypes[paddingIdx] = (byte)BlockType.Air;
                 solids[paddingIdx] = false;
             }
         }
@@ -2111,7 +2111,7 @@ public partial class World : MonoBehaviour
         int voxelSizeX,
         int voxelSizeZ,
         int voxelPlaneSize,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids)
     {
         if (currentLocalZ < 0 || currentLocalZ >= voxelSizeZ || paddingLocalZ < 0 || paddingLocalZ >= voxelSizeZ)
@@ -2125,10 +2125,10 @@ public partial class World : MonoBehaviour
             int paddingIdx = paddingSliceStart + x;
             for (int y = 0; y < Chunk.SizeY; y++, currentIdx += voxelSizeX, paddingIdx += voxelSizeX)
             {
-                if (!ShouldSealMissingHorizontalBorderForBlock(blockTypes[currentIdx]))
+                if (!ShouldSealMissingHorizontalBorderForBlock((BlockType)blockTypes[currentIdx]))
                     continue;
 
-                blockTypes[paddingIdx] = BlockType.Air;
+                blockTypes[paddingIdx] = (byte)BlockType.Air;
                 solids[paddingIdx] = false;
             }
         }
@@ -2478,7 +2478,7 @@ public partial class World : MonoBehaviour
             chunk.voxelData,
             out JobHandle dataHandle,
             out NativeArray<int> heightCache,
-            out NativeArray<BlockType> blockTypes,
+            out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
             out NativeArray<byte> lightOpacityData,
@@ -2544,7 +2544,7 @@ public partial class World : MonoBehaviour
         EnsureNativeGenerationCaches();
 
         NativeArray<int> heightCache = new NativeArray<int>(copyTotalHeightPoints, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<BlockType> blockTypes = new NativeArray<BlockType>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> blockTypes = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -2749,7 +2749,7 @@ public partial class World : MonoBehaviour
         Vector2Int coord,
         int borderSize,
         NativeArray<int> heightCache,
-        NativeArray<BlockType> blockTypes,
+        NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
         NativeArray<bool> subchunkNonEmpty)
     {
@@ -2792,7 +2792,7 @@ public partial class World : MonoBehaviour
                     }
 
                     int idx = ix + y * voxelSizeX + iz * voxelPlaneSize;
-                    blockTypes[idx] = bt;
+                    blockTypes[idx] = (byte)bt;
 
                     bool isSolid = mappings[(int)bt].isSolid;
                     solids[idx] = isSolid;
@@ -3120,7 +3120,7 @@ public partial class World : MonoBehaviour
               chunk.voxelData,
               out JobHandle dataHandle,
               out NativeArray<int> heightCache,
-              out NativeArray<BlockType> blockTypes,
+              out NativeArray<byte> blockTypes,
               out NativeArray<bool> solids,
               out NativeArray<byte> light,
               out NativeArray<byte> lightOpacityData,
