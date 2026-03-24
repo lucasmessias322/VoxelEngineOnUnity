@@ -489,7 +489,10 @@ public partial class World : MonoBehaviour
 
         Subchunk subchunk = chunk.subchunks[key.y];
         if (subchunk != null)
+        {
             subchunk.SetVisible(visible);
+            chunk.RefreshVisualSliceVisibilityForSubchunk(key.y);
+        }
     }
 
     private void EnsureAllSubchunksVisibleApplied()
@@ -529,6 +532,8 @@ public partial class World : MonoBehaviour
 
                 subchunk.SetVisible(visible);
             }
+
+            chunk.RefreshAllVisualSliceVisibility();
         }
     }
 }

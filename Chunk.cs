@@ -15,6 +15,7 @@ public class Chunk : MonoBehaviour
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
     public Subchunk[] subchunks;
+    [HideInInspector] public ChunkRenderSlice[] visualSlices;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     [NonSerialized] public bool hasVoxelSnapshot = false;
@@ -24,11 +25,14 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public bool[] subchunkVisibilityValid;
     [NonSerialized] public ulong lastLightingContextHash;
     [NonSerialized] public bool lightingContextHashValid;
+    [NonSerialized] public int visualSubchunksPerRenderer;
     public bool HasInitializedSubchunks =>
         subchunks != null &&
         subchunks.Length == SubchunksPerColumn &&
+        visualSlices != null &&
+        visualSlices.Length == GetVisualSliceCount(visualSubchunksPerRenderer) &&
         subRenderers != null &&
-        subRenderers.Length == SubchunksPerColumn;
+        subRenderers.Length == visualSlices.Length;
 
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
@@ -66,46 +70,156 @@ public class Chunk : MonoBehaviour
 
     }
 
-    public void InitializeSubchunks(Material[] materials)
+    public static int GetVisualSliceCount(int subchunksPerRenderer)
+    {
+        int clamped = Mathf.Clamp(subchunksPerRenderer, 1, SubchunksPerColumn);
+        return (SubchunksPerColumn + clamped - 1) / clamped;
+    }
+
+    public int GetVisualSliceIndexForSubchunk(int subchunkIndex)
+    {
+        int clampedSize = Mathf.Clamp(visualSubchunksPerRenderer, 1, SubchunksPerColumn);
+        return Mathf.Clamp(subchunkIndex / clampedSize, 0, Mathf.Max(0, GetVisualSliceCount(clampedSize) - 1));
+    }
+
+    public int GetVisualSliceMask(int visualSliceIndex)
+    {
+        if (visualSliceIndex < 0 || visualSliceIndex >= GetVisualSliceCount(visualSubchunksPerRenderer))
+            return 0;
+
+        int start = visualSliceIndex * visualSubchunksPerRenderer;
+        int end = Mathf.Min(start + visualSubchunksPerRenderer, SubchunksPerColumn);
+        int mask = 0;
+        for (int sub = start; sub < end; sub++)
+            mask |= 1 << sub;
+
+        return mask;
+    }
+
+    public bool TryGetVisualSlice(int visualSliceIndex, out ChunkRenderSlice visualSlice)
+    {
+        if (visualSlices != null &&
+            visualSliceIndex >= 0 &&
+            visualSliceIndex < visualSlices.Length)
+        {
+            visualSlice = visualSlices[visualSliceIndex];
+            return visualSlice != null;
+        }
+
+        visualSlice = null;
+        return false;
+    }
+
+    public void RefreshVisualSliceVisibility(int visualSliceIndex)
+    {
+        if (TryGetVisualSlice(visualSliceIndex, out ChunkRenderSlice visualSlice))
+            visualSlice.RefreshVisibility(subchunks);
+    }
+
+    public void RefreshVisualSliceVisibilityForSubchunk(int subchunkIndex)
+    {
+        RefreshVisualSliceVisibility(GetVisualSliceIndexForSubchunk(subchunkIndex));
+    }
+
+    public void RefreshAllVisualSliceVisibility()
+    {
+        if (visualSlices == null)
+            return;
+
+        for (int i = 0; i < visualSlices.Length; i++)
+        {
+            ChunkRenderSlice visualSlice = visualSlices[i];
+            if (visualSlice != null)
+                visualSlice.RefreshVisibility(subchunks);
+        }
+    }
+
+    public void InitializeSubchunks(Material[] materials, int subchunksPerVisualSlice)
     {
         EnsureVisibilityData();
 
+        visualSubchunksPerRenderer = Mathf.Clamp(subchunksPerVisualSlice, 1, SubchunksPerColumn);
+
         if (subchunks == null || subchunks.Length != SubchunksPerColumn)
             subchunks = new Subchunk[SubchunksPerColumn];
-
-        if (subRenderers == null || subRenderers.Length != SubchunksPerColumn)
-            subRenderers = new MeshRenderer[SubchunksPerColumn];
 
         for (int i = 0; i < SubchunksPerColumn; i++)
         {
             Subchunk sc = subchunks[i];
             if (sc == null)
             {
-                sc = CreateSubchunk(materials, i);
+                sc = CreateSubchunk(i);
                 subchunks[i] = sc;
             }
             else
             {
-                sc.Initialize(materials, i);
+                sc.Initialize(i);
+            }
+        }
+
+        int visualSliceCount = GetVisualSliceCount(visualSubchunksPerRenderer);
+        if (visualSlices != null && visualSlices.Length != visualSliceCount)
+        {
+            for (int i = 0; i < visualSlices.Length; i++)
+            {
+                if (visualSlices[i] != null)
+                    Destroy(visualSlices[i].gameObject);
             }
 
-            subRenderers[i] = sc != null ? sc.meshRenderer : null;
+            visualSlices = null;
+        }
+
+        if (visualSlices == null || visualSlices.Length != visualSliceCount)
+            visualSlices = new ChunkRenderSlice[visualSliceCount];
+
+        if (subRenderers == null || subRenderers.Length != visualSliceCount)
+            subRenderers = new MeshRenderer[visualSliceCount];
+
+        for (int i = 0; i < visualSliceCount; i++)
+        {
+            int startSubchunk = i * visualSubchunksPerRenderer;
+            int sliceSubchunkCount = Mathf.Min(visualSubchunksPerRenderer, SubchunksPerColumn - startSubchunk);
+
+            ChunkRenderSlice visualSlice = visualSlices[i];
+            if (visualSlice == null)
+            {
+                visualSlice = CreateVisualSlice(i, materials, startSubchunk, sliceSubchunkCount);
+                visualSlices[i] = visualSlice;
+            }
+            else
+            {
+                visualSlice.Initialize(materials, i, startSubchunk, sliceSubchunkCount);
+            }
+
+            subRenderers[i] = visualSlice != null ? visualSlice.meshRenderer : null;
         }
 
         UpdateWorldBounds();
     }
 
-    private Subchunk CreateSubchunk(Material[] materials, int subchunkIndex)
+    private Subchunk CreateSubchunk(int subchunkIndex)
     {
-        GameObject subObj = new GameObject($"Subchunk_{subchunkIndex}");
+        GameObject subObj = new GameObject($"SubchunkLogic_{subchunkIndex}");
         subObj.transform.SetParent(transform, false);
         subObj.transform.localPosition = Vector3.zero;
         subObj.layer = gameObject.layer;
 
         Subchunk sc = subObj.AddComponent<Subchunk>();
-        sc.Initialize(materials, subchunkIndex);
-        subObj.SetActive(false);
+        sc.Initialize(subchunkIndex);
         return sc;
+    }
+
+    private ChunkRenderSlice CreateVisualSlice(int sliceIndex, Material[] materials, int startSubchunkIndex, int sliceSubchunkCount)
+    {
+        GameObject sliceObj = new GameObject($"ChunkSlice_{sliceIndex}");
+        sliceObj.transform.SetParent(transform, false);
+        sliceObj.transform.localPosition = Vector3.zero;
+        sliceObj.layer = gameObject.layer;
+
+        ChunkRenderSlice visualSlice = sliceObj.AddComponent<ChunkRenderSlice>();
+        visualSlice.Initialize(materials, sliceIndex, startSubchunkIndex, sliceSubchunkCount);
+        sliceObj.SetActive(false);
+        return visualSlice;
     }
 
     public void UpdateWorldBounds()
@@ -194,8 +308,17 @@ public class Chunk : MonoBehaviour
                 if (sc != null)
                 {
                     sc.ClearMesh();
-                    sc.gameObject.SetActive(false);
+                    sc.SetVisible(false);
                 }
+            }
+        }
+
+        if (visualSlices != null)
+        {
+            foreach (var visualSlice in visualSlices)
+            {
+                if (visualSlice != null)
+                    visualSlice.ClearMesh();
             }
         }
 

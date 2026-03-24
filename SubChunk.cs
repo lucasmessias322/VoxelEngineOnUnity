@@ -3,222 +3,45 @@ using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
 
-[RequireComponent(typeof(MeshFilter))]
-[RequireComponent(typeof(MeshRenderer))]
 public class Subchunk : MonoBehaviour
 {
-    private static readonly VertexAttributeDescriptor[] ChunkVertexLayout =
-    {
-        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
-        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3),
-        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
-        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2),
-        new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
-    };
-
-    private MeshFilter meshFilter;
-    [HideInInspector] public MeshRenderer meshRenderer;
-    private Mesh mesh;
-    private bool hasColliderData = false;
-    private bool canHaveColliders = false;
+    private bool hasColliderData;
+    private bool canHaveColliders;
+    private bool isVisible = true;
     private readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
-    private int activeBoxColliderCount = 0;
+    private int activeBoxColliderCount;
     private bool[] colliderSolidsBuffer;
     private bool[] colliderVisitedBuffer;
 
     [HideInInspector]
-    public bool hasGeometry = false;
+    public bool hasGeometry;
+
     public bool CanHaveColliders => canHaveColliders;
     public bool HasColliderData => hasColliderData;
+    public bool IsVisible => isVisible;
 
-    public void Initialize(Material[] materials, int subchunkIndex)
+    public void Initialize(int subchunkIndex)
     {
-        meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
-        meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
-
-        Material[] sharedMaterials = materials ?? System.Array.Empty<Material>();
-        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
-            meshRenderer.sharedMaterials = sharedMaterials;
-
-        mesh = mesh != null ? mesh : meshFilter.sharedMesh;
-        if (mesh == null)
-        {
-            mesh = new Mesh
-            {
-                name = $"SubchunkMesh_{subchunkIndex}",
-                indexFormat = IndexFormat.UInt32
-            };
-            mesh.MarkDynamic();
-        }
-
-        if (meshFilter.sharedMesh != mesh)
-            meshFilter.sharedMesh = mesh;
-
-        MeshCollider legacyMeshCollider = GetComponent<MeshCollider>();
-        if (legacyMeshCollider != null)
-            Destroy(legacyMeshCollider);
-
+        gameObject.name = $"SubchunkLogic_{subchunkIndex}";
         transform.localPosition = Vector3.zero;
+        isVisible = true;
     }
 
-    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
+    public void SetMeshState(bool geometryPresent, bool solidColliderGeometryPresent)
     {
-        if (ReferenceEquals(current, desired))
-            return true;
-        if (current == null || desired == null)
-            return current == desired;
-        if (current.Length != desired.Length)
-            return false;
+        hasGeometry = geometryPresent;
+        canHaveColliders = geometryPresent && solidColliderGeometryPresent;
 
-        for (int i = 0; i < current.Length; i++)
-        {
-            if (current[i] != desired[i])
-                return false;
-        }
-
-        return true;
-    }
-
-    public void ApplyMeshData(
-        NativeList<MeshGenerator.PackedChunkVertex> vertices,
-        NativeList<int> opaqueTris,
-        NativeList<int> transparentTris,
-        NativeList<int> billboardTris,
-        NativeList<int> waterTris,
-        int startY,
-        int endY)
-    {
-        ApplyMeshData(
-            vertices,
-            opaqueTris,
-            transparentTris,
-            billboardTris,
-            waterTris,
-            new MeshGenerator.SubchunkMeshRange
-            {
-                vertexStart = 0,
-                vertexCount = vertices.Length,
-                opaqueStart = 0,
-                opaqueCount = opaqueTris.Length,
-                transparentStart = 0,
-                transparentCount = transparentTris.Length,
-                billboardStart = 0,
-                billboardCount = billboardTris.Length,
-                waterStart = 0,
-                waterCount = waterTris.Length
-            },
-            startY,
-            endY);
-    }
-
-    public void ApplyMeshData(
-        NativeList<MeshGenerator.PackedChunkVertex> vertices,
-        NativeList<int> opaqueTris,
-        NativeList<int> transparentTris,
-        NativeList<int> billboardTris,
-        NativeList<int> waterTris,
-        MeshGenerator.SubchunkMeshRange range,
-        int startY,
-        int endY)
-    {
-        if (range.vertexCount == 0)
-        {
-            ClearMesh();
-            return;
-        }
-
-        int vertexCount = range.vertexCount;
-
-        var meshDataArray = Mesh.AllocateWritableMeshData(1);
-        var meshData = meshDataArray[0];
-        meshData.SetVertexBufferParams(vertexCount, ChunkVertexLayout);
-
-        var vertData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
-        CopyVertexRange(vertData, vertices, range.vertexStart, vertexCount);
-
-        int totalIndices = range.opaqueCount + range.transparentCount + range.billboardCount + range.waterCount;
-        meshData.SetIndexBufferParams(totalIndices, IndexFormat.UInt32);
-
-        var indexData = meshData.GetIndexData<int>();
-        int indexOffset = 0;
-        meshData.subMeshCount = 3;
-
-        int count = range.opaqueCount;
-        CopyTriangleRange(indexData, indexOffset, opaqueTris, range.opaqueStart, count);
-        meshData.SetSubMesh(0, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-        indexOffset += count;
-
-        int transparentStart = indexOffset;
-        int transparentCount = range.transparentCount + range.billboardCount;
-        if (range.transparentCount > 0)
-        {
-            CopyTriangleRange(indexData, indexOffset, transparentTris, range.transparentStart, range.transparentCount);
-            indexOffset += range.transparentCount;
-        }
-        if (range.billboardCount > 0)
-        {
-            CopyTriangleRange(indexData, indexOffset, billboardTris, range.billboardStart, range.billboardCount);
-            indexOffset += range.billboardCount;
-        }
-        meshData.SetSubMesh(1, new SubMeshDescriptor(transparentStart, transparentCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-
-        count = range.waterCount;
-        CopyTriangleRange(indexData, indexOffset, waterTris, range.waterStart, count);
-        meshData.SetSubMesh(2, new SubMeshDescriptor(indexOffset, count, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-
-        Mesh.ApplyAndDisposeWritableMeshData(meshDataArray, mesh,
-            MeshUpdateFlags.DontRecalculateBounds |
-            MeshUpdateFlags.DontValidateIndices |
-            MeshUpdateFlags.DontNotifyMeshUsers);
-        mesh.bounds = CreateMeshBounds(startY, endY);
-
-        bool hasSolid = range.opaqueCount > 0 || range.transparentCount > 0;
-        canHaveColliders = hasSolid;
-
-        hasGeometry = true;
-        if (!gameObject.activeSelf)
-            gameObject.SetActive(true);
-        if (meshRenderer != null && !meshRenderer.enabled)
-            meshRenderer.enabled = true;
-
-        if (!hasSolid)
+        if (!canHaveColliders)
         {
             hasColliderData = false;
             DisableAllBoxColliders();
         }
     }
 
-    private static void CopyVertexRange(
-        NativeArray<MeshGenerator.PackedChunkVertex> target,
-        NativeList<MeshGenerator.PackedChunkVertex> source,
-        int sourceStart,
-        int count)
-    {
-        if (count <= 0)
-            return;
-
-        NativeArray<MeshGenerator.PackedChunkVertex>.Copy(source.AsArray(), sourceStart, target, 0, count);
-    }
-
-    private static void CopyTriangleRange(
-        NativeArray<int> target,
-        int targetStart,
-        NativeList<int> source,
-        int sourceStart,
-        int count)
-    {
-        if (count <= 0)
-            return;
-
-        NativeArray<int>.Copy(source.AsArray(), sourceStart, target, targetStart, count);
-    }
-
     public void SetVisible(bool visible)
     {
-        if (meshRenderer == null) return;
-        bool shouldShow = visible && hasGeometry;
-        if (meshRenderer.enabled != shouldShow)
-            meshRenderer.enabled = shouldShow;
+        isVisible = visible;
     }
 
     public void SetColliderSystemEnabled(bool enabled)
@@ -227,33 +50,17 @@ public class Subchunk : MonoBehaviour
         for (int i = 0; i < activeBoxColliderCount; i++)
         {
             BoxCollider box = boxColliders[i];
-            if (box != null) box.enabled = shouldEnable;
+            if (box != null)
+                box.enabled = shouldEnable;
         }
     }
 
     public void ClearMesh()
     {
-        if (!hasGeometry)
-        {
-            canHaveColliders = false;
-            hasColliderData = false;
-            DisableAllBoxColliders();
-            if (meshRenderer != null && meshRenderer.enabled)
-                meshRenderer.enabled = false;
-            if (gameObject.activeSelf)
-                gameObject.SetActive(false);
-            return;
-        }
-
-        if (mesh != null) mesh.Clear();
         hasGeometry = false;
         canHaveColliders = false;
         hasColliderData = false;
         DisableAllBoxColliders();
-        if (meshRenderer != null && meshRenderer.enabled)
-            meshRenderer.enabled = false;
-        if (gameObject.activeSelf)
-            gameObject.SetActive(false);
     }
 
     public void ClearColliderData()
@@ -347,7 +154,8 @@ public class Subchunk : MonoBehaviour
                     while (x + width < sizeX)
                     {
                         int idx = GetLocalIndex(x + width, y, z, sizeX, height);
-                        if (!solids[idx] || visited[idx]) break;
+                        if (!solids[idx] || visited[idx])
+                            break;
                         width++;
                     }
 
@@ -364,7 +172,10 @@ public class Subchunk : MonoBehaviour
                                 break;
                             }
                         }
-                        if (!canGrowDepth) break;
+
+                        if (!canGrowDepth)
+                            break;
+
                         depth++;
                     }
 
@@ -384,7 +195,10 @@ public class Subchunk : MonoBehaviour
                                 }
                             }
                         }
-                        if (!canGrowHeight) break;
+
+                        if (!canGrowHeight)
+                            break;
+
                         boxHeight++;
                     }
 
@@ -417,7 +231,8 @@ public class Subchunk : MonoBehaviour
         for (int i = colliderCount; i < boxColliders.Count; i++)
         {
             BoxCollider box = boxColliders[i];
-            if (box != null) box.enabled = false;
+            if (box != null)
+                box.enabled = false;
         }
     }
 
@@ -443,7 +258,8 @@ public class Subchunk : MonoBehaviour
         for (int i = 0; i < boxColliders.Count; i++)
         {
             BoxCollider box = boxColliders[i];
-            if (box != null) box.enabled = false;
+            if (box != null)
+                box.enabled = false;
         }
     }
 
@@ -480,13 +296,239 @@ public class Subchunk : MonoBehaviour
         BlockTextureMapping mapping = blockMappings[mapIndex];
         return mapping.isSolid && !mapping.isEmpty;
     }
+}
+
+[RequireComponent(typeof(MeshFilter))]
+[RequireComponent(typeof(MeshRenderer))]
+public class ChunkRenderSlice : MonoBehaviour
+{
+    private static readonly VertexAttributeDescriptor[] ChunkVertexLayout =
+    {
+        new VertexAttributeDescriptor(VertexAttribute.Position, VertexAttributeFormat.Float32, 3),
+        new VertexAttributeDescriptor(VertexAttribute.Normal, VertexAttributeFormat.Float32, 3),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord0, VertexAttributeFormat.Float32, 2),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord1, VertexAttributeFormat.Float32, 2),
+        new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
+    };
+
+    private MeshFilter meshFilter;
+    [HideInInspector] public MeshRenderer meshRenderer;
+    private Mesh mesh;
+    private int startSubchunkIndex;
+    private int subchunkCount;
+    private bool hasGeometry;
+
+    public int StartSubchunkIndex => startSubchunkIndex;
+    public int EndSubchunkIndexExclusive => startSubchunkIndex + subchunkCount;
+    public bool HasGeometry => hasGeometry;
+
+    public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
+    {
+        meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
+        meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
+
+        Material[] sharedMaterials = materials ?? System.Array.Empty<Material>();
+        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
+            meshRenderer.sharedMaterials = sharedMaterials;
+
+        mesh = mesh != null ? mesh : meshFilter.sharedMesh;
+        if (mesh == null)
+        {
+            mesh = new Mesh
+            {
+                name = $"ChunkSliceMesh_{sliceIndex}",
+                indexFormat = IndexFormat.UInt32
+            };
+            mesh.MarkDynamic();
+        }
+
+        if (meshFilter.sharedMesh != mesh)
+            meshFilter.sharedMesh = mesh;
+
+        startSubchunkIndex = sliceStartSubchunkIndex;
+        subchunkCount = Mathf.Max(1, sliceSubchunkCount);
+        gameObject.name = $"ChunkSlice_{sliceIndex}";
+        transform.localPosition = Vector3.zero;
+    }
+
+    public void ApplyMeshData(
+        NativeList<MeshGenerator.PackedChunkVertex> vertices,
+        NativeList<int> opaqueTris,
+        NativeList<int> transparentTris,
+        NativeList<int> billboardTris,
+        NativeList<int> waterTris,
+        NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+        Subchunk[] logicalSubchunks)
+    {
+        int totalVertexCount = 0;
+        int totalOpaqueCount = 0;
+        int totalTransparentCount = 0;
+        int totalBillboardCount = 0;
+        int totalWaterCount = 0;
+
+        for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
+        {
+            MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
+            totalVertexCount += range.vertexCount;
+            totalOpaqueCount += range.opaqueCount;
+            totalTransparentCount += range.transparentCount;
+            totalBillboardCount += range.billboardCount;
+            totalWaterCount += range.waterCount;
+        }
+
+        if (totalVertexCount == 0)
+        {
+            ClearMesh();
+            return;
+        }
+
+        var meshDataArray = Mesh.AllocateWritableMeshData(1);
+        var meshData = meshDataArray[0];
+        meshData.SetVertexBufferParams(totalVertexCount, ChunkVertexLayout);
+
+        NativeArray<MeshGenerator.PackedChunkVertex> vertexData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
+
+        int totalIndexCount = totalOpaqueCount + totalTransparentCount + totalBillboardCount + totalWaterCount;
+        meshData.SetIndexBufferParams(totalIndexCount, IndexFormat.UInt32);
+        NativeArray<int> indexData = meshData.GetIndexData<int>();
+        meshData.subMeshCount = 3;
+
+        int targetVertexStart = 0;
+        int opaqueTargetStart = 0;
+        int transparentTargetStart = totalOpaqueCount;
+        int waterTargetStart = totalOpaqueCount + totalTransparentCount + totalBillboardCount;
+
+        int opaqueWriteOffset = opaqueTargetStart;
+        int transparentWriteOffset = transparentTargetStart;
+        int waterWriteOffset = waterTargetStart;
+
+        for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
+        {
+            MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
+            if (range.vertexCount <= 0)
+                continue;
+
+            NativeArray<MeshGenerator.PackedChunkVertex>.Copy(
+                vertices.AsArray(),
+                range.vertexStart,
+                vertexData,
+                targetVertexStart,
+                range.vertexCount);
+
+            CopyTriangleRangeRebased(indexData, ref opaqueWriteOffset, opaqueTris, range.opaqueStart, range.opaqueCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref transparentWriteOffset, transparentTris, range.transparentStart, range.transparentCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref transparentWriteOffset, billboardTris, range.billboardStart, range.billboardCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref waterWriteOffset, waterTris, range.waterStart, range.waterCount, targetVertexStart);
+
+            targetVertexStart += range.vertexCount;
+        }
+
+        meshData.SetSubMesh(0, new SubMeshDescriptor(opaqueTargetStart, totalOpaqueCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        meshData.SetSubMesh(1, new SubMeshDescriptor(transparentTargetStart, totalTransparentCount + totalBillboardCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        meshData.SetSubMesh(2, new SubMeshDescriptor(waterTargetStart, totalWaterCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+
+        Mesh.ApplyAndDisposeWritableMeshData(
+            meshDataArray,
+            mesh,
+            MeshUpdateFlags.DontRecalculateBounds |
+            MeshUpdateFlags.DontValidateIndices |
+            MeshUpdateFlags.DontNotifyMeshUsers);
+
+        mesh.bounds = CreateMeshBounds(
+            startSubchunkIndex * Chunk.SubchunkHeight,
+            Mathf.Min(EndSubchunkIndexExclusive * Chunk.SubchunkHeight, Chunk.SizeY));
+
+        hasGeometry = true;
+        if (!gameObject.activeSelf)
+            gameObject.SetActive(true);
+
+        RefreshVisibility(logicalSubchunks);
+    }
+
+    public void RefreshVisibility(Subchunk[] logicalSubchunks)
+    {
+        bool shouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
+
+        if (!hasGeometry)
+        {
+            if (meshRenderer != null && meshRenderer.enabled)
+                meshRenderer.enabled = false;
+            if (gameObject.activeSelf)
+                gameObject.SetActive(false);
+            return;
+        }
+
+        if (!gameObject.activeSelf)
+            gameObject.SetActive(true);
+
+        if (meshRenderer != null && meshRenderer.enabled != shouldShow)
+            meshRenderer.enabled = shouldShow;
+    }
+
+    public void ClearMesh()
+    {
+        if (mesh != null)
+            mesh.Clear();
+
+        hasGeometry = false;
+        if (meshRenderer != null && meshRenderer.enabled)
+            meshRenderer.enabled = false;
+        if (gameObject.activeSelf)
+            gameObject.SetActive(false);
+    }
+
+    private bool HasAnyVisibleGeometry(Subchunk[] logicalSubchunks)
+    {
+        if (logicalSubchunks == null)
+            return false;
+
+        int end = Mathf.Min(EndSubchunkIndexExclusive, logicalSubchunks.Length);
+        for (int sub = startSubchunkIndex; sub < end; sub++)
+        {
+            Subchunk logicalSubchunk = logicalSubchunks[sub];
+            if (logicalSubchunk != null && logicalSubchunk.hasGeometry && logicalSubchunk.IsVisible)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void CopyTriangleRangeRebased(
+        NativeArray<int> target,
+        ref int targetStart,
+        NativeList<int> source,
+        int sourceStart,
+        int count,
+        int vertexDelta)
+    {
+        NativeArray<int> sourceArray = source.AsArray();
+        for (int i = 0; i < count; i++)
+            target[targetStart + i] = sourceArray[sourceStart + i] + vertexDelta;
+
+        targetStart += count;
+    }
+
+    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
+    {
+        if (ReferenceEquals(current, desired))
+            return true;
+        if (current == null || desired == null)
+            return current == desired;
+        if (current.Length != desired.Length)
+            return false;
+
+        for (int i = 0; i < current.Length; i++)
+        {
+            if (current[i] != desired[i])
+                return false;
+        }
+
+        return true;
+    }
 
     private static Bounds CreateMeshBounds(int startY, int endY)
     {
         float height = Mathf.Max(1f, endY - startY);
-
-        // Small padding keeps custom meshes and billboards inside bounds
-        // without paying RecalculateBounds() every rebuild.
         return new Bounds(
             new Vector3(Chunk.SizeX * 0.5f, startY + height * 0.5f, Chunk.SizeZ * 0.5f),
             new Vector3(Chunk.SizeX + 2f, height + 2f, Chunk.SizeZ + 2f));

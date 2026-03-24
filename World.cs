@@ -216,7 +216,10 @@ public partial class World : MonoBehaviour
     [Min(0)]
     public int simulationDistance = 4;
     public int poolSize = 200;
-    [Tooltip("Cria subchunks, MeshFilters, MeshRenderers e Meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
+    [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
+    [Min(1)]
+    public int visualSubchunksPerRenderer = 4;
+    [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
 
     [Header("Atlas / Material")]
@@ -645,17 +648,7 @@ public partial class World : MonoBehaviour
         for (int i = 0; i < pendingMeshes.Count; i++)
         {
             if (IsCoordInsideRenderDistance(pendingMeshes[i].coord, center))
-            {
-                int remaining = 0;
-                int mask = pendingMeshes[i].dirtySubchunkMask;
-                for (int sub = pendingMeshes[i].nextSubchunkApplyIndex; sub < Chunk.SubchunksPerColumn; sub++)
-                {
-                    if ((mask & (1 << sub)) != 0)
-                        remaining++;
-                }
-
-                count += Mathf.Max(1, remaining);
-            }
+                count++;
         }
 
         return count;
@@ -686,7 +679,7 @@ public partial class World : MonoBehaviour
             {
                 int distCmp = GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
                 if (distCmp != 0) return distCmp;
-                return a.nextSubchunkApplyIndex.CompareTo(b.nextSubchunkApplyIndex);
+                return a.visualSliceIndex.CompareTo(b.visualSliceIndex);
             });
         }
     }
@@ -1083,7 +1076,7 @@ public partial class World : MonoBehaviour
         public NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges;
         public NativeArray<ulong> subchunkVisibilityMasks;
         public int dirtySubchunkMask;
-        public int nextSubchunkApplyIndex;
+        public int visualSliceIndex;
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
@@ -1627,8 +1620,9 @@ public partial class World : MonoBehaviour
                 }
                 else
                 {
-                    if (!activeChunk.HasInitializedSubchunks)
-                        activeChunk.InitializeSubchunks(Material);
+                    if (!activeChunk.HasInitializedSubchunks ||
+                        activeChunk.visualSubchunksPerRenderer != Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn))
+                        activeChunk.InitializeSubchunks(Material, visualSubchunksPerRenderer);
                     else
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
@@ -1681,41 +1675,50 @@ public partial class World : MonoBehaviour
             if (canApplyMesh)
             {
                 bool updatedSectionVisibility = false;
-                while (pm.nextSubchunkApplyIndex < Chunk.SubchunksPerColumn &&
-                       meshesAppliedThisFrame < maxMeshAppliesPerFrame)
+                if (activeChunk.TryGetVisualSlice(pm.visualSliceIndex, out ChunkRenderSlice visualSlice))
                 {
-                    int subchunkIndex = pm.nextSubchunkApplyIndex++;
-                    if ((pm.dirtySubchunkMask & (1 << subchunkIndex)) == 0)
-                        continue;
-
-                    Subchunk sub = activeChunk.subchunks[subchunkIndex];
-                    MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
-                    if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
-                        updatedSectionVisibility = true;
-                    bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
-                    int startY = subchunkIndex * Chunk.SubchunkHeight;
-                    int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-
-                    if (range.vertexCount > 0)
+                    int sliceMask = activeChunk.GetVisualSliceMask(pm.visualSliceIndex);
+                    for (int subchunkIndex = 0; subchunkIndex < Chunk.SubchunksPerColumn; subchunkIndex++)
                     {
-                        sub.ApplyMeshData(pm.vertices, pm.opaqueTriangles, pm.transparentTriangles, pm.billboardTriangles,
-                                          pm.waterTriangles, range, startY, endY);
-                        ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
+                        int subchunkBit = 1 << subchunkIndex;
+                        if ((sliceMask & subchunkBit) == 0 || (pm.dirtySubchunkMask & subchunkBit) == 0)
+                            continue;
 
-                        if (pm.buildColliders)
+                        Subchunk sub = activeChunk.subchunks[subchunkIndex];
+                        MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
+                        if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
+                            updatedSectionVisibility = true;
+
+                        bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
+                        if (range.vertexCount > 0)
                         {
-                            if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
-                                EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
-                            else
-                                sub.ClearColliderData();
+                            sub.SetMeshState(true, hasSolidColliderGeometry);
+                            ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
+
+                            if (pm.buildColliders)
+                            {
+                                if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
+                                    EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                                else
+                                    sub.ClearColliderData();
+                            }
+                        }
+
+                        else
+                        {
+                            sub.ClearMesh();
                         }
                     }
 
-                    else
-                    {
-                        sub.ClearMesh();
-                    }
-
+                    visualSlice.ApplyMeshData(
+                        pm.vertices,
+                        pm.opaqueTriangles,
+                        pm.transparentTriangles,
+                        pm.billboardTriangles,
+                        pm.waterTriangles,
+                        pm.subchunkRanges,
+                        activeChunk.subchunks);
+                    activeChunk.RefreshVisualSliceVisibility(pm.visualSliceIndex);
                     meshesAppliedThisFrame++;
                 }
 
@@ -1761,7 +1764,7 @@ public partial class World : MonoBehaviour
         Chunk chunk = obj.GetComponent<Chunk>();
         if (chunk != null && prewarmPooledChunkVisuals)
         {
-            chunk.InitializeSubchunks(Material);
+            chunk.InitializeSubchunks(Material, visualSubchunksPerRenderer);
             chunk.ResetChunk();
         }
 
@@ -1948,12 +1951,18 @@ public partial class World : MonoBehaviour
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
             nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
 
-        int meshSubchunkMask = 0;
+        int nonEmptySubchunkMask = 0;
+        int affectedVisualSliceMask = 0;
         bool updatedEmptySectionVisibility = false;
         for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
         {
+            if (pd.subchunkNonEmpty[sub])
+                nonEmptySubchunkMask |= 1 << sub;
+
             if ((dirtySubchunkMask & (1 << sub)) == 0)
                 continue;
+
+            affectedVisualSliceMask |= 1 << activeChunk.GetVisualSliceIndexForSubchunk(sub);
 
             if (!pd.subchunkNonEmpty[sub])
             {
@@ -1962,8 +1971,6 @@ public partial class World : MonoBehaviour
                     updatedEmptySectionVisibility = true;
                 continue;
             }
-
-            meshSubchunkMask |= 1 << sub;
         }
 
         if (updatedEmptySectionVisibility)
@@ -1971,22 +1978,35 @@ public partial class World : MonoBehaviour
 
         JobHandle combinedMeshHandle = default;
         bool hasScheduledMeshJobs = false;
-        if (meshSubchunkMask != 0)
+        if (affectedVisualSliceMask != 0)
         {
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
 
-            for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
+            int visualSliceCount = activeChunk.visualSlices != null
+                ? activeChunk.visualSlices.Length
+                : Chunk.GetVisualSliceCount(activeChunk.visualSubchunksPerRenderer);
+
+            for (int sliceIndex = 0; sliceIndex < visualSliceCount; sliceIndex++)
             {
-                int subchunkMask = 1 << sub;
-                if ((meshSubchunkMask & subchunkMask) == 0)
+                int visualSliceBit = 1 << sliceIndex;
+                if ((affectedVisualSliceMask & visualSliceBit) == 0)
                     continue;
+
+                int scheduledSubchunkMask = activeChunk.GetVisualSliceMask(sliceIndex) & nonEmptySubchunkMask;
+                if (scheduledSubchunkMask == 0)
+                {
+                    if (activeChunk.TryGetVisualSlice(sliceIndex, out ChunkRenderSlice emptySlice))
+                        emptySlice.ClearMesh();
+                    activeChunk.RefreshVisualSliceVisibility(sliceIndex);
+                    continue;
+                }
 
                 MeshGenerator.ScheduleMeshJob(
                     pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
                     pd.subchunkNonEmpty, pd.knownVoxelData,
                     atlasTilesX, atlasTilesY, true, borderSize,
                     pd.coord.x, pd.coord.y,
-                    subchunkMask,
+                    scheduledSubchunkMask,
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter,
                     effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
@@ -2018,8 +2038,8 @@ public partial class World : MonoBehaviour
                     parentChunk = activeChunk,
                     subchunkRanges = subchunkRanges,
                     subchunkVisibilityMasks = subchunkVisibilityMasks,
-                    dirtySubchunkMask = subchunkMask,
-                    nextSubchunkApplyIndex = sub,
+                    dirtySubchunkMask = scheduledSubchunkMask,
+                    visualSliceIndex = sliceIndex,
                     heightCache = pd.heightCache,
                     blockTypes = pd.blockTypes,
                     solids = pd.solids,
