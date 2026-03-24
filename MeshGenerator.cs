@@ -585,6 +585,7 @@ public static class MeshGenerator
         solids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
+        NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
 
         // ==========================================
         // JOB 0: GeraÃƒÂ§ÃƒÂ£o do Heightmap (Paralelo)
@@ -676,7 +677,7 @@ public static class MeshGenerator
             enableTrees = enableTrees,
             columnContextCache = dataColumnContexts,
             columnContextCacheStride = dataHeightSize,
-            spaghettiCarveMask = default,
+            spaghettiCarveMask = sharedSpaghettiCarveMask,
             spaghettiCarveMaskVoxelSizeX = 0,
             spaghettiCarveMaskVoxelPlaneSize = 0,
             spaghettiCarveMaskOffsetX = 0,
@@ -744,7 +745,14 @@ public static class MeshGenerator
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
+            var disposeEmptySpaghettiCarveMaskJob = new DisposeByteArrayJob
+            {
+                values = sharedSpaghettiCarveMask
+            };
+            JobHandle disposeEmptySpaghettiCarveMaskHandle = disposeEmptySpaghettiCarveMaskJob.Schedule(finalChunkDataHandle);
+
             dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle);
+            dataHandle = JobHandle.CombineDependencies(dataHandle, disposeEmptySpaghettiCarveMaskHandle);
             return;
         }
 
@@ -782,23 +790,23 @@ public static class MeshGenerator
             lightBorderSize,
             caveGenerationMode,
             spaghettiCaveSettings);
-        NativeArray<byte> spaghettiCarveMask = default;
         JobHandle spaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
         {
-            spaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+            sharedSpaghettiCarveMask.Dispose();
+            sharedSpaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
             {
                 coord = coord,
                 heightCache = lightHeightCache,
-                carveMask = spaghettiCarveMask,
+                carveMask = sharedSpaghettiCarveMask,
                 borderSize = lightBorderSize,
                 oreSeed = oreSeed,
                 spaghettiCaveSettings = spaghettiCaveSettings
             };
             spaghettiCarveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(lightHeightHandle);
 
-            baseChunkDataJob.spaghettiCarveMask = spaghettiCarveMask;
+            baseChunkDataJob.spaghettiCarveMask = sharedSpaghettiCarveMask;
             baseChunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
             baseChunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
             baseChunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
@@ -867,7 +875,7 @@ public static class MeshGenerator
         {
             var spaghettiCaveOpacityJob = new ApplySpaghettiCaveCarveMaskToOpacityJob
             {
-                carveMask = spaghettiCarveMask,
+                carveMask = sharedSpaghettiCarveMask,
                 opacity = lightOpacityData,
                 airOpacity = effectiveOpacityByBlock[(int)BlockType.Air]
             };
@@ -887,16 +895,14 @@ public static class MeshGenerator
             values = lightColumnContexts
         };
         JobHandle disposeLightColumnContextHandle = disposeLightColumnContextCacheJob.Schedule(lightOpacityTerrainHandle);
-        JobHandle disposeSpaghettiCarveMaskHandle = default;
-        if (useSharedSpaghettiCarveMask)
+        var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
         {
-            var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
-            {
-                values = spaghettiCarveMask
-            };
-            disposeSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(
-                JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityTerrainHandle));
-        }
+            values = sharedSpaghettiCarveMask
+        };
+        JobHandle disposeSpaghettiCarveMaskHandle = disposeSpaghettiCarveMaskJob.Schedule(
+            useSharedSpaghettiCarveMask
+                ? JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityTerrainHandle)
+                : finalChunkDataHandle);
 
         var copyGeneratedOpacityJob = new CopyGeneratedOpacityToLightVolumeJob
         {
@@ -975,6 +981,7 @@ public static class MeshGenerator
         NativeArray<BlockTextureMapping> nativeBlockMappings,
         NativeArray<int3> suppressedGrassBillboards,
         NativeArray<bool> subchunkNonEmpty,
+        NativeArray<byte> knownVoxelData,
         int atlasTilesX,
         int atlasTilesY,
         bool generateSides,
@@ -1025,6 +1032,7 @@ public static class MeshGenerator
             blockMappings = nativeBlockMappings,
             suppressedGrassBillboards = suppressedGrassBillboards,
             subchunkNonEmpty = subchunkNonEmpty,
+            knownVoxelData = knownVoxelData,
 
             border = borderSize,
             atlasTilesX = atlasTilesX,
@@ -1073,6 +1081,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<byte> light;
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
+        [ReadOnly] public NativeArray<byte> knownVoxelData;
 
         public int border;
         public int atlasTilesX;
@@ -2391,6 +2400,12 @@ public static class MeshGenerator
                                 }
                                 else
                                 {
+                                    if (!IsVoxelSampleKnown(nx, ny, nz, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                                    {
+                                        mask[maskIndex] = default;
+                                        continue;
+                                    }
+
                                     int nIdx = nx + ny * voxelSizeX + nz * voxelPlaneSize;
                                     BlockType neighbor = (BlockType)blockTypes[nIdx];
                                     isVisible = IsFaceVisibleForCurrentBlock(current, neighbor);
@@ -2663,16 +2678,43 @@ public static class MeshGenerator
         }
         private bool IsOccluder(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+            if (!TryGetResolvedVoxelIndex(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
                 return false;
 
-            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
             if (!solids[idx])
                 return false;
 
             BlockType blockType = (BlockType)blockTypes[idx];
             BlockTextureMapping mapping = blockMappings[(int)blockType];
             return CastsAmbientOcclusion(blockType, mapping);
+        }
+
+        private bool IsVoxelSampleKnown(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        {
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            if (!knownVoxelData.IsCreated)
+                return true;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            return knownVoxelData[idx] != 0;
+        }
+
+        private bool TryGetResolvedVoxelIndex(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize, out int idx)
+        {
+            idx = -1;
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if (!knownVoxelData.IsCreated || knownVoxelData[idx] != 0)
+                return true;
+
+            int clampedX = math.clamp(x, border, border + SizeX - 1);
+            int clampedZ = math.clamp(z, border, border + SizeZ - 1);
+            idx = clampedX + y * voxelSizeX + clampedZ * voxelPlaneSize;
+            return !knownVoxelData.IsCreated || knownVoxelData[idx] != 0;
         }
 
         private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
@@ -2831,16 +2873,17 @@ public static class MeshGenerator
             if (y + 1 >= SizeY || y < 0)
                 return false;
 
-            int aboveIndex = x + (y + 1) * voxelSizeX + z * voxelPlaneSize;
+            if (!TryGetResolvedVoxelIndex(x, y + 1, z, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int aboveIndex))
+                return false;
+
             return FluidBlockUtility.IsWater((BlockType)blockTypes[aboveIndex]);
         }
 
         private BlockType GetBlockTypeSafe(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+            if (!TryGetResolvedVoxelIndex(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int index))
                 return BlockType.Air;
 
-            int index = x + y * voxelSizeX + z * voxelPlaneSize;
             return (BlockType)blockTypes[index];
         }
 
@@ -2875,8 +2918,9 @@ public static class MeshGenerator
 
             int clampedX = math.clamp(pos.x, 0, voxelSizeX - 1);
             int clampedZ = math.clamp(pos.z, 0, voxelSizeZ - 1);
+            if (!TryGetResolvedVoxelIndex(clampedX, pos.y, clampedZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
+                return 15;
 
-            int idx = clampedX + pos.y * voxelSizeX + clampedZ * voxelPlaneSize;
             byte packed = light[idx];
             return math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
         }
@@ -2893,6 +2937,7 @@ public static class MeshGenerator
     {
         [DeallocateOnJobCompletion] public NativeArray<int> heightCache;
         [DeallocateOnJobCompletion] public NativeArray<byte> blockTypes;
+        [DeallocateOnJobCompletion] public NativeArray<byte> knownVoxelData;
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;
         [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // Ã¢â€ Â NOVO

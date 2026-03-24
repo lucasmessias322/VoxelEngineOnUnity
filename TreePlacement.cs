@@ -66,22 +66,6 @@ public static class TreePlacement
             if (surfaceY < 0 || surfaceY >= chunkSizeY)
                 continue;
 
-            if (TreeGroundSupport.TryEvaluateStableSupportAtLocalColumn(
-                    blockTypes,
-                    solids,
-                    ix,
-                    surfaceY,
-                    iz,
-                    chunkSizeY,
-                    voxelSizeX,
-                    voxelSizeZ,
-                    voxelPlaneSize,
-                    out bool hasStableSupport) &&
-                !hasStableSupport)
-            {
-                continue;
-            }
-
             int leafBottom = surfaceY + t.trunkHeight - 1;
 
             if (isFancyOak)
@@ -139,24 +123,6 @@ public static class TreePlacement
 
             if (isCactus)
                 continue;
-
-            for (int dy = 1; dy <= t.trunkHeight; dy++)
-            {
-                int ty = surfaceY + dy;
-                if (ty >= chunkSizeY)
-                    break;
-
-                if (!IsInsideVoxelBounds(ix, ty, iz, voxelSizeX, voxelSizeZ, chunkSizeY))
-                    continue;
-
-                int tidx = ix + ty * voxelSizeX + iz * voxelPlaneSize;
-                if (!IsWoodBlock((BlockType)blockTypes[tidx]) &&
-                    (blockTypes[tidx] == (byte)BlockType.Air || blockTypes[tidx] == (byte)BlockType.Leaves))
-                {
-                    blockTypes[tidx] = (byte)trunkType;
-                    solids[tidx] = blockMappings[(int)trunkType].isSolid;
-                }
-            }
         }
     }
 
@@ -278,7 +244,8 @@ public static class TreePlacement
         int topLeafY = surfaceY + heightLimit - leafDistanceLimit;
         float scaleWidth = math.max(1f, canopyR / 4f);
         float leafDensity = math.max(1f, canopyH / 4f);
-        int nodesPerLayer = math.max(1, (int)(1.382f + math.pow(leafDensity * heightLimit / 13f, 2f)));
+        float nodeDensity = leafDensity * heightLimit / 13f;
+        int nodesPerLayer = math.max(1, (int)(1.382f + nodeDensity * nodeDensity));
         nodesPerLayer = math.clamp(nodesPerLayer, 1, 4);
 
         PlaceFancyOakLeafNode(
@@ -388,9 +355,13 @@ public static class TreePlacement
 
         for (int dx = -discRadius; dx <= discRadius; dx++)
         {
+            float absDx = math.abs(dx) + 0.5f;
+            float absDxSq = absDx * absDx;
+
             for (int dz = -discRadius; dz <= discRadius; dz++)
             {
-                float distSq = math.pow(math.abs(dx) + 0.5f, 2f) + math.pow(math.abs(dz) + 0.5f, 2f);
+                float absDz = math.abs(dz) + 0.5f;
+                float distSq = absDxSq + absDz * absDz;
                 if (distSq > radiusSq)
                     continue;
 
@@ -1061,11 +1032,13 @@ public static class TreePlacement
         if (skipCenter)
             return;
 
-        if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ)
+        int chunkSizeY = voxelPlaneSize / voxelSizeX;
+        if ((uint)lx >= (uint)voxelSizeX ||
+            (uint)lz >= (uint)voxelSizeZ ||
+            (uint)ly >= (uint)chunkSizeY)
+        {
             return;
-        int maxY = blockTypes.Length / (voxelSizeX * voxelSizeZ);
-        if (ly < 0 || ly >= maxY)
-            return;
+        }
 
         int lidx = lx + ly * voxelSizeX + lz * voxelPlaneSize;
         BlockType existing = (BlockType)blockTypes[lidx];
