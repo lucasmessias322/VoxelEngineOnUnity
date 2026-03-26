@@ -63,10 +63,8 @@ public class CraftingStationUIController : MonoBehaviour
         ResolveReferences();
 
         bool inventoryOpen = inventory != null && inventory.IsInventoryOpen;
-        if (previousInventoryOpen && !inventoryOpen)
-            HandleInventoryClosed();
-
-        previousInventoryOpen = inventoryOpen;
+        if (previousInventoryOpen != inventoryOpen)
+            HandleInventoryVisibilityChanged(inventoryOpen);
 
         if (IsCraftingTableOpen && ShouldCloseCraftingTable())
             CloseCraftingTable(returnItemsToInventory: true);
@@ -93,6 +91,17 @@ public class CraftingStationUIController : MonoBehaviour
 
         OpenCraftingTable(crafterBlock);
         return true;
+    }
+
+    public void HandleInventoryVisibilityChanged(bool inventoryOpen)
+    {
+        bool wasOpen = previousInventoryOpen;
+        previousInventoryOpen = inventoryOpen;
+
+        if (wasOpen && !inventoryOpen)
+            HandleInventoryClosed();
+
+        RefreshPanelVisibility();
     }
 
     private bool IsCraftingTableOpen => activeCrafterBlock != InvalidBlock;

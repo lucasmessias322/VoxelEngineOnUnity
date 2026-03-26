@@ -567,22 +567,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
     private static Sprite ResolveItemIcon(Item currentItem)
     {
-        if (currentItem == null)
-            return null;
-
-        PlayerInventory inventory = PlayerInventory.Instance;
-        if (inventory != null &&
-            inventory.TryGetBlockForItem(currentItem, out BlockType blockType) &&
-            BlockItemIconCache.TryGetIcon(blockType, out Sprite blockIcon) &&
-            blockIcon != null)
-        {
-            return blockIcon;
-        }
-
-        if (ItemAtlasIconCache.TryGetIcon(currentItem, out Sprite atlasIcon) && atlasIcon != null)
-            return atlasIcon;
-
-        return currentItem.icon;
+        return ItemIconResolver.ResolveForUI(currentItem);
     }
 
     private void TryAutoBindIconImage()
@@ -632,31 +617,8 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
     public void RefreshIcon()
     {
-        Sprite iconToShow = null;
-        bool hasIcon = false;
-
-        if (!IsEmpty && item != null)
-        {
-            PlayerInventory inventory = PlayerInventory.Instance;
-            if (inventory != null &&
-                inventory.TryGetBlockForItem(item, out BlockType blockType) &&
-                BlockItemIconCache.TryGetIcon(blockType, out Sprite blockIcon) &&
-                blockIcon != null)
-            {
-                iconToShow = blockIcon;
-                hasIcon = true;
-            }
-            else if (ItemAtlasIconCache.TryGetIcon(item, out Sprite atlasIcon) && atlasIcon != null)
-            {
-                iconToShow = atlasIcon;
-                hasIcon = true;
-            }
-            else if (item.icon != null)
-            {
-                iconToShow = item.icon;
-                hasIcon = true;
-            }
-        }
+        Sprite iconToShow = !IsEmpty ? ItemIconResolver.ResolveForUI(item) : null;
+        bool hasIcon = iconToShow != null;
 
         if (iconImage != null)
         {

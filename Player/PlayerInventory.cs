@@ -310,6 +310,12 @@ public class PlayerInventory : MonoBehaviour
         inventoryUI.SetActive(isOpen);
         ApplyCursorState(isOpen);
 
+        if (CraftingStationUIController.Instance != null)
+            CraftingStationUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
+
+        if (CraftingMenuUI.Instance != null)
+            CraftingMenuUI.Instance.HandleInventoryVisibilityChanged(isOpen);
+
         if (!isOpen)
             Slot.OnInventoryClosed(this);
     }
