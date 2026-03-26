@@ -19,7 +19,7 @@ public static class TerrainSurfaceRules
 {
     public const int BeachHeightMargin = 2;
     public const int DefaultSurfaceLayerDepth = 4;
-    public const int StoneTransitionDepth = 50;
+    public const int StoneTransitionDepth = 100;
     public const int HighMountainHeightOffset = 70;
 
     private const float SlopeStoneStart01 = 0.24f;

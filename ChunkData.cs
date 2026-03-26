@@ -221,6 +221,7 @@ public static class ChunkData
             float densityBias = settings.densityBias;
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
+            var caveNoiseSampler = SpaghettiCaveNoiseUtility.Create(worldSeed);
 
             CarveSpaghettiChunkBorderColumnsExact(
                 blockTypes,
@@ -235,8 +236,8 @@ public static class ChunkData
                 maxY,
                 minSurfaceDepth,
                 entranceSurfaceDepth,
-                worldSeed,
-                densityBias);
+                densityBias,
+                in caveNoiseSampler);
         }
 
         private bool IsSpaghettiSeamColumn(int localX, int localZ)
@@ -1098,6 +1099,7 @@ public static class ChunkData
             int entranceSurfaceDepth = math.max(0, math.min(settings.entranceSurfaceDepth, minSurfaceDepth));
             float densityBias = settings.densityBias;
             int worldSeed = oreSeed ^ settings.seedOffset ^ 0x4b1d2e37;
+            var caveNoiseSampler = SpaghettiCaveNoiseUtility.Create(worldSeed);
 
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
@@ -1142,7 +1144,7 @@ public static class ChunkData
                             int voxelY = GetSpaghettiGridCoordinate(minY, sampleMaxY, SpaghettiVerticalCellSize, gridY);
                             float sampleY = voxelY + 0.5f;
                             densityGrid[GetSpaghettiGridIndex(gridX, gridY, gridZ, gridCountX, gridCountY)] =
-                                SampleSpaghettiDensityPair(sampleX, sampleY, sampleZ, worldSeed, densityBias);
+                                SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, sampleX, sampleY, sampleZ, densityBias);
                         }
                     }
                 }
@@ -1187,7 +1189,7 @@ public static class ChunkData
                                 float centerWorldX = chunkMinX - border + (localX0 + localX1) * 0.5f + 0.5f;
                                 float centerWorldY = (voxelY0 + voxelY1) * 0.5f + 0.5f;
                                 float centerWorldZ = chunkMinZ - border + (localZ0 + localZ1) * 0.5f + 0.5f;
-                                float2 centerDensity = SampleSpaghettiDensityPair(centerWorldX, centerWorldY, centerWorldZ, worldSeed, densityBias);
+                                float2 centerDensity = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, centerWorldX, centerWorldY, centerWorldZ, densityBias);
                                 if (centerDensity.x >= 0f)
                                     continue;
 
@@ -1221,7 +1223,7 @@ public static class ChunkData
                                         float2 density;
                                         if (requiresExactCellSampling)
                                         {
-                                            density = SampleSpaghettiDensityPair(worldX, voxelY + 0.5f, worldZ, worldSeed, densityBias);
+                                            density = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, worldX, voxelY + 0.5f, worldZ, densityBias);
                                         }
                                         else
                                         {
@@ -1262,8 +1264,8 @@ public static class ChunkData
                 maxY,
                 minSurfaceDepth,
                 entranceSurfaceDepth,
-                worldSeed,
-                densityBias);
+                densityBias,
+                in caveNoiseSampler);
         }
 
         private void CarveSpaghettiChunkBorderColumnsExact(
@@ -1279,8 +1281,8 @@ public static class ChunkData
             int maxY,
             int minSurfaceDepth,
             int entranceSurfaceDepth,
-            int worldSeed,
-            float densityBias)
+            float densityBias,
+            in SpaghettiCaveNoiseUtility.SpaghettiCaveNoiseSampler caveNoiseSampler)
         {
             // Only the chunk edge columns and the immediate padding columns can hide
             // faces when neighboring chunks disagree, so we re-sample just that seam.
@@ -1295,18 +1297,18 @@ public static class ChunkData
 
             for (int localZ = 0; localZ < voxelSizeZ; localZ++)
             {
-                CarveSpaghettiColumnExact(localZ, westPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localZ, westInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localZ, eastInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localZ, eastPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localZ, westPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localZ, westInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localZ, eastInnerX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localZ, eastPaddingX, true, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
             }
 
             for (int localX = 0; localX < voxelSizeX; localX++)
             {
-                CarveSpaghettiColumnExact(localX, northPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localX, northInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localX, southInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
-                CarveSpaghettiColumnExact(localX, southPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, worldSeed, densityBias);
+                CarveSpaghettiColumnExact(localX, northPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localX, northInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localX, southInnerZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
+                CarveSpaghettiColumnExact(localX, southPaddingZ, false, blockTypes, solids, voxelSizeX, voxelSizeZ, voxelPlaneSize, heightStride, chunkMinX, chunkMinZ, minY, maxY, minSurfaceDepth, entranceSurfaceDepth, densityBias, in caveNoiseSampler);
             }
         }
 
@@ -1326,8 +1328,8 @@ public static class ChunkData
             int maxY,
             int minSurfaceDepth,
             int entranceSurfaceDepth,
-            int worldSeed,
-            float densityBias)
+            float densityBias,
+            in SpaghettiCaveNoiseUtility.SpaghettiCaveNoiseSampler caveNoiseSampler)
         {
             int localX = primaryIsZ ? secondary : primary;
             int localZ = primaryIsZ ? primary : secondary;
@@ -1350,7 +1352,7 @@ public static class ChunkData
                 if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                     continue;
 
-                float2 density = SampleSpaghettiDensityPair(worldX, voxelY + 0.5f, worldZ, worldSeed, densityBias);
+                float2 density = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, worldX, voxelY + 0.5f, worldZ, densityBias);
                 if (voxelY > regularMaxY && density.y >= 0f)
                     continue;
                 if (density.x >= 0f)

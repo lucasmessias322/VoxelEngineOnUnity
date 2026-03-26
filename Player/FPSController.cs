@@ -84,7 +84,7 @@ public class FPSController : MonoBehaviour
     private Transform[] cachedCameraChildren;
     private HeldBlockVisual cachedHeldBlockVisual;
     private bool firstPersonVisualsVisible = true;
-
+    [SerializeField] private LayerMask playerMeshLayer;
     void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
@@ -110,6 +110,7 @@ public class FPSController : MonoBehaviour
             defaultCameraLocalPosition = cameraTransform.localPosition;
             defaultCameraLocalPosition.y = cameraTargetY;
             UpdateCameraTransform(forceVisualRefresh: true);
+            UpdateCameraCulling();
         }
     }
 
@@ -164,7 +165,9 @@ public class FPSController : MonoBehaviour
             return;
 
         currentViewMode = viewMode;
+
         UpdateCameraTransform(forceVisualRefresh: true);
+        UpdateCameraCulling(); // 👈 adiciona isso
     }
 
     private void CacheFirstPersonOnlyReferences()
@@ -558,5 +561,24 @@ public class FPSController : MonoBehaviour
         }
 
         transform.position = worldPosition;
+    }
+
+    private void UpdateCameraCulling()
+    {
+        if (cameraTransform == null) return;
+
+        Camera cam = cameraTransform.GetComponent<Camera>();
+        if (cam == null) return;
+
+        if (currentViewMode == CameraViewMode.FirstPerson)
+        {
+            // remove o layer da máscara
+            cam.cullingMask &= ~playerMeshLayer;
+        }
+        else
+        {
+            // adiciona o layer de volta
+            cam.cullingMask |= playerMeshLayer;
+        }
     }
 }

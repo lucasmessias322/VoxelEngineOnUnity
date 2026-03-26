@@ -219,6 +219,8 @@ public partial class World : MonoBehaviour
     [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
     [Min(1)]
     public int visualSubchunksPerRenderer = 4;
+    [Tooltip("Quando a oclusao por secoes estilo Minecraft estiver ativa, usa um renderer por subchunk para impedir que um slice visivel desenhe cavernas ocultas do mesmo grupo.")]
+    public bool forceSingleSubchunkRendererForSectionOcclusion = true;
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
 
@@ -477,6 +479,7 @@ public partial class World : MonoBehaviour
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
     private bool nativeGenerationConfigDirty = true;
+    private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
 
 
     // Optimization temporaries
@@ -720,6 +723,34 @@ public partial class World : MonoBehaviour
     private int GetChunkBorderSize()
     {
         return Mathf.Max(GetDetailedGenerationBorderSize(), GetLightSmoothingBorderSize());
+    }
+
+    private int GetResolvedVisualSubchunksPerRenderer()
+    {
+        if (enableMinecraftSectionOcclusion && forceSingleSubchunkRendererForSectionOcclusion)
+            return 1;
+
+        return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
+    }
+
+    private void ApplyResolvedVisualSubchunkRendererLayout()
+    {
+        int resolved = GetResolvedVisualSubchunksPerRenderer();
+        if (resolved == lastResolvedVisualSubchunksPerRenderer)
+            return;
+
+        lastResolvedVisualSubchunksPerRenderer = resolved;
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+            if (chunk == null)
+                continue;
+
+            chunk.InitializeSubchunks(Material, resolved);
+            chunk.UpdateWorldBounds();
+            RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
+        }
     }
 
     private static bool CanChunkProvideVoxelSnapshot(Chunk chunk)
@@ -1439,6 +1470,7 @@ public partial class World : MonoBehaviour
     {
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
+        ApplyResolvedVisualSubchunkRendererLayout();
         meshesAppliedThisFrame = 0;
         ProcessQueuedWaterUpdates();
         ProcessQueuedChunkRebuilds();
@@ -1620,9 +1652,10 @@ public partial class World : MonoBehaviour
                 }
                 else
                 {
+                    int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
                     if (!activeChunk.HasInitializedSubchunks ||
-                        activeChunk.visualSubchunksPerRenderer != Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn))
-                        activeChunk.InitializeSubchunks(Material, visualSubchunksPerRenderer);
+                        activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
+                        activeChunk.InitializeSubchunks(Material, resolvedVisualSubchunksPerRenderer);
                     else
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
@@ -1764,7 +1797,7 @@ public partial class World : MonoBehaviour
         Chunk chunk = obj.GetComponent<Chunk>();
         if (chunk != null && prewarmPooledChunkVisuals)
         {
-            chunk.InitializeSubchunks(Material, visualSubchunksPerRenderer);
+            chunk.InitializeSubchunks(Material, GetResolvedVisualSubchunksPerRenderer());
             chunk.ResetChunk();
         }
 
