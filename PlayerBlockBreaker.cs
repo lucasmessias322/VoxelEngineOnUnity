@@ -393,6 +393,16 @@ public class PlayerBlockBreaker : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(1))
         {
+            FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
+                ? FurnaceUIController.Instance
+                : FindAnyObjectByType<FurnaceUIController>();
+            if (furnaceUI != null &&
+                furnaceUI.TryHandleFurnaceInteraction(selector))
+            {
+                CancelBreak();
+                return;
+            }
+
             CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
             if (craftingStationUI != null &&
                 craftingStationUI.TryHandleCrafterInteraction(selector))

@@ -21,6 +21,7 @@ public class CraftingMenuUI : MonoBehaviour
     private PlayerInventory observedInventory;
     private bool? lastKnownInventoryOpen;
     private bool lastKnownCrafterOpen;
+    private bool externalPanelBlocked;
 
     private void Awake()
     {
@@ -280,10 +281,25 @@ public class CraftingMenuUI : MonoBehaviour
         SetCraftingPanelState(false);
     }
 
+    public void SetExternalPanelBlocked(bool blocked)
+    {
+        if (externalPanelBlocked == blocked)
+            return;
+
+        externalPanelBlocked = blocked;
+        if (blocked)
+        {
+            CloseCraftingPanel();
+            return;
+        }
+
+        SyncPanelWithInventory(force: true);
+    }
+
     public void HandleInventoryVisibilityChanged(bool isInventoryOpen)
     {
         lastKnownInventoryOpen = isInventoryOpen;
-        SetCraftingPanelState(isInventoryOpen);
+        SetCraftingPanelState(isInventoryOpen && !externalPanelBlocked);
         RefreshAvailableRecipes();
     }
 
@@ -320,7 +336,7 @@ public class CraftingMenuUI : MonoBehaviour
             return;
 
         lastKnownInventoryOpen = inventoryOpen;
-        SetCraftingPanelState(inventoryOpen);
+        SetCraftingPanelState(inventoryOpen && !externalPanelBlocked);
     }
 
     private static string GetRecipeDisplayName(Recipe recipe)

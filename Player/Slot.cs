@@ -3,10 +3,11 @@ using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
-public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler, IDropHandler
+public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDragHandler, IEndDragHandler, IDropHandler, IPointerEnterHandler, IPointerExitHandler
 {
     public delegate bool BeforeTakeFromSlotHandler(Slot slot, Item currentItem, int currentAmount, int amountToTake);
     public delegate bool QuickTransferRequestedHandler(Slot slot);
+    public delegate bool BeforePlaceIntoSlotHandler(Slot slot, Item incomingItem, int incomingAmount);
 
     private const string IconChildName = "IconImage";
     private const string AmountChildName = "amount";
@@ -32,6 +33,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     public event BeforeTakeFromSlotHandler BeforeTakeFromSlot;
     public event System.Action<Slot, Item, int> AfterTakeFromSlot;
     public event QuickTransferRequestedHandler QuickTransferRequested;
+    public event BeforePlaceIntoSlotHandler BeforePlaceIntoSlot;
 
     private static Item carriedItem;
     private static int carriedAmount;
@@ -40,6 +42,9 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     private static RectTransform dragVisualRoot;
     private static Image dragVisualIcon;
     private static TMP_Text dragVisualAmountText;
+    private static Slot hoveredSlot;
+    private static Slot pendingDropTarget;
+    private static bool pendingDropResolution;
 
     private bool draggingFromThisSlot;
 
@@ -82,6 +87,8 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         if (inventory != null && !inventory.IsInventoryOpen && HasCarriedStack)
             OnInventoryClosed(inventory);
+
+        TryResolvePendingDragDrop();
     }
 
     public void SetIndex(int newIndex)
@@ -225,6 +232,8 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         if (!HasCarriedStack)
             return;
 
+        pendingDropResolution = false;
+        pendingDropTarget = null;
         draggingFromThisSlot = true;
         EnsureDragVisual(this);
         UpdateDragVisual();
@@ -246,6 +255,11 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         draggingFromThisSlot = false;
         UpdateDragVisualPosition(eventData.position);
+        pendingDropTarget = ResolveSlotFromGameObject(eventData.pointerEnter);
+        if (pendingDropTarget == null)
+            pendingDropTarget = hoveredSlot;
+
+        pendingDropResolution = HasCarriedStack;
     }
 
     public void OnDrop(PointerEventData eventData)
@@ -253,10 +267,21 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         if (eventData.button != PointerEventData.InputButton.Left)
             return;
 
-        if (!CanInteractWithInventory() || !HasCarriedStack)
+        if (!CanInteractWithInventory() || !HasCarriedStack || !allowManualInsert)
             return;
 
         PlaceCarriedStackWithLeftClick();
+    }
+
+    public void OnPointerEnter(PointerEventData eventData)
+    {
+        hoveredSlot = this;
+    }
+
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        if (hoveredSlot == this)
+            hoveredSlot = null;
     }
 
     private bool CanInteractWithInventory()
@@ -356,6 +381,9 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         if (!HasCarriedStack)
             return;
 
+        if (!CanPlaceIntoSlot(carriedItem, carriedAmount))
+            return;
+
         if (IsEmpty)
         {
             item = carriedItem;
@@ -400,6 +428,9 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     private void PlaceSingleFromCarriedStack()
     {
         if (!HasCarriedStack)
+            return;
+
+        if (!CanPlaceIntoSlot(carriedItem, 1))
             return;
 
         if (IsEmpty)
@@ -463,6 +494,8 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     {
         carriedItem = null;
         carriedAmount = 0;
+        pendingDropResolution = false;
+        pendingDropTarget = null;
         HideDragVisual();
     }
 
@@ -546,6 +579,28 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
             dragVisualRoot.gameObject.SetActive(false);
     }
 
+    private void TryResolvePendingDragDrop()
+    {
+        if (!pendingDropResolution || Input.GetMouseButton(0))
+            return;
+
+        pendingDropResolution = false;
+
+        if (!HasCarriedStack)
+        {
+            pendingDropTarget = null;
+            return;
+        }
+
+        Slot target = pendingDropTarget != null ? pendingDropTarget : hoveredSlot;
+        pendingDropTarget = null;
+
+        if (target == null || !target.CanInteractWithInventory() || !target.allowManualInsert)
+            return;
+
+        target.PlaceCarriedStackWithLeftClick();
+    }
+
     private static void UpdateDragVisualPosition(Vector2 screenPosition)
     {
         if (dragVisualRoot == null || dragVisualCanvas == null)
@@ -568,6 +623,14 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     private static Sprite ResolveItemIcon(Item currentItem)
     {
         return ItemIconResolver.ResolveForUI(currentItem);
+    }
+
+    private static Slot ResolveSlotFromGameObject(GameObject currentObject)
+    {
+        if (currentObject == null)
+            return null;
+
+        return currentObject.GetComponentInParent<Slot>();
     }
 
     private void TryAutoBindIconImage()
@@ -695,6 +758,22 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         }
 
         return false;
+    }
+
+    private bool CanPlaceIntoSlot(Item incomingItem, int incomingAmount)
+    {
+        if (BeforePlaceIntoSlot == null)
+            return true;
+
+        System.Delegate[] listeners = BeforePlaceIntoSlot.GetInvocationList();
+        for (int i = 0; i < listeners.Length; i++)
+        {
+            BeforePlaceIntoSlotHandler handler = (BeforePlaceIntoSlotHandler)listeners[i];
+            if (!handler.Invoke(this, incomingItem, incomingAmount))
+                return false;
+        }
+
+        return true;
     }
 
     private static bool IsQuickTransferModifierHeld()

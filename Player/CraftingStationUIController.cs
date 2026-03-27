@@ -45,6 +45,7 @@ public class CraftingStationUIController : MonoBehaviour
     private Vector3Int activeCrafterBlock = InvalidBlock;
     private bool previousInventoryOpen;
     private bool createdCraftingTablePanelAtRuntime;
+    private bool externalPlayerCraftPanelBlocked;
 
     public bool IsCrafterOpen => activeCrafterBlock != InvalidBlock;
 
@@ -120,9 +121,32 @@ public class CraftingStationUIController : MonoBehaviour
         if (inventory != null)
             inventory.SetInventoryOpen(true);
 
+        if (FurnaceUIController.Instance != null)
+            FurnaceUIController.Instance.CloseFurnacePanel();
+
         OpenCraftingTable(crafterBlock);
         CraftingMenuUI.Instance?.RefreshAvailableRecipes();
         return true;
+    }
+
+    public void SetExternalPlayerCraftPanelBlocked(bool blocked)
+    {
+        if (externalPlayerCraftPanelBlocked == blocked)
+            return;
+
+        externalPlayerCraftPanelBlocked = blocked;
+        RefreshPanelVisibility();
+    }
+
+    public void CloseCrafterUI(bool returnItemsToInventory = true)
+    {
+        if (!IsCrafterOpen)
+        {
+            RefreshPanelVisibility();
+            return;
+        }
+
+        CloseCraftingTable(returnItemsToInventory);
     }
 
     public void HandleInventoryVisibilityChanged(bool inventoryOpen)
@@ -283,7 +307,7 @@ public class CraftingStationUIController : MonoBehaviour
         bool inventoryOpen = inventory != null && inventory.IsInventoryOpen;
 
         if (playerCraftPanel != null)
-            playerCraftPanel.gameObject.SetActive(inventoryOpen && !IsCrafterOpen);
+            playerCraftPanel.gameObject.SetActive(inventoryOpen && !IsCrafterOpen && !externalPlayerCraftPanelBlocked);
 
         if (craftingTablePanel != null)
             craftingTablePanel.gameObject.SetActive(inventoryOpen && IsCrafterOpen);
