@@ -1,4 +1,5 @@
 using System.Collections;
+using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
 using UnityEngine.UI;
@@ -19,6 +20,7 @@ public class CraftingMenuUI : MonoBehaviour
     private Recipe selectedRecipe;
     private PlayerInventory observedInventory;
     private bool? lastKnownInventoryOpen;
+    private bool lastKnownCrafterOpen;
 
     private void Awake()
     {
@@ -34,14 +36,16 @@ public class CraftingMenuUI : MonoBehaviour
     private void OnEnable()
     {
         SyncInventorySubscription();
+        lastKnownCrafterOpen = IsCrafterOpen();
+        RefreshAvailableRecipes();
         SyncPanelWithInventory(force: true);
     }
 
     private void Start()
     {
         SyncInventorySubscription();
-        PopulateRecipeList();
-        EnsureRecipeSelection();
+        lastKnownCrafterOpen = IsCrafterOpen();
+        RefreshAvailableRecipes();
         SyncPanelWithInventory(force: true);
         UpdateRecipeDetails();
     }
@@ -50,6 +54,13 @@ public class CraftingMenuUI : MonoBehaviour
     {
         if (observedInventory != PlayerInventory.Instance)
             SyncInventorySubscription();
+
+        bool crafterOpen = IsCrafterOpen();
+        if (crafterOpen != lastKnownCrafterOpen)
+        {
+            lastKnownCrafterOpen = crafterOpen;
+            RefreshAvailableRecipes();
+        }
 
         SyncPanelWithInventory();
     }
@@ -67,7 +78,15 @@ public class CraftingMenuUI : MonoBehaviour
         UnsubscribeFromInventory();
     }
 
-    private void PopulateRecipeList()
+    public void RefreshAvailableRecipes()
+    {
+        List<Recipe> visibleRecipes = GetVisibleRecipes();
+        PopulateRecipeList(visibleRecipes);
+        EnsureRecipeSelection(visibleRecipes);
+        UpdateRecipeDetails();
+    }
+
+    private void PopulateRecipeList(List<Recipe> visibleRecipes)
     {
         if (recipeListParent == null || recipeButtonPrefab == null)
             return;
@@ -75,13 +94,12 @@ public class CraftingMenuUI : MonoBehaviour
         foreach (Transform child in recipeListParent)
             Destroy(child.gameObject);
 
-        CraftingSystem craftingSystem = CraftingSystem.Instance;
-        if (craftingSystem == null || craftingSystem.craftRecipesSO == null || craftingSystem.craftRecipesSO.recipes == null)
+        if (visibleRecipes == null || visibleRecipes.Count == 0)
             return;
 
-        for (int i = 0; i < craftingSystem.craftRecipesSO.recipes.Count; i++)
+        for (int i = 0; i < visibleRecipes.Count; i++)
         {
-            Recipe recipe = craftingSystem.craftRecipesSO.recipes[i];
+            Recipe recipe = visibleRecipes[i];
             if (recipe == null || recipe.resultItem == null)
                 continue;
 
@@ -101,24 +119,20 @@ public class CraftingMenuUI : MonoBehaviour
         }
     }
 
-    private void EnsureRecipeSelection()
+    private void EnsureRecipeSelection(List<Recipe> visibleRecipes)
     {
-        if (selectedRecipe != null)
-            return;
-
-        CraftingSystem craftingSystem = CraftingSystem.Instance;
-        if (craftingSystem == null || craftingSystem.craftRecipesSO == null || craftingSystem.craftRecipesSO.recipes == null)
-            return;
-
-        for (int i = 0; i < craftingSystem.craftRecipesSO.recipes.Count; i++)
+        if (visibleRecipes != null)
         {
-            Recipe recipe = craftingSystem.craftRecipesSO.recipes[i];
-            if (recipe != null)
+            for (int i = 0; i < visibleRecipes.Count; i++)
             {
-                selectedRecipe = recipe;
-                return;
+                if (visibleRecipes[i] == selectedRecipe)
+                    return;
             }
         }
+
+        selectedRecipe = visibleRecipes != null && visibleRecipes.Count > 0
+            ? visibleRecipes[0]
+            : null;
     }
 
     private void OnRecipeSelected(Recipe recipe)
@@ -130,13 +144,21 @@ public class CraftingMenuUI : MonoBehaviour
     private void UpdateRecipeDetails()
     {
         CraftingSystem craftingSystem = CraftingSystem.Instance;
+        if (selectedRecipe != null &&
+            craftingSystem != null &&
+            !craftingSystem.IsRecipeAvailableInCurrentContext(selectedRecipe))
+        {
+            RefreshAvailableRecipes();
+            return;
+        }
+
         if (selectedRecipe == null || craftingSystem == null)
         {
             if (ItemName != null)
                 ItemName.text = string.Empty;
 
             if (recipeDetailsText != null)
-                recipeDetailsText.text = "Selecione uma receita.";
+                recipeDetailsText.text = "Nenhuma receita disponivel nesse contexto.";
 
             if (craftButton != null)
             {
@@ -262,6 +284,7 @@ public class CraftingMenuUI : MonoBehaviour
     {
         lastKnownInventoryOpen = isInventoryOpen;
         SetCraftingPanelState(isInventoryOpen);
+        RefreshAvailableRecipes();
     }
 
     private void SyncInventorySubscription()
@@ -322,5 +345,20 @@ public class CraftingMenuUI : MonoBehaviour
     private static Sprite ResolveItemIcon(Item item)
     {
         return ItemIconResolver.ResolveForUI(item);
+    }
+
+    private static bool IsCrafterOpen()
+    {
+        return CraftingStationUIController.Instance != null &&
+               CraftingStationUIController.Instance.IsCrafterOpen;
+    }
+
+    private static List<Recipe> GetVisibleRecipes()
+    {
+        CraftingSystem craftingSystem = CraftingSystem.Instance;
+        if (craftingSystem == null)
+            return new List<Recipe>();
+
+        return craftingSystem.GetRecipesForCurrentContext();
     }
 }

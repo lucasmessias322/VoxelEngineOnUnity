@@ -1736,11 +1736,12 @@ public static class MeshGenerator
             if (generateGrassBillboards)
             {
                 BlockTextureMapping grassBillboardMapping = blockMappings[(int)grassBillboardBlockType];
+                Vector2Int grassBillboardTile = grassBillboardMapping.GetTileCoord(BlockFace.Front);
                 grassBillboardAtlasUv = new Vector2(
-                    grassBillboardMapping.side.x * invAtlasTilesX + 0.001f,
-                    grassBillboardMapping.side.y * invAtlasTilesY + 0.001f
+                    grassBillboardTile.x * invAtlasTilesX + 0.001f,
+                    grassBillboardTile.y * invAtlasTilesY + 0.001f
                 );
-                grassBillboardTint = grassBillboardMapping.tintSide ? 1f : 0f;
+                grassBillboardTint = grassBillboardMapping.GetTint(BlockFace.Front) ? 1f : 0f;
                 noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
                 jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
             }
@@ -1903,9 +1904,9 @@ public static class MeshGenerator
         {
             ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-            Vector2Int tile = mapping.side;
+            Vector2Int tile = mapping.GetTileCoord(BlockFace.Front);
             Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-            float tint = mapping.tintSide ? 1f : 0f;
+            float tint = mapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
             NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
                 ? waterTriangles
@@ -1955,8 +1956,8 @@ public static class MeshGenerator
                 origin + new Vector3(max.x, max.y, max.z),
                 origin + new Vector3(max.x, min.y, max.z),
                 Vector3.right,
-                mapping.side,
-                mapping.tintSide,
+                mapping.GetTileCoord(BlockFace.Right),
+                mapping.GetTint(BlockFace.Right),
                 new Vector3Int(voxelX + 1, voxelY, voxelZ),
                 Vector3Int.up,
                 Vector3Int.forward,
@@ -1971,8 +1972,8 @@ public static class MeshGenerator
                 origin + new Vector3(min.x, max.y, min.z),
                 origin + new Vector3(min.x, min.y, min.z),
                 Vector3.left,
-                mapping.side,
-                mapping.tintSide,
+                mapping.GetTileCoord(BlockFace.Left),
+                mapping.GetTint(BlockFace.Left),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.up,
                 Vector3Int.forward,
@@ -1987,8 +1988,8 @@ public static class MeshGenerator
                 origin + new Vector3(max.x, max.y, min.z),
                 origin + new Vector3(min.x, max.y, min.z),
                 Vector3.up,
-                mapping.top,
-                mapping.tintTop,
+                mapping.GetTileCoord(BlockFace.Top),
+                mapping.GetTint(BlockFace.Top),
                 new Vector3Int(voxelX, voxelY + 1, voxelZ),
                 Vector3Int.right,
                 Vector3Int.forward,
@@ -2003,8 +2004,8 @@ public static class MeshGenerator
                 origin + new Vector3(max.x, min.y, max.z),
                 origin + new Vector3(min.x, min.y, max.z),
                 Vector3.down,
-                mapping.bottom,
-                mapping.tintBottom,
+                mapping.GetTileCoord(BlockFace.Bottom),
+                mapping.GetTint(BlockFace.Bottom),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.right,
                 Vector3Int.forward,
@@ -2019,8 +2020,8 @@ public static class MeshGenerator
                 origin + new Vector3(min.x, max.y, max.z),
                 origin + new Vector3(min.x, min.y, max.z),
                 Vector3.forward,
-                mapping.side,
-                mapping.tintSide,
+                mapping.GetTileCoord(BlockFace.Front),
+                mapping.GetTint(BlockFace.Front),
                 new Vector3Int(voxelX, voxelY, voxelZ + 1),
                 Vector3Int.right,
                 Vector3Int.up,
@@ -2035,8 +2036,8 @@ public static class MeshGenerator
                 origin + new Vector3(max.x, max.y, min.z),
                 origin + new Vector3(max.x, min.y, min.z),
                 Vector3.back,
-                mapping.side,
-                mapping.tintSide,
+                mapping.GetTileCoord(BlockFace.Back),
+                mapping.GetTint(BlockFace.Back),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.right,
                 Vector3Int.up,
@@ -2069,12 +2070,12 @@ public static class MeshGenerator
             Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z));
             Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z));
 
-            AddStaticLitShapeFace(p100, p110, p111, p101, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p001, p011, p010, p000, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p011, p111, p110, p010, mapping.top, mapping.tintTop, light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p100, p101, p001, mapping.bottom, mapping.tintBottom, light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p101, p111, p011, p001, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p010, p110, p100, mapping.side, mapping.tintSide, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p100, p110, p111, p101, mapping.GetTileCoord(BlockFace.Right), mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p001, p011, p010, p000, mapping.GetTileCoord(BlockFace.Left), mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p011, p111, p110, p010, mapping.GetTileCoord(BlockFace.Top), mapping.GetTint(BlockFace.Top), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p100, p101, p001, mapping.GetTileCoord(BlockFace.Bottom), mapping.GetTint(BlockFace.Bottom), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p101, p111, p011, p001, mapping.GetTileCoord(BlockFace.Front), mapping.GetTint(BlockFace.Front), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p010, p110, p100, mapping.GetTileCoord(BlockFace.Back), mapping.GetTint(BlockFace.Back), light01, invAtlasTilesX, invAtlasTilesY, tris);
         }
 
         private void AddStaticLitShapeFace(
@@ -2353,7 +2354,7 @@ public static class MeshGenerator
                     int maxV = v == 1 ? endY : (v == 0 ? border + SizeX : border + SizeZ);
 
                     Vector3 normal = new Vector3(axis == 0 ? normalSign : 0, axis == 1 ? normalSign : 0, axis == 2 ? normalSign : 0);
-                    BlockFace faceType = axis == 1 ? (normalSign > 0 ? BlockFace.Top : BlockFace.Bottom) : BlockFace.Side;
+                    BlockFace faceType = BlockFaceUtility.FromAxisNormal(axis, normalSign);
 
                     Vector3Int stepU = new Vector3Int(u == 0 ? 1 : 0, u == 1 ? 1 : 0, u == 2 ? 1 : 0);
                     Vector3Int stepV = new Vector3Int(v == 0 ? 1 : 0, v == 1 ? 1 : 0, v == 2 ? 1 : 0);
@@ -2582,10 +2583,8 @@ public static class MeshGenerator
 
                                 int vIndex = GetCurrentSubchunkLocalVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
-                                bool tint = faceType == BlockFace.Top ? m.tintTop :
-                                            faceType == BlockFace.Bottom ? m.tintBottom : m.tintSide;
-                                Vector2Int tile = faceType == BlockFace.Top ? m.top :
-                                                  faceType == BlockFace.Bottom ? m.bottom : m.side;
+                                bool tint = m.GetTint(faceType);
+                                Vector2Int tile = m.GetTileCoord(faceType);
                                 Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
 
                                 for (int l = 0; l < 4; l++)

@@ -47,6 +47,7 @@ public enum BlockType
     WaterFall5 = 42,
     WaterFall6 = 43,
     WaterFall7 = 44,
+    StoneFurnance = 45,
 }
 
 public static class FluidBlockUtility

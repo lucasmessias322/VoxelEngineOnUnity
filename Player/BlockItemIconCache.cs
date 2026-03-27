@@ -59,7 +59,8 @@ public static class BlockItemIconCache
         bool atlasCoordinatesStartTopLeft = blockData.atlasCoordinatesStartTopLeft;
 
         Vector2Int topCoord = blockData.GetTileCoord(blockType, BlockFace.Top);
-        Vector2Int sideCoord = blockData.GetTileCoord(blockType, BlockFace.Side);
+        Vector2Int frontCoord = blockData.GetTileCoord(blockType, BlockFace.Front);
+        Vector2Int rightCoord = blockData.GetTileCoord(blockType, BlockFace.Right);
 
         if (!TryExtractTilePixels(
                 atlasTexture,
@@ -74,14 +75,26 @@ public static class BlockItemIconCache
         if (!TryExtractTilePixels(
                 atlasTexture,
                 atlasTiles,
-                sideCoord,
+                frontCoord,
                 atlasCoordinatesStartTopLeft,
-                out Color32[] sidePixels,
-                out int sideWidth,
-                out int sideHeight))
+                out Color32[] frontPixels,
+                out int frontWidth,
+                out int frontHeight))
             return null;
 
-        int faceSize = Mathf.Max(1, Mathf.Min(Mathf.Min(tileWidth, tileHeight), Mathf.Min(sideWidth, sideHeight)));
+        if (!TryExtractTilePixels(
+                atlasTexture,
+                atlasTiles,
+                rightCoord,
+                atlasCoordinatesStartTopLeft,
+                out Color32[] rightPixels,
+                out int rightWidth,
+                out int rightHeight))
+            return null;
+
+        int faceSize = Mathf.Max(1, Mathf.Min(
+            Mathf.Min(tileWidth, tileHeight),
+            Mathf.Min(Mathf.Min(frontWidth, frontHeight), Mathf.Min(rightWidth, rightHeight))));
         int iconSize = Mathf.Clamp(faceSize * 4, 48, 128);
         Color32[] iconPixels = new Color32[iconSize * iconSize];
 
@@ -91,9 +104,12 @@ public static class BlockItemIconCache
             topPixels,
             tileWidth,
             tileHeight,
-            sidePixels,
-            sideWidth,
-            sideHeight,
+            frontPixels,
+            frontWidth,
+            frontHeight,
+            rightPixels,
+            rightWidth,
+            rightHeight,
             faceSize);
 
         Texture2D iconTexture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false, false);
@@ -352,9 +368,12 @@ public static class BlockItemIconCache
         Color32[] topPixels,
         int topWidth,
         int topHeight,
-        Color32[] sidePixels,
-        int sideWidth,
-        int sideHeight,
+        Color32[] frontPixels,
+        int frontWidth,
+        int frontHeight,
+        Color32[] rightPixels,
+        int rightWidth,
+        int rightHeight,
         int faceSize)
     {
         float cubeSize = faceSize;
@@ -406,8 +425,8 @@ public static class BlockItemIconCache
             new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f),
             minX, maxY, scale, margin);
 
-        DrawFaceQuad(destination, iconSize, sidePixels, sideWidth, sideHeight, right, RightShade);
-        DrawFaceQuad(destination, iconSize, sidePixels, sideWidth, sideHeight, left, LeftShade);
+        DrawFaceQuad(destination, iconSize, rightPixels, rightWidth, rightHeight, right, RightShade);
+        DrawFaceQuad(destination, iconSize, frontPixels, frontWidth, frontHeight, left, LeftShade);
         DrawFaceQuad(destination, iconSize, topPixels, topWidth, topHeight, top, TopShade);
     }
 

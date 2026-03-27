@@ -266,9 +266,9 @@ public class BlockDrop : MonoBehaviour
     {
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-        Vector2Int tile = mapping.side;
+        Vector2Int tile = mapping.GetTileCoord(BlockFace.Front);
         Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-        float tint = mapping.tintSide ? 1f : 0f;
+        float tint = mapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
         Vector3 a0 = origin + new Vector3(min.x, min.y, min.z);
         Vector3 a1 = origin + new Vector3(max.x, min.y, max.z);
@@ -303,8 +303,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(max.x, max.y, max.z),
             origin + new Vector3(max.x, min.y, max.z),
             Vector3.right,
-            mapping.side,
-            mapping.tintSide,
+            mapping.GetTileCoord(BlockFace.Right),
+            mapping.GetTint(BlockFace.Right),
             invAtlasTilesX,
             invAtlasTilesY);
 
@@ -314,8 +314,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(min.x, max.y, min.z),
             origin + new Vector3(min.x, min.y, min.z),
             Vector3.left,
-            mapping.side,
-            mapping.tintSide,
+            mapping.GetTileCoord(BlockFace.Left),
+            mapping.GetTint(BlockFace.Left),
             invAtlasTilesX,
             invAtlasTilesY);
 
@@ -325,8 +325,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(max.x, max.y, min.z),
             origin + new Vector3(min.x, max.y, min.z),
             Vector3.up,
-            mapping.top,
-            mapping.tintTop,
+            mapping.GetTileCoord(BlockFace.Top),
+            mapping.GetTint(BlockFace.Top),
             invAtlasTilesX,
             invAtlasTilesY);
 
@@ -336,8 +336,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(max.x, min.y, max.z),
             origin + new Vector3(min.x, min.y, max.z),
             Vector3.down,
-            mapping.bottom,
-            mapping.tintBottom,
+            mapping.GetTileCoord(BlockFace.Bottom),
+            mapping.GetTint(BlockFace.Bottom),
             invAtlasTilesX,
             invAtlasTilesY);
 
@@ -347,8 +347,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(min.x, max.y, max.z),
             origin + new Vector3(min.x, min.y, max.z),
             Vector3.forward,
-            mapping.side,
-            mapping.tintSide,
+            mapping.GetTileCoord(BlockFace.Front),
+            mapping.GetTint(BlockFace.Front),
             invAtlasTilesX,
             invAtlasTilesY);
 
@@ -358,8 +358,8 @@ public class BlockDrop : MonoBehaviour
             origin + new Vector3(max.x, max.y, min.z),
             origin + new Vector3(max.x, min.y, min.z),
             Vector3.back,
-            mapping.side,
-            mapping.tintSide,
+            mapping.GetTileCoord(BlockFace.Back),
+            mapping.GetTint(BlockFace.Back),
             invAtlasTilesX,
             invAtlasTilesY);
     }
@@ -478,9 +478,7 @@ public class BlockDrop : MonoBehaviour
 
     private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex)
     {
-        if (faceIndex == 2) return mapping.top;
-        if (faceIndex == 3) return mapping.bottom;
-        return mapping.side;
+        return mapping.GetTileCoord(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
     }
 
     private static Vector2 GetFaceBaseUv(int faceIndex, Vector3 vertex01)
@@ -496,9 +494,7 @@ public class BlockDrop : MonoBehaviour
 
     private static bool GetTintForFace(BlockTextureMapping mapping, int faceIndex)
     {
-        if (faceIndex == 2) return mapping.tintTop;
-        if (faceIndex == 3) return mapping.tintBottom;
-        return mapping.tintSide;
+        return mapping.GetTint(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
     }
 
     private void SetupPhysics(Vector3 throwDirection)

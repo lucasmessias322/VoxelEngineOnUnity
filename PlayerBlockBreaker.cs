@@ -393,8 +393,9 @@ public class PlayerBlockBreaker : MonoBehaviour
     {
         if (Input.GetMouseButtonDown(1))
         {
-            if (CraftingStationUIController.Instance != null &&
-                CraftingStationUIController.Instance.TryHandleCrafterInteraction(selector))
+            CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
+            if (craftingStationUI != null &&
+                craftingStationUI.TryHandleCrafterInteraction(selector))
             {
                 CancelBreak();
                 return;

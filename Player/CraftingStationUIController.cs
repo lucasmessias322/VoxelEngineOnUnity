@@ -5,6 +5,7 @@ using UnityEngine.UI;
 public class CraftingStationUIController : MonoBehaviour
 {
     private static readonly Vector3Int InvalidBlock = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+    private const string RuntimeControllerName = "__RuntimeCraftingStationUIController";
 
     public static CraftingStationUIController Instance { get; private set; }
 
@@ -12,6 +13,10 @@ public class CraftingStationUIController : MonoBehaviour
     [SerializeField] private PlayerInventory inventory;
     [SerializeField] private BlockSelector selector;
     [SerializeField] private Transform distanceOrigin;
+
+    [Header("Optional Grid UI")]
+    [SerializeField] private bool manageGridCraftPanels;
+    [SerializeField] private bool allowRuntimeCraftingTablePanelClone;
 
     [Header("Panels")]
     [SerializeField] private RectTransform playerCraftPanel;
@@ -41,6 +46,27 @@ public class CraftingStationUIController : MonoBehaviour
     private bool previousInventoryOpen;
     private bool createdCraftingTablePanelAtRuntime;
 
+    public bool IsCrafterOpen => activeCrafterBlock != InvalidBlock;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+    private static void BootstrapRuntimeInstance()
+    {
+        EnsureInstance();
+    }
+
+    public static CraftingStationUIController EnsureInstance()
+    {
+        if (Instance != null)
+            return Instance;
+
+        CraftingStationUIController existing = FindAnyObjectByType<CraftingStationUIController>();
+        if (existing != null)
+            return existing;
+
+        GameObject controllerObject = new GameObject(RuntimeControllerName);
+        return controllerObject.AddComponent<CraftingStationUIController>();
+    }
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
@@ -52,8 +78,13 @@ public class CraftingStationUIController : MonoBehaviour
         Instance = this;
 
         ResolveReferences();
-        EnsurePanels();
-        BuildCraftingControllers();
+
+        if (manageGridCraftPanels)
+        {
+            EnsurePanels();
+            BuildCraftingControllers();
+        }
+
         previousInventoryOpen = inventory != null && inventory.IsInventoryOpen;
         RefreshPanelVisibility();
     }
@@ -66,7 +97,7 @@ public class CraftingStationUIController : MonoBehaviour
         if (previousInventoryOpen != inventoryOpen)
             HandleInventoryVisibilityChanged(inventoryOpen);
 
-        if (IsCraftingTableOpen && ShouldCloseCraftingTable())
+        if (IsCrafterOpen && ShouldCloseCraftingTable())
             CloseCraftingTable(returnItemsToInventory: true);
 
         RefreshPanelVisibility();
@@ -90,6 +121,7 @@ public class CraftingStationUIController : MonoBehaviour
             inventory.SetInventoryOpen(true);
 
         OpenCraftingTable(crafterBlock);
+        CraftingMenuUI.Instance?.RefreshAvailableRecipes();
         return true;
     }
 
@@ -102,9 +134,8 @@ public class CraftingStationUIController : MonoBehaviour
             HandleInventoryClosed();
 
         RefreshPanelVisibility();
+        CraftingMenuUI.Instance?.RefreshAvailableRecipes();
     }
-
-    private bool IsCraftingTableOpen => activeCrafterBlock != InvalidBlock;
 
     private void ResolveReferences()
     {
@@ -156,7 +187,8 @@ public class CraftingStationUIController : MonoBehaviour
         if (craftingTablePanel == null &&
             craftingTableSlotsContainer == null &&
             craftingTableOutputSlot == null &&
-            playerCraftPanel != null)
+            playerCraftPanel != null &&
+            allowRuntimeCraftingTablePanelClone)
         {
             craftingTablePanel = CreateCraftingTablePanel(playerCraftPanel);
             createdCraftingTablePanelAtRuntime = craftingTablePanel != null;
@@ -203,6 +235,7 @@ public class CraftingStationUIController : MonoBehaviour
         activeCrafterBlock = crafterBlock;
         craftingTableGrid?.RefreshCraftResult();
         RefreshPanelVisibility();
+        CraftingMenuUI.Instance?.RefreshAvailableRecipes();
         Log($"Craft table aberta em {crafterBlock}.");
     }
 
@@ -214,6 +247,7 @@ public class CraftingStationUIController : MonoBehaviour
         activeCrafterBlock = InvalidBlock;
         craftingTableGrid?.RefreshCraftResult();
         RefreshPanelVisibility();
+        CraftingMenuUI.Instance?.RefreshAvailableRecipes();
         Log("Craft table fechada.");
     }
 
@@ -222,13 +256,13 @@ public class CraftingStationUIController : MonoBehaviour
         if (inventory != null)
             playerCraftGrid?.ReturnIngredientsToInventory(inventory);
 
-        if (IsCraftingTableOpen)
+        if (IsCrafterOpen)
             CloseCraftingTable(returnItemsToInventory: true);
     }
 
     private bool ShouldCloseCraftingTable()
     {
-        if (!IsCraftingTableOpen)
+        if (!IsCrafterOpen)
             return false;
 
         if (closeWhenCrafterRemoved && World.Instance != null && World.Instance.GetBlockAt(activeCrafterBlock) != BlockType.Crafter)
@@ -243,13 +277,16 @@ public class CraftingStationUIController : MonoBehaviour
 
     private void RefreshPanelVisibility()
     {
+        if (!manageGridCraftPanels)
+            return;
+
         bool inventoryOpen = inventory != null && inventory.IsInventoryOpen;
 
         if (playerCraftPanel != null)
-            playerCraftPanel.gameObject.SetActive(inventoryOpen && !IsCraftingTableOpen);
+            playerCraftPanel.gameObject.SetActive(inventoryOpen && !IsCrafterOpen);
 
         if (craftingTablePanel != null)
-            craftingTablePanel.gameObject.SetActive(inventoryOpen && IsCraftingTableOpen);
+            craftingTablePanel.gameObject.SetActive(inventoryOpen && IsCrafterOpen);
     }
 
     private bool TryGetTargetCrafter(BlockSelector activeSelector, out Vector3Int crafterBlock)

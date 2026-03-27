@@ -640,17 +640,12 @@ public partial class World
 
     private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex)
     {
-        // 0:+X 1:-X 2:+Y 3:-Y 4:+Z 5:-Z
-        if (faceIndex == 2) return mapping.top;
-        if (faceIndex == 3) return mapping.bottom;
-        return mapping.side;
+        return mapping.GetTileCoord(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
     }
 
     private static bool GetTintForFace(BlockTextureMapping mapping, int faceIndex)
     {
-        if (faceIndex == 2) return mapping.tintTop;
-        if (faceIndex == 3) return mapping.tintBottom;
-        return mapping.tintSide;
+        return mapping.GetTint(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
     }
 
     private struct FaceDef

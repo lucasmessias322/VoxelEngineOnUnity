@@ -3,6 +3,13 @@ using System.Collections.Generic;
 using UnityEngine;
 
 [System.Serializable]
+public enum CraftingRequirement
+{
+    PlayerInventory = 0,
+    Crafter = 1
+}
+
+[System.Serializable]
 public class RecipeItem
 {
     public Item item;
@@ -16,6 +23,7 @@ public class Recipe
     public List<RecipeItem> requiredItems;
     public Item resultItem;
     public int resultQuantity = 1;
+    public CraftingRequirement craftingRequirement = CraftingRequirement.PlayerInventory;
 }
 
 public class CraftingSystem : MonoBehaviour
@@ -47,12 +55,36 @@ public class CraftingSystem : MonoBehaviour
         return GetMaxCraftAmount(recipe) > 0;
     }
 
+    public bool IsRecipeAvailableInCurrentContext(Recipe recipe)
+    {
+        return IsRecipeAvailableForCurrentContext(recipe);
+    }
+
+    public List<Recipe> GetRecipesForCurrentContext()
+    {
+        List<Recipe> availableRecipes = new List<Recipe>();
+        if (craftRecipesSO == null || craftRecipesSO.recipes == null)
+            return availableRecipes;
+
+        for (int i = 0; i < craftRecipesSO.recipes.Count; i++)
+        {
+            Recipe recipe = craftRecipesSO.recipes[i];
+            if (IsRecipeAvailableForCurrentContext(recipe))
+                availableRecipes.Add(recipe);
+        }
+
+        return availableRecipes;
+    }
+
     public int GetMaxCraftAmount(Recipe recipe)
     {
         if (!TryResolveInventory(out PlayerInventory inventory))
             return 0;
 
         if (!IsRecipeValid(recipe))
+            return 0;
+
+        if (!IsRecipeAvailableForCurrentContext(recipe))
             return 0;
 
         Dictionary<Item, int> requiredTotals = BuildRequiredItemTotals(recipe);
@@ -123,6 +155,9 @@ public class CraftingSystem : MonoBehaviour
         if (!IsRecipeValid(recipe))
             yield break;
 
+        if (!IsRecipeAvailableForCurrentContext(recipe))
+            yield break;
+
         int clampedCraftCount = Mathf.Max(1, craftCount);
         Dictionary<Item, int> requiredTotals = ScaleRequiredTotals(BuildRequiredItemTotals(recipe), clampedCraftCount);
         if (!HasRequiredItems(inventory, requiredTotals))
@@ -189,6 +224,22 @@ public class CraftingSystem : MonoBehaviour
         return recipe != null &&
                recipe.resultItem != null &&
                recipe.resultQuantity > 0;
+    }
+
+    private static bool IsRecipeAvailableForCurrentContext(Recipe recipe)
+    {
+        if (!IsRecipeValid(recipe))
+            return false;
+
+        switch (recipe.craftingRequirement)
+        {
+            case CraftingRequirement.Crafter:
+                return CraftingStationUIController.Instance != null &&
+                       CraftingStationUIController.Instance.IsCrafterOpen;
+
+            default:
+                return true;
+        }
     }
 
     private static Dictionary<Item, int> BuildRequiredItemTotals(Recipe recipe)

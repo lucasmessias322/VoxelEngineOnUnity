@@ -1,8 +1,43 @@
 using System.Collections.Generic;
 using UnityEngine;
 
-public enum BlockFace { Top = 0, Bottom = 1, Side = 2 }
+public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
 public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2 }
+
+public static class BlockFaceUtility
+{
+    public static BlockFace FromCubeFaceIndex(int faceIndex)
+    {
+        switch (faceIndex)
+        {
+            case 0: return BlockFace.Right;
+            case 1: return BlockFace.Left;
+            case 2: return BlockFace.Top;
+            case 3: return BlockFace.Bottom;
+            case 4: return BlockFace.Front;
+            case 5: return BlockFace.Back;
+            default: return BlockFace.Side;
+        }
+    }
+
+    public static BlockFace FromAxisNormal(int axis, int normalSign)
+    {
+        switch (axis)
+        {
+            case 0:
+                return normalSign > 0 ? BlockFace.Right : BlockFace.Left;
+
+            case 1:
+                return normalSign > 0 ? BlockFace.Top : BlockFace.Bottom;
+
+            case 2:
+                return normalSign > 0 ? BlockFace.Front : BlockFace.Back;
+
+            default:
+                return BlockFace.Side;
+        }
+    }
+}
 
 [CreateAssetMenu(fileName = "BlockDataSO", menuName = "ScriptableObjects/BlockDataSO", order = 1)]
 public class BlockDataSO : ScriptableObject
@@ -19,16 +54,29 @@ public class BlockDataSO : ScriptableObject
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
 
+    private void OnEnable()
+    {
+        SyncDirectionalSideMappings();
+    }
+
+    private void OnValidate()
+    {
+        SyncDirectionalSideMappings();
+    }
+
     /// <summary>
     /// Inicializa o array de mapeamentos.
     /// </summary>
     public void InitializeDictionary()
     {
+        SyncDirectionalSideMappings();
+
         int enumCount = System.Enum.GetValues(typeof(BlockType)).Length;
         mappings = new BlockTextureMapping[enumCount];
 
-        foreach (BlockTextureMapping mapping in blockTextures)
+        for (int i = 0; i < blockTextures.Count; i++)
         {
+            BlockTextureMapping mapping = blockTextures[i];
             int index = (int)mapping.blockType;
             if (index >= 0 && index < enumCount)
                 mappings[index] = mapping;
@@ -135,16 +183,7 @@ public class BlockDataSO : ScriptableObject
         if (mapping == null)
             return new Vector2Int(0, 0);
 
-        BlockTextureMapping value = mapping.Value;
-        switch (face)
-        {
-            case BlockFace.Top:
-                return value.top;
-            case BlockFace.Bottom:
-                return value.bottom;
-            default:
-                return value.side;
-        }
+        return mapping.Value.GetTileCoord(face);
     }
 
     /// <summary>
@@ -159,6 +198,21 @@ public class BlockDataSO : ScriptableObject
         BlockTextureMapping? mapping = GetMapping(type);
         return mapping != null && mapping.Value.isLiquid;
     }
+
+    private void SyncDirectionalSideMappings()
+    {
+        if (blockTextures == null)
+            return;
+
+        for (int i = 0; i < blockTextures.Count; i++)
+        {
+            BlockTextureMapping mapping = blockTextures[i];
+            if (!mapping.EnsureDirectionalSideData())
+                continue;
+
+            blockTextures[i] = mapping;
+        }
+    }
 }
 
 [System.Serializable]
@@ -167,7 +221,13 @@ public struct BlockTextureMapping
     public BlockType blockType;
     public Vector2Int top;    // coordenada no atlas para a face de cima (tileX, tileY)
     public Vector2Int bottom; // coordenada no atlas para a face de baixo
-    public Vector2Int side;   // coordenada no atlas para as laterais
+    public Vector2Int right;  // face +X
+    public Vector2Int left;   // face -X
+    public Vector2Int front;  // face +Z
+    public Vector2Int back;   // face -Z
+
+    [HideInInspector] public Vector2Int side; // legado: usado para migrar assets antigos
+    [SerializeField, HideInInspector] private bool directionalSideDataInitialized;
 
     [Header("Rendering")]
     [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes).")]
@@ -199,8 +259,78 @@ public struct BlockTextureMapping
     [Tooltip("Aplica cor do bioma nesta face?")]
     public bool tintBottom;
 
-    [Tooltip("Aplica cor do bioma nas laterais?")]
-    public bool tintSide;
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintRight;
+
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintLeft;
+
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintFront;
+
+    [Tooltip("Aplica cor do bioma nesta face?")]
+    public bool tintBack;
+
+    [HideInInspector] public bool tintSide; // legado: usado para migrar assets antigos
+
+    public bool EnsureDirectionalSideData()
+    {
+        if (directionalSideDataInitialized)
+            return false;
+
+        right = side;
+        left = side;
+        front = side;
+        back = side;
+        tintRight = tintSide;
+        tintLeft = tintSide;
+        tintFront = tintSide;
+        tintBack = tintSide;
+        directionalSideDataInitialized = true;
+        return true;
+    }
+
+    public Vector2Int GetTileCoord(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                return top;
+            case BlockFace.Bottom:
+                return bottom;
+            case BlockFace.Right:
+                return right;
+            case BlockFace.Left:
+                return left;
+            case BlockFace.Front:
+                return front;
+            case BlockFace.Back:
+                return back;
+            default:
+                return side;
+        }
+    }
+
+    public bool GetTint(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                return tintTop;
+            case BlockFace.Bottom:
+                return tintBottom;
+            case BlockFace.Right:
+                return tintRight;
+            case BlockFace.Left:
+                return tintLeft;
+            case BlockFace.Front:
+                return tintFront;
+            case BlockFace.Back:
+                return tintBack;
+            default:
+                return tintSide;
+        }
+    }
 }
 
 public static class BlockShapeUtility
