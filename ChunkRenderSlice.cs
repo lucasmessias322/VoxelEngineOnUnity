@@ -42,12 +42,15 @@ public class ChunkRenderSlice : MonoBehaviour
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
     private GraphicsBuffer pulledOpaqueFaceBuffer;
+    private GraphicsBuffer indirectOpaqueArgsBuffer;
+    private GraphicsBuffer.IndirectDrawArgs[] indirectOpaqueArgsData;
     private MaterialPropertyBlock pulledOpaquePropertyBlock;
     private Material opaqueMaterial;
     private Bounds localRenderBounds;
     private Color grassTint = Color.white;
     private int pulledOpaqueFaceCount;
     private int pulledOpaqueFaceCapacity;
+    private int indirectOpaqueArgsCapacity;
     private int startSubchunkIndex;
     private int subchunkCount;
     private int logicalVisibleOpaqueSubchunkMask;
@@ -141,6 +144,12 @@ public class ChunkRenderSlice : MonoBehaviour
                SystemInfo.maxComputeBufferInputsVertex > 0;
     }
 
+    public static bool SupportsIndirectOpaqueVertexPulling()
+    {
+        return SupportsOpaqueVertexPulling() &&
+               SystemInfo.supportsComputeShaders;
+    }
+
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
     {
         EnsureRenderHookRegistered();
@@ -169,6 +178,7 @@ public class ChunkRenderSlice : MonoBehaviour
         startSubchunkIndex = sliceStartSubchunkIndex;
         subchunkCount = Mathf.Max(1, sliceSubchunkCount);
         EnsurePulledOpaqueSubchunkMetadataCapacity();
+        EnsureIndirectOpaqueArgsCapacity(subchunkCount);
         localRenderBounds = CreateMeshBounds(
             startSubchunkIndex * Chunk.SubchunkHeight,
             Mathf.Min(EndSubchunkIndexExclusive * Chunk.SubchunkHeight, Chunk.SizeY));
@@ -322,6 +332,7 @@ public class ChunkRenderSlice : MonoBehaviour
         UnregisterManagedRenderSlice();
         UnregisterOpaqueRenderSlice();
         ReleasePulledOpaqueFaceBuffer();
+        ReleaseIndirectOpaqueArgsBuffer();
     }
 
     private void OnEnable()
@@ -415,6 +426,7 @@ public class ChunkRenderSlice : MonoBehaviour
 
         EnsurePulledOpaqueFaceBufferCapacity(totalOpaqueFaceCount);
         EnsurePulledOpaqueSubchunkMetadataCapacity();
+        EnsureIndirectOpaqueArgsCapacity(subchunkCount);
         Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
         Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
         opaqueGeometrySubchunkMask = 0;
@@ -491,6 +503,37 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         pulledOpaqueFaceCapacity = 0;
+    }
+
+    private void EnsureIndirectOpaqueArgsCapacity(int requiredCount)
+    {
+        if (!SupportsIndirectOpaqueVertexPulling())
+            return;
+
+        int safeRequiredCount = Mathf.Max(1, requiredCount);
+        if (indirectOpaqueArgsBuffer != null && indirectOpaqueArgsCapacity >= safeRequiredCount && indirectOpaqueArgsData != null && indirectOpaqueArgsData.Length >= safeRequiredCount)
+            return;
+
+        ReleaseIndirectOpaqueArgsBuffer();
+
+        indirectOpaqueArgsCapacity = safeRequiredCount;
+        indirectOpaqueArgsBuffer = new GraphicsBuffer(
+            GraphicsBuffer.Target.IndirectArguments,
+            indirectOpaqueArgsCapacity,
+            GraphicsBuffer.IndirectDrawArgs.size);
+        indirectOpaqueArgsData = new GraphicsBuffer.IndirectDrawArgs[indirectOpaqueArgsCapacity];
+    }
+
+    private void ReleaseIndirectOpaqueArgsBuffer()
+    {
+        if (indirectOpaqueArgsBuffer != null)
+        {
+            indirectOpaqueArgsBuffer.Dispose();
+            indirectOpaqueArgsBuffer = null;
+        }
+
+        indirectOpaqueArgsData = null;
+        indirectOpaqueArgsCapacity = 0;
     }
 
     private void EnsurePulledOpaqueSubchunkMetadataCapacity()
@@ -707,6 +750,18 @@ public class ChunkRenderSlice : MonoBehaviour
         bool trackTelemetry = ShouldTrackOpaqueTelemetry(camera);
         int visibleOpaqueSubchunkCount = trackTelemetry ? CountVisibleOpaqueSubchunksWithFaces() : 0;
 
+        if (SupportsIndirectOpaqueVertexPulling() &&
+            TryBuildIndirectOpaqueDrawCommands(out int indirectCommandCount) &&
+            indirectCommandCount > 0)
+        {
+            pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 1f);
+            Graphics.RenderPrimitivesIndirect(renderParams, MeshTopology.Triangles, indirectOpaqueArgsBuffer, indirectCommandCount);
+            if (trackTelemetry)
+                RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, indirectCommandCount == 1, indirectCommandCount > 1);
+            return;
+        }
+
+        pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 0f);
         if (subchunkCount <= 1 || CanRenderOpaqueSliceAsSingleDraw())
         {
             pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
@@ -756,6 +811,79 @@ public class ChunkRenderSlice : MonoBehaviour
 
         if (trackTelemetry)
             RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, runCount, false, runCount > 0);
+    }
+
+    private bool TryBuildIndirectOpaqueDrawCommands(out int commandCount)
+    {
+        commandCount = 0;
+
+        if (!SupportsIndirectOpaqueVertexPulling() ||
+            indirectOpaqueArgsBuffer == null ||
+            indirectOpaqueArgsData == null ||
+            pulledOpaqueFaceCount <= 0)
+        {
+            return false;
+        }
+
+        EnsureIndirectOpaqueArgsCapacity(1);
+        if (indirectOpaqueArgsBuffer == null || indirectOpaqueArgsData == null)
+            return false;
+
+        int commandFaceStart = 0;
+        int commandFaceCount = 0;
+        for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount;)
+        {
+            int subchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
+            int subchunkFaceCount = GetLocalOpaqueFaceCount(localSubchunkIndex);
+            if ((visibleOpaqueSubchunkMask & subchunkBit) == 0 || subchunkFaceCount <= 0)
+            {
+                localSubchunkIndex++;
+                continue;
+            }
+
+            int runFaceStart = GetLocalOpaqueFaceStart(localSubchunkIndex);
+            int runFaceCount = subchunkFaceCount;
+            int nextLocalSubchunkIndex = localSubchunkIndex + 1;
+
+            while (nextLocalSubchunkIndex < subchunkCount)
+            {
+                int nextFaceCount = GetLocalOpaqueFaceCount(nextLocalSubchunkIndex);
+                if (nextFaceCount <= 0)
+                {
+                    nextLocalSubchunkIndex++;
+                    continue;
+                }
+
+                int nextSubchunkBit = 1 << (startSubchunkIndex + nextLocalSubchunkIndex);
+                if ((visibleOpaqueSubchunkMask & nextSubchunkBit) == 0)
+                    break;
+
+                runFaceCount += nextFaceCount;
+                nextLocalSubchunkIndex++;
+            }
+
+            if (commandCount > 0)
+                return false;
+
+            commandFaceStart = runFaceStart;
+            commandFaceCount = runFaceCount;
+            commandCount = 1;
+            localSubchunkIndex = nextLocalSubchunkIndex;
+        }
+
+        if (commandCount <= 0)
+            return false;
+
+        indirectOpaqueArgsData[0] = new GraphicsBuffer.IndirectDrawArgs
+        {
+            vertexCountPerInstance = 6u,
+            instanceCount = (uint)commandFaceCount,
+            startVertex = 0u,
+            startInstance = (uint)commandFaceStart
+        };
+
+        indirectOpaqueArgsBuffer.SetData(indirectOpaqueArgsData, 0, 0, 1);
+        return true;
     }
 
     private bool CanRenderOpaqueSliceAsSingleDraw()
