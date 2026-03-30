@@ -5,6 +5,7 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Rendering;
 
 
 [Serializable]
@@ -123,6 +124,38 @@ public enum ChunkOpaqueRenderBackendSelection : byte
     ForcePulledOpaque = 2
 }
 
+public static class ChunkOpaqueRenderSupport
+{
+    public static bool SupportsVertexPulling()
+    {
+        if (!SupportsStructuredVertexFetchApi(SystemInfo.graphicsDeviceType))
+            return false;
+
+        return SystemInfo.graphicsShaderLevel >= 45 &&
+               SystemInfo.supportsInstancing &&
+               SystemInfo.maxComputeBufferInputsVertex > 0;
+    }
+
+    public static bool SupportsIndirectVertexPulling()
+    {
+        return SupportsVertexPulling() &&
+               SystemInfo.supportsComputeShaders;
+    }
+
+    private static bool SupportsStructuredVertexFetchApi(GraphicsDeviceType graphicsDeviceType)
+    {
+        switch (graphicsDeviceType)
+        {
+            case GraphicsDeviceType.Null:
+            case GraphicsDeviceType.OpenGLES3:
+                return false;
+
+            default:
+                return true;
+        }
+    }
+}
+
 public interface IChunkOpaqueRenderBackend
 {
     ChunkOpaqueRenderBackendKind Kind { get; }
@@ -163,9 +196,7 @@ public sealed class PulledOpaqueBackend : IChunkOpaqueRenderBackend
         if (shader == null || !shader.isSupported)
             return false;
 
-        return SystemInfo.graphicsShaderLevel >= 45 &&
-               SystemInfo.supportsInstancing &&
-               SystemInfo.maxComputeBufferInputsVertex > 0;
+        return ChunkOpaqueRenderSupport.SupportsVertexPulling();
     }
 
     private PulledOpaqueBackend()
@@ -279,6 +310,7 @@ public partial class World : MonoBehaviour
         if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
             caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
+        InitializePlatformRenderProfileState();
         EnsureLoadingBootstrapExists();
     }
 
@@ -981,7 +1013,7 @@ public partial class World : MonoBehaviour
             return ChunkOpaqueRenderBackendKind.ClassicMesh;
 
         IChunkOpaqueRenderBackend requestedBackend = ChunkOpaqueRenderBackends.Get(requestedKind);
-        if (requestedBackend.IsSupported(Material))
+        if (requestedBackend.IsSupported(GetRuntimeChunkMaterials()))
             return requestedBackend.Kind;
 
         return ChunkOpaqueRenderBackendKind.ClassicMesh;
@@ -992,7 +1024,8 @@ public partial class World : MonoBehaviour
         if (enableMinecraftSectionOcclusion &&
             forceSingleSubchunkRendererForSectionOcclusion)
         {
-            return 1;
+            if (!allowGroupedSlicesWithOpaqueVertexPulling || !CanUseOpaqueVertexPulling())
+                return 1;
         }
 
         return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
@@ -1012,7 +1045,7 @@ public partial class World : MonoBehaviour
             if (chunk == null)
                 continue;
 
-            chunk.InitializeSubchunks(Material, resolved);
+            chunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolved);
             chunk.UpdateWorldBounds();
             RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
         }
@@ -1671,6 +1704,7 @@ public partial class World : MonoBehaviour
         EnsureDefaultWarpLayersConfigured();
         MarkBiomeCachesDirty();
         InvalidateNativeGenerationCaches();
+        MarkPlatformRenderProfileDirty();
     }
 
     private void Start()
@@ -1679,6 +1713,8 @@ public partial class World : MonoBehaviour
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
         EnsureDefaultWarpLayersConfigured();
+        InitializePlatformRenderProfileState();
+        ApplyPlatformRenderProfileIfNeeded();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
@@ -1733,6 +1769,7 @@ public partial class World : MonoBehaviour
         }
 
         DisposeNativeGenerationCaches();
+        ReleaseRuntimeChunkMaterialVariants();
 
         if (Instance == this)
             Instance = null;
@@ -1740,6 +1777,7 @@ public partial class World : MonoBehaviour
 
     private void Update()
     {
+        ApplyPlatformRenderProfileIfNeeded();
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
         ApplyResolvedVisualSubchunkRendererLayout();
@@ -1927,7 +1965,7 @@ public partial class World : MonoBehaviour
                     int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
                     if (!activeChunk.HasInitializedSubchunks ||
                         activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
-                        activeChunk.InitializeSubchunks(Material, resolvedVisualSubchunksPerRenderer);
+                        activeChunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolvedVisualSubchunksPerRenderer);
                     else
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
@@ -2072,7 +2110,7 @@ public partial class World : MonoBehaviour
         Chunk chunk = obj.GetComponent<Chunk>();
         if (chunk != null && prewarmPooledChunkVisuals)
         {
-            chunk.InitializeSubchunks(Material, GetResolvedVisualSubchunksPerRenderer());
+            chunk.InitializeSubchunks(GetRuntimeChunkMaterials(), GetResolvedVisualSubchunksPerRenderer());
             chunk.ResetChunk();
         }
 

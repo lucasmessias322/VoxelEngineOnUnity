@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Unity.Collections;
 using UnityEngine;
@@ -24,11 +25,22 @@ public class ChunkRenderSlice : MonoBehaviour
     private static readonly int PulledOpaqueFaceBaseIndexPropertyId = Shader.PropertyToID("_PulledOpaqueFaceBaseIndex");
     private static readonly int CompactChunkWorldOriginPropertyId = Shader.PropertyToID("_CompactChunkWorldOrigin");
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
+    private static readonly int OpaqueFaceSectionsComputePropertyId = Shader.PropertyToID("_OpaqueFaceSections");
+    private static readonly int IndirectDrawArgsComputePropertyId = Shader.PropertyToID("_IndirectDrawArgs");
+    private static readonly int SectionCountComputePropertyId = Shader.PropertyToID("_SectionCount");
+    private static readonly int VisibleSectionMaskComputePropertyId = Shader.PropertyToID("_VisibleSectionMask");
     private static readonly int CompactOpaqueFaceStride = Marshal.SizeOf<MeshGenerator.CompactOpaqueFace>();
+    private static readonly int OpaqueFaceSectionStride = Marshal.SizeOf<OpaqueFaceSection>();
     private static readonly Plane[] SharedFrustumPlanes = new Plane[6];
-    private static readonly System.Collections.Generic.List<ChunkRenderSlice> ManagedRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(2048);
-    private static readonly System.Collections.Generic.List<ChunkRenderSlice> OpaqueRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(512);
+    private static readonly List<ChunkRenderSlice> ManagedRenderSlices = new List<ChunkRenderSlice>(2048);
+    private static readonly List<ChunkRenderSlice> OpaqueRenderSlices = new List<ChunkRenderSlice>(512);
+    private const string OpaqueIndirectArgsBuildResourcePath = "OpaqueIndirectArgsBuild";
+    private const bool EnableIndirectOpaqueDrawSubmission = false;
     private static bool renderHookRegistered;
+    private static ComputeShader opaqueIndirectArgsBuildComputeShader;
+    private static int opaqueIndirectArgsBuildKernel = -1;
+    private static bool opaqueIndirectArgsBuildShaderLoaded;
+    private static bool opaqueIndirectArgsComputeUnavailable;
     private static OpaqueRenderTelemetrySnapshot latestOpaqueRenderTelemetry;
     private static int telemetryFrame = -1;
     private static int telemetrySlicesRendered;
@@ -38,19 +50,202 @@ public class ChunkRenderSlice : MonoBehaviour
     private static int telemetryVisibleOpaqueSubchunks;
     private static int telemetrySavedDrawCalls;
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct OpaqueFaceSection
+    {
+        public uint faceStart;
+        public uint faceCount;
+    }
+
+    private static class SharedOpaqueFacePool
+    {
+        private const int AllocationAlignment = 64;
+
+        private struct Range
+        {
+            public int start;
+            public int length;
+
+            public Range(int start, int length)
+            {
+                this.start = start;
+                this.length = length;
+            }
+        }
+
+        private static readonly List<Range> FreeRanges = new List<Range>(128);
+        private static GraphicsBuffer buffer;
+        private static int capacity;
+        private static int usedLength;
+        private static int version;
+
+        public static GraphicsBuffer Buffer => buffer;
+        public static int Version => version;
+
+        public static int Allocate(int requiredCount, out int allocatedLength)
+        {
+            allocatedLength = 0;
+            if (requiredCount <= 0)
+                return -1;
+
+            int requestedLength = RoundUp(requiredCount, AllocationAlignment);
+            for (int i = 0; i < FreeRanges.Count; i++)
+            {
+                Range range = FreeRanges[i];
+                if (range.length < requestedLength)
+                    continue;
+
+                int allocatedStart = range.start;
+                allocatedLength = requestedLength;
+                if (range.length == requestedLength)
+                {
+                    FreeRanges.RemoveAt(i);
+                }
+                else
+                {
+                    FreeRanges[i] = new Range(range.start + requestedLength, range.length - requestedLength);
+                }
+
+                return allocatedStart;
+            }
+
+            EnsureCapacityFor(requestedLength);
+            int start = usedLength;
+            usedLength += requestedLength;
+            allocatedLength = requestedLength;
+            return start;
+        }
+
+        public static void Release(int start, int length)
+        {
+            if (start < 0 || length <= 0)
+                return;
+
+            Range releasedRange = new Range(start, length);
+            int insertIndex = 0;
+            while (insertIndex < FreeRanges.Count && FreeRanges[insertIndex].start < releasedRange.start)
+                insertIndex++;
+
+            FreeRanges.Insert(insertIndex, releasedRange);
+            MergeNeighbors(insertIndex);
+            TrimFreeTail();
+        }
+
+        public static void Reset()
+        {
+            if (buffer != null)
+            {
+                buffer.Dispose();
+                buffer = null;
+            }
+
+            capacity = 0;
+            usedLength = 0;
+            version = 0;
+            FreeRanges.Clear();
+        }
+
+        private static void EnsureCapacityFor(int additionalLength)
+        {
+            int requiredCapacity = usedLength + additionalLength;
+            if (buffer != null && capacity >= requiredCapacity)
+                return;
+
+            int newCapacity = Mathf.Max(1024, capacity);
+            while (newCapacity < requiredCapacity)
+                newCapacity = Mathf.Max(newCapacity * 2, requiredCapacity);
+
+            GraphicsBuffer newBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, newCapacity, CompactOpaqueFaceStride);
+            if (buffer != null)
+            {
+                int copyCount = Mathf.Min(usedLength, capacity);
+                if (copyCount > 0)
+                {
+                    // Unity only allows CopyBuffer between equal-sized buffers, so on growth we
+                    // preserve the active range through a one-time CPU copy.
+                    MeshGenerator.CompactOpaqueFace[] existingFaces = new MeshGenerator.CompactOpaqueFace[copyCount];
+                    buffer.GetData(existingFaces, 0, 0, copyCount);
+                    newBuffer.SetData(existingFaces, 0, 0, copyCount);
+                }
+
+                buffer.Dispose();
+            }
+
+            buffer = newBuffer;
+            capacity = newCapacity;
+            version++;
+        }
+
+        private static void MergeNeighbors(int index)
+        {
+            if (index < 0 || index >= FreeRanges.Count)
+                return;
+
+            int currentIndex = index;
+            if (currentIndex > 0)
+            {
+                Range previous = FreeRanges[currentIndex - 1];
+                Range current = FreeRanges[currentIndex];
+                if (previous.start + previous.length == current.start)
+                {
+                    FreeRanges[currentIndex - 1] = new Range(previous.start, previous.length + current.length);
+                    FreeRanges.RemoveAt(currentIndex);
+                    currentIndex--;
+                }
+            }
+
+            if (currentIndex < FreeRanges.Count - 1)
+            {
+                Range current = FreeRanges[currentIndex];
+                Range next = FreeRanges[currentIndex + 1];
+                if (current.start + current.length == next.start)
+                {
+                    FreeRanges[currentIndex] = new Range(current.start, current.length + next.length);
+                    FreeRanges.RemoveAt(currentIndex + 1);
+                }
+            }
+        }
+
+        private static void TrimFreeTail()
+        {
+            while (FreeRanges.Count > 0)
+            {
+                Range last = FreeRanges[FreeRanges.Count - 1];
+                if (last.start + last.length != usedLength)
+                    break;
+
+                usedLength = last.start;
+                FreeRanges.RemoveAt(FreeRanges.Count - 1);
+            }
+        }
+
+        private static int RoundUp(int value, int multiple)
+        {
+            if (multiple <= 1)
+                return Mathf.Max(0, value);
+
+            int remainder = value % multiple;
+            return remainder == 0 ? value : value + multiple - remainder;
+        }
+    }
+
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
-    private GraphicsBuffer pulledOpaqueFaceBuffer;
     private GraphicsBuffer indirectOpaqueArgsBuffer;
+    private GraphicsBuffer opaqueFaceSectionBuffer;
     private GraphicsBuffer.IndirectDrawArgs[] indirectOpaqueArgsData;
+    private OpaqueFaceSection[] opaqueFaceSectionsData;
     private MaterialPropertyBlock pulledOpaquePropertyBlock;
     private Material opaqueMaterial;
     private Bounds localRenderBounds;
     private Color grassTint = Color.white;
     private int pulledOpaqueFaceCount;
-    private int pulledOpaqueFaceCapacity;
     private int indirectOpaqueArgsCapacity;
+    private int opaqueFaceSectionCapacity;
+    private int pulledOpaqueFaceGlobalStart = -1;
+    private int pulledOpaqueFaceAllocationLength;
+    private int pulledOpaqueFaceBufferVersion = -1;
     private int startSubchunkIndex;
     private int subchunkCount;
     private int logicalVisibleOpaqueSubchunkMask;
@@ -58,6 +253,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private int opaqueGeometrySubchunkMask;
     private int[] pulledOpaqueFaceStartsByLocalSubchunk;
     private int[] pulledOpaqueFaceCountsByLocalSubchunk;
+    private int cachedIndirectOpaqueCommandCount;
     private bool hasGeometry;
     private bool hasMeshGeometry;
     private bool hasOpaqueGeometry;
@@ -65,6 +261,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private bool logicalShouldShow;
     private bool isFrustumVisible = true;
     private bool shouldRenderOpaqueGeometry;
+    private bool indirectOpaqueArgsDirty = true;
     private bool registeredForManagedRendering;
     private bool registeredForOpaqueRendering;
 
@@ -139,15 +336,12 @@ public class ChunkRenderSlice : MonoBehaviour
 
     public static bool SupportsOpaqueVertexPulling()
     {
-        return SystemInfo.graphicsShaderLevel >= 45 &&
-               SystemInfo.supportsInstancing &&
-               SystemInfo.maxComputeBufferInputsVertex > 0;
+        return ChunkOpaqueRenderSupport.SupportsVertexPulling();
     }
 
     public static bool SupportsIndirectOpaqueVertexPulling()
     {
-        return SupportsOpaqueVertexPulling() &&
-               SystemInfo.supportsComputeShaders;
+        return ChunkOpaqueRenderSupport.SupportsIndirectVertexPulling();
     }
 
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
@@ -310,7 +504,6 @@ public class ChunkRenderSlice : MonoBehaviour
             mesh.Clear();
 
         ClearPulledOpaqueFaces();
-        ReleasePulledOpaqueFaceBuffer();
 
         hasGeometry = false;
         hasMeshGeometry = false;
@@ -331,7 +524,8 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         UnregisterManagedRenderSlice();
         UnregisterOpaqueRenderSlice();
-        ReleasePulledOpaqueFaceBuffer();
+        ReleaseSharedOpaqueFaceAllocation();
+        ReleaseOpaqueFaceSectionBuffer();
         ReleaseIndirectOpaqueArgsBuffer();
     }
 
@@ -424,51 +618,54 @@ public class ChunkRenderSlice : MonoBehaviour
             return;
         }
 
-        EnsurePulledOpaqueFaceBufferCapacity(totalOpaqueFaceCount);
+        EnsureSharedOpaqueFaceAllocation(totalOpaqueFaceCount);
         EnsurePulledOpaqueSubchunkMetadataCapacity();
         EnsureIndirectOpaqueArgsCapacity(subchunkCount);
+        EnsureOpaqueFaceSectionBufferCapacity(subchunkCount);
         Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
         Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
         opaqueGeometrySubchunkMask = 0;
+        int sliceOpaqueFaceSourceStart = subchunkRanges[startSubchunkIndex].opaqueFaceStart;
 
-        NativeArray<MeshGenerator.CompactOpaqueFace> uploadData = new NativeArray<MeshGenerator.CompactOpaqueFace>(
-            totalOpaqueFaceCount,
-            Allocator.Temp,
-            NativeArrayOptions.UninitializedMemory);
+        GraphicsBuffer sharedOpaqueFaceBuffer = GetCurrentPulledOpaqueFaceBuffer();
+        if (sharedOpaqueFaceBuffer == null)
+        {
+            ClearPulledOpaqueFaces();
+            return;
+        }
 
-        int writeOffset = 0;
         for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
         {
             MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
             int localSubchunkIndex = sub - startSubchunkIndex;
-            pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex] = writeOffset;
+            int localOpaqueFaceStart = range.opaqueFaceStart - sliceOpaqueFaceSourceStart;
+            pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex] = localOpaqueFaceStart;
             pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex] = range.opaqueFaceCount;
+            opaqueFaceSectionsData[localSubchunkIndex] = new OpaqueFaceSection
+            {
+                faceStart = (uint)Mathf.Max(0, pulledOpaqueFaceGlobalStart + localOpaqueFaceStart),
+                faceCount = (uint)Mathf.Max(0, range.opaqueFaceCount)
+            };
 
             if (range.opaqueFaceCount <= 0)
                 continue;
 
             opaqueGeometrySubchunkMask |= 1 << sub;
-
-            NativeArray<MeshGenerator.CompactOpaqueFace>.Copy(
-                compactOpaqueFaces.AsArray(),
-                range.opaqueFaceStart,
-                uploadData,
-                writeOffset,
-                range.opaqueFaceCount);
-
-            writeOffset += range.opaqueFaceCount;
         }
 
-        pulledOpaqueFaceBuffer.SetData(uploadData);
-        uploadData.Dispose();
+        sharedOpaqueFaceBuffer.SetData(compactOpaqueFaces.AsArray(), sliceOpaqueFaceSourceStart, pulledOpaqueFaceGlobalStart, totalOpaqueFaceCount);
+        if (opaqueFaceSectionBuffer != null && opaqueFaceSectionsData != null)
+            opaqueFaceSectionBuffer.SetData(opaqueFaceSectionsData, 0, 0, subchunkCount);
 
         pulledOpaqueFaceCount = totalOpaqueFaceCount;
+        MarkIndirectOpaqueArgsDirty();
         UpdatePulledOpaquePropertyBlock();
         UpdateOpaqueRenderRegistration();
     }
 
     private void ClearPulledOpaqueFaces()
     {
+        ReleaseSharedOpaqueFaceAllocation();
         pulledOpaqueFaceCount = 0;
         visibleOpaqueSubchunkMask = 0;
         opaqueGeometrySubchunkMask = 0;
@@ -476,38 +673,41 @@ public class ChunkRenderSlice : MonoBehaviour
             Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
         if (pulledOpaqueFaceCountsByLocalSubchunk != null)
             Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
+        if (opaqueFaceSectionsData != null)
+            Array.Clear(opaqueFaceSectionsData, 0, opaqueFaceSectionsData.Length);
+        cachedIndirectOpaqueCommandCount = 0;
+        pulledOpaqueFaceBufferVersion = -1;
+        MarkIndirectOpaqueArgsDirty();
         UpdatePulledOpaquePropertyBlock();
         UpdateOpaqueRenderRegistration();
     }
 
-    private void EnsurePulledOpaqueFaceBufferCapacity(int requiredCount)
+    private void EnsureSharedOpaqueFaceAllocation(int requiredCount)
     {
         if (requiredCount <= 0)
             return;
 
-        if (pulledOpaqueFaceBuffer != null && pulledOpaqueFaceCapacity >= requiredCount)
+        if (pulledOpaqueFaceGlobalStart >= 0 && pulledOpaqueFaceAllocationLength >= requiredCount)
             return;
 
-        ReleasePulledOpaqueFaceBuffer();
-
-        pulledOpaqueFaceCapacity = requiredCount;
-        pulledOpaqueFaceBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, pulledOpaqueFaceCapacity, CompactOpaqueFaceStride);
+        ReleaseSharedOpaqueFaceAllocation();
+        pulledOpaqueFaceGlobalStart = SharedOpaqueFacePool.Allocate(requiredCount, out pulledOpaqueFaceAllocationLength);
+        pulledOpaqueFaceBufferVersion = -1;
     }
 
-    private void ReleasePulledOpaqueFaceBuffer()
+    private void ReleaseSharedOpaqueFaceAllocation()
     {
-        if (pulledOpaqueFaceBuffer != null)
-        {
-            pulledOpaqueFaceBuffer.Dispose();
-            pulledOpaqueFaceBuffer = null;
-        }
+        if (pulledOpaqueFaceGlobalStart >= 0 && pulledOpaqueFaceAllocationLength > 0)
+            SharedOpaqueFacePool.Release(pulledOpaqueFaceGlobalStart, pulledOpaqueFaceAllocationLength);
 
-        pulledOpaqueFaceCapacity = 0;
+        pulledOpaqueFaceGlobalStart = -1;
+        pulledOpaqueFaceAllocationLength = 0;
+        pulledOpaqueFaceBufferVersion = -1;
     }
 
     private void EnsureIndirectOpaqueArgsCapacity(int requiredCount)
     {
-        if (!SupportsIndirectOpaqueVertexPulling())
+        if (!EnableIndirectOpaqueDrawSubmission || !SupportsIndirectOpaqueVertexPulling())
             return;
 
         int safeRequiredCount = Mathf.Max(1, requiredCount);
@@ -521,7 +721,9 @@ public class ChunkRenderSlice : MonoBehaviour
             GraphicsBuffer.Target.IndirectArguments,
             indirectOpaqueArgsCapacity,
             GraphicsBuffer.IndirectDrawArgs.size);
+
         indirectOpaqueArgsData = new GraphicsBuffer.IndirectDrawArgs[indirectOpaqueArgsCapacity];
+        MarkIndirectOpaqueArgsDirty();
     }
 
     private void ReleaseIndirectOpaqueArgsBuffer()
@@ -534,6 +736,41 @@ public class ChunkRenderSlice : MonoBehaviour
 
         indirectOpaqueArgsData = null;
         indirectOpaqueArgsCapacity = 0;
+        cachedIndirectOpaqueCommandCount = 0;
+        indirectOpaqueArgsDirty = true;
+    }
+
+    private void EnsureOpaqueFaceSectionBufferCapacity(int requiredCount)
+    {
+        if (requiredCount <= 0)
+            return;
+
+        if (opaqueFaceSectionBuffer != null &&
+            opaqueFaceSectionCapacity >= requiredCount &&
+            opaqueFaceSectionsData != null &&
+            opaqueFaceSectionsData.Length >= requiredCount)
+        {
+            return;
+        }
+
+        ReleaseOpaqueFaceSectionBuffer();
+        opaqueFaceSectionCapacity = requiredCount;
+        opaqueFaceSectionBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, opaqueFaceSectionCapacity, OpaqueFaceSectionStride);
+        opaqueFaceSectionsData = new OpaqueFaceSection[opaqueFaceSectionCapacity];
+        MarkIndirectOpaqueArgsDirty();
+    }
+
+    private void ReleaseOpaqueFaceSectionBuffer()
+    {
+        if (opaqueFaceSectionBuffer != null)
+        {
+            opaqueFaceSectionBuffer.Dispose();
+            opaqueFaceSectionBuffer = null;
+        }
+
+        opaqueFaceSectionsData = null;
+        opaqueFaceSectionCapacity = 0;
+        MarkIndirectOpaqueArgsDirty();
     }
 
     private void EnsurePulledOpaqueSubchunkMetadataCapacity()
@@ -566,8 +803,16 @@ public class ChunkRenderSlice : MonoBehaviour
         pulledOpaquePropertyBlock.SetVector(CompactChunkWorldOriginPropertyId, new Vector4(chunkWorldOrigin.x, chunkWorldOrigin.y, chunkWorldOrigin.z, 0f));
         pulledOpaquePropertyBlock.SetColor(GrassTintPropertyId, grassTint);
 
-        if (pulledOpaqueFaceBuffer != null && pulledOpaqueFaceCount > 0)
-            pulledOpaquePropertyBlock.SetBuffer(CompactOpaqueFacesPropertyId, pulledOpaqueFaceBuffer);
+        GraphicsBuffer currentOpaqueFaceBuffer = GetCurrentPulledOpaqueFaceBuffer();
+        if (currentOpaqueFaceBuffer != null && pulledOpaqueFaceCount > 0)
+        {
+            pulledOpaquePropertyBlock.SetBuffer(CompactOpaqueFacesPropertyId, currentOpaqueFaceBuffer);
+            pulledOpaqueFaceBufferVersion = SharedOpaqueFacePool.Version;
+        }
+        else
+        {
+            pulledOpaqueFaceBufferVersion = -1;
+        }
     }
 
     private void ConfigureOpaqueMaterial(Material[] sharedMaterials)
@@ -585,7 +830,11 @@ public class ChunkRenderSlice : MonoBehaviour
 
     private void ApplyRenderVisibilityState()
     {
-        visibleOpaqueSubchunkMask = isFrustumVisible ? logicalVisibleOpaqueSubchunkMask : 0;
+        int nextVisibleOpaqueSubchunkMask = isFrustumVisible ? logicalVisibleOpaqueSubchunkMask : 0;
+        if (visibleOpaqueSubchunkMask != nextVisibleOpaqueSubchunkMask)
+            MarkIndirectOpaqueArgsDirty();
+
+        visibleOpaqueSubchunkMask = nextVisibleOpaqueSubchunkMask;
         SetRendererEnabled(hasMeshGeometry && logicalShouldShow && isFrustumVisible);
         shouldRenderOpaqueGeometry =
             activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
@@ -612,7 +861,7 @@ public class ChunkRenderSlice : MonoBehaviour
             shouldRenderOpaqueGeometry &&
             hasOpaqueGeometry &&
             pulledOpaqueFaceCount > 0 &&
-            pulledOpaqueFaceBuffer != null &&
+            GetCurrentPulledOpaqueFaceBuffer() != null &&
             opaqueMaterial != null &&
             SupportsOpaqueVertexPulling();
 
@@ -678,6 +927,11 @@ public class ChunkRenderSlice : MonoBehaviour
         renderHookRegistered = false;
         ManagedRenderSlices.Clear();
         OpaqueRenderSlices.Clear();
+        SharedOpaqueFacePool.Reset();
+        opaqueIndirectArgsBuildComputeShader = null;
+        opaqueIndirectArgsBuildKernel = -1;
+        opaqueIndirectArgsBuildShaderLoaded = false;
+        opaqueIndirectArgsComputeUnavailable = false;
         latestOpaqueRenderTelemetry = default;
         telemetryFrame = -1;
         telemetrySlicesRendered = 0;
@@ -719,16 +973,18 @@ public class ChunkRenderSlice : MonoBehaviour
 
     private void RenderOpaqueGeometry(Camera camera)
     {
+        GraphicsBuffer currentOpaqueFaceBuffer = GetCurrentPulledOpaqueFaceBuffer();
         if (!shouldRenderOpaqueGeometry ||
             !isFrustumVisible ||
             !hasOpaqueGeometry ||
             pulledOpaqueFaceCount <= 0 ||
-            pulledOpaqueFaceBuffer == null ||
+            currentOpaqueFaceBuffer == null ||
             opaqueMaterial == null)
         {
             return;
         }
 
+        EnsureCurrentPulledOpaqueFaceBufferBinding(currentOpaqueFaceBuffer);
         Bounds worldBounds = GetWorldBounds(localRenderBounds);
         if (pulledOpaquePropertyBlock != null)
         {
@@ -755,6 +1011,7 @@ public class ChunkRenderSlice : MonoBehaviour
             indirectCommandCount > 0)
         {
             pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 1f);
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
             Graphics.RenderPrimitivesIndirect(renderParams, MeshTopology.Triangles, indirectOpaqueArgsBuffer, indirectCommandCount);
             if (trackTelemetry)
                 RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, indirectCommandCount == 1, indirectCommandCount > 1);
@@ -764,7 +1021,7 @@ public class ChunkRenderSlice : MonoBehaviour
         pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 0f);
         if (subchunkCount <= 1 || CanRenderOpaqueSliceAsSingleDraw())
         {
-            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, pulledOpaqueFaceGlobalStart);
             Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, pulledOpaqueFaceCount);
             if (trackTelemetry)
                 RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, true, false);
@@ -803,7 +1060,7 @@ public class ChunkRenderSlice : MonoBehaviour
                 nextLocalSubchunkIndex++;
             }
 
-            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, runFaceStart);
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, pulledOpaqueFaceGlobalStart + runFaceStart);
             Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, runFaceCount);
             runCount++;
             localSubchunkIndex = nextLocalSubchunkIndex;
@@ -817,25 +1074,52 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         commandCount = 0;
 
-        if (!SupportsIndirectOpaqueVertexPulling() ||
+        if (!EnableIndirectOpaqueDrawSubmission ||
+            !SupportsIndirectOpaqueVertexPulling() ||
             indirectOpaqueArgsBuffer == null ||
-            indirectOpaqueArgsData == null ||
             pulledOpaqueFaceCount <= 0)
         {
+            cachedIndirectOpaqueCommandCount = 0;
             return false;
         }
 
-        EnsureIndirectOpaqueArgsCapacity(1);
-        if (indirectOpaqueArgsBuffer == null || indirectOpaqueArgsData == null)
+        if (!indirectOpaqueArgsDirty)
+        {
+            commandCount = cachedIndirectOpaqueCommandCount;
+            return commandCount > 0;
+        }
+
+        EnsureIndirectOpaqueArgsCapacity(subchunkCount);
+        if (indirectOpaqueArgsBuffer == null ||
+            opaqueFaceSectionBuffer == null ||
+            pulledOpaqueFaceCount <= 0)
+        {
+            cachedIndirectOpaqueCommandCount = 0;
+            return false;
+        }
+
+        uint visibleLocalMask = GetVisibleLocalOpaqueSectionMask();
+        int visibleRunCount = CountVisibleOpaqueRuns(visibleLocalMask);
+        cachedIndirectOpaqueCommandCount = visibleRunCount;
+        indirectOpaqueArgsDirty = false;
+
+        if (visibleRunCount <= 0)
             return false;
 
-        int commandFaceStart = 0;
-        int commandFaceCount = 0;
+        if (TryBuildIndirectOpaqueDrawCommandsGpu(visibleLocalMask))
+        {
+            commandCount = cachedIndirectOpaqueCommandCount;
+            return true;
+        }
+
+        if (indirectOpaqueArgsData == null)
+            return false;
+
+        Array.Clear(indirectOpaqueArgsData, 0, indirectOpaqueArgsData.Length);
         for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount;)
         {
-            int subchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
             int subchunkFaceCount = GetLocalOpaqueFaceCount(localSubchunkIndex);
-            if ((visibleOpaqueSubchunkMask & subchunkBit) == 0 || subchunkFaceCount <= 0)
+            if (((visibleLocalMask >> localSubchunkIndex) & 1u) == 0u || subchunkFaceCount <= 0)
             {
                 localSubchunkIndex++;
                 continue;
@@ -854,42 +1138,154 @@ public class ChunkRenderSlice : MonoBehaviour
                     continue;
                 }
 
-                int nextSubchunkBit = 1 << (startSubchunkIndex + nextLocalSubchunkIndex);
-                if ((visibleOpaqueSubchunkMask & nextSubchunkBit) == 0)
+                if (((visibleLocalMask >> nextLocalSubchunkIndex) & 1u) == 0u)
                     break;
 
                 runFaceCount += nextFaceCount;
                 nextLocalSubchunkIndex++;
             }
 
-            if (commandCount > 0)
+            if (commandCount >= indirectOpaqueArgsData.Length)
                 return false;
 
-            commandFaceStart = runFaceStart;
-            commandFaceCount = runFaceCount;
-            commandCount = 1;
+            indirectOpaqueArgsData[commandCount++] = new GraphicsBuffer.IndirectDrawArgs
+            {
+                vertexCountPerInstance = 6u,
+                instanceCount = (uint)runFaceCount,
+                startVertex = 0u,
+                startInstance = (uint)(pulledOpaqueFaceGlobalStart + runFaceStart)
+            };
+
             localSubchunkIndex = nextLocalSubchunkIndex;
         }
 
         if (commandCount <= 0)
             return false;
 
-        indirectOpaqueArgsData[0] = new GraphicsBuffer.IndirectDrawArgs
-        {
-            vertexCountPerInstance = 6u,
-            instanceCount = (uint)commandFaceCount,
-            startVertex = 0u,
-            startInstance = (uint)commandFaceStart
-        };
-
-        indirectOpaqueArgsBuffer.SetData(indirectOpaqueArgsData, 0, 0, 1);
+        indirectOpaqueArgsBuffer.SetData(indirectOpaqueArgsData, 0, 0, commandCount);
         return true;
+    }
+
+    private bool TryBuildIndirectOpaqueDrawCommandsGpu(uint visibleLocalMask)
+    {
+        return false;
     }
 
     private bool CanRenderOpaqueSliceAsSingleDraw()
     {
         return opaqueGeometrySubchunkMask != 0 &&
                visibleOpaqueSubchunkMask == opaqueGeometrySubchunkMask;
+    }
+
+    private GraphicsBuffer GetCurrentPulledOpaqueFaceBuffer()
+    {
+        return pulledOpaqueFaceGlobalStart >= 0 ? SharedOpaqueFacePool.Buffer : null;
+    }
+
+    private void EnsureCurrentPulledOpaqueFaceBufferBinding(GraphicsBuffer currentOpaqueFaceBuffer)
+    {
+        if (pulledOpaquePropertyBlock == null || currentOpaqueFaceBuffer == null || pulledOpaqueFaceCount <= 0)
+            return;
+
+        int currentPoolVersion = SharedOpaqueFacePool.Version;
+        if (pulledOpaqueFaceBufferVersion == currentPoolVersion)
+            return;
+
+        pulledOpaquePropertyBlock.SetBuffer(CompactOpaqueFacesPropertyId, currentOpaqueFaceBuffer);
+        pulledOpaqueFaceBufferVersion = currentPoolVersion;
+    }
+
+    private void MarkIndirectOpaqueArgsDirty()
+    {
+        indirectOpaqueArgsDirty = true;
+        cachedIndirectOpaqueCommandCount = 0;
+    }
+
+    private uint GetVisibleLocalOpaqueSectionMask()
+    {
+        uint mask = 0u;
+        int safeSectionCount = Mathf.Min(subchunkCount, 32);
+        for (int localSubchunkIndex = 0; localSubchunkIndex < safeSectionCount; localSubchunkIndex++)
+        {
+            int absoluteSubchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
+            if ((visibleOpaqueSubchunkMask & absoluteSubchunkBit) == 0)
+                continue;
+
+            if (GetLocalOpaqueFaceCount(localSubchunkIndex) <= 0)
+                continue;
+
+            mask |= 1u << localSubchunkIndex;
+        }
+
+        return mask;
+    }
+
+    private int CountVisibleOpaqueRuns(uint visibleLocalMask)
+    {
+        int runCount = 0;
+        for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount;)
+        {
+            int subchunkFaceCount = GetLocalOpaqueFaceCount(localSubchunkIndex);
+            if (((visibleLocalMask >> localSubchunkIndex) & 1u) == 0u || subchunkFaceCount <= 0)
+            {
+                localSubchunkIndex++;
+                continue;
+            }
+
+            runCount++;
+            int nextLocalSubchunkIndex = localSubchunkIndex + 1;
+            while (nextLocalSubchunkIndex < subchunkCount)
+            {
+                int nextFaceCount = GetLocalOpaqueFaceCount(nextLocalSubchunkIndex);
+                if (nextFaceCount <= 0)
+                {
+                    nextLocalSubchunkIndex++;
+                    continue;
+                }
+
+                if (((visibleLocalMask >> nextLocalSubchunkIndex) & 1u) == 0u)
+                    break;
+
+                nextLocalSubchunkIndex++;
+            }
+
+            localSubchunkIndex = nextLocalSubchunkIndex;
+        }
+
+        return runCount;
+    }
+
+    private static bool TryGetOpaqueIndirectArgsBuildComputeShader(out ComputeShader computeShader, out int kernelIndex)
+    {
+        computeShader = null;
+        kernelIndex = -1;
+
+        if (opaqueIndirectArgsComputeUnavailable)
+            return false;
+
+        if (!opaqueIndirectArgsBuildShaderLoaded)
+        {
+            opaqueIndirectArgsBuildShaderLoaded = true;
+            opaqueIndirectArgsBuildComputeShader = Resources.Load<ComputeShader>(OpaqueIndirectArgsBuildResourcePath);
+            if (opaqueIndirectArgsBuildComputeShader != null)
+            {
+                try
+                {
+                    opaqueIndirectArgsBuildKernel = opaqueIndirectArgsBuildComputeShader.FindKernel("BuildIndirectOpaqueArgs");
+                }
+                catch (Exception)
+                {
+                    opaqueIndirectArgsBuildKernel = -1;
+                }
+            }
+        }
+
+        if (opaqueIndirectArgsBuildComputeShader == null || opaqueIndirectArgsBuildKernel < 0)
+            return false;
+
+        computeShader = opaqueIndirectArgsBuildComputeShader;
+        kernelIndex = opaqueIndirectArgsBuildKernel;
+        return true;
     }
 
     private int GetLocalOpaqueFaceStart(int localSubchunkIndex)

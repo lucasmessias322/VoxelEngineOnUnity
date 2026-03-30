@@ -120,18 +120,9 @@ public class BlockDrop : MonoBehaviour
 
     private static Material ResolveMaterial(World world, int preferredMaterialIndex)
     {
-        if (world != null && world.Material != null && world.Material.Length > 0)
-        {
-            int clamped = Mathf.Clamp(preferredMaterialIndex, 0, world.Material.Length - 1);
-            if (world.Material[clamped] != null)
-                return world.Material[clamped];
-
-            for (int i = 0; i < world.Material.Length; i++)
-            {
-                if (world.Material[i] != null)
-                    return world.Material[i];
-            }
-        }
+        Material runtimeMaterial = world != null ? world.GetRuntimeChunkMaterial(preferredMaterialIndex) : null;
+        if (runtimeMaterial != null)
+            return runtimeMaterial;
 
         return GetFallbackMaterial();
     }

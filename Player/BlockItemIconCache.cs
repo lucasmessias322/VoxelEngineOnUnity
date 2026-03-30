@@ -160,7 +160,7 @@ public static class BlockItemIconCache
             return true;
         }
 
-        Material[] materials = world.Material;
+        Material[] materials = world.GetRuntimeChunkMaterials();
         if (materials == null || materials.Length == 0)
             return false;
 
@@ -637,7 +637,7 @@ public static class BlockItemIconCache
             return true;
         }
 
-        Material[] materials = world.Material;
+        Material[] materials = world.GetRuntimeChunkMaterials();
         if (materials == null || materials.Length == 0)
             return true;
 

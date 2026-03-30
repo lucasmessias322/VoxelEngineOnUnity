@@ -347,7 +347,7 @@ public partial class World
 
         MeshFilter mf = go.AddComponent<MeshFilter>();
         MeshRenderer mr = go.AddComponent<MeshRenderer>();
-        mr.materials = Material;
+        mr.sharedMaterials = GetRuntimeChunkMaterials();
 
         Mesh mesh = new Mesh { indexFormat = UnityEngine.Rendering.IndexFormat.UInt32 };
         mesh.MarkDynamic();

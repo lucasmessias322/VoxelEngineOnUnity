@@ -335,7 +335,8 @@ public class HeldBlockVisual : MonoBehaviour
         if (world == null)
             world = World.Instance;
 
-        if (world == null || world.Material == null || world.Material.Length == 0)
+        Material[] materials = world != null ? world.GetRuntimeChunkMaterials() : null;
+        if (materials == null || materials.Length == 0)
             return false;
 
         Mesh heldMesh = GetOrCreateBlockMesh(blockType);
@@ -344,7 +345,7 @@ public class HeldBlockVisual : MonoBehaviour
 
         HideAllVisualChildren();
         blockMeshFilter.sharedMesh = heldMesh;
-        blockMeshRenderer.materials = world.Material;
+        blockMeshRenderer.sharedMaterials = materials;
         blockVisualObject.SetActive(true);
         return true;
     }
