@@ -214,7 +214,7 @@ public partial class World
 
         NativeArray<byte> knownVoxelData = CreateFullyKnownVoxelMask(blockTypes.Length);
 
-        pendingDataJobs.Add(new PendingData
+        AddPendingDataJob(new PendingData
         {
             handle = dataHandle,
             heightCache = heightCache,
@@ -243,25 +243,7 @@ public partial class World
 
     private bool IsChunkJobPending(Vector2Int coord)
     {
-        for (int i = 0; i < pendingMeshes.Count; i++)
-        {
-            if (pendingMeshes[i].coord == coord)
-                return true;
-        }
-
-        for (int i = 0; i < pendingDataJobs.Count; i++)
-        {
-            if (pendingDataJobs[i].coord == coord)
-                return true;
-        }
-
-        for (int i = 0; i < pendingChunks.Count; i++)
-        {
-            if (pendingChunks[i].coord == coord)
-                return true;
-        }
-
-        return false;
+        return pendingJobReferencesByCoord.ContainsKey(coord);
     }
 
     private bool HasQueuedChunkRebuild(Vector2Int coord)
@@ -316,10 +298,13 @@ public partial class World
         if (index < 0 || index > last)
             return;
 
+        Vector2Int removedCoord = pendingDataJobs[index].coord;
         if (index != last)
             pendingDataJobs[index] = pendingDataJobs[last];
 
         pendingDataJobs.RemoveAt(last);
+        DecrementPendingJobReference(removedCoord);
+        MarkPendingJobQueuesDirty();
     }
 
     private void RemovePendingMeshAtSwapBack(int index)
@@ -328,9 +313,12 @@ public partial class World
         if (index < 0 || index > last)
             return;
 
+        Vector2Int removedCoord = pendingMeshes[index].coord;
         if (index != last)
             pendingMeshes[index] = pendingMeshes[last];
 
         pendingMeshes.RemoveAt(last);
+        DecrementPendingJobReference(removedCoord);
+        MarkPendingJobQueuesDirty();
     }
 }

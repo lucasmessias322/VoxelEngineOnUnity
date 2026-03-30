@@ -29,6 +29,7 @@ public partial class World : MonoBehaviour
     private bool lastEnableMinecraftAdvancedOcclusionRay = true;
     private Vector3Int lastOcclusionCameraSection = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
     private Camera cachedOcclusionCamera;
+    private int nextOcclusionCameraLookupFrame;
     private Vector3 sectionOcclusionBuildCameraPosition;
     private Vector3Int sectionOcclusionBuildCameraSection = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
     private Vector3 sectionOcclusionBuildCameraSectionCenter;
@@ -39,6 +40,7 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector3Int> sectionOcclusionAppliedVisibleSections = new HashSet<Vector3Int>();
     private readonly List<SectionOcclusionNode> sectionOcclusionSeedBuffer = new List<SectionOcclusionNode>();
     private readonly List<Vector3Int> sectionOcclusionVisibilityDiffBuffer = new List<Vector3Int>();
+    private const int OcclusionCameraLookupIntervalFrames = 30;
 
     private struct SectionOcclusionNode
     {
@@ -143,24 +145,34 @@ public partial class World : MonoBehaviour
 
     private Camera GetOcclusionCamera()
     {
+        if (IsOcclusionCameraUsable(cachedOcclusionCamera))
+            return cachedOcclusionCamera;
+
+        if (Time.frameCount < nextOcclusionCameraLookupFrame)
+            return null;
+
+        nextOcclusionCameraLookupFrame = Time.frameCount + OcclusionCameraLookupIntervalFrames;
+
         if (preferMainCameraForOcclusion)
         {
             Camera mainCamera = Camera.main;
-            if (mainCamera != null)
+            if (IsOcclusionCameraUsable(mainCamera))
             {
                 cachedOcclusionCamera = mainCamera;
                 return mainCamera;
             }
         }
 
-        if (cachedOcclusionCamera != null)
-            return cachedOcclusionCamera;
+        cachedOcclusionCamera = player != null ? player.GetComponentInChildren<Camera>() : null;
+        if (!IsOcclusionCameraUsable(cachedOcclusionCamera))
+            cachedOcclusionCamera = null;
 
-        if (player == null)
-            return null;
-
-        cachedOcclusionCamera = player.GetComponentInChildren<Camera>();
         return cachedOcclusionCamera;
+    }
+
+    private static bool IsOcclusionCameraUsable(Camera camera)
+    {
+        return camera != null && camera.isActiveAndEnabled && camera.gameObject.activeInHierarchy;
     }
 
     private void BeginSectionOcclusionVisibilityRebuild(Vector3 cameraPosition, Vector3Int cameraSection)

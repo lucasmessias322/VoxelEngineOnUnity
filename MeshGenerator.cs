@@ -125,6 +125,8 @@ public static class MeshGenerator
         public int vertexCount;
         public int opaqueStart;
         public int opaqueCount;
+        public int opaqueFaceStart;
+        public int opaqueFaceCount;
         public int transparentStart;
         public int transparentCount;
         public int billboardStart;
@@ -141,6 +143,19 @@ public static class MeshGenerator
         public Vector2 uv0;
         public Vector2 uv1;
         public Vector4 uv2;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct PulledOpaqueFace
+    {
+        public float4 originWS;
+        public float4 edgeU;
+        public float4 edgeV;
+        public float4 normalWS;
+        public float4 uvBounds;
+        public float4 atlasAndFlags;
+        public float4 cornerLight01;
+        public float4 cornerAo01;
     }
     // ------------------- Tree Instance -------------------
 
@@ -1002,10 +1017,12 @@ public static class MeshGenerator
         float aoStrength,
         float aoCurveExponent,
         float aoMinLight,
+        bool useOpaqueVertexPulling,
         bool useFastBedrockStyleMeshing,
         out JobHandle meshHandle,
         out NativeList<PackedChunkVertex> vertices,
         out NativeList<int> opaqueTriangles,
+        out NativeList<PulledOpaqueFace> pulledOpaqueFaces,
         out NativeList<int> transparentTriangles,
         out NativeList<int> billboardTriangles,
         out NativeList<int> waterTriangles,
@@ -1016,6 +1033,9 @@ public static class MeshGenerator
         // 1. AlocaÃƒÂ§ÃƒÂµes das Listas de Mesh (Output)
         vertices = new NativeList<PackedChunkVertex>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
+        pulledOpaqueFaces = useOpaqueVertexPulling
+            ? new NativeList<PulledOpaqueFace>(2048, Allocator.Persistent)
+            : default;
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
@@ -1053,12 +1073,14 @@ public static class MeshGenerator
             aoStrength = aoStrength,
             aoCurveExponent = aoCurveExponent,
             aoMinLight = aoMinLight,
+            useOpaqueVertexPulling = useOpaqueVertexPulling,
             useFastBedrockStyleMeshing = useFastBedrockStyleMeshing,
             dirtySubchunkMask = dirtySubchunkMask,
             subchunkRanges = subchunkRanges,
 
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
+            pulledOpaqueFaces = pulledOpaqueFaces,
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             billboardTriangles = billboardTriangles,
@@ -1102,6 +1124,7 @@ public static class MeshGenerator
         public float aoStrength;
         public float aoCurveExponent;
         public float aoMinLight;
+        public bool useOpaqueVertexPulling;
         public bool useFastBedrockStyleMeshing;
         public int dirtySubchunkMask;
         public NativeArray<SubchunkMeshRange> subchunkRanges;
@@ -1112,6 +1135,7 @@ public static class MeshGenerator
 
         public NativeList<PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
+        public NativeList<PulledOpaqueFace> pulledOpaqueFaces;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
@@ -1165,6 +1189,7 @@ public static class MeshGenerator
                     {
                         vertexStart = vertices.Length,
                         opaqueStart = opaqueTriangles.Length,
+                        opaqueFaceStart = pulledOpaqueFaces.IsCreated ? pulledOpaqueFaces.Length : 0,
                         transparentStart = transparentTriangles.Length,
                         billboardStart = billboardTriangles.Length,
                         waterStart = waterTriangles.Length
@@ -1178,6 +1203,7 @@ public static class MeshGenerator
 
                     range.vertexCount = vertices.Length - range.vertexStart;
                     range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
+                    range.opaqueFaceCount = pulledOpaqueFaces.IsCreated ? pulledOpaqueFaces.Length - range.opaqueFaceStart : 0;
                     range.transparentCount = transparentTriangles.Length - range.transparentStart;
                     range.billboardCount = billboardTriangles.Length - range.billboardStart;
                     range.waterCount = waterTriangles.Length - range.waterStart;
@@ -1205,6 +1231,49 @@ public static class MeshGenerator
                 uv0 = uv0,
                 uv1 = uv1,
                 uv2 = uv2
+            });
+        }
+
+        private void AddPulledOpaqueFace(
+            Vector3 originWS,
+            Vector3 edgeU,
+            Vector3 edgeV,
+            Vector3 normal,
+            Vector2 uvOrigin,
+            Vector2 uvEdgeU,
+            Vector2 uvEdgeV,
+            Vector2 atlasUv,
+            bool tint,
+            bool flipTriangle,
+            bool reversedWinding,
+            float light0,
+            float light1,
+            float light2,
+            float light3,
+            float ao0,
+            float ao1,
+            float ao2,
+            float ao3)
+        {
+            if (!pulledOpaqueFaces.IsCreated)
+                return;
+
+            uint flags = 0u;
+            if (flipTriangle)
+                flags |= 1u;
+            if (reversedWinding)
+                flags |= 2u;
+
+            pulledOpaqueFaces.Add(new PulledOpaqueFace
+            {
+                originWS = new float4(originWS.x, originWS.y, originWS.z, flags),
+                edgeU = new float4(edgeU.x, edgeU.y, edgeU.z, tint ? 1f : 0f),
+                edgeV = new float4(edgeV.x, edgeV.y, edgeV.z, 0f),
+                normalWS = new float4(normal.x, normal.y, normal.z, 0f),
+                uvBounds = new float4(uvOrigin.x, uvOrigin.y, uvEdgeU.x, uvEdgeU.y),
+                atlasAndFlags = new float4(uvEdgeV.x, uvEdgeV.y, atlasUv.x, atlasUv.y),
+                cornerLight01 = new float4(light0, light1, light2, light3),
+                cornerAo01 = new float4(ao0, ao1, ao2, ao3)
             });
         }
 
@@ -2585,11 +2654,31 @@ public static class MeshGenerator
                                 int blockY = u == 1 ? i : v == 1 ? j : n;
                                 int blockZ = u == 2 ? i : v == 2 ? j : n;
 
-                                int vIndex = GetCurrentSubchunkLocalVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
                                 bool tint = m.GetTint(faceType);
                                 Vector2Int tile = m.GetTileCoord(faceType);
                                 Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+                                float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
+                                float floatAO0 = math.max(math.saturate(aoMinLight), math.saturate(1f - (1f - math.pow(ao0 / 3f, aoCurve)) * math.max(0f, aoStrength)));
+                                float floatAO1 = math.max(math.saturate(aoMinLight), math.saturate(1f - (1f - math.pow(ao1 / 3f, aoCurve)) * math.max(0f, aoStrength)));
+                                float floatAO2 = math.max(math.saturate(aoMinLight), math.saturate(1f - (1f - math.pow(ao2 / 3f, aoCurve)) * math.max(0f, aoStrength)));
+                                float floatAO3 = math.max(math.saturate(aoMinLight), math.saturate(1f - (1f - math.pow(ao3 / 3f, aoCurve)) * math.max(0f, aoStrength)));
+                                float floatLight0 = light0 / 15f;
+                                float floatLight1 = light1 / 15f;
+                                float floatLight2 = light2 / 15f;
+                                float floatLight3 = light3 / 15f;
+                                bool usePulledOpaqueFace = useOpaqueVertexPulling &&
+                                                           !FluidBlockUtility.IsWater(bt) &&
+                                                           !blockMappings[(int)bt].isTransparent;
+
+                                Vector3 p0 = default;
+                                Vector3 p1 = default;
+                                Vector3 p2 = default;
+                                Vector3 p3 = default;
+                                Vector2 uv0 = default;
+                                Vector2 uv1 = default;
+                                Vector2 uv2 = default;
+                                Vector2 uv3 = default;
 
                                 for (int l = 0; l < 4; l++)
                                 {
@@ -2609,55 +2698,111 @@ public static class MeshGenerator
                                     if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
                                         py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
+                                    Vector3 position = new Vector3(px, py, pz);
                                     Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
                                                       axis == 1 ? new Vector2(rawV, rawU) :
                                                                   new Vector2(rawU, rawV);
+
+                                    switch (l)
+                                    {
+                                        case 0:
+                                            p0 = position;
+                                            uv0 = uvCoord;
+                                            break;
+                                        case 1:
+                                            p1 = position;
+                                            uv1 = uvCoord;
+                                            break;
+                                        case 2:
+                                            p2 = position;
+                                            uv2 = uvCoord;
+                                            break;
+                                        default:
+                                            p3 = position;
+                                            uv3 = uvCoord;
+                                            break;
+                                    }
+
+                                    if (usePulledOpaqueFace)
+                                        continue;
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
                                     byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
                                     float rawLight = currentLight / 15f;
                                     float floatTint = tint ? 1f : 0f;
-                                    float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
                                     float aoBase = currentAO / 3f;
                                     float aoCurved = math.pow(aoBase, aoCurve);
                                     float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
                                     float floatAO = math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
                                     AddPackedVertex(
-                                        new Vector3(px, py, pz),
+                                        position,
                                         normal,
                                         uvCoord,
                                         atlasUv,
                                         new Vector4(rawLight, floatTint, floatAO, 0f));
                                 }
 
-                                NativeList<int> tris = FluidBlockUtility.IsWater(bt)
-                                    ? waterTriangles
-                                    : (blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles);
-
-                                if (normalSign > 0)
+                                if (usePulledOpaqueFace)
                                 {
-                                    if (flipTriangle)
-                                    {
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 3);
-                                        tris.Add(vIndex + 1); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
-                                    }
-                                    else
-                                    {
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
-                                    }
+                                    float chunkWorldX = chunkCoordX * SizeX;
+                                    float chunkWorldZ = chunkCoordZ * SizeZ;
+                                    Vector3 p0World = new Vector3(chunkWorldX + p0.x, p0.y, chunkWorldZ + p0.z);
+                                    Vector3 p1World = new Vector3(chunkWorldX + p1.x, p1.y, chunkWorldZ + p1.z);
+                                    Vector3 p3World = new Vector3(chunkWorldX + p3.x, p3.y, chunkWorldZ + p3.z);
+
+                                    AddPulledOpaqueFace(
+                                        p0World,
+                                        p1World - p0World,
+                                        p3World - p0World,
+                                        normal,
+                                        uv0,
+                                        uv1 - uv0,
+                                        uv3 - uv0,
+                                        atlasUv,
+                                        tint,
+                                        flipTriangle,
+                                        normalSign < 0,
+                                        floatLight0,
+                                        floatLight1,
+                                        floatLight2,
+                                        floatLight3,
+                                        floatAO0,
+                                        floatAO1,
+                                        floatAO2,
+                                        floatAO3);
                                 }
                                 else
                                 {
-                                    if (flipTriangle)
+                                    int vIndex = GetCurrentSubchunkLocalVertexIndex() - 4;
+                                    NativeList<int> tris = FluidBlockUtility.IsWater(bt)
+                                        ? waterTriangles
+                                        : (blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles);
+
+                                    if (normalSign > 0)
                                     {
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 1);
-                                        tris.Add(vIndex + 1); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                        if (flipTriangle)
+                                        {
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 3);
+                                            tris.Add(vIndex + 1); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
+                                        }
+                                        else
+                                        {
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 1); tris.Add(vIndex + 2);
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 3);
+                                        }
                                     }
                                     else
                                     {
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
-                                        tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
+                                        if (flipTriangle)
+                                        {
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 1);
+                                            tris.Add(vIndex + 1); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                        }
+                                        else
+                                        {
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 3); tris.Add(vIndex + 2);
+                                            tris.Add(vIndex + 0); tris.Add(vIndex + 2); tris.Add(vIndex + 1);
+                                        }
                                     }
                                 }
 

@@ -1,24 +1,33 @@
 using Unity.Collections;
 using UnityEngine;
 
-public class Subchunk : MonoBehaviour
+public sealed class Subchunk
 {
     private readonly SubchunkColliderBuilder colliderBuilder = new SubchunkColliderBuilder();
+    private GameObject colliderOwner;
     private bool hasColliderData;
     private bool canHaveColliders;
     private bool isVisible = true;
 
-    [HideInInspector]
     public bool hasGeometry;
 
     public bool CanHaveColliders => canHaveColliders;
     public bool HasColliderData => hasColliderData;
     public bool IsVisible => isVisible;
 
+    public Subchunk(GameObject owner, int subchunkIndex)
+    {
+        Initialize(owner, subchunkIndex);
+    }
+
+    public void Initialize(GameObject owner, int subchunkIndex)
+    {
+        colliderOwner = owner;
+        Initialize(subchunkIndex);
+    }
+
     public void Initialize(int subchunkIndex)
     {
-        gameObject.name = $"SubchunkLogic_{subchunkIndex}";
-        transform.localPosition = Vector3.zero;
         isVisible = true;
     }
 
@@ -59,13 +68,13 @@ public class Subchunk : MonoBehaviour
         int startY,
         int endY)
     {
-        if (!hasGeometry || !canHaveColliders)
+        if (!hasGeometry || !canHaveColliders || colliderOwner == null)
         {
             ResetColliderState();
             return;
         }
 
-        hasColliderData = colliderBuilder.TryBuild(gameObject, voxelData, blockMappings, startY, endY);
+        hasColliderData = colliderBuilder.TryBuild(colliderOwner, voxelData, blockMappings, startY, endY);
     }
 
     private void ResetColliderState()

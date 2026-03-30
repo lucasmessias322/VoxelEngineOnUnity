@@ -275,12 +275,25 @@ public partial class World : MonoBehaviour
 
     private void ApplyChunkBiomeTint(Chunk chunk, Vector2Int coord)
     {
-        if (chunk == null || chunk.subRenderers == null)
+        if (chunk == null)
             return;
 
         Color grassTint = EvaluateChunkGrassTint(coord);
-        for (int i = 0; i < chunk.subRenderers.Length; i++)
-            ApplyBiomeTintToRenderer(chunk.subRenderers[i], grassTint);
+        if (chunk.subRenderers != null)
+        {
+            for (int i = 0; i < chunk.subRenderers.Length; i++)
+                ApplyBiomeTintToRenderer(chunk.subRenderers[i], grassTint);
+        }
+
+        if (chunk.visualSlices != null)
+        {
+            for (int i = 0; i < chunk.visualSlices.Length; i++)
+            {
+                ChunkRenderSlice slice = chunk.visualSlices[i];
+                if (slice != null)
+                    slice.SetGrassTint(grassTint);
+            }
+        }
     }
 
     private void ApplyBiomeTintToRenderer(Renderer renderer, Vector2Int coord)

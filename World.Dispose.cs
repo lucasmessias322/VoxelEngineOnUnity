@@ -52,6 +52,7 @@ public partial class World
     {
         if (pm.vertices.IsCreated) pm.vertices.Dispose();
         if (pm.opaqueTriangles.IsCreated) pm.opaqueTriangles.Dispose();
+        if (pm.pulledOpaqueFaces.IsCreated) pm.pulledOpaqueFaces.Dispose();
         if (pm.transparentTriangles.IsCreated) pm.transparentTriangles.Dispose();
         if (pm.billboardTriangles.IsCreated) pm.billboardTriangles.Dispose();
         if (pm.waterTriangles.IsCreated) pm.waterTriangles.Dispose();

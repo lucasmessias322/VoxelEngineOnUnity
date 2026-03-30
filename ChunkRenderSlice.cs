@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using Unity.Collections;
 using UnityEngine;
 using UnityEngine.Rendering;
@@ -16,17 +17,48 @@ public class ChunkRenderSlice : MonoBehaviour
         new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
     };
 
+    private static readonly int PulledOpaqueFacesPropertyId = Shader.PropertyToID("_PulledOpaqueFaces");
+    private static readonly int UseVertexPullingPropertyId = Shader.PropertyToID("_UseVertexPulling");
+    private static readonly int UseCompactOpaqueFacesPropertyId = Shader.PropertyToID("_UseCompactOpaqueFaces");
+    private static readonly int UseIndirectVertexPullingPropertyId = Shader.PropertyToID("_UseIndirectVertexPulling");
+    private static readonly int PulledOpaqueFaceBaseIndexPropertyId = Shader.PropertyToID("_PulledOpaqueFaceBaseIndex");
+    private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
+    private static readonly int PulledOpaqueFaceStride = Marshal.SizeOf<MeshGenerator.PulledOpaqueFace>();
+    private static readonly Plane[] SharedFrustumPlanes = new Plane[6];
+    private static readonly System.Collections.Generic.List<ChunkRenderSlice> ManagedRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(2048);
+    private static readonly System.Collections.Generic.List<ChunkRenderSlice> OpaqueRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(512);
+    private static bool renderHookRegistered;
+
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
+    private GraphicsBuffer pulledOpaqueFaceBuffer;
+    private MaterialPropertyBlock pulledOpaquePropertyBlock;
+    private Material opaqueMaterial;
+    private Bounds localRenderBounds;
+    private Color grassTint = Color.white;
+    private int pulledOpaqueFaceCount;
+    private int pulledOpaqueFaceCapacity;
     private int startSubchunkIndex;
     private int subchunkCount;
+    private int logicalVisibleOpaqueSubchunkMask;
+    private int visibleOpaqueSubchunkMask;
+    private int[] pulledOpaqueFaceStartsByLocalSubchunk;
+    private int[] pulledOpaqueFaceCountsByLocalSubchunk;
     private bool hasGeometry;
+    private bool hasMeshGeometry;
+    private bool hasOpaqueGeometry;
+    private bool logicalShouldShow;
+    private bool isFrustumVisible = true;
+    private bool shouldRenderOpaqueGeometry;
+    private bool registeredForManagedRendering;
+    private bool registeredForOpaqueRendering;
 
     private readonly struct SliceMeshTotals
     {
         public readonly int vertexCount;
         public readonly int opaqueCount;
+        public readonly int opaqueFaceCount;
         public readonly int transparentCount;
         public readonly int billboardCount;
         public readonly int waterCount;
@@ -34,12 +66,14 @@ public class ChunkRenderSlice : MonoBehaviour
         public SliceMeshTotals(
             int vertexCount,
             int opaqueCount,
+            int opaqueFaceCount,
             int transparentCount,
             int billboardCount,
             int waterCount)
         {
             this.vertexCount = vertexCount;
             this.opaqueCount = opaqueCount;
+            this.opaqueFaceCount = opaqueFaceCount;
             this.transparentCount = transparentCount;
             this.billboardCount = billboardCount;
             this.waterCount = waterCount;
@@ -53,8 +87,16 @@ public class ChunkRenderSlice : MonoBehaviour
     public int EndSubchunkIndexExclusive => startSubchunkIndex + subchunkCount;
     public bool HasGeometry => hasGeometry;
 
+    public static bool SupportsOpaqueVertexPulling()
+    {
+        return SystemInfo.supportsInstancing &&
+               SystemInfo.maxComputeBufferInputsVertex > 0;
+    }
+
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
     {
+        EnsureRenderHookRegistered();
+
         meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
         meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
 
@@ -78,13 +120,31 @@ public class ChunkRenderSlice : MonoBehaviour
 
         startSubchunkIndex = sliceStartSubchunkIndex;
         subchunkCount = Mathf.Max(1, sliceSubchunkCount);
+        EnsurePulledOpaqueSubchunkMetadataCapacity();
+        localRenderBounds = CreateMeshBounds(
+            startSubchunkIndex * Chunk.SubchunkHeight,
+            Mathf.Min(EndSubchunkIndexExclusive * Chunk.SubchunkHeight, Chunk.SizeY));
+
+        ConfigureOpaqueMaterial(sharedMaterials);
+
         gameObject.name = $"ChunkSlice_{sliceIndex}";
         transform.localPosition = Vector3.zero;
+        isFrustumVisible = true;
+    }
+
+    public void SetGrassTint(Color tint)
+    {
+        if (grassTint == tint)
+            return;
+
+        grassTint = tint;
+        UpdatePulledOpaquePropertyBlock();
     }
 
     public void ApplyMeshData(
         NativeList<MeshGenerator.PackedChunkVertex> vertices,
         NativeList<int> opaqueTris,
+        NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
         NativeList<int> transparentTris,
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
@@ -92,53 +152,92 @@ public class ChunkRenderSlice : MonoBehaviour
         Subchunk[] logicalSubchunks)
     {
         SliceMeshTotals totals = CalculateMeshTotals(subchunkRanges);
-        if (totals.vertexCount == 0)
+
+        if (totals.opaqueFaceCount > 0 && SupportsOpaqueVertexPulling() && opaqueMaterial != null)
+            UploadPulledOpaqueFaces(pulledOpaqueFaces, subchunkRanges, totals.opaqueFaceCount);
+        else
+            ClearPulledOpaqueFaces();
+
+        hasOpaqueGeometry = pulledOpaqueFaceCount > 0;
+
+        if (totals.vertexCount > 0)
         {
-            ClearMesh();
+            var meshDataArray = Mesh.AllocateWritableMeshData(1);
+            var meshData = meshDataArray[0];
+            meshData.SetVertexBufferParams(totals.vertexCount, ChunkVertexLayout);
+            meshData.SetIndexBufferParams(totals.TotalIndexCount, IndexFormat.UInt32);
+            meshData.subMeshCount = 3;
+
+            NativeArray<MeshGenerator.PackedChunkVertex> vertexData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
+            NativeArray<int> indexData = meshData.GetIndexData<int>();
+
+            CopySliceGeometry(vertices, opaqueTris, transparentTris, billboardTris, waterTris, subchunkRanges, vertexData, indexData, totals);
+            ConfigureSubMeshes(meshData, totals);
+
+            Mesh.ApplyAndDisposeWritableMeshData(
+                meshDataArray,
+                mesh,
+                MeshUpdateFlags.DontRecalculateBounds |
+                MeshUpdateFlags.DontValidateIndices |
+                MeshUpdateFlags.DontNotifyMeshUsers);
+
+            mesh.bounds = localRenderBounds;
+            hasMeshGeometry = true;
+        }
+        else
+        {
+            if (mesh != null)
+                mesh.Clear();
+
+            hasMeshGeometry = false;
+        }
+
+        hasGeometry = hasMeshGeometry || hasOpaqueGeometry;
+        if (!hasGeometry)
+        {
+            logicalShouldShow = false;
+            logicalVisibleOpaqueSubchunkMask = 0;
+            SetRendererEnabled(false);
+            shouldRenderOpaqueGeometry = false;
+            SetActiveState(false);
             return;
         }
 
-        var meshDataArray = Mesh.AllocateWritableMeshData(1);
-        var meshData = meshDataArray[0];
-        meshData.SetVertexBufferParams(totals.vertexCount, ChunkVertexLayout);
-        meshData.SetIndexBufferParams(totals.TotalIndexCount, IndexFormat.UInt32);
-        meshData.subMeshCount = 3;
-
-        NativeArray<MeshGenerator.PackedChunkVertex> vertexData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
-        NativeArray<int> indexData = meshData.GetIndexData<int>();
-
-        CopySliceGeometry(vertices, opaqueTris, transparentTris, billboardTris, waterTris, subchunkRanges, vertexData, indexData, totals);
-        ConfigureSubMeshes(meshData, totals);
-
-        Mesh.ApplyAndDisposeWritableMeshData(
-            meshDataArray,
-            mesh,
-            MeshUpdateFlags.DontRecalculateBounds |
-            MeshUpdateFlags.DontValidateIndices |
-            MeshUpdateFlags.DontNotifyMeshUsers);
-
-        mesh.bounds = CreateMeshBounds(
-            startSubchunkIndex * Chunk.SubchunkHeight,
-            Mathf.Min(EndSubchunkIndexExclusive * Chunk.SubchunkHeight, Chunk.SizeY));
-
-        hasGeometry = true;
         SetActiveState(true);
         RefreshVisibility(logicalSubchunks);
     }
 
     public void RefreshVisibility(Subchunk[] logicalSubchunks)
     {
-        bool shouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
+        logicalShouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
+        logicalVisibleOpaqueSubchunkMask = logicalShouldShow ? GetVisibleOpaqueSubchunkMask(logicalSubchunks) : 0;
 
         if (!hasGeometry)
         {
+            logicalShouldShow = false;
+            logicalVisibleOpaqueSubchunkMask = 0;
             SetRendererEnabled(false);
+            shouldRenderOpaqueGeometry = false;
+            visibleOpaqueSubchunkMask = 0;
             SetActiveState(false);
             return;
         }
 
         SetActiveState(true);
-        SetRendererEnabled(shouldShow);
+        ApplyRenderVisibilityState();
+    }
+
+    public void UpdateFrustumVisibility(Plane[] frustumPlanes)
+    {
+        if (!hasGeometry)
+            return;
+
+        bool visible = GeometryUtility.TestPlanesAABB(frustumPlanes, GetWorldBounds(localRenderBounds));
+        if (visible == isFrustumVisible)
+            return;
+
+        isFrustumVisible = visible;
+        ApplyRenderVisibilityState();
     }
 
     public void ClearMesh()
@@ -146,15 +245,46 @@ public class ChunkRenderSlice : MonoBehaviour
         if (mesh != null)
             mesh.Clear();
 
+        ClearPulledOpaqueFaces();
+        ReleasePulledOpaqueFaceBuffer();
+
         hasGeometry = false;
+        hasMeshGeometry = false;
+        hasOpaqueGeometry = false;
+        logicalShouldShow = false;
+        logicalVisibleOpaqueSubchunkMask = 0;
+        isFrustumVisible = true;
+        shouldRenderOpaqueGeometry = false;
+        visibleOpaqueSubchunkMask = 0;
+        UpdateManagedRenderRegistration();
+        UpdateOpaqueRenderRegistration();
         SetRendererEnabled(false);
         SetActiveState(false);
+    }
+
+    private void OnDestroy()
+    {
+        UnregisterManagedRenderSlice();
+        UnregisterOpaqueRenderSlice();
+        ReleasePulledOpaqueFaceBuffer();
+    }
+
+    private void OnEnable()
+    {
+        RegisterManagedRenderSlice();
+    }
+
+    private void OnDisable()
+    {
+        UnregisterManagedRenderSlice();
+        UnregisterOpaqueRenderSlice();
     }
 
     private SliceMeshTotals CalculateMeshTotals(NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges)
     {
         int totalVertexCount = 0;
         int totalOpaqueCount = 0;
+        int totalOpaqueFaceCount = 0;
         int totalTransparentCount = 0;
         int totalBillboardCount = 0;
         int totalWaterCount = 0;
@@ -164,6 +294,7 @@ public class ChunkRenderSlice : MonoBehaviour
             MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
             totalVertexCount += range.vertexCount;
             totalOpaqueCount += range.opaqueCount;
+            totalOpaqueFaceCount += range.opaqueFaceCount;
             totalTransparentCount += range.transparentCount;
             totalBillboardCount += range.billboardCount;
             totalWaterCount += range.waterCount;
@@ -172,6 +303,7 @@ public class ChunkRenderSlice : MonoBehaviour
         return new SliceMeshTotals(
             totalVertexCount,
             totalOpaqueCount,
+            totalOpaqueFaceCount,
             totalTransparentCount,
             totalBillboardCount,
             totalWaterCount);
@@ -215,6 +347,312 @@ public class ChunkRenderSlice : MonoBehaviour
         }
     }
 
+    private void UploadPulledOpaqueFaces(
+        NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
+        NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+        int totalOpaqueFaceCount)
+    {
+        if (!pulledOpaqueFaces.IsCreated || totalOpaqueFaceCount <= 0)
+        {
+            ClearPulledOpaqueFaces();
+            return;
+        }
+
+        EnsurePulledOpaqueFaceBufferCapacity(totalOpaqueFaceCount);
+        EnsurePulledOpaqueSubchunkMetadataCapacity();
+        Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
+        Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
+
+        NativeArray<MeshGenerator.PulledOpaqueFace> uploadData = new NativeArray<MeshGenerator.PulledOpaqueFace>(
+            totalOpaqueFaceCount,
+            Allocator.Temp,
+            NativeArrayOptions.UninitializedMemory);
+
+        int writeOffset = 0;
+        for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
+        {
+            MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
+            int localSubchunkIndex = sub - startSubchunkIndex;
+            pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex] = writeOffset;
+            pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex] = range.opaqueFaceCount;
+
+            if (range.opaqueFaceCount <= 0)
+                continue;
+
+            NativeArray<MeshGenerator.PulledOpaqueFace>.Copy(
+                pulledOpaqueFaces.AsArray(),
+                range.opaqueFaceStart,
+                uploadData,
+                writeOffset,
+                range.opaqueFaceCount);
+
+            writeOffset += range.opaqueFaceCount;
+        }
+
+        pulledOpaqueFaceBuffer.SetData(uploadData);
+        uploadData.Dispose();
+
+        pulledOpaqueFaceCount = totalOpaqueFaceCount;
+        UpdatePulledOpaquePropertyBlock();
+        UpdateOpaqueRenderRegistration();
+    }
+
+    private void ClearPulledOpaqueFaces()
+    {
+        pulledOpaqueFaceCount = 0;
+        visibleOpaqueSubchunkMask = 0;
+        if (pulledOpaqueFaceStartsByLocalSubchunk != null)
+            Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
+        if (pulledOpaqueFaceCountsByLocalSubchunk != null)
+            Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
+        UpdatePulledOpaquePropertyBlock();
+        UpdateOpaqueRenderRegistration();
+    }
+
+    private void EnsurePulledOpaqueFaceBufferCapacity(int requiredCount)
+    {
+        if (requiredCount <= 0)
+            return;
+
+        if (pulledOpaqueFaceBuffer != null && pulledOpaqueFaceCapacity >= requiredCount)
+            return;
+
+        ReleasePulledOpaqueFaceBuffer();
+
+        pulledOpaqueFaceCapacity = requiredCount;
+        pulledOpaqueFaceBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, pulledOpaqueFaceCapacity, PulledOpaqueFaceStride);
+    }
+
+    private void ReleasePulledOpaqueFaceBuffer()
+    {
+        if (pulledOpaqueFaceBuffer != null)
+        {
+            pulledOpaqueFaceBuffer.Dispose();
+            pulledOpaqueFaceBuffer = null;
+        }
+
+        pulledOpaqueFaceCapacity = 0;
+    }
+
+    private void EnsurePulledOpaqueSubchunkMetadataCapacity()
+    {
+        if (subchunkCount <= 0)
+            return;
+
+        if (pulledOpaqueFaceStartsByLocalSubchunk == null || pulledOpaqueFaceStartsByLocalSubchunk.Length != subchunkCount)
+            pulledOpaqueFaceStartsByLocalSubchunk = new int[subchunkCount];
+
+        if (pulledOpaqueFaceCountsByLocalSubchunk == null || pulledOpaqueFaceCountsByLocalSubchunk.Length != subchunkCount)
+            pulledOpaqueFaceCountsByLocalSubchunk = new int[subchunkCount];
+    }
+
+    private void UpdatePulledOpaquePropertyBlock()
+    {
+        if (!SupportsOpaqueVertexPulling() || opaqueMaterial == null)
+            return;
+
+        pulledOpaquePropertyBlock = pulledOpaquePropertyBlock ?? new MaterialPropertyBlock();
+        pulledOpaquePropertyBlock.Clear();
+        pulledOpaquePropertyBlock.SetFloat(UseVertexPullingPropertyId, pulledOpaqueFaceCount > 0 ? 1f : 0f);
+        pulledOpaquePropertyBlock.SetFloat(UseCompactOpaqueFacesPropertyId, 0f);
+        pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 0f);
+        pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
+        pulledOpaquePropertyBlock.SetColor(GrassTintPropertyId, grassTint);
+
+        if (pulledOpaqueFaceBuffer != null && pulledOpaqueFaceCount > 0)
+            pulledOpaquePropertyBlock.SetBuffer(PulledOpaqueFacesPropertyId, pulledOpaqueFaceBuffer);
+    }
+
+    private void ConfigureOpaqueMaterial(Material[] sharedMaterials)
+    {
+        opaqueMaterial = sharedMaterials != null && sharedMaterials.Length > 0
+            ? sharedMaterials[0]
+            : null;
+
+        if (opaqueMaterial != null && SupportsOpaqueVertexPulling())
+            opaqueMaterial.enableInstancing = true;
+
+        UpdatePulledOpaquePropertyBlock();
+        UpdateOpaqueRenderRegistration();
+    }
+
+    private void ApplyRenderVisibilityState()
+    {
+        visibleOpaqueSubchunkMask = isFrustumVisible ? logicalVisibleOpaqueSubchunkMask : 0;
+        SetRendererEnabled(hasMeshGeometry && logicalShouldShow && isFrustumVisible);
+        shouldRenderOpaqueGeometry = hasOpaqueGeometry && visibleOpaqueSubchunkMask != 0;
+        UpdateManagedRenderRegistration();
+        UpdateOpaqueRenderRegistration();
+    }
+
+    private void UpdateManagedRenderRegistration()
+    {
+        bool shouldRegister = isActiveAndEnabled && hasGeometry;
+
+        if (shouldRegister)
+            RegisterManagedRenderSlice();
+        else
+            UnregisterManagedRenderSlice();
+    }
+
+    private void UpdateOpaqueRenderRegistration()
+    {
+        bool shouldRegister =
+            isActiveAndEnabled &&
+            shouldRenderOpaqueGeometry &&
+            hasOpaqueGeometry &&
+            pulledOpaqueFaceCount > 0 &&
+            pulledOpaqueFaceBuffer != null &&
+            opaqueMaterial != null &&
+            SupportsOpaqueVertexPulling();
+
+        if (shouldRegister)
+            RegisterOpaqueRenderSlice();
+        else
+            UnregisterOpaqueRenderSlice();
+    }
+
+    private void RegisterManagedRenderSlice()
+    {
+        if (registeredForManagedRendering)
+            return;
+
+        EnsureRenderHookRegistered();
+        ManagedRenderSlices.Add(this);
+        registeredForManagedRendering = true;
+    }
+
+    private void UnregisterManagedRenderSlice()
+    {
+        if (!registeredForManagedRendering)
+            return;
+
+        ManagedRenderSlices.Remove(this);
+        registeredForManagedRendering = false;
+    }
+
+    private void RegisterOpaqueRenderSlice()
+    {
+        if (registeredForOpaqueRendering)
+            return;
+
+        EnsureRenderHookRegistered();
+        OpaqueRenderSlices.Add(this);
+        registeredForOpaqueRendering = true;
+    }
+
+    private void UnregisterOpaqueRenderSlice()
+    {
+        if (!registeredForOpaqueRendering)
+            return;
+
+        OpaqueRenderSlices.Remove(this);
+        registeredForOpaqueRendering = false;
+    }
+
+    private static void EnsureRenderHookRegistered()
+    {
+        if (renderHookRegistered)
+            return;
+
+        RenderPipelineManager.beginCameraRendering += HandleBeginCameraRendering;
+        renderHookRegistered = true;
+    }
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStaticState()
+    {
+        if (renderHookRegistered)
+            RenderPipelineManager.beginCameraRendering -= HandleBeginCameraRendering;
+
+        renderHookRegistered = false;
+        ManagedRenderSlices.Clear();
+        OpaqueRenderSlices.Clear();
+    }
+
+    private static void HandleBeginCameraRendering(ScriptableRenderContext context, Camera camera)
+    {
+        if (camera == null || (ManagedRenderSlices.Count == 0 && OpaqueRenderSlices.Count == 0))
+            return;
+
+        if (camera.cameraType == CameraType.Preview || camera.cameraType == CameraType.Reflection)
+            return;
+
+        GeometryUtility.CalculateFrustumPlanes(camera, SharedFrustumPlanes);
+
+        for (int i = 0; i < ManagedRenderSlices.Count; i++)
+        {
+            ChunkRenderSlice slice = ManagedRenderSlices[i];
+            if (slice == null)
+                continue;
+
+            slice.UpdateFrustumVisibility(SharedFrustumPlanes);
+        }
+
+        for (int i = 0; i < OpaqueRenderSlices.Count; i++)
+        {
+            ChunkRenderSlice slice = OpaqueRenderSlices[i];
+            if (slice == null)
+                continue;
+
+            slice.RenderOpaqueGeometry(camera);
+        }
+    }
+
+    private void RenderOpaqueGeometry(Camera camera)
+    {
+        if (!shouldRenderOpaqueGeometry ||
+            !isFrustumVisible ||
+            !hasOpaqueGeometry ||
+            pulledOpaqueFaceCount <= 0 ||
+            pulledOpaqueFaceBuffer == null ||
+            opaqueMaterial == null)
+        {
+            return;
+        }
+
+        Bounds worldBounds = GetWorldBounds(localRenderBounds);
+        RenderParams renderParams = new RenderParams(opaqueMaterial)
+        {
+            camera = camera,
+            worldBounds = worldBounds,
+            layer = gameObject.layer,
+            matProps = pulledOpaquePropertyBlock,
+            receiveShadows = meshRenderer == null || meshRenderer.receiveShadows,
+            shadowCastingMode = meshRenderer != null ? meshRenderer.shadowCastingMode : ShadowCastingMode.On,
+            renderingLayerMask = meshRenderer != null ? meshRenderer.renderingLayerMask : uint.MaxValue
+        };
+
+        if (subchunkCount <= 1)
+        {
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
+            Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, pulledOpaqueFaceCount);
+            return;
+        }
+
+        for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount; localSubchunkIndex++)
+        {
+            int subchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
+            if ((visibleOpaqueSubchunkMask & subchunkBit) == 0)
+                continue;
+
+            int subchunkFaceCount = pulledOpaqueFaceCountsByLocalSubchunk != null &&
+                                    localSubchunkIndex < pulledOpaqueFaceCountsByLocalSubchunk.Length
+                ? pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex]
+                : 0;
+            if (subchunkFaceCount <= 0)
+                continue;
+
+            int subchunkFaceStart = pulledOpaqueFaceStartsByLocalSubchunk != null &&
+                                    localSubchunkIndex < pulledOpaqueFaceStartsByLocalSubchunk.Length
+                ? pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex]
+                : 0;
+
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, subchunkFaceStart);
+            Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, subchunkFaceCount);
+        }
+    }
+
     private static void ConfigureSubMeshes(Mesh.MeshData meshData, SliceMeshTotals totals)
     {
         int transparentStart = totals.opaqueCount;
@@ -253,6 +691,32 @@ public class ChunkRenderSlice : MonoBehaviour
         return false;
     }
 
+    private int GetVisibleOpaqueSubchunkMask(Subchunk[] logicalSubchunks)
+    {
+        if (!hasOpaqueGeometry || logicalSubchunks == null)
+            return 0;
+
+        int mask = 0;
+        int end = Mathf.Min(EndSubchunkIndexExclusive, logicalSubchunks.Length);
+        for (int sub = startSubchunkIndex; sub < end; sub++)
+        {
+            int localSubchunkIndex = sub - startSubchunkIndex;
+            int faceCount = pulledOpaqueFaceCountsByLocalSubchunk != null &&
+                            localSubchunkIndex >= 0 &&
+                            localSubchunkIndex < pulledOpaqueFaceCountsByLocalSubchunk.Length
+                ? pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex]
+                : 0;
+            if (faceCount <= 0)
+                continue;
+
+            Subchunk logicalSubchunk = logicalSubchunks[sub];
+            if (logicalSubchunk != null && logicalSubchunk.hasGeometry && logicalSubchunk.IsVisible)
+                mask |= 1 << sub;
+        }
+
+        return mask;
+    }
+
     private static void CopyTriangleRangeRebased(
         NativeArray<int> target,
         ref int targetStart,
@@ -284,6 +748,13 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         return true;
+    }
+
+    private Bounds GetWorldBounds(Bounds localBounds)
+    {
+        Vector3 center = transform.TransformPoint(localBounds.center);
+        Vector3 size = Vector3.Scale(localBounds.size, transform.lossyScale);
+        return new Bounds(center, size);
     }
 
     private static Bounds CreateMeshBounds(int startY, int endY)

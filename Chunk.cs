@@ -13,9 +13,9 @@ public class Chunk : MonoBehaviour
     public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
 
-    [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
+    [NonSerialized, HideInInspector] // Mantido apenas em runtime para evitar milhares de GameObjects lógicos.
     public Subchunk[] subchunks;
-    [HideInInspector] public ChunkRenderSlice[] visualSlices;
+    [NonSerialized, HideInInspector] public ChunkRenderSlice[] visualSlices;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     [NonSerialized] public bool hasVoxelSnapshot = false;
@@ -199,14 +199,7 @@ public class Chunk : MonoBehaviour
 
     private Subchunk CreateSubchunk(int subchunkIndex)
     {
-        GameObject subObj = new GameObject($"SubchunkLogic_{subchunkIndex}");
-        subObj.transform.SetParent(transform, false);
-        subObj.transform.localPosition = Vector3.zero;
-        subObj.layer = gameObject.layer;
-
-        Subchunk sc = subObj.AddComponent<Subchunk>();
-        sc.Initialize(subchunkIndex);
-        return sc;
+        return new Subchunk(gameObject, subchunkIndex);
     }
 
     private ChunkRenderSlice CreateVisualSlice(int sliceIndex, Material[] materials, int startSubchunkIndex, int sliceSubchunkCount)

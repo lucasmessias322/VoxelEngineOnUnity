@@ -394,6 +394,12 @@ public partial class World : MonoBehaviour
     [Tooltip("Quando ativado, usa um greedy meshing rapido com validacao barata de AO/luz. Mantem o AO correto na maior parte dos casos sem o custo alto da busca exaustiva.")]
     public bool useFastBedrockStyleMeshing = true;
 
+    [Header("Opaque GPU Rendering")]
+    [Tooltip("Move as faces opacas em cubos para vertex pulling via StructuredBuffer quando a GPU/API suporta leitura de buffer no vertex stage. Transparentes, agua e billboards continuam no caminho tradicional.")]
+    public bool enableOpaqueVertexPulling = true;
+    [Tooltip("Quando vertex pulling opaco estiver ativo, permite agrupar varios subchunks no mesmo slice visual mesmo com a oclusao por secoes ligada. As faces opacas continuam com culling por subchunk; agua/transparentes continuam usando a malha do slice.")]
+    public bool allowGroupedSlicesWithOpaqueVertexPulling = false;
+
     [Header("Debug / Physics")]
     [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
     public bool enableBlockColliders = true;
@@ -451,6 +457,14 @@ public partial class World : MonoBehaviour
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
     private List<PendingData> pendingDataJobs = new List<PendingData>();
+    private readonly Dictionary<Vector2Int, int> pendingJobReferencesByCoord = new Dictionary<Vector2Int, int>();
+    private bool pendingChunkPrioritiesDirty = true;
+    private bool pendingJobPrioritiesDirty = true;
+    private bool pendingRenderDistanceCountsDirty = true;
+    private Vector2Int cachedPendingRenderDistanceCenter = new Vector2Int(int.MinValue, int.MinValue);
+    private int cachedPendingRenderDistance = -1;
+    private int cachedPendingDataJobsInRenderDistance;
+    private int cachedPendingMeshesInRenderDistance;
     private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>();
     private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
@@ -471,11 +485,11 @@ public partial class World : MonoBehaviour
     private float offsetX, offsetZ;
     private int nextChunkGeneration = 0;
     private int meshesAppliedThisFrame = 0;
-    private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
+    private bool lastEnableOpaqueVertexPulling = true;
     private int lastHorizontalSkylightStepLoss = 1;
     private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
@@ -665,19 +679,136 @@ public partial class World : MonoBehaviour
         return count;
     }
 
+    private void MarkPendingChunkPrioritiesDirty()
+    {
+        pendingChunkPrioritiesDirty = true;
+    }
+
+    private void MarkPendingJobQueuesDirty()
+    {
+        pendingJobPrioritiesDirty = true;
+        pendingRenderDistanceCountsDirty = true;
+    }
+
+    private void IncrementPendingJobReference(Vector2Int coord)
+    {
+        if (pendingJobReferencesByCoord.TryGetValue(coord, out int count))
+            pendingJobReferencesByCoord[coord] = count + 1;
+        else
+            pendingJobReferencesByCoord.Add(coord, 1);
+    }
+
+    private void DecrementPendingJobReference(Vector2Int coord)
+    {
+        if (!pendingJobReferencesByCoord.TryGetValue(coord, out int count))
+            return;
+
+        if (count <= 1)
+            pendingJobReferencesByCoord.Remove(coord);
+        else
+            pendingJobReferencesByCoord[coord] = count - 1;
+    }
+
+    private void AddPendingChunk(Vector2Int coord, float distSq)
+    {
+        pendingChunks.Add((coord, distSq));
+        IncrementPendingJobReference(coord);
+        MarkPendingChunkPrioritiesDirty();
+    }
+
+    private void AddPendingDataJob(PendingData pendingData)
+    {
+        pendingDataJobs.Add(pendingData);
+        IncrementPendingJobReference(pendingData.coord);
+        MarkPendingJobQueuesDirty();
+    }
+
+    private void AddPendingMeshJob(PendingMesh pendingMesh)
+    {
+        pendingMeshes.Add(pendingMesh);
+        IncrementPendingJobReference(pendingMesh.coord);
+        MarkPendingJobQueuesDirty();
+    }
+
+    private void GetPendingJobsInRenderDistance(Vector2Int center, out int pendingDataInRange, out int pendingMeshesInRange)
+    {
+        if (!pendingRenderDistanceCountsDirty &&
+            center == cachedPendingRenderDistanceCenter &&
+            cachedPendingRenderDistance == renderDistance)
+        {
+            pendingDataInRange = cachedPendingDataJobsInRenderDistance;
+            pendingMeshesInRange = cachedPendingMeshesInRenderDistance;
+            return;
+        }
+
+        cachedPendingDataJobsInRenderDistance = CountPendingDataJobsInRenderDistance(center);
+        cachedPendingMeshesInRenderDistance = CountPendingMeshesInRenderDistance(center);
+        cachedPendingRenderDistanceCenter = center;
+        cachedPendingRenderDistance = renderDistance;
+        pendingRenderDistanceCountsDirty = false;
+
+        pendingDataInRange = cachedPendingDataJobsInRenderDistance;
+        pendingMeshesInRange = cachedPendingMeshesInRenderDistance;
+    }
+
     private void RefreshPendingChunkPriorities()
     {
+        if (pendingChunks.Count == 0)
+        {
+            pendingChunkPrioritiesDirty = false;
+            return;
+        }
+
         for (int i = 0; i < pendingChunks.Count; i++)
         {
             var item = pendingChunks[i];
             pendingChunks[i] = (item.coord, GetChunkDistanceSqToPlayer(item.coord));
         }
 
-        pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+        if (pendingChunks.Count > 1)
+            pendingChunks.Sort((a, b) => b.distSq.CompareTo(a.distSq));
+
+        pendingChunkPrioritiesDirty = false;
+    }
+
+    private bool TryPopNextPendingChunk(out (Vector2Int coord, float distSq) pendingChunk)
+    {
+        if (pendingChunkPrioritiesDirty)
+            RefreshPendingChunkPriorities();
+
+        int last = pendingChunks.Count - 1;
+        if (last < 0)
+        {
+            pendingChunk = default;
+            return false;
+        }
+
+        pendingChunk = pendingChunks[last];
+        pendingChunks.RemoveAt(last);
+        DecrementPendingJobReference(pendingChunk.coord);
+        return true;
+    }
+
+    private void RemovePendingChunkAtSwapBack(int index)
+    {
+        int last = pendingChunks.Count - 1;
+        if (index < 0 || index > last)
+            return;
+
+        Vector2Int removedCoord = pendingChunks[index].coord;
+        if (index != last)
+            pendingChunks[index] = pendingChunks[last];
+
+        pendingChunks.RemoveAt(last);
+        DecrementPendingJobReference(removedCoord);
+        MarkPendingChunkPrioritiesDirty();
     }
 
     private void PrioritizePendingJobsByDistance()
     {
+        if (!pendingJobPrioritiesDirty)
+            return;
+
         if (pendingDataJobs.Count > 1)
         {
             pendingDataJobs.Sort((a, b) =>
@@ -693,6 +824,8 @@ public partial class World : MonoBehaviour
                 return a.visualSliceIndex.CompareTo(b.visualSliceIndex);
             });
         }
+
+        pendingJobPrioritiesDirty = false;
     }
 
     private bool HasOtherPendingMeshJobs(Vector2Int coord, int expectedGen, int excludeIndex)
@@ -733,10 +866,25 @@ public partial class World : MonoBehaviour
         return Mathf.Max(GetDetailedGenerationBorderSize(), GetLightSmoothingBorderSize());
     }
 
+    private bool CanUseOpaqueVertexPulling()
+    {
+        if (!enableOpaqueVertexPulling)
+            return false;
+
+        if (Material == null || Material.Length == 0 || Material[0] == null)
+            return false;
+
+        return SystemInfo.supportsInstancing &&
+               SystemInfo.maxComputeBufferInputsVertex > 0;
+    }
+
     private int GetResolvedVisualSubchunksPerRenderer()
     {
-        if (enableMinecraftSectionOcclusion && forceSingleSubchunkRendererForSectionOcclusion)
+        if (enableMinecraftSectionOcclusion &&
+            forceSingleSubchunkRendererForSectionOcclusion)
+        {
             return 1;
+        }
 
         return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
     }
@@ -1106,6 +1254,7 @@ public partial class World : MonoBehaviour
 
         public NativeList<MeshGenerator.PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
+        public NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
@@ -1463,6 +1612,7 @@ public partial class World : MonoBehaviour
             DisposePendingMesh(pm);
         }
         pendingMeshes.Clear();
+        pendingJobReferencesByCoord.Clear();
 
         foreach (var kv in activeChunks)
         {
@@ -1733,8 +1883,9 @@ public partial class World : MonoBehaviour
                         if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
                             updatedSectionVisibility = true;
 
-                        bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
-                        if (range.vertexCount > 0)
+                        bool hasSubchunkGeometry = range.vertexCount > 0 || range.opaqueFaceCount > 0;
+                        bool hasSolidColliderGeometry = range.opaqueFaceCount > 0 || range.opaqueCount > 0 || range.transparentCount > 0;
+                        if (hasSubchunkGeometry)
                         {
                             sub.SetMeshState(true, hasSolidColliderGeometry);
                             ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
@@ -1757,6 +1908,7 @@ public partial class World : MonoBehaviour
                     visualSlice.ApplyMeshData(
                         pm.vertices,
                         pm.opaqueTriangles,
+                        pm.pulledOpaqueFaces,
                         pm.transparentTriangles,
                         pm.billboardTriangles,
                         pm.waterTriangles,
@@ -2053,10 +2205,11 @@ public partial class World : MonoBehaviour
                     scheduledSubchunkMask,
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter,
-                    effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
+                    effectiveAoStrength, aoCurveExponent, aoMinLight, CanUseOpaqueVertexPulling(), useFastBedrockStyleMeshing,
                     out JobHandle meshHandle,
                     out NativeList<MeshGenerator.PackedChunkVertex> vertices,
                     out NativeList<int> opaqueTriangles,
+                    out NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
                     out NativeList<int> transparentTriangles,
                     out NativeList<int> billboardTriangles,
                     out NativeList<int> waterTriangles,
@@ -2069,11 +2222,12 @@ public partial class World : MonoBehaviour
                     : meshHandle;
                 hasScheduledMeshJobs = true;
 
-                pendingMeshes.Add(new PendingMesh
+                AddPendingMeshJob(new PendingMesh
                 {
                     handle = meshHandle,
                     vertices = vertices,
                     opaqueTriangles = opaqueTriangles,
+                    pulledOpaqueFaces = pulledOpaqueFaces,
                     transparentTriangles = transparentTriangles,
                     billboardTriangles = billboardTriangles,
                     waterTriangles = waterTriangles,
@@ -2240,6 +2394,8 @@ public partial class World : MonoBehaviour
         if (currentChunkCoord != _lastChunkCoord)
         {
             _lastChunkCoord = currentChunkCoord;
+            MarkPendingChunkPrioritiesDirty();
+            MarkPendingJobQueuesDirty();
             _tempNeededCoords.Clear();
             bool activeSectionSetChanged = false;
 
@@ -2284,7 +2440,7 @@ public partial class World : MonoBehaviour
             for (int i = pendingChunks.Count - 1; i >= 0; i--)
             {
                 if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
-                    pendingChunks.RemoveAt(i);
+                    RemovePendingChunkAtSwapBack(i);
             }
 
             // C. Encontrar novos chunks para gerar
@@ -2294,23 +2450,18 @@ public partial class World : MonoBehaviour
                 if (IsChunkJobPending(coord)) continue;
 
                 float distSq = GetChunkDistanceSqToPlayer(coord);
-                pendingChunks.Add((coord, distSq));
+                AddPendingChunk(coord, distSq);
             }
 
             // D. Reordenar fila por distÃ¢ncia
-            RefreshPendingChunkPriorities();
         }
-
-        if (pendingChunks.Count > 1)
-            RefreshPendingChunkPriorities();
 
         // Processa alguns itens da fila por frame
         if (pendingChunks.Count > 0)
         {
             int processed = 0;
             int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
-            int pendingDataInRange = CountPendingDataJobsInRenderDistance(currentChunkCoord);
-            int pendingMeshesInRange = CountPendingMeshesInRenderDistance(currentChunkCoord);
+            GetPendingJobsInRenderDistance(currentChunkCoord, out int pendingDataInRange, out int pendingMeshesInRange);
             int realPending = pendingDataInRange + Mathf.CeilToInt(pendingMeshesInRange / (float)subchunksPerChunk);
             int hardPendingDataLimit = Mathf.Max(maxPendingDataJobs, maxPendingDataJobs * 3);
             bool jobsCongested = realPending > maxChunksPerFrame * 4;
@@ -2322,8 +2473,8 @@ public partial class World : MonoBehaviour
                     if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
                         break;
 
-                    var item = pendingChunks[0];
-                    pendingChunks.RemoveAt(0);
+                    if (!TryPopNextPendingChunk(out var item))
+                        break;
 
                     if (!activeChunks.ContainsKey(item.coord))
                     {
@@ -2441,7 +2592,7 @@ public partial class World : MonoBehaviour
         );
         NativeArray<byte> knownVoxelData = CreateFullyKnownVoxelMask(blockTypes.Length);
 
-        pendingDataJobs.Add(new PendingData
+        AddPendingDataJob(new PendingData
         {
             handle = dataHandle,
             heightCache = heightCache,
@@ -2633,7 +2784,7 @@ public partial class World : MonoBehaviour
             visualDataHandle = deriveDataHandle;
         }
 
-        pendingDataJobs.Add(new PendingData
+        AddPendingDataJob(new PendingData
         {
             handle = visualDataHandle,
             heightCache = heightCache,
