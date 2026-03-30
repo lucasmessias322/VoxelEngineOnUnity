@@ -310,6 +310,7 @@ public partial class World : MonoBehaviour
         if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
             caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
+        ChunkRenderSlice.SetIndirectOpaqueDrawSubmissionEnabled(enableOpaqueIndirectDrawSubmission);
         InitializePlatformRenderProfileState();
         EnsureLoadingBootstrapExists();
     }
@@ -515,8 +516,18 @@ public partial class World : MonoBehaviour
     [Header("Opaque GPU Rendering")]
     [Tooltip("Move as faces opacas em cubos para vertex pulling via StructuredBuffer quando a GPU/API suporta leitura de buffer no vertex stage. Transparentes, agua e billboards continuam no caminho tradicional.")]
     public bool enableOpaqueVertexPulling = true;
+    [Tooltip("Quando ativado, envia as draws opacas do vertex pulling por RenderPrimitivesIndirect. Isso reduz chamadas de draw no CPU quando um slice visivel precisaria de varios draws diretos.")]
+    public bool enableOpaqueIndirectDrawSubmission = true;
     [Tooltip("Quando vertex pulling opaco estiver ativo, permite agrupar varios subchunks no mesmo slice visual mesmo com a oclusao por secoes ligada. As faces opacas continuam com culling por subchunk; agua/transparentes continuam usando a malha do slice.")]
     public bool allowGroupedSlicesWithOpaqueVertexPulling = true;
+    [Min(0)]
+    [Tooltip("Override opcional do tamanho maximo de slice quando o backend opaco puxado estiver ativo. 0 reutiliza visualSubchunksPerRenderer. Valores maiores ajudam a reduzir draws opacos, mas aumentam a granularidade do culling da malha nao-opaca da slice.")]
+    public int groupedSlicesWithOpaqueVertexPullingSubchunksPerRenderer = 8;
+    [Tooltip("Escreve no Console uma telemetria periodica comparando draws do caminho direto vs draws submetidos com indirect para o opaco.")]
+    public bool logOpaqueIndirectTelemetry = false;
+    [Min(0.25f)]
+    [Tooltip("Intervalo em segundos entre logs da telemetria de indirect opaco.")]
+    public float opaqueIndirectTelemetryLogInterval = 2f;
 
     [Header("Debug / Physics")]
     [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
@@ -620,6 +631,9 @@ public partial class World : MonoBehaviour
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
     private bool nativeGenerationConfigDirty = true;
     private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
+    private bool lastEnableOpaqueIndirectDrawSubmission = true;
+    private float nextOpaqueIndirectTelemetryLogTime;
+    private int lastLoggedOpaqueTelemetryFrame = -1;
 
 
     // Optimization temporaries
@@ -1031,6 +1045,14 @@ public partial class World : MonoBehaviour
 
     private int GetResolvedVisualSubchunksPerRenderer()
     {
+        int resolved = Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
+        if (allowGroupedSlicesWithOpaqueVertexPulling && CanUseOpaqueVertexPulling())
+        {
+            int pulledOpaqueResolved = Mathf.Clamp(groupedSlicesWithOpaqueVertexPullingSubchunksPerRenderer, 0, Chunk.SubchunksPerColumn);
+            if (pulledOpaqueResolved > 0)
+                resolved = Mathf.Max(resolved, pulledOpaqueResolved);
+        }
+
         if (enableMinecraftSectionOcclusion &&
             forceSingleSubchunkRendererForSectionOcclusion)
         {
@@ -1038,7 +1060,7 @@ public partial class World : MonoBehaviour
                 return 1;
         }
 
-        return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
+        return resolved;
     }
 
     private void ApplyResolvedVisualSubchunkRendererLayout()
@@ -1716,6 +1738,7 @@ public partial class World : MonoBehaviour
         MarkBiomeCachesDirty();
         InvalidateNativeGenerationCaches();
         MarkPlatformRenderProfileDirty();
+        ChunkRenderSlice.SetIndirectOpaqueDrawSubmissionEnabled(enableOpaqueIndirectDrawSubmission);
     }
 
     private void Start()
@@ -1735,6 +1758,10 @@ public partial class World : MonoBehaviour
         InitializeWarpLayers();
         InvalidateNativeGenerationCaches();
         lastResolvedOpaqueRenderBackendKind = GetActiveOpaqueRenderBackendKind();
+        lastEnableOpaqueIndirectDrawSubmission = enableOpaqueIndirectDrawSubmission;
+        ChunkRenderSlice.SetIndirectOpaqueDrawSubmissionEnabled(enableOpaqueIndirectDrawSubmission);
+        nextOpaqueIndirectTelemetryLogTime = Time.unscaledTime + Mathf.Max(0.25f, opaqueIndirectTelemetryLogInterval);
+        lastLoggedOpaqueTelemetryFrame = -1;
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -1789,6 +1816,7 @@ public partial class World : MonoBehaviour
     private void Update()
     {
         ApplyPlatformRenderProfileIfNeeded();
+        ApplyOpaqueIndirectSettingsIfNeeded();
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
         ApplyResolvedVisualSubchunkRendererLayout();
@@ -1802,6 +1830,7 @@ public partial class World : MonoBehaviour
         ProcessPendingColliderBuilds();
         ProcessChunkQueue();
         UpdateSectionOcclusionVisibility();
+        LogOpaqueIndirectTelemetryIfNeeded();
     }
 
     #endregion

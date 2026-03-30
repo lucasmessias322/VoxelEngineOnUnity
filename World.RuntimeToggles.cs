@@ -81,6 +81,45 @@ public partial class World
             RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
     }
 
+    private void ApplyOpaqueIndirectSettingsIfNeeded()
+    {
+        if (lastEnableOpaqueIndirectDrawSubmission == enableOpaqueIndirectDrawSubmission)
+            return;
+
+        lastEnableOpaqueIndirectDrawSubmission = enableOpaqueIndirectDrawSubmission;
+        ChunkRenderSlice.SetIndirectOpaqueDrawSubmissionEnabled(enableOpaqueIndirectDrawSubmission);
+        lastLoggedOpaqueTelemetryFrame = -1;
+        nextOpaqueIndirectTelemetryLogTime = Time.unscaledTime + Mathf.Max(0.25f, opaqueIndirectTelemetryLogInterval);
+    }
+
+    private void LogOpaqueIndirectTelemetryIfNeeded()
+    {
+        if (!logOpaqueIndirectTelemetry)
+            return;
+
+        if (Time.unscaledTime < nextOpaqueIndirectTelemetryLogTime)
+            return;
+
+        ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot = ChunkRenderSlice.GetLatestOpaqueRenderTelemetry();
+        if (!snapshot.IsValid || snapshot.slicesRendered <= 0)
+            return;
+
+        if (snapshot.frame == lastLoggedOpaqueTelemetryFrame)
+            return;
+
+        lastLoggedOpaqueTelemetryFrame = snapshot.frame;
+        nextOpaqueIndirectTelemetryLogTime = Time.unscaledTime + Mathf.Max(0.25f, opaqueIndirectTelemetryLogInterval);
+
+        Debug.Log(
+            $"[OpaqueIndirectTelemetry] frame={snapshot.frame} enabled={enableOpaqueIndirectDrawSubmission} " +
+            $"slices={snapshot.slicesRendered} directPathDraws={snapshot.directPathDrawCalls} " +
+            $"submittedDraws={snapshot.drawCalls} savedVsDirect={snapshot.indirectSavedDrawCalls} " +
+            $"visibleOpaqueSubchunks={snapshot.visibleOpaqueSubchunks} savedVsSubchunk={snapshot.savedDrawCalls} " +
+            $"indirectSlices={snapshot.indirectSlices} singleDrawSlices={snapshot.singleDrawSlices} " +
+            $"runBatchedSlices={snapshot.runBatchedSlices}",
+            this);
+    }
+
     private void RefreshSimulationDistanceState(Vector2Int simulationCenter)
     {
         foreach (var kv in activeChunks)

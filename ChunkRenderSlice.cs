@@ -35,7 +35,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private static readonly List<ChunkRenderSlice> ManagedRenderSlices = new List<ChunkRenderSlice>(2048);
     private static readonly List<ChunkRenderSlice> OpaqueRenderSlices = new List<ChunkRenderSlice>(512);
     private const string OpaqueIndirectArgsBuildResourcePath = "OpaqueIndirectArgsBuild";
-    private const bool EnableIndirectOpaqueDrawSubmission = false;
+    private static bool enableIndirectOpaqueDrawSubmission = true;
     private static bool renderHookRegistered;
     private static ComputeShader opaqueIndirectArgsBuildComputeShader;
     private static int opaqueIndirectArgsBuildKernel = -1;
@@ -45,10 +45,13 @@ public class ChunkRenderSlice : MonoBehaviour
     private static int telemetryFrame = -1;
     private static int telemetrySlicesRendered;
     private static int telemetryDrawCalls;
+    private static int telemetryDirectPathDrawCalls;
     private static int telemetrySingleDrawSlices;
     private static int telemetryRunBatchedSlices;
+    private static int telemetryIndirectSlices;
     private static int telemetryVisibleOpaqueSubchunks;
     private static int telemetrySavedDrawCalls;
+    private static int telemetryIndirectSavedDrawCalls;
 
     [StructLayout(LayoutKind.Sequential)]
     private struct OpaqueFaceSection
@@ -248,6 +251,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private int pulledOpaqueFaceBufferVersion = -1;
     private int startSubchunkIndex;
     private int subchunkCount;
+    private int meshGeometrySubchunkMask;
     private int logicalVisibleOpaqueSubchunkMask;
     private int visibleOpaqueSubchunkMask;
     private int opaqueGeometrySubchunkMask;
@@ -259,6 +263,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private bool hasOpaqueGeometry;
     private ChunkOpaqueRenderBackendKind activeOpaqueRenderBackendKind;
     private bool logicalShouldShow;
+    private bool logicalShouldShowMeshGeometry;
     private bool isFrustumVisible = true;
     private bool shouldRenderOpaqueGeometry;
     private bool indirectOpaqueArgsDirty = true;
@@ -303,27 +308,36 @@ public class ChunkRenderSlice : MonoBehaviour
         public readonly int frame;
         public readonly int slicesRendered;
         public readonly int drawCalls;
+        public readonly int directPathDrawCalls;
         public readonly int singleDrawSlices;
         public readonly int runBatchedSlices;
+        public readonly int indirectSlices;
         public readonly int visibleOpaqueSubchunks;
         public readonly int savedDrawCalls;
+        public readonly int indirectSavedDrawCalls;
 
         public OpaqueRenderTelemetrySnapshot(
             int frame,
             int slicesRendered,
             int drawCalls,
+            int directPathDrawCalls,
             int singleDrawSlices,
             int runBatchedSlices,
             int visibleOpaqueSubchunks,
-            int savedDrawCalls)
+            int savedDrawCalls,
+            int indirectSlices,
+            int indirectSavedDrawCalls)
         {
             this.frame = frame;
             this.slicesRendered = slicesRendered;
             this.drawCalls = drawCalls;
+            this.directPathDrawCalls = directPathDrawCalls;
             this.singleDrawSlices = singleDrawSlices;
             this.runBatchedSlices = runBatchedSlices;
+            this.indirectSlices = indirectSlices;
             this.visibleOpaqueSubchunks = visibleOpaqueSubchunks;
             this.savedDrawCalls = savedDrawCalls;
+            this.indirectSavedDrawCalls = indirectSavedDrawCalls;
         }
 
         public bool IsValid => frame >= 0;
@@ -342,6 +356,16 @@ public class ChunkRenderSlice : MonoBehaviour
     public static bool SupportsIndirectOpaqueVertexPulling()
     {
         return ChunkOpaqueRenderSupport.SupportsIndirectVertexPulling();
+    }
+
+    public static bool IsIndirectOpaqueDrawSubmissionEnabled()
+    {
+        return enableIndirectOpaqueDrawSubmission;
+    }
+
+    public static void SetIndirectOpaqueDrawSubmissionEnabled(bool enabled)
+    {
+        enableIndirectOpaqueDrawSubmission = enabled;
     }
 
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
@@ -406,6 +430,7 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         activeOpaqueRenderBackendKind = opaqueRenderBackendKind;
         SliceMeshTotals totals = CalculateMeshTotals(subchunkRanges);
+        UpdateMeshGeometrySubchunkMask(subchunkRanges);
         bool usePulledOpaqueBackend =
             activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
             SupportsOpaqueVertexPulling() &&
@@ -454,6 +479,7 @@ public class ChunkRenderSlice : MonoBehaviour
         if (!hasGeometry)
         {
             logicalShouldShow = false;
+            logicalShouldShowMeshGeometry = false;
             logicalVisibleOpaqueSubchunkMask = 0;
             SetRendererEnabled(false);
             shouldRenderOpaqueGeometry = false;
@@ -467,12 +493,14 @@ public class ChunkRenderSlice : MonoBehaviour
 
     public void RefreshVisibility(Subchunk[] logicalSubchunks)
     {
-        logicalShouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
-        logicalVisibleOpaqueSubchunkMask = logicalShouldShow ? GetVisibleOpaqueSubchunkMask(logicalSubchunks) : 0;
+        logicalVisibleOpaqueSubchunkMask = hasOpaqueGeometry ? GetVisibleOpaqueSubchunkMask(logicalSubchunks) : 0;
+        logicalShouldShowMeshGeometry = hasMeshGeometry && HasAnyVisibleMeshGeometry(logicalSubchunks);
+        logicalShouldShow = logicalShouldShowMeshGeometry || logicalVisibleOpaqueSubchunkMask != 0;
 
         if (!hasGeometry)
         {
             logicalShouldShow = false;
+            logicalShouldShowMeshGeometry = false;
             logicalVisibleOpaqueSubchunkMask = 0;
             SetRendererEnabled(false);
             shouldRenderOpaqueGeometry = false;
@@ -510,10 +538,12 @@ public class ChunkRenderSlice : MonoBehaviour
         hasOpaqueGeometry = false;
         activeOpaqueRenderBackendKind = ChunkOpaqueRenderBackendKind.ClassicMesh;
         logicalShouldShow = false;
+        logicalShouldShowMeshGeometry = false;
         logicalVisibleOpaqueSubchunkMask = 0;
         isFrustumVisible = true;
         shouldRenderOpaqueGeometry = false;
         visibleOpaqueSubchunkMask = 0;
+        meshGeometrySubchunkMask = 0;
         UpdateManagedRenderRegistration();
         UpdateOpaqueRenderRegistration();
         SetRendererEnabled(false);
@@ -707,7 +737,7 @@ public class ChunkRenderSlice : MonoBehaviour
 
     private void EnsureIndirectOpaqueArgsCapacity(int requiredCount)
     {
-        if (!EnableIndirectOpaqueDrawSubmission || !SupportsIndirectOpaqueVertexPulling())
+        if (!enableIndirectOpaqueDrawSubmission || !SupportsIndirectOpaqueVertexPulling())
             return;
 
         int safeRequiredCount = Mathf.Max(1, requiredCount);
@@ -813,6 +843,9 @@ public class ChunkRenderSlice : MonoBehaviour
         {
             pulledOpaqueFaceBufferVersion = -1;
         }
+
+        if (indirectOpaqueArgsBuffer != null)
+            pulledOpaquePropertyBlock.SetBuffer(IndirectDrawArgsComputePropertyId, indirectOpaqueArgsBuffer);
     }
 
     private void ConfigureOpaqueMaterial(Material[] sharedMaterials)
@@ -835,7 +868,7 @@ public class ChunkRenderSlice : MonoBehaviour
             MarkIndirectOpaqueArgsDirty();
 
         visibleOpaqueSubchunkMask = nextVisibleOpaqueSubchunkMask;
-        SetRendererEnabled(hasMeshGeometry && logicalShouldShow && isFrustumVisible);
+        SetRendererEnabled(hasMeshGeometry && logicalShouldShowMeshGeometry && isFrustumVisible);
         shouldRenderOpaqueGeometry =
             activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
             hasOpaqueGeometry &&
@@ -936,10 +969,14 @@ public class ChunkRenderSlice : MonoBehaviour
         telemetryFrame = -1;
         telemetrySlicesRendered = 0;
         telemetryDrawCalls = 0;
+        telemetryDirectPathDrawCalls = 0;
         telemetrySingleDrawSlices = 0;
         telemetryRunBatchedSlices = 0;
+        telemetryIndirectSlices = 0;
         telemetryVisibleOpaqueSubchunks = 0;
         telemetrySavedDrawCalls = 0;
+        telemetryIndirectSavedDrawCalls = 0;
+        enableIndirectOpaqueDrawSubmission = true;
     }
 
     private static void HandleBeginCameraRendering(ScriptableRenderContext context, Camera camera)
@@ -1010,11 +1047,20 @@ public class ChunkRenderSlice : MonoBehaviour
             TryBuildIndirectOpaqueDrawCommands(out int indirectCommandCount) &&
             indirectCommandCount > 0)
         {
+            if (pulledOpaquePropertyBlock != null && indirectOpaqueArgsBuffer != null)
+                pulledOpaquePropertyBlock.SetBuffer(IndirectDrawArgsComputePropertyId, indirectOpaqueArgsBuffer);
+
             pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 1f);
             pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
             Graphics.RenderPrimitivesIndirect(renderParams, MeshTopology.Triangles, indirectOpaqueArgsBuffer, indirectCommandCount);
             if (trackTelemetry)
-                RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, indirectCommandCount == 1, indirectCommandCount > 1);
+                RecordOpaqueTelemetry(
+                    visibleOpaqueSubchunkCount,
+                    indirectCommandCount,
+                    1,
+                    indirectCommandCount == 1,
+                    indirectCommandCount > 1,
+                    true);
             return;
         }
 
@@ -1024,7 +1070,7 @@ public class ChunkRenderSlice : MonoBehaviour
             pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, pulledOpaqueFaceGlobalStart);
             Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, pulledOpaqueFaceCount);
             if (trackTelemetry)
-                RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, true, false);
+                RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, 1, true, false, false);
             return;
         }
 
@@ -1067,16 +1113,15 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         if (trackTelemetry)
-            RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, runCount, false, runCount > 0);
+            RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, runCount, runCount, false, runCount > 0, false);
     }
 
     private bool TryBuildIndirectOpaqueDrawCommands(out int commandCount)
     {
         commandCount = 0;
 
-        if (!EnableIndirectOpaqueDrawSubmission ||
+        if (!enableIndirectOpaqueDrawSubmission ||
             !SupportsIndirectOpaqueVertexPulling() ||
-            indirectOpaqueArgsBuffer == null ||
             pulledOpaqueFaceCount <= 0)
         {
             cachedIndirectOpaqueCommandCount = 0;
@@ -1168,6 +1213,8 @@ public class ChunkRenderSlice : MonoBehaviour
 
     private bool TryBuildIndirectOpaqueDrawCommandsGpu(uint visibleLocalMask)
     {
+        // Keep the indirect submission itself enabled, but build the command buffer on CPU.
+        // The GPU args builder is currently causing opaque slices to disappear in runtime.
         return false;
     }
 
@@ -1331,7 +1378,13 @@ public class ChunkRenderSlice : MonoBehaviour
         return mainCamera == null || camera == mainCamera;
     }
 
-    private static void RecordOpaqueTelemetry(int visibleOpaqueSubchunkCount, int actualDrawCalls, bool usedSingleDraw, bool usedRunBatching)
+    private static void RecordOpaqueTelemetry(
+        int visibleOpaqueSubchunkCount,
+        int directPathDrawCalls,
+        int actualDrawCalls,
+        bool usedSingleDraw,
+        bool usedRunBatching,
+        bool usedIndirect)
     {
         int currentFrame = Time.frameCount;
         if (telemetryFrame != currentFrame)
@@ -1339,30 +1392,41 @@ public class ChunkRenderSlice : MonoBehaviour
             telemetryFrame = currentFrame;
             telemetrySlicesRendered = 0;
             telemetryDrawCalls = 0;
+            telemetryDirectPathDrawCalls = 0;
             telemetrySingleDrawSlices = 0;
             telemetryRunBatchedSlices = 0;
+            telemetryIndirectSlices = 0;
             telemetryVisibleOpaqueSubchunks = 0;
             telemetrySavedDrawCalls = 0;
+            telemetryIndirectSavedDrawCalls = 0;
         }
 
         telemetrySlicesRendered++;
         telemetryDrawCalls += actualDrawCalls;
+        telemetryDirectPathDrawCalls += directPathDrawCalls;
         telemetryVisibleOpaqueSubchunks += visibleOpaqueSubchunkCount;
         telemetrySavedDrawCalls += Mathf.Max(0, visibleOpaqueSubchunkCount - actualDrawCalls);
+        telemetryIndirectSavedDrawCalls += Mathf.Max(0, directPathDrawCalls - actualDrawCalls);
 
         if (usedSingleDraw)
             telemetrySingleDrawSlices++;
         else if (usedRunBatching)
             telemetryRunBatchedSlices++;
 
+        if (usedIndirect)
+            telemetryIndirectSlices++;
+
         latestOpaqueRenderTelemetry = new OpaqueRenderTelemetrySnapshot(
             telemetryFrame,
             telemetrySlicesRendered,
             telemetryDrawCalls,
+            telemetryDirectPathDrawCalls,
             telemetrySingleDrawSlices,
             telemetryRunBatchedSlices,
             telemetryVisibleOpaqueSubchunks,
-            telemetrySavedDrawCalls);
+            telemetrySavedDrawCalls,
+            telemetryIndirectSlices,
+            telemetryIndirectSavedDrawCalls);
     }
 
     private static void ConfigureSubMeshes(Mesh.MeshData meshData, SliceMeshTotals totals)
@@ -1387,16 +1451,33 @@ public class ChunkRenderSlice : MonoBehaviour
             meshRenderer.enabled = enabled;
     }
 
-    private bool HasAnyVisibleGeometry(Subchunk[] logicalSubchunks)
+    private void UpdateMeshGeometrySubchunkMask(NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges)
     {
-        if (logicalSubchunks == null)
+        meshGeometrySubchunkMask = 0;
+        if (!subchunkRanges.IsCreated)
+            return;
+
+        int end = Mathf.Min(EndSubchunkIndexExclusive, subchunkRanges.Length);
+        for (int sub = startSubchunkIndex; sub < end; sub++)
+        {
+            if (subchunkRanges[sub].vertexCount > 0)
+                meshGeometrySubchunkMask |= 1 << sub;
+        }
+    }
+
+    private bool HasAnyVisibleMeshGeometry(Subchunk[] logicalSubchunks)
+    {
+        if (!hasMeshGeometry || meshGeometrySubchunkMask == 0 || logicalSubchunks == null)
             return false;
 
         int end = Mathf.Min(EndSubchunkIndexExclusive, logicalSubchunks.Length);
         for (int sub = startSubchunkIndex; sub < end; sub++)
         {
+            if ((meshGeometrySubchunkMask & (1 << sub)) == 0)
+                continue;
+
             Subchunk logicalSubchunk = logicalSubchunks[sub];
-            if (logicalSubchunk != null && logicalSubchunk.hasGeometry && logicalSubchunk.IsVisible)
+            if (logicalSubchunk != null && logicalSubchunk.IsVisible)
                 return true;
         }
 
