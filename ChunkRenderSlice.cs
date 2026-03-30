@@ -28,6 +28,14 @@ public class ChunkRenderSlice : MonoBehaviour
     private static readonly System.Collections.Generic.List<ChunkRenderSlice> ManagedRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(2048);
     private static readonly System.Collections.Generic.List<ChunkRenderSlice> OpaqueRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(512);
     private static bool renderHookRegistered;
+    private static OpaqueRenderTelemetrySnapshot latestOpaqueRenderTelemetry;
+    private static int telemetryFrame = -1;
+    private static int telemetrySlicesRendered;
+    private static int telemetryDrawCalls;
+    private static int telemetrySingleDrawSlices;
+    private static int telemetryRunBatchedSlices;
+    private static int telemetryVisibleOpaqueSubchunks;
+    private static int telemetrySavedDrawCalls;
 
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
@@ -43,6 +51,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private int subchunkCount;
     private int logicalVisibleOpaqueSubchunkMask;
     private int visibleOpaqueSubchunkMask;
+    private int opaqueGeometrySubchunkMask;
     private int[] pulledOpaqueFaceStartsByLocalSubchunk;
     private int[] pulledOpaqueFaceCountsByLocalSubchunk;
     private bool hasGeometry;
@@ -87,6 +96,42 @@ public class ChunkRenderSlice : MonoBehaviour
     public int StartSubchunkIndex => startSubchunkIndex;
     public int EndSubchunkIndexExclusive => startSubchunkIndex + subchunkCount;
     public bool HasGeometry => hasGeometry;
+
+    public readonly struct OpaqueRenderTelemetrySnapshot
+    {
+        public readonly int frame;
+        public readonly int slicesRendered;
+        public readonly int drawCalls;
+        public readonly int singleDrawSlices;
+        public readonly int runBatchedSlices;
+        public readonly int visibleOpaqueSubchunks;
+        public readonly int savedDrawCalls;
+
+        public OpaqueRenderTelemetrySnapshot(
+            int frame,
+            int slicesRendered,
+            int drawCalls,
+            int singleDrawSlices,
+            int runBatchedSlices,
+            int visibleOpaqueSubchunks,
+            int savedDrawCalls)
+        {
+            this.frame = frame;
+            this.slicesRendered = slicesRendered;
+            this.drawCalls = drawCalls;
+            this.singleDrawSlices = singleDrawSlices;
+            this.runBatchedSlices = runBatchedSlices;
+            this.visibleOpaqueSubchunks = visibleOpaqueSubchunks;
+            this.savedDrawCalls = savedDrawCalls;
+        }
+
+        public bool IsValid => frame >= 0;
+    }
+
+    public static OpaqueRenderTelemetrySnapshot GetLatestOpaqueRenderTelemetry()
+    {
+        return latestOpaqueRenderTelemetry;
+    }
 
     public static bool SupportsOpaqueVertexPulling()
     {
@@ -371,6 +416,7 @@ public class ChunkRenderSlice : MonoBehaviour
         EnsurePulledOpaqueSubchunkMetadataCapacity();
         Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
         Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
+        opaqueGeometrySubchunkMask = 0;
 
         NativeArray<MeshGenerator.PulledOpaqueFace> uploadData = new NativeArray<MeshGenerator.PulledOpaqueFace>(
             totalOpaqueFaceCount,
@@ -387,6 +433,8 @@ public class ChunkRenderSlice : MonoBehaviour
 
             if (range.opaqueFaceCount <= 0)
                 continue;
+
+            opaqueGeometrySubchunkMask |= 1 << sub;
 
             NativeArray<MeshGenerator.PulledOpaqueFace>.Copy(
                 pulledOpaqueFaces.AsArray(),
@@ -410,6 +458,7 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         pulledOpaqueFaceCount = 0;
         visibleOpaqueSubchunkMask = 0;
+        opaqueGeometrySubchunkMask = 0;
         if (pulledOpaqueFaceStartsByLocalSubchunk != null)
             Array.Clear(pulledOpaqueFaceStartsByLocalSubchunk, 0, pulledOpaqueFaceStartsByLocalSubchunk.Length);
         if (pulledOpaqueFaceCountsByLocalSubchunk != null)
@@ -583,6 +632,14 @@ public class ChunkRenderSlice : MonoBehaviour
         renderHookRegistered = false;
         ManagedRenderSlices.Clear();
         OpaqueRenderSlices.Clear();
+        latestOpaqueRenderTelemetry = default;
+        telemetryFrame = -1;
+        telemetrySlicesRendered = 0;
+        telemetryDrawCalls = 0;
+        telemetrySingleDrawSlices = 0;
+        telemetryRunBatchedSlices = 0;
+        telemetryVisibleOpaqueSubchunks = 0;
+        telemetrySavedDrawCalls = 0;
     }
 
     private static void HandleBeginCameraRendering(ScriptableRenderContext context, Camera camera)
@@ -638,34 +695,141 @@ public class ChunkRenderSlice : MonoBehaviour
             renderingLayerMask = meshRenderer != null ? meshRenderer.renderingLayerMask : uint.MaxValue
         };
 
-        if (subchunkCount <= 1)
+        bool trackTelemetry = ShouldTrackOpaqueTelemetry(camera);
+        int visibleOpaqueSubchunkCount = trackTelemetry ? CountVisibleOpaqueSubchunksWithFaces() : 0;
+
+        if (subchunkCount <= 1 || CanRenderOpaqueSliceAsSingleDraw())
         {
             pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
             Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, pulledOpaqueFaceCount);
+            if (trackTelemetry)
+                RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, 1, true, false);
             return;
         }
 
+        int runCount = 0;
+        for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount;)
+        {
+            int subchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
+            int subchunkFaceCount = GetLocalOpaqueFaceCount(localSubchunkIndex);
+            if ((visibleOpaqueSubchunkMask & subchunkBit) == 0 || subchunkFaceCount <= 0)
+            {
+                localSubchunkIndex++;
+                continue;
+            }
+
+            int runFaceStart = GetLocalOpaqueFaceStart(localSubchunkIndex);
+            int runFaceCount = subchunkFaceCount;
+            int nextLocalSubchunkIndex = localSubchunkIndex + 1;
+
+            while (nextLocalSubchunkIndex < subchunkCount)
+            {
+                int nextFaceCount = GetLocalOpaqueFaceCount(nextLocalSubchunkIndex);
+                if (nextFaceCount <= 0)
+                {
+                    nextLocalSubchunkIndex++;
+                    continue;
+                }
+
+                int nextSubchunkBit = 1 << (startSubchunkIndex + nextLocalSubchunkIndex);
+                if ((visibleOpaqueSubchunkMask & nextSubchunkBit) == 0)
+                    break;
+
+                runFaceCount += nextFaceCount;
+                nextLocalSubchunkIndex++;
+            }
+
+            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, runFaceStart);
+            Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, runFaceCount);
+            runCount++;
+            localSubchunkIndex = nextLocalSubchunkIndex;
+        }
+
+        if (trackTelemetry)
+            RecordOpaqueTelemetry(visibleOpaqueSubchunkCount, runCount, false, runCount > 0);
+    }
+
+    private bool CanRenderOpaqueSliceAsSingleDraw()
+    {
+        return opaqueGeometrySubchunkMask != 0 &&
+               visibleOpaqueSubchunkMask == opaqueGeometrySubchunkMask;
+    }
+
+    private int GetLocalOpaqueFaceStart(int localSubchunkIndex)
+    {
+        return pulledOpaqueFaceStartsByLocalSubchunk != null &&
+               localSubchunkIndex >= 0 &&
+               localSubchunkIndex < pulledOpaqueFaceStartsByLocalSubchunk.Length
+            ? pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex]
+            : 0;
+    }
+
+    private int GetLocalOpaqueFaceCount(int localSubchunkIndex)
+    {
+        return pulledOpaqueFaceCountsByLocalSubchunk != null &&
+               localSubchunkIndex >= 0 &&
+               localSubchunkIndex < pulledOpaqueFaceCountsByLocalSubchunk.Length
+            ? pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex]
+            : 0;
+    }
+
+    private int CountVisibleOpaqueSubchunksWithFaces()
+    {
+        int visibleCount = 0;
         for (int localSubchunkIndex = 0; localSubchunkIndex < subchunkCount; localSubchunkIndex++)
         {
             int subchunkBit = 1 << (startSubchunkIndex + localSubchunkIndex);
             if ((visibleOpaqueSubchunkMask & subchunkBit) == 0)
                 continue;
 
-            int subchunkFaceCount = pulledOpaqueFaceCountsByLocalSubchunk != null &&
-                                    localSubchunkIndex < pulledOpaqueFaceCountsByLocalSubchunk.Length
-                ? pulledOpaqueFaceCountsByLocalSubchunk[localSubchunkIndex]
-                : 0;
-            if (subchunkFaceCount <= 0)
-                continue;
-
-            int subchunkFaceStart = pulledOpaqueFaceStartsByLocalSubchunk != null &&
-                                    localSubchunkIndex < pulledOpaqueFaceStartsByLocalSubchunk.Length
-                ? pulledOpaqueFaceStartsByLocalSubchunk[localSubchunkIndex]
-                : 0;
-
-            pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, subchunkFaceStart);
-            Graphics.RenderPrimitives(renderParams, MeshTopology.Triangles, 6, subchunkFaceCount);
+            if (GetLocalOpaqueFaceCount(localSubchunkIndex) > 0)
+                visibleCount++;
         }
+
+        return visibleCount;
+    }
+
+    private static bool ShouldTrackOpaqueTelemetry(Camera camera)
+    {
+        if (camera == null)
+            return false;
+
+        Camera mainCamera = Camera.main;
+        return mainCamera == null || camera == mainCamera;
+    }
+
+    private static void RecordOpaqueTelemetry(int visibleOpaqueSubchunkCount, int actualDrawCalls, bool usedSingleDraw, bool usedRunBatching)
+    {
+        int currentFrame = Time.frameCount;
+        if (telemetryFrame != currentFrame)
+        {
+            telemetryFrame = currentFrame;
+            telemetrySlicesRendered = 0;
+            telemetryDrawCalls = 0;
+            telemetrySingleDrawSlices = 0;
+            telemetryRunBatchedSlices = 0;
+            telemetryVisibleOpaqueSubchunks = 0;
+            telemetrySavedDrawCalls = 0;
+        }
+
+        telemetrySlicesRendered++;
+        telemetryDrawCalls += actualDrawCalls;
+        telemetryVisibleOpaqueSubchunks += visibleOpaqueSubchunkCount;
+        telemetrySavedDrawCalls += Mathf.Max(0, visibleOpaqueSubchunkCount - actualDrawCalls);
+
+        if (usedSingleDraw)
+            telemetrySingleDrawSlices++;
+        else if (usedRunBatching)
+            telemetryRunBatchedSlices++;
+
+        latestOpaqueRenderTelemetry = new OpaqueRenderTelemetrySnapshot(
+            telemetryFrame,
+            telemetrySlicesRendered,
+            telemetryDrawCalls,
+            telemetrySingleDrawSlices,
+            telemetryRunBatchedSlices,
+            telemetryVisibleOpaqueSubchunks,
+            telemetrySavedDrawCalls);
     }
 
     private static void ConfigureSubMeshes(Mesh.MeshData meshData, SliceMeshTotals totals)
