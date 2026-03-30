@@ -1363,7 +1363,7 @@ public partial class World : MonoBehaviour
 
         public NativeList<MeshGenerator.PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
-        public NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces;
+        public NativeList<MeshGenerator.CompactOpaqueFace> compactOpaqueFaces;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
@@ -2019,7 +2019,7 @@ public partial class World : MonoBehaviour
                     visualSlice.ApplyMeshData(
                         pm.vertices,
                         pm.opaqueTriangles,
-                        pm.pulledOpaqueFaces,
+                        pm.compactOpaqueFaces,
                         pm.transparentTriangles,
                         pm.billboardTriangles,
                         pm.waterTriangles,
@@ -2322,7 +2322,7 @@ public partial class World : MonoBehaviour
                     out JobHandle meshHandle,
                     out NativeList<MeshGenerator.PackedChunkVertex> vertices,
                     out NativeList<int> opaqueTriangles,
-                    out NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
+                    out NativeList<MeshGenerator.CompactOpaqueFace> compactOpaqueFaces,
                     out NativeList<int> transparentTriangles,
                     out NativeList<int> billboardTriangles,
                     out NativeList<int> waterTriangles,
@@ -2340,7 +2340,7 @@ public partial class World : MonoBehaviour
                     handle = meshHandle,
                     vertices = vertices,
                     opaqueTriangles = opaqueTriangles,
-                    pulledOpaqueFaces = pulledOpaqueFaces,
+                    compactOpaqueFaces = compactOpaqueFaces,
                     transparentTriangles = transparentTriangles,
                     billboardTriangles = billboardTriangles,
                     waterTriangles = waterTriangles,

@@ -146,16 +146,12 @@ public static class MeshGenerator
     }
 
     [StructLayout(LayoutKind.Sequential)]
-    public struct PulledOpaqueFace
+    public struct CompactOpaqueFace
     {
-        public float4 originWS;
-        public float4 edgeU;
-        public float4 edgeV;
-        public float4 normalWS;
-        public float4 uvBounds;
-        public float4 atlasAndFlags;
-        public float4 cornerLight01;
-        public float4 cornerAo01;
+        public uint packed0;
+        public uint packed1;
+        public uint packed2;
+        public uint packed3;
     }
     // ------------------- Tree Instance -------------------
 
@@ -1022,7 +1018,7 @@ public static class MeshGenerator
         out JobHandle meshHandle,
         out NativeList<PackedChunkVertex> vertices,
         out NativeList<int> opaqueTriangles,
-        out NativeList<PulledOpaqueFace> pulledOpaqueFaces,
+        out NativeList<CompactOpaqueFace> compactOpaqueFaces,
         out NativeList<int> transparentTriangles,
         out NativeList<int> billboardTriangles,
         out NativeList<int> waterTriangles,
@@ -1034,8 +1030,8 @@ public static class MeshGenerator
         bool useOpaqueVertexPulling = opaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque;
         vertices = new NativeList<PackedChunkVertex>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        pulledOpaqueFaces = useOpaqueVertexPulling
-            ? new NativeList<PulledOpaqueFace>(2048, Allocator.Persistent)
+        compactOpaqueFaces = useOpaqueVertexPulling
+            ? new NativeList<CompactOpaqueFace>(8192, Allocator.Persistent)
             : default;
         waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
@@ -1081,7 +1077,7 @@ public static class MeshGenerator
 
             vertices = vertices,
             opaqueTriangles = opaqueTriangles,
-            pulledOpaqueFaces = pulledOpaqueFaces,
+            compactOpaqueFaces = compactOpaqueFaces,
             waterTriangles = waterTriangles,
             transparentTriangles = transparentTriangles,
             billboardTriangles = billboardTriangles,
@@ -1136,7 +1132,7 @@ public static class MeshGenerator
 
         public NativeList<PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
-        public NativeList<PulledOpaqueFace> pulledOpaqueFaces;
+        public NativeList<CompactOpaqueFace> compactOpaqueFaces;
         public NativeList<int> waterTriangles;
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
@@ -1190,7 +1186,7 @@ public static class MeshGenerator
                     {
                         vertexStart = vertices.Length,
                         opaqueStart = opaqueTriangles.Length,
-                        opaqueFaceStart = pulledOpaqueFaces.IsCreated ? pulledOpaqueFaces.Length : 0,
+                        opaqueFaceStart = compactOpaqueFaces.IsCreated ? compactOpaqueFaces.Length : 0,
                         transparentStart = transparentTriangles.Length,
                         billboardStart = billboardTriangles.Length,
                         waterStart = waterTriangles.Length
@@ -1204,7 +1200,7 @@ public static class MeshGenerator
 
                     range.vertexCount = vertices.Length - range.vertexStart;
                     range.opaqueCount = opaqueTriangles.Length - range.opaqueStart;
-                    range.opaqueFaceCount = pulledOpaqueFaces.IsCreated ? pulledOpaqueFaces.Length - range.opaqueFaceStart : 0;
+                    range.opaqueFaceCount = compactOpaqueFaces.IsCreated ? compactOpaqueFaces.Length - range.opaqueFaceStart : 0;
                     range.transparentCount = transparentTriangles.Length - range.transparentStart;
                     range.billboardCount = billboardTriangles.Length - range.billboardStart;
                     range.waterCount = waterTriangles.Length - range.waterStart;
@@ -1235,18 +1231,68 @@ public static class MeshGenerator
             });
         }
 
-        private void AddPulledOpaqueFace(
-            Vector3 originWS,
-            Vector3 edgeU,
-            Vector3 edgeV,
-            Vector3 normal,
-            Vector2 uvOrigin,
-            Vector2 uvEdgeU,
-            Vector2 uvEdgeV,
-            Vector2 atlasUv,
+        private static byte PackNormalizedByte(float value)
+        {
+            return (byte)math.clamp((int)math.round(math.saturate(value) * 255f), 0, 255);
+        }
+
+        private static uint PackNormalizedBytes4(float a, float b, float c, float d)
+        {
+            return (uint)(PackNormalizedByte(a) |
+                          (PackNormalizedByte(b) << 8) |
+                          (PackNormalizedByte(c) << 16) |
+                          (PackNormalizedByte(d) << 24));
+        }
+
+        private static int ResolveCompactFaceDirection(int axis, int normalSign)
+        {
+            switch (axis)
+            {
+                case 0:
+                    return normalSign > 0 ? 0 : 1;
+                case 1:
+                    return normalSign > 0 ? 2 : 3;
+                default:
+                    return normalSign > 0 ? 4 : 5;
+            }
+        }
+
+        private static uint PackCompactOpaqueFaceHeader(
+            int localX,
+            int localY,
+            int localZ,
+            int faceDir,
+            int tileX,
+            int tileY,
+            bool tint,
+            bool flipTriangle)
+        {
+            uint packed = 0u;
+            packed |= (uint)(math.clamp(localX, 0, Chunk.SizeX - 1) & 0xF);
+            packed |= (uint)(math.clamp(localY, 0, Chunk.SizeY - 1) & 0x1FF) << 4;
+            packed |= (uint)(math.clamp(localZ, 0, Chunk.SizeZ - 1) & 0xF) << 13;
+            packed |= (uint)(faceDir & 0x7) << 17;
+            packed |= (uint)(math.clamp(tileX, 0, 31) & 0x1F) << 20;
+            packed |= (uint)(math.clamp(tileY, 0, 31) & 0x1F) << 25;
+            if (tint)
+                packed |= 1u << 30;
+            if (flipTriangle)
+                packed |= 1u << 31;
+
+            return packed;
+        }
+
+        private void AddCompactOpaqueFace(
+            int localX,
+            int localY,
+            int localZ,
+            int faceDir,
+            int spanU,
+            int spanV,
+            int tileX,
+            int tileY,
             bool tint,
             bool flipTriangle,
-            bool reversedWinding,
             float light0,
             float light1,
             float light2,
@@ -1256,25 +1302,16 @@ public static class MeshGenerator
             float ao2,
             float ao3)
         {
-            if (!pulledOpaqueFaces.IsCreated)
+            if (!compactOpaqueFaces.IsCreated)
                 return;
 
-            uint flags = 0u;
-            if (flipTriangle)
-                flags |= 1u;
-            if (reversedWinding)
-                flags |= 2u;
-
-            pulledOpaqueFaces.Add(new PulledOpaqueFace
+            compactOpaqueFaces.Add(new CompactOpaqueFace
             {
-                originWS = new float4(originWS.x, originWS.y, originWS.z, flags),
-                edgeU = new float4(edgeU.x, edgeU.y, edgeU.z, tint ? 1f : 0f),
-                edgeV = new float4(edgeV.x, edgeV.y, edgeV.z, 0f),
-                normalWS = new float4(normal.x, normal.y, normal.z, 0f),
-                uvBounds = new float4(uvOrigin.x, uvOrigin.y, uvEdgeU.x, uvEdgeU.y),
-                atlasAndFlags = new float4(uvEdgeV.x, uvEdgeV.y, atlasUv.x, atlasUv.y),
-                cornerLight01 = new float4(light0, light1, light2, light3),
-                cornerAo01 = new float4(ao0, ao1, ao2, ao3)
+                packed0 = PackCompactOpaqueFaceHeader(localX, localY, localZ, faceDir, tileX, tileY, tint, flipTriangle),
+                packed1 = (uint)((math.clamp(spanU, 1, Chunk.SizeY) & 0x1FF) |
+                                 ((math.clamp(spanV, 1, Chunk.SizeY) & 0x1FF) << 9)),
+                packed2 = PackNormalizedBytes4(light0, light1, light2, light3),
+                packed3 = PackNormalizedBytes4(ao0, ao1, ao2, ao3)
             });
         }
 
@@ -2573,13 +2610,18 @@ public static class MeshGenerator
                                     continue;
                                 }
 
-                                bool isWaterFace = FluidBlockUtility.IsWater((BlockType)startFace.blockId);
+                                BlockType startBlockType = (BlockType)startFace.blockId;
+                                BlockTextureMapping startMapping = blockMappings[(int)startBlockType];
+                                bool useCompactOpaqueFace = useOpaqueVertexPulling &&
+                                                            !FluidBlockUtility.IsWater(startBlockType) &&
+                                                            !startMapping.isTransparent;
+                                bool allowGreedyMerge = !FluidBlockUtility.IsWater(startBlockType);
                                 int w = 1;
-                                while (!isWaterFace && i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
+                                while (allowGreedyMerge && i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
                                     w++;
 
                                 int h = 1;
-                                while (!isWaterFace && j + h < maxV)
+                                while (allowGreedyMerge && j + h < maxV)
                                 {
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
@@ -2601,7 +2643,7 @@ public static class MeshGenerator
                                 }
 
                                 bool flipTriangle = (startFace.ao0 + startFace.ao2) > (startFace.ao1 + startFace.ao3);
-                                if (!useFastBedrockStyleMeshing)
+                                if (allowGreedyMerge && !useFastBedrockStyleMeshing)
                                 {
                                     int maxW = w;
                                     int maxH = h;
@@ -2631,7 +2673,7 @@ public static class MeshGenerator
                                     w = bestW;
                                     h = bestH;
                                 }
-                                else
+                                else if (allowGreedyMerge)
                                 {
                                     TryGetRepresentableRectFast(mask, sizeU, i, j, w, h, out w, out h, out flipTriangle);
                                 }
@@ -2668,101 +2710,19 @@ public static class MeshGenerator
                                 float floatLight1 = light1 / 15f;
                                 float floatLight2 = light2 / 15f;
                                 float floatLight3 = light3 / 15f;
-                                bool usePulledOpaqueFace = useOpaqueVertexPulling &&
-                                                           !FluidBlockUtility.IsWater(bt) &&
-                                                           !blockMappings[(int)bt].isTransparent;
-
-                                Vector3 p0 = default;
-                                Vector3 p1 = default;
-                                Vector3 p2 = default;
-                                Vector3 p3 = default;
-                                Vector2 uv0 = default;
-                                Vector2 uv1 = default;
-                                Vector2 uv2 = default;
-                                Vector2 uv3 = default;
-
-                                for (int l = 0; l < 4; l++)
+                                if (useCompactOpaqueFace)
                                 {
-                                    int du = (l == 1 || l == 2) ? w : 0;
-                                    int dv = (l == 2 || l == 3) ? h : 0;
-
-                                    float rawU = i + du;
-                                    float rawV = j + dv;
-                                    float posD = n + (normalSign > 0 ? 1f : 0f);
-                                    int cornerUOffset = du > 0 ? 1 : 0;
-                                    int cornerVOffset = dv > 0 ? 1 : 0;
-
-                                    float px = (u == 0 ? rawU : v == 0 ? rawV : posD) - border;
-                                    float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
-                                    float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
-
-                                    if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
-                                        py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-
-                                    Vector3 position = new Vector3(px, py, pz);
-                                    Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
-                                                      axis == 1 ? new Vector2(rawV, rawU) :
-                                                                  new Vector2(rawU, rawV);
-
-                                    switch (l)
-                                    {
-                                        case 0:
-                                            p0 = position;
-                                            uv0 = uvCoord;
-                                            break;
-                                        case 1:
-                                            p1 = position;
-                                            uv1 = uvCoord;
-                                            break;
-                                        case 2:
-                                            p2 = position;
-                                            uv2 = uvCoord;
-                                            break;
-                                        default:
-                                            p3 = position;
-                                            uv3 = uvCoord;
-                                            break;
-                                    }
-
-                                    if (usePulledOpaqueFace)
-                                        continue;
-
-                                    byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
-                                    byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
-                                    float rawLight = currentLight / 15f;
-                                    float floatTint = tint ? 1f : 0f;
-                                    float aoBase = currentAO / 3f;
-                                    float aoCurved = math.pow(aoBase, aoCurve);
-                                    float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
-                                    float floatAO = math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
-                                    AddPackedVertex(
-                                        position,
-                                        normal,
-                                        uvCoord,
-                                        atlasUv,
-                                        new Vector4(rawLight, floatTint, floatAO, 0f));
-                                }
-
-                                if (usePulledOpaqueFace)
-                                {
-                                    float chunkWorldX = chunkCoordX * SizeX;
-                                    float chunkWorldZ = chunkCoordZ * SizeZ;
-                                    Vector3 p0World = new Vector3(chunkWorldX + p0.x, p0.y, chunkWorldZ + p0.z);
-                                    Vector3 p1World = new Vector3(chunkWorldX + p1.x, p1.y, chunkWorldZ + p1.z);
-                                    Vector3 p3World = new Vector3(chunkWorldX + p3.x, p3.y, chunkWorldZ + p3.z);
-
-                                    AddPulledOpaqueFace(
-                                        p0World,
-                                        p1World - p0World,
-                                        p3World - p0World,
-                                        normal,
-                                        uv0,
-                                        uv1 - uv0,
-                                        uv3 - uv0,
-                                        atlasUv,
+                                    AddCompactOpaqueFace(
+                                        blockX - border,
+                                        blockY,
+                                        blockZ - border,
+                                        ResolveCompactFaceDirection(axis, normalSign),
+                                        w,
+                                        h,
+                                        tile.x,
+                                        tile.y,
                                         tint,
                                         flipTriangle,
-                                        normalSign < 0,
                                         floatLight0,
                                         floatLight1,
                                         floatLight2,
@@ -2774,6 +2734,45 @@ public static class MeshGenerator
                                 }
                                 else
                                 {
+                                    for (int l = 0; l < 4; l++)
+                                    {
+                                        int du = (l == 1 || l == 2) ? w : 0;
+                                        int dv = (l == 2 || l == 3) ? h : 0;
+
+                                        float rawU = i + du;
+                                        float rawV = j + dv;
+                                        float posD = n + (normalSign > 0 ? 1f : 0f);
+                                        int cornerUOffset = du > 0 ? 1 : 0;
+                                        int cornerVOffset = dv > 0 ? 1 : 0;
+
+                                        float px = (u == 0 ? rawU : v == 0 ? rawV : posD) - border;
+                                        float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
+                                        float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
+
+                                        if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
+                                            py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+                                        Vector3 position = new Vector3(px, py, pz);
+                                        Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
+                                                          axis == 1 ? new Vector2(rawV, rawU) :
+                                                                      new Vector2(rawU, rawV);
+
+                                        byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
+                                        byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
+                                        float rawLight = currentLight / 15f;
+                                        float floatTint = tint ? 1f : 0f;
+                                        float aoBase = currentAO / 3f;
+                                        float aoCurved = math.pow(aoBase, aoCurve);
+                                        float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
+                                        float floatAO = math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
+                                        AddPackedVertex(
+                                            position,
+                                            normal,
+                                            uvCoord,
+                                            atlasUv,
+                                            new Vector4(rawLight, floatTint, floatAO, 0f));
+                                    }
+
                                     int vIndex = GetCurrentSubchunkLocalVertexIndex() - 4;
                                     NativeList<int> tris = FluidBlockUtility.IsWater(bt)
                                         ? waterTriangles

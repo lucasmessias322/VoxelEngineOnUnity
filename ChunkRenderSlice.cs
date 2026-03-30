@@ -17,13 +17,14 @@ public class ChunkRenderSlice : MonoBehaviour
         new VertexAttributeDescriptor(VertexAttribute.TexCoord2, VertexAttributeFormat.Float32, 4)
     };
 
-    private static readonly int PulledOpaqueFacesPropertyId = Shader.PropertyToID("_PulledOpaqueFaces");
+    private static readonly int CompactOpaqueFacesPropertyId = Shader.PropertyToID("_CompactOpaqueFaces");
     private static readonly int UseVertexPullingPropertyId = Shader.PropertyToID("_UseVertexPulling");
     private static readonly int UseCompactOpaqueFacesPropertyId = Shader.PropertyToID("_UseCompactOpaqueFaces");
     private static readonly int UseIndirectVertexPullingPropertyId = Shader.PropertyToID("_UseIndirectVertexPulling");
     private static readonly int PulledOpaqueFaceBaseIndexPropertyId = Shader.PropertyToID("_PulledOpaqueFaceBaseIndex");
+    private static readonly int CompactChunkWorldOriginPropertyId = Shader.PropertyToID("_CompactChunkWorldOrigin");
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
-    private static readonly int PulledOpaqueFaceStride = Marshal.SizeOf<MeshGenerator.PulledOpaqueFace>();
+    private static readonly int CompactOpaqueFaceStride = Marshal.SizeOf<MeshGenerator.CompactOpaqueFace>();
     private static readonly Plane[] SharedFrustumPlanes = new Plane[6];
     private static readonly System.Collections.Generic.List<ChunkRenderSlice> ManagedRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(2048);
     private static readonly System.Collections.Generic.List<ChunkRenderSlice> OpaqueRenderSlices = new System.Collections.Generic.List<ChunkRenderSlice>(512);
@@ -191,7 +192,7 @@ public class ChunkRenderSlice : MonoBehaviour
     public void ApplyMeshData(
         NativeList<MeshGenerator.PackedChunkVertex> vertices,
         NativeList<int> opaqueTris,
-        NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
+        NativeList<MeshGenerator.CompactOpaqueFace> compactOpaqueFaces,
         NativeList<int> transparentTris,
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
@@ -207,7 +208,7 @@ public class ChunkRenderSlice : MonoBehaviour
             opaqueMaterial != null;
 
         if (usePulledOpaqueBackend && totals.opaqueFaceCount > 0)
-            UploadPulledOpaqueFaces(pulledOpaqueFaces, subchunkRanges, totals.opaqueFaceCount);
+            UploadCompactOpaqueFaces(compactOpaqueFaces, subchunkRanges, totals.opaqueFaceCount);
         else
             ClearPulledOpaqueFaces();
 
@@ -401,12 +402,12 @@ public class ChunkRenderSlice : MonoBehaviour
         }
     }
 
-    private void UploadPulledOpaqueFaces(
-        NativeList<MeshGenerator.PulledOpaqueFace> pulledOpaqueFaces,
+    private void UploadCompactOpaqueFaces(
+        NativeList<MeshGenerator.CompactOpaqueFace> compactOpaqueFaces,
         NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
         int totalOpaqueFaceCount)
     {
-        if (!pulledOpaqueFaces.IsCreated || totalOpaqueFaceCount <= 0)
+        if (!compactOpaqueFaces.IsCreated || totalOpaqueFaceCount <= 0)
         {
             ClearPulledOpaqueFaces();
             return;
@@ -418,7 +419,7 @@ public class ChunkRenderSlice : MonoBehaviour
         Array.Clear(pulledOpaqueFaceCountsByLocalSubchunk, 0, pulledOpaqueFaceCountsByLocalSubchunk.Length);
         opaqueGeometrySubchunkMask = 0;
 
-        NativeArray<MeshGenerator.PulledOpaqueFace> uploadData = new NativeArray<MeshGenerator.PulledOpaqueFace>(
+        NativeArray<MeshGenerator.CompactOpaqueFace> uploadData = new NativeArray<MeshGenerator.CompactOpaqueFace>(
             totalOpaqueFaceCount,
             Allocator.Temp,
             NativeArrayOptions.UninitializedMemory);
@@ -436,8 +437,8 @@ public class ChunkRenderSlice : MonoBehaviour
 
             opaqueGeometrySubchunkMask |= 1 << sub;
 
-            NativeArray<MeshGenerator.PulledOpaqueFace>.Copy(
-                pulledOpaqueFaces.AsArray(),
+            NativeArray<MeshGenerator.CompactOpaqueFace>.Copy(
+                compactOpaqueFaces.AsArray(),
                 range.opaqueFaceStart,
                 uploadData,
                 writeOffset,
@@ -478,7 +479,7 @@ public class ChunkRenderSlice : MonoBehaviour
         ReleasePulledOpaqueFaceBuffer();
 
         pulledOpaqueFaceCapacity = requiredCount;
-        pulledOpaqueFaceBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, pulledOpaqueFaceCapacity, PulledOpaqueFaceStride);
+        pulledOpaqueFaceBuffer = new GraphicsBuffer(GraphicsBuffer.Target.Structured, pulledOpaqueFaceCapacity, CompactOpaqueFaceStride);
     }
 
     private void ReleasePulledOpaqueFaceBuffer()
@@ -514,14 +515,16 @@ public class ChunkRenderSlice : MonoBehaviour
         bool useVertexPulling =
             activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
             pulledOpaqueFaceCount > 0;
-        pulledOpaquePropertyBlock.SetFloat(UseVertexPullingPropertyId, useVertexPulling ? 1f : 0f);
-        pulledOpaquePropertyBlock.SetFloat(UseCompactOpaqueFacesPropertyId, 0f);
+        pulledOpaquePropertyBlock.SetFloat(UseVertexPullingPropertyId, 0f);
+        pulledOpaquePropertyBlock.SetFloat(UseCompactOpaqueFacesPropertyId, useVertexPulling ? 1f : 0f);
         pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 0f);
         pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
+        Vector3 chunkWorldOrigin = transform.position;
+        pulledOpaquePropertyBlock.SetVector(CompactChunkWorldOriginPropertyId, new Vector4(chunkWorldOrigin.x, chunkWorldOrigin.y, chunkWorldOrigin.z, 0f));
         pulledOpaquePropertyBlock.SetColor(GrassTintPropertyId, grassTint);
 
         if (pulledOpaqueFaceBuffer != null && pulledOpaqueFaceCount > 0)
-            pulledOpaquePropertyBlock.SetBuffer(PulledOpaqueFacesPropertyId, pulledOpaqueFaceBuffer);
+            pulledOpaquePropertyBlock.SetBuffer(CompactOpaqueFacesPropertyId, pulledOpaqueFaceBuffer);
     }
 
     private void ConfigureOpaqueMaterial(Material[] sharedMaterials)
@@ -684,6 +687,12 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         Bounds worldBounds = GetWorldBounds(localRenderBounds);
+        if (pulledOpaquePropertyBlock != null)
+        {
+            Vector3 chunkWorldOrigin = transform.position;
+            pulledOpaquePropertyBlock.SetVector(CompactChunkWorldOriginPropertyId, new Vector4(chunkWorldOrigin.x, chunkWorldOrigin.y, chunkWorldOrigin.z, 0f));
+        }
+
         RenderParams renderParams = new RenderParams(opaqueMaterial)
         {
             camera = camera,
