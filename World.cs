@@ -528,6 +528,9 @@ public partial class World : MonoBehaviour
     [Min(0.25f)]
     [Tooltip("Intervalo em segundos entre logs da telemetria de indirect opaco.")]
     public float opaqueIndirectTelemetryLogInterval = 2f;
+    [Min(0.5f)]
+    [Tooltip("Janela em segundos usada para calcular a media da telemetria de indirect opaco.")]
+    public float opaqueIndirectTelemetryAverageWindowSeconds = 5f;
 
     [Header("Debug / Physics")]
     [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
@@ -634,6 +637,18 @@ public partial class World : MonoBehaviour
     private bool lastEnableOpaqueIndirectDrawSubmission = true;
     private float nextOpaqueIndirectTelemetryLogTime;
     private int lastLoggedOpaqueTelemetryFrame = -1;
+    private int lastQueuedOpaqueTelemetryFrame = -1;
+    private readonly Queue<OpaqueIndirectTelemetryWindowSample> opaqueIndirectTelemetryWindowSamples = new Queue<OpaqueIndirectTelemetryWindowSample>(256);
+    private int opaqueIndirectTelemetryWindowFrameCount;
+    private int opaqueIndirectTelemetryWindowSliceSum;
+    private int opaqueIndirectTelemetryWindowDirectDrawSum;
+    private int opaqueIndirectTelemetryWindowSubmittedDrawSum;
+    private int opaqueIndirectTelemetryWindowVisibleSubchunkSum;
+    private int opaqueIndirectTelemetryWindowSavedVsSubchunkSum;
+    private int opaqueIndirectTelemetryWindowSavedVsDirectSum;
+    private int opaqueIndirectTelemetryWindowIndirectSliceSum;
+    private int opaqueIndirectTelemetryWindowSingleSliceSum;
+    private int opaqueIndirectTelemetryWindowRunBatchedSliceSum;
 
 
     // Optimization temporaries

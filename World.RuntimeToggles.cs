@@ -3,6 +3,18 @@ using UnityEngine;
 
 public partial class World
 {
+    private readonly struct OpaqueIndirectTelemetryWindowSample
+    {
+        public readonly float time;
+        public readonly ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot;
+
+        public OpaqueIndirectTelemetryWindowSample(float time, ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot)
+        {
+            this.time = time;
+            this.snapshot = snapshot;
+        }
+    }
+
     private void HandleBlockColliderToggle()
     {
         if (lastEnableBlockColliders == enableBlockColliders)
@@ -88,8 +100,77 @@ public partial class World
 
         lastEnableOpaqueIndirectDrawSubmission = enableOpaqueIndirectDrawSubmission;
         ChunkRenderSlice.SetIndirectOpaqueDrawSubmissionEnabled(enableOpaqueIndirectDrawSubmission);
+        ResetOpaqueIndirectTelemetryWindow();
         lastLoggedOpaqueTelemetryFrame = -1;
         nextOpaqueIndirectTelemetryLogTime = Time.unscaledTime + Mathf.Max(0.25f, opaqueIndirectTelemetryLogInterval);
+    }
+
+    private void UpdateOpaqueIndirectTelemetryWindowIfNeeded()
+    {
+        if (!logOpaqueIndirectTelemetry)
+            return;
+
+        ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot = ChunkRenderSlice.GetLatestOpaqueRenderTelemetry();
+        if (!snapshot.IsValid || snapshot.slicesRendered <= 0)
+            return;
+
+        if (snapshot.frame == lastQueuedOpaqueTelemetryFrame)
+        {
+            TrimOpaqueIndirectTelemetryWindow(Time.unscaledTime);
+            return;
+        }
+
+        lastQueuedOpaqueTelemetryFrame = snapshot.frame;
+        opaqueIndirectTelemetryWindowSamples.Enqueue(new OpaqueIndirectTelemetryWindowSample(Time.unscaledTime, snapshot));
+        opaqueIndirectTelemetryWindowFrameCount++;
+        opaqueIndirectTelemetryWindowSliceSum += snapshot.slicesRendered;
+        opaqueIndirectTelemetryWindowDirectDrawSum += snapshot.directPathDrawCalls;
+        opaqueIndirectTelemetryWindowSubmittedDrawSum += snapshot.drawCalls;
+        opaqueIndirectTelemetryWindowVisibleSubchunkSum += snapshot.visibleOpaqueSubchunks;
+        opaqueIndirectTelemetryWindowSavedVsSubchunkSum += snapshot.savedDrawCalls;
+        opaqueIndirectTelemetryWindowSavedVsDirectSum += snapshot.indirectSavedDrawCalls;
+        opaqueIndirectTelemetryWindowIndirectSliceSum += snapshot.indirectSlices;
+        opaqueIndirectTelemetryWindowSingleSliceSum += snapshot.singleDrawSlices;
+        opaqueIndirectTelemetryWindowRunBatchedSliceSum += snapshot.runBatchedSlices;
+
+        TrimOpaqueIndirectTelemetryWindow(Time.unscaledTime);
+    }
+
+    private void TrimOpaqueIndirectTelemetryWindow(float currentTime)
+    {
+        float window = Mathf.Max(0.5f, opaqueIndirectTelemetryAverageWindowSeconds);
+        while (opaqueIndirectTelemetryWindowSamples.Count > 0 &&
+               currentTime - opaqueIndirectTelemetryWindowSamples.Peek().time > window)
+        {
+            OpaqueIndirectTelemetryWindowSample expired = opaqueIndirectTelemetryWindowSamples.Dequeue();
+            ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot = expired.snapshot;
+            opaqueIndirectTelemetryWindowFrameCount = Mathf.Max(0, opaqueIndirectTelemetryWindowFrameCount - 1);
+            opaqueIndirectTelemetryWindowSliceSum -= snapshot.slicesRendered;
+            opaqueIndirectTelemetryWindowDirectDrawSum -= snapshot.directPathDrawCalls;
+            opaqueIndirectTelemetryWindowSubmittedDrawSum -= snapshot.drawCalls;
+            opaqueIndirectTelemetryWindowVisibleSubchunkSum -= snapshot.visibleOpaqueSubchunks;
+            opaqueIndirectTelemetryWindowSavedVsSubchunkSum -= snapshot.savedDrawCalls;
+            opaqueIndirectTelemetryWindowSavedVsDirectSum -= snapshot.indirectSavedDrawCalls;
+            opaqueIndirectTelemetryWindowIndirectSliceSum -= snapshot.indirectSlices;
+            opaqueIndirectTelemetryWindowSingleSliceSum -= snapshot.singleDrawSlices;
+            opaqueIndirectTelemetryWindowRunBatchedSliceSum -= snapshot.runBatchedSlices;
+        }
+    }
+
+    private void ResetOpaqueIndirectTelemetryWindow()
+    {
+        opaqueIndirectTelemetryWindowSamples.Clear();
+        opaqueIndirectTelemetryWindowFrameCount = 0;
+        opaqueIndirectTelemetryWindowSliceSum = 0;
+        opaqueIndirectTelemetryWindowDirectDrawSum = 0;
+        opaqueIndirectTelemetryWindowSubmittedDrawSum = 0;
+        opaqueIndirectTelemetryWindowVisibleSubchunkSum = 0;
+        opaqueIndirectTelemetryWindowSavedVsSubchunkSum = 0;
+        opaqueIndirectTelemetryWindowSavedVsDirectSum = 0;
+        opaqueIndirectTelemetryWindowIndirectSliceSum = 0;
+        opaqueIndirectTelemetryWindowSingleSliceSum = 0;
+        opaqueIndirectTelemetryWindowRunBatchedSliceSum = 0;
+        lastQueuedOpaqueTelemetryFrame = -1;
     }
 
     private void LogOpaqueIndirectTelemetryIfNeeded()
@@ -97,26 +178,45 @@ public partial class World
         if (!logOpaqueIndirectTelemetry)
             return;
 
+        UpdateOpaqueIndirectTelemetryWindowIfNeeded();
         if (Time.unscaledTime < nextOpaqueIndirectTelemetryLogTime)
             return;
 
-        ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot = ChunkRenderSlice.GetLatestOpaqueRenderTelemetry();
-        if (!snapshot.IsValid || snapshot.slicesRendered <= 0)
+        if (opaqueIndirectTelemetryWindowFrameCount <= 0)
             return;
 
-        if (snapshot.frame == lastLoggedOpaqueTelemetryFrame)
+        ChunkRenderSlice.OpaqueRenderTelemetrySnapshot snapshot = ChunkRenderSlice.GetLatestOpaqueRenderTelemetry();
+        if (!snapshot.IsValid || snapshot.frame == lastLoggedOpaqueTelemetryFrame)
             return;
 
         lastLoggedOpaqueTelemetryFrame = snapshot.frame;
         nextOpaqueIndirectTelemetryLogTime = Time.unscaledTime + Mathf.Max(0.25f, opaqueIndirectTelemetryLogInterval);
 
+        float frameCount = Mathf.Max(1, opaqueIndirectTelemetryWindowFrameCount);
+        float averageWindow = Mathf.Max(0.5f, opaqueIndirectTelemetryAverageWindowSeconds);
+        float avgSlices = opaqueIndirectTelemetryWindowSliceSum / frameCount;
+        float avgDirectDraws = opaqueIndirectTelemetryWindowDirectDrawSum / frameCount;
+        float avgSubmittedDraws = opaqueIndirectTelemetryWindowSubmittedDrawSum / frameCount;
+        float avgVisibleSubchunks = opaqueIndirectTelemetryWindowVisibleSubchunkSum / frameCount;
+        float avgSavedVsSubchunk = opaqueIndirectTelemetryWindowSavedVsSubchunkSum / frameCount;
+        float avgSavedVsDirect = opaqueIndirectTelemetryWindowSavedVsDirectSum / frameCount;
+        float avgIndirectSlices = opaqueIndirectTelemetryWindowIndirectSliceSum / frameCount;
+        float avgSingleSlices = opaqueIndirectTelemetryWindowSingleSliceSum / frameCount;
+        float avgRunBatchedSlices = opaqueIndirectTelemetryWindowRunBatchedSliceSum / frameCount;
+        float saveVsSubchunkPercent = opaqueIndirectTelemetryWindowVisibleSubchunkSum > 0
+            ? opaqueIndirectTelemetryWindowSavedVsSubchunkSum * 100f / opaqueIndirectTelemetryWindowVisibleSubchunkSum
+            : 0f;
+        float saveVsDirectPercent = opaqueIndirectTelemetryWindowDirectDrawSum > 0
+            ? opaqueIndirectTelemetryWindowSavedVsDirectSum * 100f / opaqueIndirectTelemetryWindowDirectDrawSum
+            : 0f;
+
         Debug.Log(
-            $"[OpaqueIndirectTelemetry] frame={snapshot.frame} enabled={enableOpaqueIndirectDrawSubmission} " +
-            $"slices={snapshot.slicesRendered} directPathDraws={snapshot.directPathDrawCalls} " +
-            $"submittedDraws={snapshot.drawCalls} savedVsDirect={snapshot.indirectSavedDrawCalls} " +
-            $"visibleOpaqueSubchunks={snapshot.visibleOpaqueSubchunks} savedVsSubchunk={snapshot.savedDrawCalls} " +
-            $"indirectSlices={snapshot.indirectSlices} singleDrawSlices={snapshot.singleDrawSlices} " +
-            $"runBatchedSlices={snapshot.runBatchedSlices}",
+            $"[OpaqueIndirectTelemetry] latestFrame={snapshot.frame} enabled={enableOpaqueIndirectDrawSubmission} " +
+            $"window={averageWindow:0.0}s frames={opaqueIndirectTelemetryWindowFrameCount} " +
+            $"avgSlices={avgSlices:0.0} avgDirectPathDraws={avgDirectDraws:0.0} avgSubmittedDraws={avgSubmittedDraws:0.0} " +
+            $"avgVisibleOpaqueSubchunks={avgVisibleSubchunks:0.0} avgSavedVsSubchunk={avgSavedVsSubchunk:0.0} ({saveVsSubchunkPercent:0.0}%) " +
+            $"avgSavedVsDirect={avgSavedVsDirect:0.0} ({saveVsDirectPercent:0.0}%) " +
+            $"avgIndirectSlices={avgIndirectSlices:0.0} avgSingleDrawSlices={avgSingleSlices:0.0} avgRunBatchedSlices={avgRunBatchedSlices:0.0}",
             this);
     }
 
