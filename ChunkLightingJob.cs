@@ -14,6 +14,8 @@ public static class ChunkLighting
         [ReadOnly] public NativeArray<byte> blockLightData;
 
         public NativeArray<byte> light;
+        public bool enableHorizontalSkylight;
+        public int horizontalSkylightStepLoss;
 
         public int voxelSizeX;
         public int voxelSizeZ;
@@ -59,49 +61,52 @@ public static class ChunkLighting
                 }
             }
 
-            // Step 2a: enqueue only real propagation sources.
-            for (int z = 0; z < voxelSizeZ; z++)
+            if (enableHorizontalSkylight)
             {
-                for (int y = 0; y < SizeY; y++)
+                // Step 2a: enqueue only real propagation sources.
+                for (int z = 0; z < voxelSizeZ; z++)
                 {
-                    for (int x = 0; x < voxelSizeX; x++)
+                    for (int y = 0; y < SizeY; y++)
                     {
-                        int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-                        byte currentLight = skyMap[idx];
-                        if (currentLight <= 1) continue;
-
-                        bool canPropagate = false;
-
-                        if (x + 1 < voxelSizeX && CanImproveNeighbor(idx + 1, currentLight, skyMap)) canPropagate = true;
-                        else if (x - 1 >= 0 && CanImproveNeighbor(idx - 1, currentLight, skyMap)) canPropagate = true;
-                        else if (y - 1 >= 0 && CanImproveNeighbor(idx - voxelSizeX, currentLight, skyMap)) canPropagate = true;
-                        else if (z + 1 < voxelSizeZ && CanImproveNeighbor(idx + voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
-                        else if (z - 1 >= 0 && CanImproveNeighbor(idx - voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
-
-                        if (canPropagate)
+                        for (int x = 0; x < voxelSizeX; x++)
                         {
-                            lightQueue.Enqueue(idx);
+                            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+                            byte currentLight = skyMap[idx];
+                            if (currentLight <= 1) continue;
+
+                            bool canPropagate = false;
+
+                            if (x + 1 < voxelSizeX && CanImproveHorizontalNeighbor(idx + 1, currentLight, skyMap)) canPropagate = true;
+                            else if (x - 1 >= 0 && CanImproveHorizontalNeighbor(idx - 1, currentLight, skyMap)) canPropagate = true;
+                            else if (y - 1 >= 0 && CanImproveDownwardNeighbor(idx - voxelSizeX, currentLight, skyMap)) canPropagate = true;
+                            else if (z + 1 < voxelSizeZ && CanImproveHorizontalNeighbor(idx + voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+                            else if (z - 1 >= 0 && CanImproveHorizontalNeighbor(idx - voxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+
+                            if (canPropagate)
+                            {
+                                lightQueue.Enqueue(idx);
+                            }
                         }
                     }
                 }
-            }
 
-            // Step 2b: flood-fill smoothing (no +Y for skylight).
-            while (lightQueue.TryDequeue(out int currentIndex))
-            {
-                byte currentLight = skyMap[currentIndex];
-                if (currentLight <= 1) continue;
+                // Step 2b: flood-fill smoothing (no +Y for skylight).
+                while (lightQueue.TryDequeue(out int currentIndex))
+                {
+                    byte currentLight = skyMap[currentIndex];
+                    if (currentLight <= 1) continue;
 
-                int z = currentIndex / voxelPlaneSize;
-                int rem = currentIndex % voxelPlaneSize;
-                int y = rem / voxelSizeX;
-                int x = rem % voxelSizeX;
+                    int z = currentIndex / voxelPlaneSize;
+                    int rem = currentIndex % voxelPlaneSize;
+                    int y = rem / voxelSizeX;
+                    int x = rem % voxelSizeX;
 
-                if (x + 1 < voxelSizeX) TryPropagate(currentIndex + 1, currentLight, skyMap, lightQueue);
-                if (x - 1 >= 0) TryPropagate(currentIndex - 1, currentLight, skyMap, lightQueue);
-                if (y - 1 >= 0) TryPropagate(currentIndex - voxelSizeX, currentLight, skyMap, lightQueue);
-                if (z + 1 < voxelSizeZ) TryPropagate(currentIndex + voxelPlaneSize, currentLight, skyMap, lightQueue);
-                if (z - 1 >= 0) TryPropagate(currentIndex - voxelPlaneSize, currentLight, skyMap, lightQueue);
+                    if (x + 1 < voxelSizeX) TryPropagateHorizontal(currentIndex + 1, currentLight, skyMap, lightQueue);
+                    if (x - 1 >= 0) TryPropagateHorizontal(currentIndex - 1, currentLight, skyMap, lightQueue);
+                    if (y - 1 >= 0) TryPropagateDownward(currentIndex - voxelSizeX, currentLight, skyMap, lightQueue);
+                    if (z + 1 < voxelSizeZ) TryPropagateHorizontal(currentIndex + voxelPlaneSize, currentLight, skyMap, lightQueue);
+                    if (z - 1 >= 0) TryPropagateHorizontal(currentIndex - voxelPlaneSize, currentLight, skyMap, lightQueue);
+                }
             }
 
             // Step 3: pack sky + block light.
@@ -120,7 +125,15 @@ public static class ChunkLighting
             lightQueue.Dispose();
         }
 
-        private bool CanImproveNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
+        private bool CanImproveHorizontalNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
+        {
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
+            int lightLoss = math.max(1, horizontalSkylightStepLoss) + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            return propagatedLight > skyMap[neighborIndex];
+        }
+
+        private bool CanImproveDownwardNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
         {
             byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
@@ -128,7 +141,20 @@ public static class ChunkLighting
             return propagatedLight > skyMap[neighborIndex];
         }
 
-        private void TryPropagate(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
+        private void TryPropagateHorizontal(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
+        {
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
+            int lightLoss = math.max(1, horizontalSkylightStepLoss) + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+            if (propagatedLight > skyMap[neighborIndex])
+            {
+                skyMap[neighborIndex] = propagatedLight;
+                lightQueue.Enqueue(neighborIndex);
+            }
+        }
+
+        private void TryPropagateDownward(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
         {
             byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
@@ -150,6 +176,8 @@ public static class ChunkLighting
         [ReadOnly] public NativeArray<byte> blockLightData;
 
         public NativeArray<byte> light;
+        public bool enableHorizontalSkylight;
+        public int horizontalSkylightStepLoss;
 
         public int inputVoxelSizeX;
         public int inputVoxelSizeZ;
@@ -195,45 +223,48 @@ public static class ChunkLighting
                 }
             }
 
-            for (int z = 0; z < inputVoxelSizeZ; z++)
+            if (enableHorizontalSkylight)
             {
-                for (int y = 0; y < SizeY; y++)
+                for (int z = 0; z < inputVoxelSizeZ; z++)
                 {
-                    for (int x = 0; x < inputVoxelSizeX; x++)
+                    for (int y = 0; y < SizeY; y++)
                     {
-                        int idx = x + y * inputVoxelSizeX + z * inputVoxelPlaneSize;
-                        byte currentLight = skyMap[idx];
-                        if (currentLight <= 1) continue;
+                        for (int x = 0; x < inputVoxelSizeX; x++)
+                        {
+                            int idx = x + y * inputVoxelSizeX + z * inputVoxelPlaneSize;
+                            byte currentLight = skyMap[idx];
+                            if (currentLight <= 1) continue;
 
-                        bool canPropagate = false;
+                            bool canPropagate = false;
 
-                        if (x + 1 < inputVoxelSizeX && CanImproveNeighbor(idx + 1, currentLight, skyMap)) canPropagate = true;
-                        else if (x - 1 >= 0 && CanImproveNeighbor(idx - 1, currentLight, skyMap)) canPropagate = true;
-                        else if (y - 1 >= 0 && CanImproveNeighbor(idx - inputVoxelSizeX, currentLight, skyMap)) canPropagate = true;
-                        else if (z + 1 < inputVoxelSizeZ && CanImproveNeighbor(idx + inputVoxelPlaneSize, currentLight, skyMap)) canPropagate = true;
-                        else if (z - 1 >= 0 && CanImproveNeighbor(idx - inputVoxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+                            if (x + 1 < inputVoxelSizeX && CanImproveHorizontalNeighbor(idx + 1, currentLight, skyMap)) canPropagate = true;
+                            else if (x - 1 >= 0 && CanImproveHorizontalNeighbor(idx - 1, currentLight, skyMap)) canPropagate = true;
+                            else if (y - 1 >= 0 && CanImproveDownwardNeighbor(idx - inputVoxelSizeX, currentLight, skyMap)) canPropagate = true;
+                            else if (z + 1 < inputVoxelSizeZ && CanImproveHorizontalNeighbor(idx + inputVoxelPlaneSize, currentLight, skyMap)) canPropagate = true;
+                            else if (z - 1 >= 0 && CanImproveHorizontalNeighbor(idx - inputVoxelPlaneSize, currentLight, skyMap)) canPropagate = true;
 
-                        if (canPropagate)
-                            lightQueue.Enqueue(idx);
+                            if (canPropagate)
+                                lightQueue.Enqueue(idx);
+                        }
                     }
                 }
-            }
 
-            while (lightQueue.TryDequeue(out int currentIndex))
-            {
-                byte currentLight = skyMap[currentIndex];
-                if (currentLight <= 1) continue;
+                while (lightQueue.TryDequeue(out int currentIndex))
+                {
+                    byte currentLight = skyMap[currentIndex];
+                    if (currentLight <= 1) continue;
 
-                int z = currentIndex / inputVoxelPlaneSize;
-                int rem = currentIndex % inputVoxelPlaneSize;
-                int y = rem / inputVoxelSizeX;
-                int x = rem % inputVoxelSizeX;
+                    int z = currentIndex / inputVoxelPlaneSize;
+                    int rem = currentIndex % inputVoxelPlaneSize;
+                    int y = rem / inputVoxelSizeX;
+                    int x = rem % inputVoxelSizeX;
 
-                if (x + 1 < inputVoxelSizeX) TryPropagate(currentIndex + 1, currentLight, skyMap, lightQueue);
-                if (x - 1 >= 0) TryPropagate(currentIndex - 1, currentLight, skyMap, lightQueue);
-                if (y - 1 >= 0) TryPropagate(currentIndex - inputVoxelSizeX, currentLight, skyMap, lightQueue);
-                if (z + 1 < inputVoxelSizeZ) TryPropagate(currentIndex + inputVoxelPlaneSize, currentLight, skyMap, lightQueue);
-                if (z - 1 >= 0) TryPropagate(currentIndex - inputVoxelPlaneSize, currentLight, skyMap, lightQueue);
+                    if (x + 1 < inputVoxelSizeX) TryPropagateHorizontal(currentIndex + 1, currentLight, skyMap, lightQueue);
+                    if (x - 1 >= 0) TryPropagateHorizontal(currentIndex - 1, currentLight, skyMap, lightQueue);
+                    if (y - 1 >= 0) TryPropagateDownward(currentIndex - inputVoxelSizeX, currentLight, skyMap, lightQueue);
+                    if (z + 1 < inputVoxelSizeZ) TryPropagateHorizontal(currentIndex + inputVoxelPlaneSize, currentLight, skyMap, lightQueue);
+                    if (z - 1 >= 0) TryPropagateHorizontal(currentIndex - inputVoxelPlaneSize, currentLight, skyMap, lightQueue);
+                }
             }
 
             for (int oz = 0; oz < outputVoxelSizeZ; oz++)
@@ -260,14 +291,33 @@ public static class ChunkLighting
             lightQueue.Dispose();
         }
 
-        private bool CanImproveNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
+        private bool CanImproveHorizontalNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
+        {
+            int lightLoss = math.max(1, horizontalSkylightStepLoss) + opacity[neighborIndex];
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            return propagatedLight > skyMap[neighborIndex];
+        }
+
+        private bool CanImproveDownwardNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
         {
             int lightLoss = 1 + opacity[neighborIndex];
             byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
             return propagatedLight > skyMap[neighborIndex];
         }
 
-        private void TryPropagate(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
+        private void TryPropagateHorizontal(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
+        {
+            int lightLoss = math.max(1, horizontalSkylightStepLoss) + opacity[neighborIndex];
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+            if (propagatedLight > skyMap[neighborIndex])
+            {
+                skyMap[neighborIndex] = propagatedLight;
+                lightQueue.Enqueue(neighborIndex);
+            }
+        }
+
+        private void TryPropagateDownward(int neighborIndex, byte currentLight, NativeArray<byte> skyMap, NativeQueue<int> lightQueue)
         {
             int lightLoss = 1 + opacity[neighborIndex];
             byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);

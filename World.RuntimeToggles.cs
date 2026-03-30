@@ -53,11 +53,21 @@ public partial class World
     {
         bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;
         bool aoChanged = lastEnableAmbientOcclusion != enableAmbientOcclusion;
-        if (!lightingChanged && !aoChanged)
-            return;
+        bool horizontalLightingChanged = enableVoxelLighting && lastEnableHorizontalSkylight != enableHorizontalSkylight;
+        bool horizontalLightingParamsChanged =
+            enableVoxelLighting &&
+            enableHorizontalSkylight &&
+            (lastHorizontalSkylightStepLoss != horizontalSkylightStepLoss ||
+             lastSunlightSmoothingPadding != sunlightSmoothingPadding);
 
         lastEnableVoxelLighting = enableVoxelLighting;
+        lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
+        lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
+        lastSunlightSmoothingPadding = sunlightSmoothingPadding;
+
+        if (!lightingChanged && !aoChanged && !horizontalLightingChanged && !horizontalLightingParamsChanged)
+            return;
 
         foreach (var kv in activeChunks)
             RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);

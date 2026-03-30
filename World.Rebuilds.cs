@@ -200,6 +200,8 @@ public partial class World
             caveWormSettings,
             caveSpaghettiSettings,
             enableVoxelLighting,
+            enableHorizontalSkylight,
+            horizontalSkylightStepLoss,
             chunkLightData,
             chunk.voxelData,
             out JobHandle dataHandle,

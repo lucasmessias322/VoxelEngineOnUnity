@@ -427,7 +427,12 @@ public partial class World : MonoBehaviour
     [Header("Lighting")]
     [Tooltip("Liga/desliga o calculo de iluminacao voxel/skylight para testes de performance. Quando desligado, os chunks usam brilho uniforme.")]
     public bool enableVoxelLighting = true;
-    [Tooltip("Padding horizontal em voxels usado apenas pela suavizacao de skylight entre chunks. Valores altos melhoram costuras visuais, mas aumentam o custo do volume de luz.")]
+    [Tooltip("Liga/desliga a propagacao horizontal do skylight apos os raios verticais. Desative para manter apenas a luz direta por coluna e reduzir custo.")]
+    public bool enableHorizontalSkylight = true;
+    [Tooltip("Custo base de cada passo horizontal do skylight. 1 = comportamento atual; valores maiores encurtam o alcance lateral da luz.")]
+    [Range(1, 15)]
+    public int horizontalSkylightStepLoss = 1;
+    [Tooltip("Padding horizontal em voxels usado pela propagacao lateral do skylight entre chunks. Valores altos melhoram costuras visuais, mas aumentam o custo do volume de luz. Ignorado quando a luz horizontal esta desligada.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
     [Tooltip("Padding horizontal usado pelas etapas caras de geracao detalhada (arvores, cavernas e minerios). Mantido separado do padding de luz para reduzir custo.")]
@@ -469,7 +474,10 @@ public partial class World : MonoBehaviour
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableVoxelLighting = true;
+    private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
+    private int lastHorizontalSkylightStepLoss = 1;
+    private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
     private bool treeSpawnRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
@@ -714,7 +722,7 @@ public partial class World : MonoBehaviour
 
     private int GetLightSmoothingBorderSize()
     {
-        if (!enableVoxelLighting)
+        if (!enableVoxelLighting || !enableHorizontalSkylight)
             return GetMeshNeighborPadding();
 
         return Mathf.Max(GetMeshNeighborPadding(), sunlightSmoothingPadding);
@@ -1430,7 +1438,10 @@ public partial class World : MonoBehaviour
 
         lastEnableBlockColliders = enableBlockColliders;
         lastEnableVoxelLighting = enableVoxelLighting;
+        lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
+        lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
+        lastSunlightSmoothingPadding = sunlightSmoothingPadding;
     }
 
     private void OnDestroy()
@@ -2416,6 +2427,8 @@ public partial class World : MonoBehaviour
             caveWormSettings,
             caveSpaghettiSettings,
             enableVoxelLighting,
+            enableHorizontalSkylight,
+            horizontalSkylightStepLoss,
             chunkLightData,
             chunk.voxelData,
             out JobHandle dataHandle,
@@ -2595,6 +2608,8 @@ public partial class World : MonoBehaviour
                 opacity = lightOpacityData,
                 light = light,
                 blockLightData = blockLightData,
+                enableHorizontalSkylight = enableHorizontalSkylight,
+                horizontalSkylightStepLoss = horizontalSkylightStepLoss,
                 inputVoxelSizeX = lightVoxelSizeX,
                 inputVoxelSizeZ = lightVoxelSizeZ,
                 inputTotalVoxels = lightTotalVoxels,
