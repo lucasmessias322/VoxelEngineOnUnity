@@ -110,6 +110,84 @@ public enum CaveGenerationMode : byte
     LegacyWorms = 1
 }
 
+public enum ChunkOpaqueRenderBackendKind : byte
+{
+    ClassicMesh = 0,
+    PulledOpaque = 1
+}
+
+public enum ChunkOpaqueRenderBackendSelection : byte
+{
+    AutomaticByPlatform = 0,
+    ForceClassicMesh = 1,
+    ForcePulledOpaque = 2
+}
+
+public interface IChunkOpaqueRenderBackend
+{
+    ChunkOpaqueRenderBackendKind Kind { get; }
+    bool UsesPulledOpaqueFaces { get; }
+    bool IsSupported(Material[] materials);
+}
+
+public sealed class ClassicMeshBackend : IChunkOpaqueRenderBackend
+{
+    public static readonly ClassicMeshBackend Instance = new ClassicMeshBackend();
+
+    public ChunkOpaqueRenderBackendKind Kind => ChunkOpaqueRenderBackendKind.ClassicMesh;
+    public bool UsesPulledOpaqueFaces => false;
+
+    public bool IsSupported(Material[] materials)
+    {
+        return true;
+    }
+
+    private ClassicMeshBackend()
+    {
+    }
+}
+
+public sealed class PulledOpaqueBackend : IChunkOpaqueRenderBackend
+{
+    public static readonly PulledOpaqueBackend Instance = new PulledOpaqueBackend();
+
+    public ChunkOpaqueRenderBackendKind Kind => ChunkOpaqueRenderBackendKind.PulledOpaque;
+    public bool UsesPulledOpaqueFaces => true;
+
+    public bool IsSupported(Material[] materials)
+    {
+        if (materials == null || materials.Length == 0 || materials[0] == null)
+            return false;
+
+        Shader shader = materials[0].shader;
+        if (shader == null || !shader.isSupported)
+            return false;
+
+        return SystemInfo.graphicsShaderLevel >= 45 &&
+               SystemInfo.supportsInstancing &&
+               SystemInfo.maxComputeBufferInputsVertex > 0;
+    }
+
+    private PulledOpaqueBackend()
+    {
+    }
+}
+
+public static class ChunkOpaqueRenderBackends
+{
+    public static IChunkOpaqueRenderBackend Get(ChunkOpaqueRenderBackendKind kind)
+    {
+        switch (kind)
+        {
+            case ChunkOpaqueRenderBackendKind.PulledOpaque:
+                return PulledOpaqueBackend.Instance;
+
+            default:
+                return ClassicMeshBackend.Instance;
+        }
+    }
+}
+
 [Serializable]
 public struct SpaghettiCaveSettings
 {
@@ -364,6 +442,14 @@ public partial class World : MonoBehaviour
     [Min(1)]
     public int maxChunkRebuildsPerFrame = 1;
 
+    [Header("Opaque Render Backend")]
+    [Tooltip("Seleciona o backend do opaco. AutomaticByPlatform usa ClassicMesh no mobile e PulledOpaque no desktop/high-end.")]
+    public ChunkOpaqueRenderBackendSelection opaqueRenderBackendSelection = ChunkOpaqueRenderBackendSelection.AutomaticByPlatform;
+    [Tooltip("Backend preferido em plataformas desktop/high-end quando AutomaticByPlatform estiver selecionado.")]
+    public ChunkOpaqueRenderBackendKind desktopOpaqueRenderBackend = ChunkOpaqueRenderBackendKind.PulledOpaque;
+    [Tooltip("Backend preferido em plataformas mobile quando AutomaticByPlatform estiver selecionado.")]
+    public ChunkOpaqueRenderBackendKind mobileOpaqueRenderBackend = ChunkOpaqueRenderBackendKind.ClassicMesh;
+
     [Header("Features Toggle")]
     public bool enableTrees = true;
 
@@ -489,7 +575,7 @@ public partial class World : MonoBehaviour
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
-    private bool lastEnableOpaqueVertexPulling = true;
+    private ChunkOpaqueRenderBackendKind lastResolvedOpaqueRenderBackendKind = ChunkOpaqueRenderBackendKind.ClassicMesh;
     private int lastHorizontalSkylightStepLoss = 1;
     private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
@@ -868,14 +954,37 @@ public partial class World : MonoBehaviour
 
     private bool CanUseOpaqueVertexPulling()
     {
-        if (!enableOpaqueVertexPulling)
-            return false;
+        return GetActiveOpaqueRenderBackendKind() == ChunkOpaqueRenderBackendKind.PulledOpaque;
+    }
 
-        if (Material == null || Material.Length == 0 || Material[0] == null)
-            return false;
+    private ChunkOpaqueRenderBackendKind GetConfiguredOpaqueRenderBackendKind()
+    {
+        switch (opaqueRenderBackendSelection)
+        {
+            case ChunkOpaqueRenderBackendSelection.ForceClassicMesh:
+                return ChunkOpaqueRenderBackendKind.ClassicMesh;
 
-        return SystemInfo.supportsInstancing &&
-               SystemInfo.maxComputeBufferInputsVertex > 0;
+            case ChunkOpaqueRenderBackendSelection.ForcePulledOpaque:
+                return ChunkOpaqueRenderBackendKind.PulledOpaque;
+
+            default:
+                return Application.isMobilePlatform
+                    ? mobileOpaqueRenderBackend
+                    : desktopOpaqueRenderBackend;
+        }
+    }
+
+    private ChunkOpaqueRenderBackendKind GetActiveOpaqueRenderBackendKind()
+    {
+        ChunkOpaqueRenderBackendKind requestedKind = GetConfiguredOpaqueRenderBackendKind();
+        if (requestedKind == ChunkOpaqueRenderBackendKind.PulledOpaque && !enableOpaqueVertexPulling)
+            return ChunkOpaqueRenderBackendKind.ClassicMesh;
+
+        IChunkOpaqueRenderBackend requestedBackend = ChunkOpaqueRenderBackends.Get(requestedKind);
+        if (requestedBackend.IsSupported(Material))
+            return requestedBackend.Kind;
+
+        return ChunkOpaqueRenderBackendKind.ClassicMesh;
     }
 
     private int GetResolvedVisualSubchunksPerRenderer()
@@ -1265,6 +1374,7 @@ public partial class World : MonoBehaviour
         public NativeArray<ulong> subchunkVisibilityMasks;
         public int dirtySubchunkMask;
         public int visualSliceIndex;
+        public ChunkOpaqueRenderBackendKind opaqueRenderBackendKind;
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
@@ -1577,6 +1687,7 @@ public partial class World : MonoBehaviour
         InitializeNoiseLayers();
         InitializeWarpLayers();
         InvalidateNativeGenerationCaches();
+        lastResolvedOpaqueRenderBackendKind = GetActiveOpaqueRenderBackendKind();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -1913,6 +2024,7 @@ public partial class World : MonoBehaviour
                         pm.billboardTriangles,
                         pm.waterTriangles,
                         pm.subchunkRanges,
+                        pm.opaqueRenderBackendKind,
                         activeChunk.subchunks);
                     activeChunk.RefreshVisualSliceVisibility(pm.visualSliceIndex);
                     meshesAppliedThisFrame++;
@@ -2142,6 +2254,7 @@ public partial class World : MonoBehaviour
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
+        ChunkOpaqueRenderBackendKind opaqueRenderBackendKind = GetActiveOpaqueRenderBackendKind();
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.Persistent);
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
@@ -2205,7 +2318,7 @@ public partial class World : MonoBehaviour
                     scheduledSubchunkMask,
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter,
-                    effectiveAoStrength, aoCurveExponent, aoMinLight, CanUseOpaqueVertexPulling(), useFastBedrockStyleMeshing,
+                    effectiveAoStrength, aoCurveExponent, aoMinLight, opaqueRenderBackendKind, useFastBedrockStyleMeshing,
                     out JobHandle meshHandle,
                     out NativeList<MeshGenerator.PackedChunkVertex> vertices,
                     out NativeList<int> opaqueTriangles,
@@ -2238,6 +2351,7 @@ public partial class World : MonoBehaviour
                     subchunkVisibilityMasks = subchunkVisibilityMasks,
                     dirtySubchunkMask = scheduledSubchunkMask,
                     visualSliceIndex = sliceIndex,
+                    opaqueRenderBackendKind = opaqueRenderBackendKind,
                     heightCache = pd.heightCache,
                     blockTypes = pd.blockTypes,
                     solids = pd.solids,

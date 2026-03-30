@@ -1017,7 +1017,7 @@ public static class MeshGenerator
         float aoStrength,
         float aoCurveExponent,
         float aoMinLight,
-        bool useOpaqueVertexPulling,
+        ChunkOpaqueRenderBackendKind opaqueRenderBackendKind,
         bool useFastBedrockStyleMeshing,
         out JobHandle meshHandle,
         out NativeList<PackedChunkVertex> vertices,
@@ -1031,6 +1031,7 @@ public static class MeshGenerator
     )
     {
         // 1. AlocaÃƒÂ§ÃƒÂµes das Listas de Mesh (Output)
+        bool useOpaqueVertexPulling = opaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque;
         vertices = new NativeList<PackedChunkVertex>(4096, Allocator.Persistent);
         opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
         pulledOpaqueFaces = useOpaqueVertexPulling

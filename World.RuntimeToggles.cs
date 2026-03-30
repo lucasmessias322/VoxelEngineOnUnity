@@ -53,7 +53,8 @@ public partial class World
     {
         bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;
         bool aoChanged = lastEnableAmbientOcclusion != enableAmbientOcclusion;
-        bool opaqueVertexPullingChanged = lastEnableOpaqueVertexPulling != enableOpaqueVertexPulling;
+        ChunkOpaqueRenderBackendKind resolvedOpaqueBackend = GetActiveOpaqueRenderBackendKind();
+        bool opaqueBackendChanged = lastResolvedOpaqueRenderBackendKind != resolvedOpaqueBackend;
         bool horizontalLightingChanged = enableVoxelLighting && lastEnableHorizontalSkylight != enableHorizontalSkylight;
         bool horizontalLightingParamsChanged =
             enableVoxelLighting &&
@@ -64,13 +65,13 @@ public partial class World
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
-        lastEnableOpaqueVertexPulling = enableOpaqueVertexPulling;
+        lastResolvedOpaqueRenderBackendKind = resolvedOpaqueBackend;
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
 
         if (!lightingChanged &&
             !aoChanged &&
-            !opaqueVertexPullingChanged &&
+            !opaqueBackendChanged &&
             !horizontalLightingChanged &&
             !horizontalLightingParamsChanged)
             return;

@@ -48,6 +48,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private bool hasGeometry;
     private bool hasMeshGeometry;
     private bool hasOpaqueGeometry;
+    private ChunkOpaqueRenderBackendKind activeOpaqueRenderBackendKind;
     private bool logicalShouldShow;
     private bool isFrustumVisible = true;
     private bool shouldRenderOpaqueGeometry;
@@ -89,7 +90,8 @@ public class ChunkRenderSlice : MonoBehaviour
 
     public static bool SupportsOpaqueVertexPulling()
     {
-        return SystemInfo.supportsInstancing &&
+        return SystemInfo.graphicsShaderLevel >= 45 &&
+               SystemInfo.supportsInstancing &&
                SystemInfo.maxComputeBufferInputsVertex > 0;
     }
 
@@ -149,16 +151,22 @@ public class ChunkRenderSlice : MonoBehaviour
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
         NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
+        ChunkOpaqueRenderBackendKind opaqueRenderBackendKind,
         Subchunk[] logicalSubchunks)
     {
+        activeOpaqueRenderBackendKind = opaqueRenderBackendKind;
         SliceMeshTotals totals = CalculateMeshTotals(subchunkRanges);
+        bool usePulledOpaqueBackend =
+            activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
+            SupportsOpaqueVertexPulling() &&
+            opaqueMaterial != null;
 
-        if (totals.opaqueFaceCount > 0 && SupportsOpaqueVertexPulling() && opaqueMaterial != null)
+        if (usePulledOpaqueBackend && totals.opaqueFaceCount > 0)
             UploadPulledOpaqueFaces(pulledOpaqueFaces, subchunkRanges, totals.opaqueFaceCount);
         else
             ClearPulledOpaqueFaces();
 
-        hasOpaqueGeometry = pulledOpaqueFaceCount > 0;
+        hasOpaqueGeometry = usePulledOpaqueBackend && pulledOpaqueFaceCount > 0;
 
         if (totals.vertexCount > 0)
         {
@@ -251,6 +259,7 @@ public class ChunkRenderSlice : MonoBehaviour
         hasGeometry = false;
         hasMeshGeometry = false;
         hasOpaqueGeometry = false;
+        activeOpaqueRenderBackendKind = ChunkOpaqueRenderBackendKind.ClassicMesh;
         logicalShouldShow = false;
         logicalVisibleOpaqueSubchunkMask = 0;
         isFrustumVisible = true;
@@ -453,7 +462,10 @@ public class ChunkRenderSlice : MonoBehaviour
 
         pulledOpaquePropertyBlock = pulledOpaquePropertyBlock ?? new MaterialPropertyBlock();
         pulledOpaquePropertyBlock.Clear();
-        pulledOpaquePropertyBlock.SetFloat(UseVertexPullingPropertyId, pulledOpaqueFaceCount > 0 ? 1f : 0f);
+        bool useVertexPulling =
+            activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
+            pulledOpaqueFaceCount > 0;
+        pulledOpaquePropertyBlock.SetFloat(UseVertexPullingPropertyId, useVertexPulling ? 1f : 0f);
         pulledOpaquePropertyBlock.SetFloat(UseCompactOpaqueFacesPropertyId, 0f);
         pulledOpaquePropertyBlock.SetFloat(UseIndirectVertexPullingPropertyId, 0f);
         pulledOpaquePropertyBlock.SetFloat(PulledOpaqueFaceBaseIndexPropertyId, 0f);
@@ -480,7 +492,10 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         visibleOpaqueSubchunkMask = isFrustumVisible ? logicalVisibleOpaqueSubchunkMask : 0;
         SetRendererEnabled(hasMeshGeometry && logicalShouldShow && isFrustumVisible);
-        shouldRenderOpaqueGeometry = hasOpaqueGeometry && visibleOpaqueSubchunkMask != 0;
+        shouldRenderOpaqueGeometry =
+            activeOpaqueRenderBackendKind == ChunkOpaqueRenderBackendKind.PulledOpaque &&
+            hasOpaqueGeometry &&
+            visibleOpaqueSubchunkMask != 0;
         UpdateManagedRenderRegistration();
         UpdateOpaqueRenderRegistration();
     }
