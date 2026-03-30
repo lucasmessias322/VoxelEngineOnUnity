@@ -329,6 +329,23 @@ public partial class World : MonoBehaviour
     [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
     [Min(1)]
     public int visualSubchunksPerRenderer = 4;
+    [Tooltip("Quando ativado, aumenta o tamanho dos slices conforme a distancia ao player para reduzir batches no anel medio e distante.")]
+    public bool enableDistanceBasedVisualSliceLayout = true;
+    [Tooltip("Distancia em chunks a partir da qual o anel medio passa a usar um agrupamento de slices maior.")]
+    [Min(0)]
+    public int mediumDistanceSliceStart = 8;
+    [Tooltip("Quantidade de subchunks agrupados por renderer no anel medio.")]
+    [Min(1)]
+    public int mediumVisualSubchunksPerRenderer = 8;
+    [Tooltip("Distancia em chunks a partir da qual o anel distante passa a usar o maior agrupamento de slices.")]
+    [Min(0)]
+    public int farDistanceSliceStart = 16;
+    [Tooltip("Quantidade de subchunks agrupados por renderer no anel distante.")]
+    [Min(1)]
+    public int farVisualSubchunksPerRenderer = Chunk.SubchunksPerColumn;
+    [Tooltip("Quantidade maxima de chunks que podem trocar de layout visual por frame quando o player se move.")]
+    [Min(1)]
+    public int maxVisualLayoutChangesPerFrame = 6;
     [Tooltip("Quando a oclusao por secoes estilo Minecraft estiver ativa, usa um renderer por subchunk para impedir que um slice visivel desenhe cavernas ocultas do mesmo grupo.")]
     public bool forceSingleSubchunkRendererForSectionOcclusion = true;
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
@@ -619,7 +636,10 @@ public partial class World : MonoBehaviour
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
     private bool nativeGenerationConfigDirty = true;
-    private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
+    private int lastVisualLayoutConfigHash = int.MinValue;
+    private Vector2Int lastVisualLayoutCenter = new Vector2Int(int.MinValue, int.MinValue);
+    private readonly Queue<Vector2Int> queuedVisualLayoutUpdates = new Queue<Vector2Int>();
+    private readonly HashSet<Vector2Int> queuedVisualLayoutUpdatesSet = new HashSet<Vector2Int>();
 
 
     // Optimization temporaries
@@ -1031,6 +1051,11 @@ public partial class World : MonoBehaviour
 
     private int GetResolvedVisualSubchunksPerRenderer()
     {
+        return ResolveVisualSubchunksPerRendererForRequestedSize(visualSubchunksPerRenderer);
+    }
+
+    private int ResolveVisualSubchunksPerRendererForRequestedSize(int requestedSubchunksPerRenderer)
+    {
         if (enableMinecraftSectionOcclusion &&
             forceSingleSubchunkRendererForSectionOcclusion)
         {
@@ -1038,27 +1063,107 @@ public partial class World : MonoBehaviour
                 return 1;
         }
 
-        return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
+        return Mathf.Clamp(requestedSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
     }
 
-    private void ApplyResolvedVisualSubchunkRendererLayout()
+    private int GetResolvedVisualSubchunksPerRendererForCoord(Vector2Int coord)
     {
-        int resolved = GetResolvedVisualSubchunksPerRenderer();
-        if (resolved == lastResolvedVisualSubchunksPerRenderer)
+        int requested = visualSubchunksPerRenderer;
+        if (enableDistanceBasedVisualSliceLayout)
+        {
+            float distSq = GetChunkDistanceSqToPlayer(coord);
+            int mediumStart = Mathf.Max(0, mediumDistanceSliceStart);
+            int farStart = Mathf.Max(mediumStart, farDistanceSliceStart);
+
+            if (distSq >= farStart * farStart)
+                requested = farVisualSubchunksPerRenderer;
+            else if (distSq >= mediumStart * mediumStart)
+                requested = mediumVisualSubchunksPerRenderer;
+        }
+
+        return ResolveVisualSubchunksPerRendererForRequestedSize(requested);
+    }
+
+    private int GetVisualLayoutConfigurationHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + visualSubchunksPerRenderer;
+            hash = hash * 31 + (enableDistanceBasedVisualSliceLayout ? 1 : 0);
+            hash = hash * 31 + mediumDistanceSliceStart;
+            hash = hash * 31 + mediumVisualSubchunksPerRenderer;
+            hash = hash * 31 + farDistanceSliceStart;
+            hash = hash * 31 + farVisualSubchunksPerRenderer;
+            hash = hash * 31 + (enableMinecraftSectionOcclusion ? 1 : 0);
+            hash = hash * 31 + (forceSingleSubchunkRendererForSectionOcclusion ? 1 : 0);
+            hash = hash * 31 + (allowGroupedSlicesWithOpaqueVertexPulling ? 1 : 0);
+            hash = hash * 31 + (CanUseOpaqueVertexPulling() ? 1 : 0);
+            return hash;
+        }
+    }
+
+    private void EnqueueVisualLayoutUpdate(Vector2Int coord)
+    {
+        if (!queuedVisualLayoutUpdatesSet.Add(coord))
             return;
 
-        lastResolvedVisualSubchunksPerRenderer = resolved;
+        queuedVisualLayoutUpdates.Enqueue(coord);
+    }
 
-        foreach (var kv in activeChunks)
+    private void ProcessQueuedVisualLayoutUpdates()
+    {
+        if (queuedVisualLayoutUpdates.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, maxVisualLayoutChangesPerFrame);
+        int processed = 0;
+        int attempts = queuedVisualLayoutUpdates.Count;
+        while (processed < perFrameLimit && attempts-- > 0 && queuedVisualLayoutUpdates.Count > 0)
         {
-            Chunk chunk = kv.Value;
-            if (chunk == null)
+            Vector2Int coord = queuedVisualLayoutUpdates.Dequeue();
+            queuedVisualLayoutUpdatesSet.Remove(coord);
+
+            if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+                continue;
+
+            int resolved = GetResolvedVisualSubchunksPerRendererForCoord(coord);
+            if (chunk.HasInitializedSubchunks && chunk.visualSubchunksPerRenderer == resolved)
                 continue;
 
             chunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolved);
             chunk.UpdateWorldBounds();
-            RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
+            if (chunk.hasVoxelData)
+                RequestChunkRebuild(coord, GetFullSubchunkMask(), false);
+
+            processed++;
         }
+    }
+
+    private void ApplyResolvedVisualSubchunkRendererLayout()
+    {
+        int configHash = GetVisualLayoutConfigurationHash();
+        Vector2Int currentLayoutCenter = GetCurrentPlayerChunkCoord();
+        bool requiresRescan = configHash != lastVisualLayoutConfigHash ||
+                              currentLayoutCenter != lastVisualLayoutCenter;
+        if (requiresRescan)
+        {
+            lastVisualLayoutConfigHash = configHash;
+            lastVisualLayoutCenter = currentLayoutCenter;
+
+            foreach (var kv in activeChunks)
+            {
+                Chunk chunk = kv.Value;
+                if (chunk == null)
+                    continue;
+
+                int resolved = GetResolvedVisualSubchunksPerRendererForCoord(kv.Key);
+                if (!chunk.HasInitializedSubchunks || chunk.visualSubchunksPerRenderer != resolved)
+                    EnqueueVisualLayoutUpdate(kv.Key);
+            }
+        }
+
+        ProcessQueuedVisualLayoutUpdates();
     }
 
     private static bool CanChunkProvideVoxelSnapshot(Chunk chunk)
@@ -1973,10 +2078,10 @@ public partial class World : MonoBehaviour
                 }
                 else
                 {
-                    int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
-                    if (!activeChunk.HasInitializedSubchunks ||
-                        activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
-                        activeChunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolvedVisualSubchunksPerRenderer);
+                        int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRendererForCoord(pd.coord);
+                        if (!activeChunk.HasInitializedSubchunks ||
+                            activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
+                            activeChunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolvedVisualSubchunksPerRenderer);
                     else
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);

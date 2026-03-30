@@ -243,14 +243,13 @@ public partial class World
         if (!materialsChanged && !forceRebuild)
             return;
 
-        int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
             if (chunk == null)
                 continue;
 
-            chunk.InitializeSubchunks(GetRuntimeChunkMaterials(), resolvedVisualSubchunksPerRenderer);
+            chunk.InitializeSubchunks(GetRuntimeChunkMaterials(), GetResolvedVisualSubchunksPerRendererForCoord(kv.Key));
             chunk.UpdateWorldBounds();
             RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
         }
