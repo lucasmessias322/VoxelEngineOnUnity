@@ -89,7 +89,7 @@ public class ChunkRenderSlice : MonoBehaviour
         NativeList<int> billboardTris,
         NativeList<int> waterTris,
         NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges,
-        Chunk.SubchunkState[] logicalSubchunks)
+        Chunk owningChunk)
     {
         SliceMeshTotals totals = CalculateMeshTotals(subchunkRanges);
         if (totals.vertexCount == 0)
@@ -123,12 +123,12 @@ public class ChunkRenderSlice : MonoBehaviour
 
         hasGeometry = true;
         SetActiveState(true);
-        RefreshVisibility(logicalSubchunks);
+        RefreshVisibility(owningChunk);
     }
 
-    public void RefreshVisibility(Chunk.SubchunkState[] logicalSubchunks)
+    public void RefreshVisibility(Chunk owningChunk)
     {
-        bool shouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
+        bool shouldShow = hasGeometry && HasAnyVisibleGeometry(owningChunk);
 
         if (!hasGeometry)
         {
@@ -237,16 +237,15 @@ public class ChunkRenderSlice : MonoBehaviour
             meshRenderer.enabled = enabled;
     }
 
-    private bool HasAnyVisibleGeometry(Chunk.SubchunkState[] logicalSubchunks)
+    private bool HasAnyVisibleGeometry(Chunk owningChunk)
     {
-        if (logicalSubchunks == null)
+        if (owningChunk == null || owningChunk.SubchunkCount == 0)
             return false;
 
-        int end = Mathf.Min(EndSubchunkIndexExclusive, logicalSubchunks.Length);
+        int end = Mathf.Min(EndSubchunkIndexExclusive, owningChunk.SubchunkCount);
         for (int sub = startSubchunkIndex; sub < end; sub++)
         {
-            Chunk.SubchunkState logicalSubchunk = logicalSubchunks[sub];
-            if (logicalSubchunk.hasGeometry && logicalSubchunk.isVisible)
+            if (owningChunk.HasSubchunkGeometry(sub) && owningChunk.IsSubchunkVisible(sub))
                 return true;
         }
 

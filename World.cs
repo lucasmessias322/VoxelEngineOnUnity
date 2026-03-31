@@ -817,9 +817,8 @@ public partial class World : MonoBehaviour
                 chunk.generation != request.expectedGen ||
                 !chunk.hasVoxelData ||
                 !chunk.voxelData.IsCreated ||
-                chunk.subchunks == null ||
                 request.subchunkIndex < 0 ||
-                request.subchunkIndex >= chunk.subchunks.Length)
+                request.subchunkIndex >= chunk.SubchunkCount)
             {
                 continue;
             }
@@ -1757,7 +1756,7 @@ public partial class World : MonoBehaviour
                         pm.billboardTriangles,
                         pm.waterTriangles,
                         pm.subchunkRanges,
-                        activeChunk.subchunks);
+                        activeChunk);
                     activeChunk.RefreshVisualSliceVisibility(pm.visualSliceIndex);
                     meshesAppliedThisFrame++;
                 }

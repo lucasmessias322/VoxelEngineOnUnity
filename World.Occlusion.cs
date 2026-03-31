@@ -261,10 +261,7 @@ public partial class World : MonoBehaviour
         if (!TryGetLoadedSection(node.chunkCoord, node.subchunkIndex, out Chunk chunk))
             return;
 
-        bool hasGeometry = chunk.subchunks != null &&
-                           node.subchunkIndex >= 0 &&
-                           node.subchunkIndex < chunk.subchunks.Length &&
-                           chunk.subchunks[node.subchunkIndex].hasGeometry;
+        bool hasGeometry = chunk.HasSubchunkGeometry(node.subchunkIndex);
 
         if (hasGeometry)
             sectionOcclusionVisibleSections.Add(GetSectionKey(node.chunkCoord, node.subchunkIndex));
@@ -463,7 +460,7 @@ public partial class World : MonoBehaviour
 
     private void ApplyCachedSectionVisibility(Vector2Int chunkCoord, int subchunkIndex, Chunk chunk)
     {
-        if (chunk == null || chunk.subchunks == null || subchunkIndex < 0 || subchunkIndex >= chunk.subchunks.Length)
+        if (chunk == null || subchunkIndex < 0 || subchunkIndex >= chunk.SubchunkCount)
             return;
 
         if (!enableMinecraftSectionOcclusion || sectionOcclusionAllVisibleApplied)
@@ -479,9 +476,8 @@ public partial class World : MonoBehaviour
     {
         Vector2Int chunkCoord = new Vector2Int(key.x, key.z);
         if (!TryGetLoadedSection(chunkCoord, key.y, out Chunk chunk) ||
-            chunk.subchunks == null ||
             key.y < 0 ||
-            key.y >= chunk.subchunks.Length)
+            key.y >= chunk.SubchunkCount)
         {
             return;
         }
@@ -516,10 +512,10 @@ public partial class World : MonoBehaviour
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
-            if (chunk == null || chunk.subchunks == null)
+            if (chunk == null || chunk.SubchunkCount == 0)
                 continue;
 
-            for (int sub = 0; sub < chunk.subchunks.Length; sub++)
+            for (int sub = 0; sub < chunk.SubchunkCount; sub++)
             {
                 chunk.SetSubchunkVisible(sub, visible);
             }

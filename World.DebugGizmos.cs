@@ -80,12 +80,12 @@ public partial class World
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
-            if (chunk == null || chunk.subchunks == null)
+            if (chunk == null || chunk.SubchunkCount == 0)
                 continue;
 
-            for (int i = 0; i < chunk.subchunks.Length; i++)
+            for (int i = 0; i < chunk.SubchunkCount; i++)
             {
-                if (debugSubchunksOnlyWithGeometry && !chunk.subchunks[i].hasGeometry)
+                if (debugSubchunksOnlyWithGeometry && !chunk.HasSubchunkGeometry(i))
                     continue;
 
                 float minY = i * Chunk.SubchunkHeight;

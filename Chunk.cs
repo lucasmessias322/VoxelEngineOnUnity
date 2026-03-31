@@ -21,8 +21,8 @@ public class Chunk : MonoBehaviour
     public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
 
-    [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
-    public SubchunkState[] subchunks;
+    [SerializeField, HideInInspector] // Estado logico dos subchunks fica encapsulado no Chunk.
+    private SubchunkState[] subchunks;
     [HideInInspector] public ChunkRenderSlice[] visualSlices;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
@@ -35,6 +35,7 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public ulong lastLightingContextHash;
     [NonSerialized] public bool lightingContextHashValid;
     [NonSerialized] public int visualSubchunksPerRenderer;
+    public int SubchunkCount => subchunks?.Length ?? 0;
     public bool HasInitializedSubchunks =>
         subchunks != null &&
         subchunks.Length == SubchunksPerColumn &&
@@ -124,7 +125,7 @@ public class Chunk : MonoBehaviour
     public void RefreshVisualSliceVisibility(int visualSliceIndex)
     {
         if (TryGetVisualSlice(visualSliceIndex, out ChunkRenderSlice visualSlice))
-            visualSlice.RefreshVisibility(subchunks);
+            visualSlice.RefreshVisibility(this);
     }
 
     public void RefreshVisualSliceVisibilityForSubchunk(int subchunkIndex)
@@ -141,7 +142,7 @@ public class Chunk : MonoBehaviour
         {
             ChunkRenderSlice visualSlice = visualSlices[i];
             if (visualSlice != null)
-                visualSlice.RefreshVisibility(subchunks);
+                visualSlice.RefreshVisibility(this);
         }
     }
 
@@ -348,6 +349,18 @@ public class Chunk : MonoBehaviour
     public bool IsSubchunkVisible(int subchunkIndex)
     {
         return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].isVisible;
+    }
+
+    public bool TryGetSubchunkState(int subchunkIndex, out SubchunkState state)
+    {
+        if (IsSubchunkIndexValid(subchunkIndex))
+        {
+            state = subchunks[subchunkIndex];
+            return true;
+        }
+
+        state = default;
+        return false;
     }
 
     public void SetSubchunkMeshState(int subchunkIndex, bool geometryPresent, bool solidColliderGeometryPresent)
