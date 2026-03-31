@@ -22,6 +22,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private int startSubchunkIndex;
     private int subchunkCount;
     private bool hasGeometry;
+    private bool externallySuppressed;
 
     private readonly struct SliceMeshTotals
     {
@@ -52,6 +53,8 @@ public class ChunkRenderSlice : MonoBehaviour
     public int StartSubchunkIndex => startSubchunkIndex;
     public int EndSubchunkIndexExclusive => startSubchunkIndex + subchunkCount;
     public bool HasGeometry => hasGeometry;
+    public Mesh SharedMesh => meshFilter != null ? meshFilter.sharedMesh : mesh;
+    public static VertexAttributeDescriptor[] SharedVertexLayout => ChunkVertexLayout;
 
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
     {
@@ -128,7 +131,7 @@ public class ChunkRenderSlice : MonoBehaviour
 
     public void RefreshVisibility(Chunk.SubchunkState[] logicalSubchunks)
     {
-        bool shouldShow = hasGeometry && HasAnyVisibleGeometry(logicalSubchunks);
+        bool shouldShow = hasGeometry && !externallySuppressed && HasAnyVisibleGeometry(logicalSubchunks);
 
         if (!hasGeometry)
         {
@@ -141,12 +144,18 @@ public class ChunkRenderSlice : MonoBehaviour
         SetRendererEnabled(shouldShow);
     }
 
+    public void SetExternallySuppressed(bool suppressed)
+    {
+        externallySuppressed = suppressed;
+    }
+
     public void ClearMesh()
     {
         if (mesh != null)
             mesh.Clear();
 
         hasGeometry = false;
+        externallySuppressed = false;
         SetRendererEnabled(false);
         SetActiveState(false);
     }
