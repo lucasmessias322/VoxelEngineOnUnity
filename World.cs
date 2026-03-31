@@ -963,7 +963,15 @@ public partial class World : MonoBehaviour
 
     private int GetMaxTreeRadiusForGeneration()
     {
-        return GetMaxTreeCanopyRadiusForGeneration();
+        TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
+        if (rules.Length == 0)
+            return 0;
+
+        int maxRadius = 0;
+        for (int i = 0; i < rules.Length; i++)
+            maxRadius = Mathf.Max(maxRadius, TreeGenerationMetrics.GetPlacementSpacingRadius(rules[i].treeStyle, rules[i].settings));
+
+        return maxRadius;
     }
 
     private int GetMaxTreeMarginForGeneration()

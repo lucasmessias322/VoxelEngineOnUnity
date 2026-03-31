@@ -280,7 +280,10 @@ public static class ChunkData
             int chunkMaxZ = chunkMinZ + SizeZ - 1;
 
             int horizontalReach = TreeGenerationMetrics.GetHorizontalReach(rule.treeStyle, settings.maxHeight, settings.canopyRadius, settings.canopyHeight);
-            int searchMargin = horizontalReach + settings.minSpacing;
+            // Search farther than the canopy reach so every neighboring chunk sees the same
+            // set of competing trees near borders and picks the same winners.
+            int conflictSearchRadius = math.max(math.max(1, maxTreeRadius), settings.minSpacing);
+            int searchMargin = horizontalReach + conflictSearchRadius;
             int cellX0 = FloorDiv(chunkMinX - searchMargin, cellSize);
             int cellX1 = FloorDiv(chunkMaxX + searchMargin, cellSize);
             int cellZ0 = FloorDiv(chunkMinZ - searchMargin, cellSize);
@@ -427,31 +430,70 @@ public static class ChunkData
                 treeStyle = rule.treeStyle
             };
 
-            int voxelSizeX = SizeX + 2 * border;
-            int voxelSizeZ = SizeZ + 2 * border;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            if (TreeGroundSupport.TryEvaluateStableSupportAtWorldColumn(
-                    blockTypes,
-                    solids,
-                    coord,
-                    border,
-                    SizeX,
-                    SizeZ,
-                    SizeY,
-                    voxelSizeX,
-                    voxelSizeZ,
-                    voxelPlaneSize,
-                    worldX,
-                    surfaceY,
-                    worldZ,
-                    out bool hasStableSupport) &&
-                !hasStableSupport)
+            // Border trees must be validated from deterministic terrain data, otherwise
+            // adjacent chunks can disagree about whether the same tree exists.
+            if (!HasDeterministicTreeSupport(columnContext, isCactus))
             {
                 candidate = default;
                 return false;
             }
 
             return true;
+        }
+
+        private static bool HasDeterministicTreeSupport(in TerrainColumnContext columnContext, bool isCactus)
+        {
+            if (columnContext.surface.isCliff)
+                return false;
+
+            int centerHeight = columnContext.surfaceHeight;
+            if (centerHeight <= 0)
+                return false;
+
+            int maxSupportedDelta = isCactus ? 3 : 2;
+            int strongDelta = isCactus ? 2 : 1;
+            int requiredSupportedNeighbors = isCactus ? 4 : 5;
+            int requiredStrongColumns = isCactus ? 3 : 4;
+            int requiredSupportedCardinals = isCactus ? 2 : 3;
+
+            int supportedNeighbors = 0;
+            int strongColumns = 1; // center column
+            int supportedCardinals = 0;
+
+            AccumulateTreeSupport(columnContext.northHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, true);
+            AccumulateTreeSupport(columnContext.southHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, true);
+            AccumulateTreeSupport(columnContext.eastHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, true);
+            AccumulateTreeSupport(columnContext.westHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, true);
+            AccumulateTreeSupport(columnContext.northEastHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, false);
+            AccumulateTreeSupport(columnContext.northWestHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, false);
+            AccumulateTreeSupport(columnContext.southEastHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, false);
+            AccumulateTreeSupport(columnContext.southWestHeight, centerHeight, maxSupportedDelta, strongDelta, ref supportedNeighbors, ref strongColumns, ref supportedCardinals, false);
+
+            return supportedNeighbors >= requiredSupportedNeighbors &&
+                   strongColumns >= requiredStrongColumns &&
+                   supportedCardinals >= requiredSupportedCardinals;
+        }
+
+        private static void AccumulateTreeSupport(
+            int neighborHeight,
+            int centerHeight,
+            int maxSupportedDelta,
+            int strongDelta,
+            ref int supportedNeighbors,
+            ref int strongColumns,
+            ref int supportedCardinals,
+            bool isCardinal)
+        {
+            int delta = math.abs(neighborHeight - centerHeight);
+            if (delta > maxSupportedDelta)
+                return;
+
+            supportedNeighbors++;
+            if (delta <= strongDelta)
+                strongColumns++;
+
+            if (isCardinal)
+                supportedCardinals++;
         }
 
         private bool HasHigherPriorityConflictingCell(
