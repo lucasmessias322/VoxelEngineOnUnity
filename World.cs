@@ -824,27 +824,24 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
-            Subchunk subchunk = chunk.subchunks[request.subchunkIndex];
-            if (subchunk == null)
-                continue;
-
             if (!IsCoordInsideSimulationDistance(request.coord, simulationCenter))
             {
-                subchunk.SetColliderSystemEnabled(false);
+                chunk.SetSubchunkColliderSystemEnabled(request.subchunkIndex, false);
                 EnqueueColliderBuild(request.coord, request.expectedGen, request.subchunkIndex);
                 continue;
             }
 
-            if (!subchunk.hasGeometry || !subchunk.CanHaveColliders)
+            if (!chunk.HasSubchunkGeometry(request.subchunkIndex) ||
+                !chunk.CanSubchunkHaveColliders(request.subchunkIndex))
             {
-                subchunk.ClearColliderData();
+                chunk.ClearSubchunkColliderData(request.subchunkIndex);
                 continue;
             }
 
             int startY = request.subchunkIndex * Chunk.SubchunkHeight;
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-            subchunk.RebuildColliders(chunk.voxelData, blockMappings, startY, endY);
-            subchunk.SetColliderSystemEnabled(true);
+            chunk.RebuildSubchunkColliders(request.subchunkIndex, chunk.voxelData, blockMappings, startY, endY);
+            chunk.SetSubchunkColliderSystemEnabled(request.subchunkIndex, true);
             processed++;
         }
     }
@@ -1728,7 +1725,6 @@ public partial class World : MonoBehaviour
                         if ((sliceMask & subchunkBit) == 0 || (pm.dirtySubchunkMask & subchunkBit) == 0)
                             continue;
 
-                        Subchunk sub = activeChunk.subchunks[subchunkIndex];
                         MeshGenerator.SubchunkMeshRange range = pm.subchunkRanges[subchunkIndex];
                         if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
                             updatedSectionVisibility = true;
@@ -1736,21 +1732,21 @@ public partial class World : MonoBehaviour
                         bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
                         if (range.vertexCount > 0)
                         {
-                            sub.SetMeshState(true, hasSolidColliderGeometry);
-                            ApplyCachedSectionVisibility(pm.coord, subchunkIndex, sub);
+                            activeChunk.SetSubchunkMeshState(subchunkIndex, true, hasSolidColliderGeometry);
+                            ApplyCachedSectionVisibility(pm.coord, subchunkIndex, activeChunk);
 
                             if (pm.buildColliders)
                             {
                                 if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
                                     EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
                                 else
-                                    sub.ClearColliderData();
+                                    activeChunk.ClearSubchunkColliderData(subchunkIndex);
                             }
                         }
 
                         else
                         {
-                            sub.ClearMesh();
+                            activeChunk.ClearSubchunkMesh(subchunkIndex);
                         }
                     }
 
@@ -2010,7 +2006,7 @@ public partial class World : MonoBehaviour
 
             if (!pd.subchunkNonEmpty[sub])
             {
-                activeChunk.subchunks[sub].ClearMesh();
+                activeChunk.ClearSubchunkMesh(sub);
                 if (activeChunk.SetSubchunkVisibilityData(sub, SubchunkOcclusion.AllVisibleMask))
                     updatedEmptySectionVisibility = true;
                 continue;

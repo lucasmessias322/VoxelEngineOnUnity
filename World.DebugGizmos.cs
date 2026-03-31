@@ -85,8 +85,7 @@ public partial class World
 
             for (int i = 0; i < chunk.subchunks.Length; i++)
             {
-                Subchunk subchunk = chunk.subchunks[i];
-                if (subchunk == null || (debugSubchunksOnlyWithGeometry && !subchunk.hasGeometry))
+                if (debugSubchunksOnlyWithGeometry && !chunk.subchunks[i].hasGeometry)
                     continue;
 
                 float minY = i * Chunk.SubchunkHeight;

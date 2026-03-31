@@ -6,6 +6,14 @@ using UnityEngine;
 
 public class Chunk : MonoBehaviour
 {
+    public struct SubchunkState
+    {
+        public bool hasGeometry;
+        public bool canHaveColliders;
+        public bool hasColliderData;
+        public bool isVisible;
+    }
+
     public const int SizeX = 16;
     public const int SizeY = 384;
     public const int SizeZ = 16;
@@ -14,13 +22,14 @@ public class Chunk : MonoBehaviour
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
 
     [HideInInspector] // Impede que a Unity serialize isso incorretamente no Prefab
-    public Subchunk[] subchunks;
+    public SubchunkState[] subchunks;
     [HideInInspector] public ChunkRenderSlice[] visualSlices;
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     [NonSerialized] public bool hasVoxelSnapshot = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
+    [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
     [NonSerialized] public ulong[] subchunkVisibilityMasks;
     [NonSerialized] public bool[] subchunkVisibilityValid;
     [NonSerialized] public ulong lastLightingContextHash;
@@ -29,6 +38,8 @@ public class Chunk : MonoBehaviour
     public bool HasInitializedSubchunks =>
         subchunks != null &&
         subchunks.Length == SubchunksPerColumn &&
+        subchunkColliderBuilders != null &&
+        subchunkColliderBuilders.Length == SubchunksPerColumn &&
         visualSlices != null &&
         visualSlices.Length == GetVisualSliceCount(visualSubchunksPerRenderer) &&
         subRenderers != null &&
@@ -140,21 +151,15 @@ public class Chunk : MonoBehaviour
 
         visualSubchunksPerRenderer = Mathf.Clamp(subchunksPerVisualSlice, 1, SubchunksPerColumn);
 
-        if (subchunks == null || subchunks.Length != SubchunksPerColumn)
-            subchunks = new Subchunk[SubchunksPerColumn];
+        EnsureSubchunkStorage();
 
         for (int i = 0; i < SubchunksPerColumn; i++)
         {
-            Subchunk sc = subchunks[i];
-            if (sc == null)
-            {
-                sc = CreateSubchunk(i);
-                subchunks[i] = sc;
-            }
-            else
-            {
-                sc.Initialize(i);
-            }
+            subchunks[i].hasGeometry = false;
+            subchunks[i].canHaveColliders = false;
+            subchunks[i].hasColliderData = false;
+            subchunks[i].isVisible = true;
+            subchunkColliderBuilders[i].Clear();
         }
 
         int visualSliceCount = GetVisualSliceCount(visualSubchunksPerRenderer);
@@ -195,18 +200,6 @@ public class Chunk : MonoBehaviour
         }
 
         UpdateWorldBounds();
-    }
-
-    private Subchunk CreateSubchunk(int subchunkIndex)
-    {
-        GameObject subObj = new GameObject($"SubchunkLogic_{subchunkIndex}");
-        subObj.transform.SetParent(transform, false);
-        subObj.transform.localPosition = Vector3.zero;
-        subObj.layer = gameObject.layer;
-
-        Subchunk sc = subObj.AddComponent<Subchunk>();
-        sc.Initialize(subchunkIndex);
-        return sc;
     }
 
     private ChunkRenderSlice CreateVisualSlice(int sliceIndex, Material[] materials, int startSubchunkIndex, int sliceSubchunkCount)
@@ -303,13 +296,10 @@ public class Chunk : MonoBehaviour
 
         if (subchunks != null)
         {
-            foreach (var sc in subchunks)
+            for (int i = 0; i < subchunks.Length; i++)
             {
-                if (sc != null)
-                {
-                    sc.ClearMesh();
-                    sc.SetVisible(false);
-                }
+                ClearSubchunkMesh(i);
+                SetSubchunkVisible(i, false);
             }
         }
 
@@ -338,5 +328,132 @@ public class Chunk : MonoBehaviour
         catch (InvalidOperationException)
         {
         }
+    }
+
+    public bool HasSubchunkGeometry(int subchunkIndex)
+    {
+        return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].hasGeometry;
+    }
+
+    public bool CanSubchunkHaveColliders(int subchunkIndex)
+    {
+        return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].canHaveColliders;
+    }
+
+    public bool HasSubchunkColliderData(int subchunkIndex)
+    {
+        return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].hasColliderData;
+    }
+
+    public bool IsSubchunkVisible(int subchunkIndex)
+    {
+        return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].isVisible;
+    }
+
+    public void SetSubchunkMeshState(int subchunkIndex, bool geometryPresent, bool solidColliderGeometryPresent)
+    {
+        if (!IsSubchunkIndexValid(subchunkIndex))
+            return;
+
+        subchunks[subchunkIndex].hasGeometry = geometryPresent;
+        subchunks[subchunkIndex].canHaveColliders = geometryPresent && solidColliderGeometryPresent;
+
+        if (!subchunks[subchunkIndex].canHaveColliders)
+            ClearSubchunkColliderData(subchunkIndex);
+    }
+
+    public void SetSubchunkVisible(int subchunkIndex, bool visible)
+    {
+        if (!IsSubchunkIndexValid(subchunkIndex))
+            return;
+
+        subchunks[subchunkIndex].isVisible = visible;
+    }
+
+    public void SetSubchunkColliderSystemEnabled(int subchunkIndex, bool enabled)
+    {
+        if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
+            return;
+
+        bool shouldEnable = enabled &&
+                            subchunks[subchunkIndex].hasGeometry &&
+                            subchunks[subchunkIndex].hasColliderData;
+        colliderBuilder.SetEnabled(shouldEnable);
+    }
+
+    public void ClearSubchunkMesh(int subchunkIndex)
+    {
+        if (!IsSubchunkIndexValid(subchunkIndex))
+            return;
+
+        subchunks[subchunkIndex].hasGeometry = false;
+        subchunks[subchunkIndex].canHaveColliders = false;
+        ClearSubchunkColliderData(subchunkIndex);
+    }
+
+    public void ClearSubchunkColliderData(int subchunkIndex)
+    {
+        if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
+            return;
+
+        subchunks[subchunkIndex].hasColliderData = false;
+        colliderBuilder.Clear();
+    }
+
+    public void RebuildSubchunkColliders(
+        int subchunkIndex,
+        NativeArray<byte> voxelSource,
+        BlockTextureMapping[] blockMappings,
+        int startY,
+        int endY)
+    {
+        if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
+            return;
+
+        if (!subchunks[subchunkIndex].hasGeometry || !subchunks[subchunkIndex].canHaveColliders)
+        {
+            ClearSubchunkColliderData(subchunkIndex);
+            return;
+        }
+
+        subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, startY, endY);
+    }
+
+    private void EnsureSubchunkStorage()
+    {
+        if (subchunks == null || subchunks.Length != SubchunksPerColumn)
+            subchunks = new SubchunkState[SubchunksPerColumn];
+
+        if (subchunkColliderBuilders == null || subchunkColliderBuilders.Length != SubchunksPerColumn)
+            subchunkColliderBuilders = new SubchunkColliderBuilder[SubchunksPerColumn];
+
+        for (int i = 0; i < subchunkColliderBuilders.Length; i++)
+        {
+            if (subchunkColliderBuilders[i] == null)
+                subchunkColliderBuilders[i] = new SubchunkColliderBuilder();
+        }
+    }
+
+    private bool IsSubchunkIndexValid(int subchunkIndex)
+    {
+        return subchunks != null &&
+               subchunkIndex >= 0 &&
+               subchunkIndex < subchunks.Length;
+    }
+
+    private bool TryGetSubchunkColliderBuilder(int subchunkIndex, out SubchunkColliderBuilder colliderBuilder)
+    {
+        colliderBuilder = null;
+        EnsureSubchunkStorage();
+
+        if (!IsSubchunkIndexValid(subchunkIndex) ||
+            subchunkColliderBuilders == null ||
+            subchunkIndex >= subchunkColliderBuilders.Length)
+        {
+            return false;
+        }
+
+        colliderBuilder = subchunkColliderBuilders[subchunkIndex];
+        return colliderBuilder != null;
     }
 }

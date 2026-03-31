@@ -261,13 +261,12 @@ public partial class World : MonoBehaviour
         if (!TryGetLoadedSection(node.chunkCoord, node.subchunkIndex, out Chunk chunk))
             return;
 
-        Subchunk subchunk = chunk.subchunks != null &&
-                            node.subchunkIndex >= 0 &&
-                            node.subchunkIndex < chunk.subchunks.Length
-            ? chunk.subchunks[node.subchunkIndex]
-            : null;
+        bool hasGeometry = chunk.subchunks != null &&
+                           node.subchunkIndex >= 0 &&
+                           node.subchunkIndex < chunk.subchunks.Length &&
+                           chunk.subchunks[node.subchunkIndex].hasGeometry;
 
-        if (subchunk != null && subchunk.hasGeometry)
+        if (hasGeometry)
             sectionOcclusionVisibleSections.Add(GetSectionKey(node.chunkCoord, node.subchunkIndex));
 
         if (!chunk.TryGetSubchunkVisibilityData(node.subchunkIndex, out ulong visibilityMask))
@@ -462,18 +461,18 @@ public partial class World : MonoBehaviour
         sectionOcclusionAllVisibleApplied = false;
     }
 
-    private void ApplyCachedSectionVisibility(Vector2Int chunkCoord, int subchunkIndex, Subchunk subchunk)
+    private void ApplyCachedSectionVisibility(Vector2Int chunkCoord, int subchunkIndex, Chunk chunk)
     {
-        if (subchunk == null)
+        if (chunk == null || chunk.subchunks == null || subchunkIndex < 0 || subchunkIndex >= chunk.subchunks.Length)
             return;
 
         if (!enableMinecraftSectionOcclusion || sectionOcclusionAllVisibleApplied)
         {
-            subchunk.SetVisible(true);
+            chunk.SetSubchunkVisible(subchunkIndex, true);
             return;
         }
 
-        subchunk.SetVisible(sectionOcclusionAppliedVisibleSections.Contains(GetSectionKey(chunkCoord, subchunkIndex)));
+        chunk.SetSubchunkVisible(subchunkIndex, sectionOcclusionAppliedVisibleSections.Contains(GetSectionKey(chunkCoord, subchunkIndex)));
     }
 
     private void SetSectionVisibility(Vector3Int key, bool visible)
@@ -487,12 +486,8 @@ public partial class World : MonoBehaviour
             return;
         }
 
-        Subchunk subchunk = chunk.subchunks[key.y];
-        if (subchunk != null)
-        {
-            subchunk.SetVisible(visible);
-            chunk.RefreshVisualSliceVisibilityForSubchunk(key.y);
-        }
+        chunk.SetSubchunkVisible(key.y, visible);
+        chunk.RefreshVisualSliceVisibilityForSubchunk(key.y);
     }
 
     private void EnsureAllSubchunksVisibleApplied()
@@ -526,11 +521,7 @@ public partial class World : MonoBehaviour
 
             for (int sub = 0; sub < chunk.subchunks.Length; sub++)
             {
-                Subchunk subchunk = chunk.subchunks[sub];
-                if (subchunk == null)
-                    continue;
-
-                subchunk.SetVisible(visible);
+                chunk.SetSubchunkVisible(sub, visible);
             }
 
             chunk.RefreshAllVisualSliceVisibility();

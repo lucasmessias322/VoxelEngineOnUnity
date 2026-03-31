@@ -19,17 +19,13 @@ public partial class World
             bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
             for (int i = 0; i < chunk.subchunks.Length; i++)
             {
-                Subchunk subchunk = chunk.subchunks[i];
-                if (subchunk == null)
-                    continue;
-
-                subchunk.SetColliderSystemEnabled(chunkIsSimulated);
+                chunk.SetSubchunkColliderSystemEnabled(i, chunkIsSimulated);
 
                 if (chunkIsSimulated &&
                     chunk.hasVoxelData &&
-                    subchunk.hasGeometry &&
-                    subchunk.CanHaveColliders &&
-                    !subchunk.HasColliderData)
+                    chunk.HasSubchunkGeometry(i) &&
+                    chunk.CanSubchunkHaveColliders(i) &&
+                    !chunk.HasSubchunkColliderData(i))
                 {
                     EnqueueColliderBuild(kv.Key, chunk.generation, i);
                 }
@@ -84,25 +80,24 @@ public partial class World
             bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
             for (int i = 0; i < chunk.subchunks.Length; i++)
             {
-                Subchunk subchunk = chunk.subchunks[i];
-                if (subchunk == null)
-                    continue;
-
                 if (!chunkIsSimulated)
                 {
-                    subchunk.SetColliderSystemEnabled(false);
+                    chunk.SetSubchunkColliderSystemEnabled(i, false);
                     continue;
                 }
 
-                if (!chunk.hasVoxelData || !chunk.voxelData.IsCreated || !subchunk.hasGeometry || !subchunk.CanHaveColliders)
+                if (!chunk.hasVoxelData ||
+                    !chunk.voxelData.IsCreated ||
+                    !chunk.HasSubchunkGeometry(i) ||
+                    !chunk.CanSubchunkHaveColliders(i))
                 {
-                    subchunk.SetColliderSystemEnabled(false);
+                    chunk.SetSubchunkColliderSystemEnabled(i, false);
                     continue;
                 }
 
-                if (subchunk.HasColliderData)
+                if (chunk.HasSubchunkColliderData(i))
                 {
-                    subchunk.SetColliderSystemEnabled(true);
+                    chunk.SetSubchunkColliderSystemEnabled(i, true);
                     continue;
                 }
 
