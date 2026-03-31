@@ -224,25 +224,6 @@ public partial class World : MonoBehaviour
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
 
-    [Header("Distant Chunk Batching")]
-    [Tooltip("Agrupa chunks distantes em clusters horizontais maiores para reduzir batches sem perder o detalhe dos chunks proximos.")]
-    public bool enableDistantChunkBatching = true;
-    [Tooltip("Chunks alem deste raio passam a usar clusters compartilhados em vez de renderers individuais.")]
-    [Min(0)]
-    public int distantChunkBatchStartDistance = 10;
-    [Tooltip("Quantidade de chunks por lado em cada cluster distante. Valores maiores reduzem batches, mas aumentam overdraw e custo de rebuild.")]
-    [Min(2)]
-    public int distantChunkClusterSize = 2;
-    [Tooltip("Limita quantos clusters distantes podem ser reconstruidos por frame.")]
-    [Min(1)]
-    public int maxDistantChunkClusterRebuildsPerFrame = 6;
-    [Tooltip("Agrupa atualizacoes do mesmo cluster por alguns frames antes de remontar o mesh distante, evitando rebuild repetido enquanto varios chunks terminam juntos.")]
-    [Min(0)]
-    public int distantChunkClusterRebuildDebounceFrames = 2;
-    [Tooltip("Limita quantos merges distantes concluidos podem ser enviados para a GPU por frame, suavizando picos no main thread.")]
-    [Min(1)]
-    public int maxDistantChunkClusterMergeCompletionsPerFrame = 2;
-
     [Header("Atlas / Material")]
     public Material[] Material;
     public int atlasTilesX = 4;
@@ -1132,7 +1113,6 @@ public partial class World : MonoBehaviour
         public NativeArray<ulong> subchunkVisibilityMasks;
         public int dirtySubchunkMask;
         public int visualSliceIndex;
-        public int visualMeshApplyBatchId;
 
         // Data arrays (kept so we can dispose later)
         public NativeArray<int> heightCache;
@@ -1488,8 +1468,6 @@ public partial class World : MonoBehaviour
                 chunk.CompleteTrackedJob();
         }
 
-        DisposeDistantChunkBatching();
-
         DisposeNativeGenerationCaches();
 
         if (Instance == this)
@@ -1510,7 +1488,6 @@ public partial class World : MonoBehaviour
         RefreshSimulationDistanceStateIfNeeded();
         ProcessPendingColliderBuilds();
         ProcessChunkQueue();
-        UpdateDistantChunkBatching();
         UpdateSectionOcclusionVisibility();
     }
 
@@ -1789,10 +1766,6 @@ public partial class World : MonoBehaviour
                     InvalidateSectionOcclusionGraph();
             }
 
-            bool completedVisualMeshBatch = hasActiveChunk && activeChunk.CompleteVisualMeshApply(pm.visualMeshApplyBatchId);
-            if (completedVisualMeshBatch && canApplyMesh)
-                MarkDistantChunkClusterDirty(pm.coord);
-
             DisposePendingMesh(pm);
             RemovePendingMeshAtSwapBack(i);
             if (hasActiveChunk)
@@ -2045,8 +2018,6 @@ public partial class World : MonoBehaviour
 
         JobHandle combinedMeshHandle = default;
         bool hasScheduledMeshJobs = false;
-        int visualMeshApplyBatchId = activeChunk.BeginVisualMeshApplyBatch();
-        int scheduledVisualSliceApplyCount = 0;
         if (affectedVisualSliceMask != 0)
         {
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
@@ -2109,7 +2080,6 @@ public partial class World : MonoBehaviour
                     subchunkVisibilityMasks = subchunkVisibilityMasks,
                     dirtySubchunkMask = scheduledSubchunkMask,
                     visualSliceIndex = sliceIndex,
-                    visualMeshApplyBatchId = visualMeshApplyBatchId,
                     heightCache = pd.heightCache,
                     blockTypes = pd.blockTypes,
                     solids = pd.solids,
@@ -2117,14 +2087,8 @@ public partial class World : MonoBehaviour
                     suppressedBillboards = default,
                     buildColliders = pd.rebuildColliders
                 });
-                scheduledVisualSliceApplyCount++;
             }
         }
-
-        activeChunk.SetPendingVisualMeshApplyCount(visualMeshApplyBatchId, scheduledVisualSliceApplyCount);
-
-        if (dirtySubchunkMask != 0 && scheduledVisualSliceApplyCount == 0)
-            MarkDistantChunkClusterDirty(pd.coord);
 
         var disposeJob = new MeshGenerator.DisposeChunkDataJob
         {
@@ -2303,7 +2267,6 @@ public partial class World : MonoBehaviour
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
-                    distantChunkClusterAssignmentsDirty = true;
                     activeSectionSetChanged = true;
 
                     RemoveHighBuildMesh(coord);
@@ -2402,7 +2365,6 @@ public partial class World : MonoBehaviour
         }
 
         activeChunks.Add(coord, chunk);
-        distantChunkClusterAssignmentsDirty = true;
         RequestHighBuildMeshRebuild(coord);
 
         // Build edits from blockOverrides

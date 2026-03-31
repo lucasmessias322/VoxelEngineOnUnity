@@ -47,8 +47,6 @@ public class Chunk : MonoBehaviour
 
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
-    [NonSerialized] public int pendingVisualMeshApplyCount;
-    [NonSerialized] public int visualMeshApplyBatchId;
 
     public enum ChunkState
     {
@@ -288,8 +286,6 @@ public class Chunk : MonoBehaviour
 
         jobScheduled = false;
         currentJob = default;
-        pendingVisualMeshApplyCount = 0;
-        visualMeshApplyBatchId = 0;
         state = ChunkState.Inactive;
         generation = -1;
         hasVoxelData = false;
@@ -334,7 +330,6 @@ public class Chunk : MonoBehaviour
         }
     }
 
-<<<<<<< HEAD
     public bool HasSubchunkGeometry(int subchunkIndex)
     {
         return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].hasGeometry;
@@ -460,29 +455,5 @@ public class Chunk : MonoBehaviour
 
         colliderBuilder = subchunkColliderBuilders[subchunkIndex];
         return colliderBuilder != null;
-=======
-    public int BeginVisualMeshApplyBatch()
-    {
-        visualMeshApplyBatchId++;
-        pendingVisualMeshApplyCount = 0;
-        return visualMeshApplyBatchId;
-    }
-
-    public void SetPendingVisualMeshApplyCount(int batchId, int pendingCount)
-    {
-        if (batchId != visualMeshApplyBatchId)
-            return;
-
-        pendingVisualMeshApplyCount = Mathf.Max(0, pendingCount);
-    }
-
-    public bool CompleteVisualMeshApply(int batchId)
-    {
-        if (batchId != visualMeshApplyBatchId || pendingVisualMeshApplyCount <= 0)
-            return false;
-
-        pendingVisualMeshApplyCount--;
-        return pendingVisualMeshApplyCount == 0;
->>>>>>> a06e462af060f08f44f519673eb4b6dba6baae60
     }
 }
