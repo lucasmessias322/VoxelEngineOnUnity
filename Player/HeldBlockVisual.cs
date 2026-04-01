@@ -6,6 +6,12 @@ using UnityEngine.Sprites;
 [DisallowMultipleComponent]
 public class HeldBlockVisual : MonoBehaviour
 {
+    private const string FollowRootName = "HeldItemFollowRoot";
+    private const string VisualRootName = "HeldItemVisual";
+    private const string BlockVisualName = "BlockVisual";
+    private const string FlatItemVisualName = "FlatItemVisual";
+    private const string HeldPrefabRootName = "HeldPrefabRoot";
+
     private enum HeldVisualKind
     {
         None,
@@ -30,6 +36,7 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private bool receiveShadows = false;
 
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
+    private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
     private readonly Dictionary<Sprite, Mesh> spriteFlatItemMeshCache = new Dictionary<Sprite, Mesh>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
 
@@ -91,6 +98,7 @@ public class HeldBlockVisual : MonoBehaviour
     private void OnDestroy()
     {
         DestroyCachedMeshes(blockMeshCache);
+        blockMaterialIndexCache.Clear();
         DestroyCachedMeshes(spriteFlatItemMeshCache);
         DestroyCachedMeshes(atlasFlatItemMeshCache);
 
@@ -98,6 +106,27 @@ public class HeldBlockVisual : MonoBehaviour
             Destroy(flatItemMaterial);
 
         ClearHeldPrefabInstance();
+
+        if (followRoot != null)
+            Destroy(followRoot);
+
+        followRoot = null;
+        visualRoot = null;
+        blockVisualObject = null;
+        flatItemVisualObject = null;
+        heldPrefabInstance = null;
+    }
+
+    private void OnDisable()
+    {
+        if (followRoot != null)
+            followRoot.SetActive(false);
+    }
+
+    private void OnEnable()
+    {
+        if (followRoot != null)
+            followRoot.SetActive(true);
     }
 
     private void ResolveReferences()
@@ -114,11 +143,17 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void EnsureVisualObject()
     {
-        Transform stableParent = transform;
+        Transform stableParent = handAnchor != null ? handAnchor : transform;
+
+        if (followRoot == null && stableParent != null)
+            followRoot = FindDirectChildByName(stableParent, FollowRootName)?.gameObject;
+
+        if (followRoot == null && transform != null && transform != stableParent)
+            followRoot = FindDirectChildByName(transform, FollowRootName)?.gameObject;
 
         if (followRoot == null)
         {
-            followRoot = new GameObject("HeldItemFollowRoot");
+            followRoot = new GameObject(FollowRootName);
             followRoot.transform.SetParent(stableParent, false);
         }
         else if (followRoot.transform.parent != stableParent)
@@ -126,9 +161,17 @@ public class HeldBlockVisual : MonoBehaviour
             followRoot.transform.SetParent(stableParent, false);
         }
 
+        DestroyDuplicateChildren(stableParent, FollowRootName, followRoot.transform);
+
+        if (transform != null && transform != stableParent)
+            DestroyDuplicateChildren(transform, FollowRootName, followRoot.transform.parent == transform ? followRoot.transform : null);
+
+        if (visualRoot == null && followRoot != null)
+            visualRoot = FindDirectChildByName(followRoot.transform, VisualRootName)?.gameObject;
+
         if (visualRoot == null)
         {
-            visualRoot = new GameObject("HeldItemVisual");
+            visualRoot = new GameObject(VisualRootName);
             visualRoot.transform.SetParent(followRoot.transform, false);
             visualRoot.SetActive(false);
         }
@@ -137,18 +180,26 @@ public class HeldBlockVisual : MonoBehaviour
             visualRoot.transform.SetParent(followRoot.transform, false);
         }
 
+        DestroyDuplicateChildren(followRoot.transform, VisualRootName, visualRoot.transform);
+
+        if (blockVisualObject == null && visualRoot != null)
+            blockVisualObject = FindDirectChildByName(visualRoot.transform, BlockVisualName)?.gameObject;
+
         if (blockVisualObject == null)
         {
-            blockVisualObject = new GameObject("BlockVisual");
+            blockVisualObject = new GameObject(BlockVisualName);
             blockVisualObject.transform.SetParent(visualRoot.transform, false);
             blockMeshFilter = blockVisualObject.AddComponent<MeshFilter>();
             blockMeshRenderer = blockVisualObject.AddComponent<MeshRenderer>();
             blockVisualObject.SetActive(false);
         }
 
+        if (flatItemVisualObject == null && visualRoot != null)
+            flatItemVisualObject = FindDirectChildByName(visualRoot.transform, FlatItemVisualName)?.gameObject;
+
         if (flatItemVisualObject == null)
         {
-            flatItemVisualObject = new GameObject("FlatItemVisual");
+            flatItemVisualObject = new GameObject(FlatItemVisualName);
             flatItemVisualObject.transform.SetParent(visualRoot.transform, false);
             flatItemMeshFilter = flatItemVisualObject.AddComponent<MeshFilter>();
             flatItemMeshRenderer = flatItemVisualObject.AddComponent<MeshRenderer>();
@@ -166,7 +217,7 @@ public class HeldBlockVisual : MonoBehaviour
 
         if (heldPrefabInstance == null)
         {
-            heldPrefabInstance = new GameObject("HeldPrefabRoot");
+            heldPrefabInstance = new GameObject(HeldPrefabRootName);
             heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
             heldPrefabInstance.SetActive(false);
         }
@@ -184,9 +235,26 @@ public class HeldBlockVisual : MonoBehaviour
         if (followRoot == null)
             return;
 
-        Transform source = handAnchor != null ? handAnchor : transform;
-        followRoot.transform.SetPositionAndRotation(source.position, source.rotation);
-        followRoot.transform.localScale = Vector3.one;
+        Transform stableParent = handAnchor != null ? handAnchor : transform;
+        if (followRoot.transform.parent != stableParent)
+            followRoot.transform.SetParent(stableParent, false);
+
+        // followRoot.transform.localPosition = Vector3.zero;
+        // followRoot.transform.localRotation = Quaternion.identity;
+        followRoot.transform.localScale = GetNeutralizedLocalScale();
+    }
+
+    private Vector3 GetNeutralizedLocalScale()
+    {
+        Transform parentTransform = followRoot != null ? followRoot.transform.parent : null;
+        if (parentTransform == null)
+            return Vector3.one;
+
+        Vector3 parentLossyScale = parentTransform.lossyScale;
+        return new Vector3(
+            GetSafeInverseScale(parentLossyScale.x),
+            GetSafeInverseScale(parentLossyScale.y),
+            GetSafeInverseScale(parentLossyScale.z));
     }
 
     private void ApplyViewTransform(Item selectedItem, HeldVisualKind visualKind)
@@ -261,8 +329,7 @@ public class HeldBlockVisual : MonoBehaviour
             return;
         }
 
-        BlockType selectedBlockType = BlockType.Air;
-        bool hasBlockSelection = hotbar.TryGetSelectedBlockType(out selectedBlockType) && selectedBlockType != BlockType.Air;
+        bool hasBlockSelection = TryResolveHeldBlockType(selectedItem, out BlockType selectedBlockType);
         HeldVisualKind desiredKind = GetDesiredVisualKind(selectedItem, hasBlockSelection);
         if (desiredKind == HeldVisualKind.None)
         {
@@ -321,10 +388,30 @@ public class HeldBlockVisual : MonoBehaviour
         if (hasBlockSelection)
             return HeldVisualKind.Block;
 
-        if (selectedItem.icon != null || HasAtlasFlatItem(selectedItem))
+        if (HasFlatItemVisual(selectedItem))
             return HeldVisualKind.FlatItem;
 
         return HeldVisualKind.None;
+    }
+
+    private bool TryResolveHeldBlockType(Item selectedItem, out BlockType blockType)
+    {
+        blockType = BlockType.Air;
+        if (selectedItem == null || selectedItem.inventoryIconMode == InventoryIconMode.ItemIconOnly)
+            return false;
+
+        PlayerInventory inventory = PlayerInventory.Instance != null
+            ? PlayerInventory.Instance
+            : FindAnyObjectByType<PlayerInventory>();
+
+        return inventory != null &&
+               inventory.TryGetBlockForItem(selectedItem, out blockType) &&
+               blockType != BlockType.Air;
+    }
+
+    private bool HasFlatItemVisual(Item selectedItem)
+    {
+        return selectedItem != null && (selectedItem.icon != null || HasAtlasFlatItem(selectedItem));
     }
 
     private bool ShowBlock(BlockType blockType)
@@ -338,13 +425,14 @@ public class HeldBlockVisual : MonoBehaviour
         if (world == null || world.Material == null || world.Material.Length == 0)
             return false;
 
-        Mesh heldMesh = GetOrCreateBlockMesh(blockType);
-        if (heldMesh == null)
+        Mesh heldMesh = GetOrCreateBlockMesh(blockType, out int materialIndex);
+        Material heldMaterial = ResolveHeldBlockMaterial(materialIndex);
+        if (heldMesh == null || heldMaterial == null)
             return false;
 
         HideAllVisualChildren();
         blockMeshFilter.sharedMesh = heldMesh;
-        blockMeshRenderer.materials = world.Material;
+        blockMeshRenderer.sharedMaterial = heldMaterial;
         blockVisualObject.SetActive(true);
         return true;
     }
@@ -441,18 +529,55 @@ public class HeldBlockVisual : MonoBehaviour
             heldPrefabInstance.SetActive(false);
     }
 
-    private Mesh GetOrCreateBlockMesh(BlockType blockType)
+    private Mesh GetOrCreateBlockMesh(BlockType blockType, out int materialIndex)
     {
+        materialIndex = 0;
         if (blockMeshCache.TryGetValue(blockType, out Mesh cachedMesh) && cachedMesh != null)
-            return cachedMesh;
+        {
+            if (blockMaterialIndexCache.TryGetValue(blockType, out int cachedMaterialIndex))
+                materialIndex = cachedMaterialIndex;
 
-        Mesh mesh = BlockDrop.BuildBlockMesh(world, blockType, out _);
+            return cachedMesh;
+        }
+
+        Mesh mesh = BlockDrop.BuildBlockMesh(world, blockType, out materialIndex);
         if (mesh == null)
             return null;
 
+        CollapseToSingleSubmesh(mesh, materialIndex);
         mesh.name = $"HeldMesh_{blockType}";
         blockMeshCache[blockType] = mesh;
+        blockMaterialIndexCache[blockType] = materialIndex;
         return mesh;
+    }
+
+    private Material ResolveHeldBlockMaterial(int preferredMaterialIndex)
+    {
+        if (world == null || world.Material == null || world.Material.Length == 0)
+            return null;
+
+        int clampedIndex = Mathf.Clamp(preferredMaterialIndex, 0, world.Material.Length - 1);
+        if (world.Material[clampedIndex] != null)
+            return world.Material[clampedIndex];
+
+        for (int i = 0; i < world.Material.Length; i++)
+        {
+            if (world.Material[i] != null)
+                return world.Material[i];
+        }
+
+        return null;
+    }
+
+    private static void CollapseToSingleSubmesh(Mesh mesh, int submeshIndex)
+    {
+        if (mesh == null || mesh.subMeshCount <= 1)
+            return;
+
+        int clampedIndex = Mathf.Clamp(submeshIndex, 0, mesh.subMeshCount - 1);
+        int[] triangles = mesh.GetTriangles(clampedIndex);
+        mesh.subMeshCount = 1;
+        mesh.SetTriangles(triangles, 0, false);
     }
 
     private bool HasAtlasFlatItem(Item item)
@@ -700,5 +825,40 @@ public class HeldBlockVisual : MonoBehaviour
     private static float SanitizeScaleAxis(float value)
     {
         return Mathf.Approximately(value, 0f) ? 0.01f : value;
+    }
+
+    private static float GetSafeInverseScale(float value)
+    {
+        return Mathf.Approximately(value, 0f) ? 1f : 1f / value;
+    }
+
+    private static Transform FindDirectChildByName(Transform parent, string childName)
+    {
+        if (parent == null)
+            return null;
+
+        for (int i = 0; i < parent.childCount; i++)
+        {
+            Transform child = parent.GetChild(i);
+            if (child != null && child.name == childName)
+                return child;
+        }
+
+        return null;
+    }
+
+    private static void DestroyDuplicateChildren(Transform parent, string childName, Transform keep)
+    {
+        if (parent == null)
+            return;
+
+        for (int i = parent.childCount - 1; i >= 0; i--)
+        {
+            Transform child = parent.GetChild(i);
+            if (child == null || child == keep || child.name != childName)
+                continue;
+
+            Destroy(child.gameObject);
+        }
     }
 }
