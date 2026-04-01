@@ -125,6 +125,8 @@ public struct BiomeNoiseSettings
     public BlockType meadowSubsurfaceBlock;
     public BlockType taigaSurfaceBlock;
     public BlockType taigaSubsurfaceBlock;
+
+    public TerrainSplineShaperSettings terrainShaper;
 }
 
 public static class BiomeUtility

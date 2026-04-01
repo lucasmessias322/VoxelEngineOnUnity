@@ -197,7 +197,8 @@ public partial class World : MonoBehaviour
             meadowSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Meadow),
             meadowSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Meadow),
             taigaSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Taiga),
-            taigaSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Taiga)
+            taigaSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Taiga),
+            terrainShaper = terrainSplineShaper.Sanitized()
         };
 
         biomeNoiseSettingsDirty = false;

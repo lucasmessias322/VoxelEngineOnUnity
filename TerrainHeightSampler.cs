@@ -167,7 +167,8 @@ public static class TerrainHeightSampler
                 sampleState.mountainWeight,
                 sampleState.legacyNoiseTotal,
                 sampleState.legacyNoiseWeight,
-                terrainSettings)
+                terrainSettings,
+                biomeNoiseSettings.terrainShaper)
             : MyNoise.ShapeLegacyTerrainSignal(
                 MyNoise.GetLegacyCenteredNoise(sampleState.legacyNoiseTotal, sampleState.legacyNoiseWeight),
                 terrainSettings);

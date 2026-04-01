@@ -240,6 +240,8 @@ public partial class World : MonoBehaviour
     [Header("Noise Settings (Runtime)")]
     [Tooltip("Preenchido a partir do Terrain Layer Profile durante validacao/execucao.")]
     [SerializeField, HideInInspector] public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
+    [Tooltip("Shaper de terreno por splines inspirado no offset/factor/jaggedness do Minecraft moderno.")]
+    public TerrainSplineShaperSettings terrainSplineShaper = TerrainSplineShaperSettings.MinecraftModernDefault;
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
@@ -1493,6 +1495,7 @@ public partial class World : MonoBehaviour
     {
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
+        EnsureTerrainSplineShaperInitialized();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
@@ -1522,12 +1525,41 @@ public partial class World : MonoBehaviour
             return;
 
         noiseLayers = terrainLayerProfile.CloneNoiseLayers();
+        terrainSplineShaper = terrainLayerProfile.CloneTerrainSplines();
     }
 
     private void EnsureTerrainLayerArraysInitialized()
     {
         if (noiseLayers == null)
             noiseLayers = Array.Empty<NoiseLayer>();
+    }
+
+    private void EnsureTerrainSplineShaperInitialized()
+    {
+        if (terrainSplineShaper.enabled || terrainSplineShaper.HasAnyControlPoints)
+            return;
+
+        if (!HasAnyModernTerrainRole())
+            return;
+
+        terrainSplineShaper = TerrainSplineShaperSettings.MinecraftModernDefault;
+    }
+
+    private bool HasAnyModernTerrainRole()
+    {
+        if (noiseLayers == null)
+            return false;
+
+        for (int i = 0; i < noiseLayers.Length; i++)
+        {
+            if (!noiseLayers[i].enabled)
+                continue;
+
+            if (noiseLayers[i].role != TerrainNoiseRole.LegacyAdditive)
+                return true;
+        }
+
+        return false;
     }
 
     private void InitializeNoiseLayers()

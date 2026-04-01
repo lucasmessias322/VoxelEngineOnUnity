@@ -152,6 +152,110 @@ public static class MyNoise
         float mountainWeight,
         float legacyTotal,
         float legacyWeight,
+        in BiomeTerrainSettings biomeTerrain,
+        in TerrainSplineShaperSettings terrainShaper)
+    {
+        if (!terrainShaper.enabled)
+            return ComposePreSplineMinecraftTerrainSignal(
+                continentalTotal,
+                continentalWeight,
+                erosionTotal,
+                erosionWeight,
+                hillsTotal,
+                hillsWeight,
+                peaksValleysTotal,
+                peaksValleysWeight,
+                mountainTotal,
+                mountainWeight,
+                legacyTotal,
+                legacyWeight,
+                biomeTerrain);
+
+        float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);
+        float hillsMultiplier = math.max(0f, biomeTerrain.hillsMultiplier);
+        float mountainMultiplier = math.max(0f, biomeTerrain.mountainMultiplier);
+        float flattenStrength = math.saturate(biomeTerrain.flattenStrength);
+
+        float continentalness01 = GetWeightedRoleSample(continentalTotal, continentalWeight, 0.5f);
+        float erosion01 = GetWeightedRoleSample(erosionTotal, erosionWeight, 1f);
+        float hillsNoise01 = GetWeightedRoleSample(hillsTotal, hillsWeight, 0.5f);
+        float peaksValleys01 = GetWeightedRoleSample(peaksValleysTotal, peaksValleysWeight, 0.5f);
+        float mountainNoise01 = GetWeightedRoleSample(mountainTotal, mountainWeight, 0.5f);
+
+        float continentalness = continentalness01 * 2f - 1f;
+        float erosion = erosion01 * 2f - 1f;
+        float hillsNoise = hillsNoise01 * 2f - 1f;
+        float ridges = peaksValleys01 * 2f - 1f;
+        float peakSignal = math.abs(ridges);
+        float mountainSignal = math.saturate((mountainNoise01 - 0.48f) / 0.52f);
+        float flatness = math.saturate(TerrainSplineEvaluator.Evaluate(terrainShaper.factorSpline, erosion, erosion01));
+        float ruggedness = 1f - flatness;
+        float jaggedness = math.max(0f, TerrainSplineEvaluator.Evaluate(terrainShaper.jaggednessSpline, peakSignal, peakSignal));
+        float offset = TerrainSplineEvaluator.Evaluate(terrainShaper.offsetSpline, continentalness, continentalness);
+
+        float continentalBaseline = offset * math.max(1f, continentalWeight) * 0.82f;
+        float legacyDetail = GetLegacyCenteredNoise(legacyTotal, legacyWeight) * math.lerp(1.75f, 8.25f, ruggedness);
+        float inlandness = math.saturate(offset * 0.5f + 0.55f);
+
+        float hills = hillsNoise
+            * math.max(1f, hillsWeight)
+            * math.lerp(0.10f, 0.72f, ruggedness)
+            * hillsMultiplier;
+        float foothills = math.max(0f, hillsNoise)
+            * math.max(1f, hillsWeight)
+            * ruggedness
+            * inlandness
+            * 0.34f
+            * math.lerp(0.7f, 1f, hillsMultiplier);
+        float mountains = math.pow(mountainSignal, 2.35f)
+            * math.max(1f, mountainWeight)
+            * jaggedness
+            * ruggedness
+            * inlandness
+            * mountainMultiplier;
+        float cliffAccent = math.pow(math.saturate((mountainNoise01 - 0.63f) / 0.37f), 2.4f)
+            * math.max(1f, mountainWeight)
+            * jaggedness
+            * ruggedness
+            * inlandness
+            * 0.28f
+            * mountainMultiplier;
+
+        float terrain = continentalBaseline + legacyDetail + hills + foothills + mountains + cliffAccent;
+        float flattenedTerrain = continentalBaseline + legacyDetail * 0.42f;
+        terrain = math.lerp(terrain, flattenedTerrain, flattenStrength * math.lerp(0.42f, 1f, flatness));
+        terrain = continentalBaseline + (terrain - continentalBaseline) * reliefMultiplier;
+        terrain += biomeTerrain.heightOffset;
+
+        float hillsTerraceMask = ruggedness
+            * SmoothThreshold(math.abs(hillsNoise), 0.18f, 0.74f)
+            * SmoothThreshold(terrain, 4f, 18f)
+            * math.lerp(1f, 0.46f, flattenStrength);
+        terrain = ApplyTerracing(terrain, 2f, hillsTerraceMask * 0.38f);
+
+        float mountainTerraceMask = inlandness
+            * jaggedness
+            * ruggedness
+            * SmoothThreshold(terrain, 12f, 42f)
+            * math.lerp(1f, 0.7f, flattenStrength);
+        float mountainTerraceStep = math.lerp(3.4f, 4.6f, math.saturate(jaggedness));
+        return ApplyTerracing(terrain, mountainTerraceStep, mountainTerraceMask * 0.16f);
+    }
+
+    [BurstCompile]
+    private static float ComposePreSplineMinecraftTerrainSignal(
+        float continentalTotal,
+        float continentalWeight,
+        float erosionTotal,
+        float erosionWeight,
+        float hillsTotal,
+        float hillsWeight,
+        float peaksValleysTotal,
+        float peaksValleysWeight,
+        float mountainTotal,
+        float mountainWeight,
+        float legacyTotal,
+        float legacyWeight,
         in BiomeTerrainSettings biomeTerrain)
     {
         float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);

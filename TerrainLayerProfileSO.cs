@@ -9,6 +9,9 @@ public class TerrainLayerProfileSO : ScriptableObject
     [Header("Terrain Noise Layers")]
     public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
 
+    [Header("Minecraft-Style Terrain Splines")]
+    public TerrainSplineShaperSettings terrainSplines = TerrainSplineShaperSettings.MinecraftModernDefault;
+
     public NoiseLayer[] CloneNoiseLayers()
     {
         if (noiseLayers == null || noiseLayers.Length == 0)
@@ -17,6 +20,11 @@ public class TerrainLayerProfileSO : ScriptableObject
         NoiseLayer[] copy = new NoiseLayer[noiseLayers.Length];
         Array.Copy(noiseLayers, copy, noiseLayers.Length);
         return copy;
+    }
+
+    public TerrainSplineShaperSettings CloneTerrainSplines()
+    {
+        return terrainSplines;
     }
 
     private void OnValidate()
@@ -86,6 +94,8 @@ public class TerrainLayerProfileSO : ScriptableObject
             ),
         };
 
+        terrainSplines = TerrainSplineShaperSettings.MinecraftModernDefault;
+
     }
 
     [ContextMenu("Apply Preset/Legacy Additive")]
@@ -127,12 +137,15 @@ public class TerrainLayerProfileSO : ScriptableObject
                 ridgeFactor: 1f
             ),
         };
+
+        terrainSplines = TerrainSplineShaperSettings.Disabled;
     }
 
     [ContextMenu("Apply Preset/Clear Noise Layers")]
     public void ClearNoiseLayers()
     {
         noiseLayers = Array.Empty<NoiseLayer>();
+        terrainSplines = TerrainSplineShaperSettings.Disabled;
     }
 
     private static NoiseLayer CreateNoiseLayer(
