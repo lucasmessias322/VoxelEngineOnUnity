@@ -154,7 +154,6 @@ public static class MeshGenerator
         public Vector2Int coord;
 
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
-        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
 
         public int baseHeight;
         public float offsetX;
@@ -182,7 +181,6 @@ public static class MeshGenerator
                 worldX,
                 worldZ,
                 noiseLayers,
-                warpLayers,
                 baseHeight,
                 offsetX,
                 offsetZ,
@@ -513,7 +511,6 @@ public static class MeshGenerator
     public static void ScheduleDataJob(
         Vector2Int coord,
         NativeArray<NoiseLayer> noiseLayers,
-        NativeArray<WarpLayer> warpLayers,
         NativeArray<BlockTextureMapping> blockMappings,
         NativeArray<byte> effectiveOpacityByBlock,
         int baseHeight,
@@ -596,7 +593,6 @@ public static class MeshGenerator
         {
             coord = coord,
             noiseLayers = noiseLayers,
-            warpLayers = warpLayers,
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
@@ -648,7 +644,6 @@ public static class MeshGenerator
         {
             coord = coord,
             noiseLayers = noiseLayers,
-            warpLayers = warpLayers,
             blockMappings = blockMappings,
             blockEdits = blockEdits,
 
@@ -764,7 +759,6 @@ public static class MeshGenerator
         {
             coord = coord,
             noiseLayers = noiseLayers,
-            warpLayers = warpLayers,
             baseHeight = baseHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,

@@ -177,7 +177,6 @@ public partial class World
         MeshGenerator.ScheduleDataJob(
             coord,
             cachedNativeNoiseLayers,
-            cachedNativeWarpLayers,
             cachedNativeBlockMappings,
             cachedNativeEffectiveLightOpacityByBlock,
             baseHeight,

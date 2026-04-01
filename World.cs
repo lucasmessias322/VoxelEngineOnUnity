@@ -240,10 +240,6 @@ public partial class World : MonoBehaviour
     [Header("Noise Settings (Runtime)")]
     [Tooltip("Preenchido a partir do Terrain Layer Profile durante validacao/execucao.")]
     [SerializeField, HideInInspector] public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
-
-    [Header("Domain Warping Settings (Runtime)")]
-    [Tooltip("Preenchido a partir do Terrain Layer Profile durante validacao/execucao.")]
-    [SerializeField, HideInInspector] public WarpLayer[] warpLayers = Array.Empty<WarpLayer>();
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
@@ -481,7 +477,6 @@ public partial class World : MonoBehaviour
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
     private bool treeSpawnRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
-    private NativeArray<WarpLayer> cachedNativeWarpLayers;
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
@@ -566,7 +561,6 @@ public partial class World : MonoBehaviour
     private void DisposeNativeGenerationCaches()
     {
         if (cachedNativeNoiseLayers.IsCreated) cachedNativeNoiseLayers.Dispose();
-        if (cachedNativeWarpLayers.IsCreated) cachedNativeWarpLayers.Dispose();
         if (cachedNativeBlockMappings.IsCreated) cachedNativeBlockMappings.Dispose();
         if (cachedNativeEffectiveLightOpacityByBlock.IsCreated) cachedNativeEffectiveLightOpacityByBlock.Dispose();
         if (cachedNativeOreSettings.IsCreated) cachedNativeOreSettings.Dispose();
@@ -576,7 +570,6 @@ public partial class World : MonoBehaviour
     private void EnsureNativeGenerationCaches()
     {
         bool cachesCreated = cachedNativeNoiseLayers.IsCreated &&
-                             cachedNativeWarpLayers.IsCreated &&
                              cachedNativeBlockMappings.IsCreated &&
                              cachedNativeEffectiveLightOpacityByBlock.IsCreated &&
                              cachedNativeOreSettings.IsCreated &&
@@ -596,7 +589,6 @@ public partial class World : MonoBehaviour
         DisposeNativeGenerationCaches();
 
         NoiseLayer[] runtimeNoiseLayers = noiseLayers ?? Array.Empty<NoiseLayer>();
-        WarpLayer[] runtimeWarpLayers = warpLayers ?? Array.Empty<WarpLayer>();
         BlockTextureMapping[] runtimeBlockMappings = blockData != null && blockData.mappings != null
             ? blockData.mappings
             : Array.Empty<BlockTextureMapping>();
@@ -604,7 +596,6 @@ public partial class World : MonoBehaviour
         TreeSpawnRuleData[] runtimeTreeSpawnRules = GetActiveTreeSpawnRules();
 
         cachedNativeNoiseLayers = new NativeArray<NoiseLayer>(runtimeNoiseLayers, Allocator.Persistent);
-        cachedNativeWarpLayers = new NativeArray<WarpLayer>(runtimeWarpLayers, Allocator.Persistent);
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
         cachedNativeEffectiveLightOpacityByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
         for (int i = 0; i < runtimeBlockMappings.Length; i++)
@@ -1411,27 +1402,13 @@ public partial class World : MonoBehaviour
 
     private void OnValidate()
     {
-        ApplyTerrainLayerProfileIfAssigned();
-        EnsureTerrainLayerArraysInitialized();
-        EnsureDefaultWarpLayersConfigured();
-        MarkBiomeCachesDirty();
-        InvalidateNativeGenerationCaches();
+        RefreshTerrainGenerationRuntimeState();
     }
 
     private void Start()
     {
         if (blockData != null) blockData.InitializeDictionary();
-        ApplyTerrainLayerProfileIfAssigned();
-        EnsureTerrainLayerArraysInitialized();
-        EnsureDefaultWarpLayersConfigured();
-
-        offsetX = seed * 17.123f;
-        offsetZ = seed * -9.753f;
-
-        InitializeBiomeNoiseOffsets();
-        InitializeNoiseLayers();
-        InitializeWarpLayers();
-        InvalidateNativeGenerationCaches();
+        RefreshTerrainGenerationRuntimeState();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -1446,6 +1423,16 @@ public partial class World : MonoBehaviour
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
+    }
+
+    private void OnEnable()
+    {
+        TerrainLayerProfileSO.ProfileChanged += HandleTerrainLayerProfileChanged;
+    }
+
+    private void OnDisable()
+    {
+        TerrainLayerProfileSO.ProfileChanged -= HandleTerrainLayerProfileChanged;
     }
 
     private void OnDestroy()
@@ -1502,54 +1489,45 @@ public partial class World : MonoBehaviour
 
     #region Initialization Helpers
 
+    private void RefreshTerrainGenerationRuntimeState()
+    {
+        ApplyTerrainLayerProfileIfAssigned();
+        EnsureTerrainLayerArraysInitialized();
+
+        offsetX = seed * 17.123f;
+        offsetZ = seed * -9.753f;
+
+        InitializeBiomeNoiseOffsets();
+        InitializeNoiseLayers();
+        MarkBiomeCachesDirty();
+    }
+
+    private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)
+    {
+        if (changedProfile == null || changedProfile != terrainLayerProfile)
+            return;
+
+        RefreshTerrainGenerationRuntimeState();
+
+        if (!Application.isPlaying || isShuttingDown)
+            return;
+
+        foreach (Vector2Int coord in activeChunks.Keys)
+            RequestChunkRebuild(coord);
+    }
+
     private void ApplyTerrainLayerProfileIfAssigned()
     {
         if (terrainLayerProfile == null)
             return;
 
         noiseLayers = terrainLayerProfile.CloneNoiseLayers();
-        warpLayers = terrainLayerProfile.CloneWarpLayers();
     }
 
     private void EnsureTerrainLayerArraysInitialized()
     {
         if (noiseLayers == null)
             noiseLayers = Array.Empty<NoiseLayer>();
-
-        if (warpLayers == null)
-            warpLayers = Array.Empty<WarpLayer>();
-    }
-
-    private void EnsureDefaultWarpLayersConfigured()
-    {
-        if (warpLayers != null && warpLayers.Length > 0)
-            return;
-
-        warpLayers = new[]
-        {
-            new WarpLayer
-            {
-                enabled = true,
-                scale = 960f,
-                amplitude = 32f,
-                octaves = 2,
-                persistence = 0.5f,
-                lacunarity = 2f,
-                offset = Vector2.zero,
-                maxAmp = 0f
-            },
-            new WarpLayer
-            {
-                enabled = true,
-                scale = 280f,
-                amplitude = 14f,
-                octaves = 3,
-                persistence = 0.55f,
-                lacunarity = 2.15f,
-                offset = new Vector2(173.4f, -91.2f),
-                maxAmp = 0f
-            }
-        };
     }
 
     private void InitializeNoiseLayers()
@@ -1571,9 +1549,7 @@ public partial class World : MonoBehaviour
             if (layer.ridgeFactor <= 0f) layer.ridgeFactor = 1f + i * 0.2f;
 
             if (layer.offset == Vector2.zero)
-                layer.offset = new Vector2(offsetX + i * 13.37f, offsetZ + i * 7.53f);
-            else
-                layer.offset += new Vector2(offsetX, offsetZ);
+                layer.offset = new Vector2(i * 13.37f, i * 7.53f);
 
             float amp = 1f;
             layer.maxAmp = 0f;
@@ -1585,39 +1561,6 @@ public partial class World : MonoBehaviour
             if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
 
             noiseLayers[i] = layer;
-        }
-    }
-
-    private void InitializeWarpLayers()
-    {
-        if (warpLayers == null) return;
-
-        for (int i = 0; i < warpLayers.Length; i++)
-        {
-            WarpLayer layer = warpLayers[i];
-            if (!layer.enabled) continue;
-            if (layer.scale <= 0f) layer.scale = 300f + i * 200f;
-            if (layer.amplitude <= 0f) layer.amplitude = 28f;
-
-            if (layer.octaves <= 0) layer.octaves = 1;
-            if (layer.lacunarity <= 0f) layer.lacunarity = 2f;
-            if (layer.persistence <= 0f || layer.persistence > 1f) layer.persistence = 0.5f;
-
-            if (layer.offset == Vector2.zero)
-                layer.offset = new Vector2(offsetX + i * 23.45f, offsetZ + i * 11.89f);
-            else
-                layer.offset += new Vector2(offsetX, offsetZ);
-
-            float amp = 1f;
-            layer.maxAmp = 0f;
-            for (int o = 0; o < layer.octaves; o++)
-            {
-                layer.maxAmp += amp;
-                amp *= layer.persistence;
-            }
-            if (layer.maxAmp <= 0f) layer.maxAmp = 1f;
-
-            warpLayers[i] = layer;
         }
     }
 
@@ -2418,7 +2361,7 @@ public partial class World : MonoBehaviour
 
         // Agendamento do data job
         MeshGenerator.ScheduleDataJob(
-            coord, cachedNativeNoiseLayers, cachedNativeWarpLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
+            coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
             baseHeight, offsetX, offsetZ, seaLevel,
             GetBiomeNoiseSettings(),
             seed,

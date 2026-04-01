@@ -4,11 +4,10 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "TerrainLayerProfile", menuName = "ScriptableObjects/Terrain Layer Profile", order = 3)]
 public class TerrainLayerProfileSO : ScriptableObject
 {
+    public static event Action<TerrainLayerProfileSO> ProfileChanged;
+
     [Header("Terrain Noise Layers")]
     public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
-
-    [Header("Domain Warp Layers")]
-    public WarpLayer[] warpLayers = Array.Empty<WarpLayer>();
 
     public NoiseLayer[] CloneNoiseLayers()
     {
@@ -20,14 +19,9 @@ public class TerrainLayerProfileSO : ScriptableObject
         return copy;
     }
 
-    public WarpLayer[] CloneWarpLayers()
+    private void OnValidate()
     {
-        if (warpLayers == null || warpLayers.Length == 0)
-            return Array.Empty<WarpLayer>();
-
-        WarpLayer[] copy = new WarpLayer[warpLayers.Length];
-        Array.Copy(warpLayers, copy, warpLayers.Length);
-        return copy;
+        ProfileChanged?.Invoke(this);
     }
 
     [ContextMenu("Apply Preset/Minecraft Surface")]
@@ -92,7 +86,6 @@ public class TerrainLayerProfileSO : ScriptableObject
             ),
         };
 
-        ApplyDefaultWarpPreset();
     }
 
     [ContextMenu("Apply Preset/Legacy Additive")]
@@ -136,42 +129,6 @@ public class TerrainLayerProfileSO : ScriptableObject
         };
     }
 
-    [ContextMenu("Apply Preset/Default Warp Layers")]
-    public void ApplyDefaultWarpPreset()
-    {
-        warpLayers = new[]
-        {
-            CreateWarpLayer(
-                scale: 960f,
-                amplitude: 32f,
-                octaves: 2,
-                persistence: 0.5f,
-                lacunarity: 2f,
-                offset: new Vector2(0f, 0f)
-            ),
-            CreateWarpLayer(
-                scale: 280f,
-                amplitude: 14f,
-                octaves: 3,
-                persistence: 0.55f,
-                lacunarity: 2.15f,
-                offset: new Vector2(173.4f, -91.2f)
-            ),
-        };
-    }
-
-    [ContextMenu("Apply Preset/Minecraft Density 3D")]
-    public void ApplyMinecraftDensityPreset()
-    {
-        Debug.LogWarning("Minecraft Density 3D preset ainda nao foi implementado neste perfil. Mantendo a configuracao atual.");
-    }
-
-    [ContextMenu("Disable Density 3D")]
-    public void DisableDensityFunction()
-    {
-        Debug.LogWarning("Nao ha density function 3D configurada neste perfil para desativar.");
-    }
-
     [ContextMenu("Apply Preset/Clear Noise Layers")]
     public void ClearNoiseLayers()
     {
@@ -202,29 +159,8 @@ public class TerrainLayerProfileSO : ScriptableObject
             maxAmp = 0f,
             redistributionModifier = redistributionModifier,
             exponent = exponent,
-            verticalScale = 1f,
             ridgeFactor = ridgeFactor
         };
     }
 
-    private static WarpLayer CreateWarpLayer(
-        float scale,
-        float amplitude,
-        int octaves,
-        float persistence,
-        float lacunarity,
-        Vector2 offset)
-    {
-        return new WarpLayer
-        {
-            enabled = true,
-            scale = scale,
-            amplitude = amplitude,
-            octaves = octaves,
-            persistence = persistence,
-            lacunarity = lacunarity,
-            offset = offset,
-            maxAmp = 0f
-        };
-    }
 }

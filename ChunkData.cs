@@ -39,7 +39,6 @@ public static class ChunkData
         public Vector2Int coord;
 
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
-        [ReadOnly] public NativeArray<WarpLayer> warpLayers;
 
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockEdit> blockEdits;
@@ -594,7 +593,6 @@ public static class ChunkData
                 worldX,
                 worldZ,
                 noiseLayers,
-                warpLayers,
                 baseHeight,
                 offsetX,
                 offsetZ,
