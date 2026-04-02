@@ -35,6 +35,10 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private bool castShadows = false;
     [SerializeField] private bool receiveShadows = false;
 
+    [Header("Flat Item Rendering")]
+    [Tooltip("Material usado para renderizar itens planos na mao. A textura do item sera aplicada por renderer em runtime.")]
+    [SerializeField] private Material flatItemMaterial;
+
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
     private readonly Dictionary<Sprite, Mesh> spriteFlatItemMeshCache = new Dictionary<Sprite, Mesh>();
@@ -48,7 +52,7 @@ public class HeldBlockVisual : MonoBehaviour
     private GameObject flatItemVisualObject;
     private MeshFilter flatItemMeshFilter;
     private MeshRenderer flatItemMeshRenderer;
-    private Material flatItemMaterial;
+    private MaterialPropertyBlock flatItemPropertyBlock;
     private GameObject heldPrefabInstance;
     private GameObject heldPrefabVisualObject;
     private GameObject heldPrefabSource;
@@ -101,9 +105,6 @@ public class HeldBlockVisual : MonoBehaviour
         blockMaterialIndexCache.Clear();
         DestroyCachedMeshes(spriteFlatItemMeshCache);
         DestroyCachedMeshes(atlasFlatItemMeshCache);
-
-        if (flatItemMaterial != null)
-            Destroy(flatItemMaterial);
 
         ClearHeldPrefabInstance();
 
@@ -226,7 +227,9 @@ public class HeldBlockVisual : MonoBehaviour
             heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
         }
 
-        EnsureFlatItemMaterial();
+        if (flatItemPropertyBlock == null)
+            flatItemPropertyBlock = new MaterialPropertyBlock();
+
         ApplyRendererSettings();
     }
 
@@ -442,13 +445,15 @@ public class HeldBlockVisual : MonoBehaviour
         if (selectedItem == null || flatItemMeshFilter == null || flatItemMeshRenderer == null)
             return false;
 
-        Mesh flatMesh = GetOrCreateFlatItemMesh(selectedItem, out Material renderMaterial);
-        if (flatMesh == null || renderMaterial == null)
+        Mesh flatMesh = GetOrCreateFlatItemMesh(selectedItem, out Texture renderTexture);
+        Material renderMaterial = ResolveFlatItemMaterial(selectedItem);
+        if (flatMesh == null || renderMaterial == null || renderTexture == null)
             return false;
 
         HideAllVisualChildren();
         flatItemMeshFilter.sharedMesh = flatMesh;
         flatItemMeshRenderer.sharedMaterial = renderMaterial;
+        ApplyFlatItemTexture(renderTexture);
         flatItemVisualObject.SetActive(true);
         return true;
     }
@@ -597,14 +602,14 @@ public class HeldBlockVisual : MonoBehaviour
         return atlasData != null;
     }
 
-    private Mesh GetOrCreateFlatItemMesh(Item item, out Material renderMaterial)
+    private Mesh GetOrCreateFlatItemMesh(Item item, out Texture renderTexture)
     {
-        renderMaterial = null;
+        renderTexture = null;
         if (item == null)
             return null;
 
         if (TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData) &&
-            atlasData.TryGetUvRect(item, out Rect atlasUvRect) &&
+            atlasData.TryGetUvRect(item, out Rect atlasUvRect, applyInset: false) &&
             atlasData.TryGetAspect(item, out float atlasAspect))
         {
             Mesh atlasMesh = GetOrCreateAtlasFlatItemMesh(item, atlasUvRect, atlasAspect);
@@ -612,22 +617,8 @@ public class HeldBlockVisual : MonoBehaviour
                 return null;
 
             if (atlasData.TryGetTexture(out Texture2D atlasTexture) && atlasTexture != null)
-                ConfigurePixelArtTexture(atlasTexture);
-
-            if (atlasData.TryGetMaterial(out Material atlasMaterial) && atlasMaterial != null)
             {
-                renderMaterial = atlasMaterial;
-                return atlasMesh;
-            }
-
-            if (atlasData.TryGetTexture(out Texture2D atlasTextureFallback) && atlasTextureFallback != null)
-            {
-                EnsureFlatItemMaterial();
-                if (flatItemMaterial == null)
-                    return null;
-
-                ApplyFlatItemTexture(atlasTextureFallback);
-                renderMaterial = flatItemMaterial;
+                renderTexture = atlasTexture;
                 return atlasMesh;
             }
         }
@@ -639,13 +630,24 @@ public class HeldBlockVisual : MonoBehaviour
         if (spriteMesh == null)
             return null;
 
-        EnsureFlatItemMaterial();
-        if (flatItemMaterial == null)
-            return null;
-
-        ApplyFlatItemTexture(item.icon.texture);
-        renderMaterial = flatItemMaterial;
+        renderTexture = item.icon.texture;
         return spriteMesh;
+    }
+
+    private Material ResolveFlatItemMaterial(Item item)
+    {
+        if (flatItemMaterial != null)
+            return flatItemMaterial;
+
+        if (item != null &&
+            TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData) &&
+            atlasData.TryGetMaterial(out Material atlasMaterial) &&
+            atlasMaterial != null)
+        {
+            return atlasMaterial;
+        }
+
+        return null;
     }
 
     private Mesh GetOrCreateSpriteFlatItemMesh(Sprite sprite)
@@ -728,53 +730,22 @@ public class HeldBlockVisual : MonoBehaviour
         return mesh;
     }
 
-    private void EnsureFlatItemMaterial()
-    {
-        if (flatItemMaterial != null)
-            return;
-
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-            shader = Shader.Find("Unlit/Transparent");
-
-        if (shader == null)
-            return;
-
-        flatItemMaterial = new Material(shader)
-        {
-            name = "HeldFlatItemMaterial"
-        };
-
-        if (flatItemMaterial.HasProperty("_Surface"))
-            flatItemMaterial.SetFloat("_Surface", 1f);
-        if (flatItemMaterial.HasProperty("_Blend"))
-            flatItemMaterial.SetFloat("_Blend", 0f);
-        if (flatItemMaterial.HasProperty("_Cull"))
-            flatItemMaterial.SetFloat("_Cull", (float)CullMode.Off);
-        if (flatItemMaterial.HasProperty("_AlphaClip"))
-            flatItemMaterial.SetFloat("_AlphaClip", 0f);
-    }
-
     private void ApplyFlatItemTexture(Texture texture)
     {
-        if (flatItemMaterial == null)
+        if (flatItemMeshRenderer == null || texture == null)
             return;
 
         ConfigurePixelArtTexture(texture);
 
-        if (flatItemMaterial.HasProperty("_BaseMap"))
-            flatItemMaterial.SetTexture("_BaseMap", texture);
+        if (flatItemPropertyBlock == null)
+            flatItemPropertyBlock = new MaterialPropertyBlock();
 
-        if (flatItemMaterial.HasProperty("_MainTex"))
-            flatItemMaterial.SetTexture("_MainTex", texture);
-
-        flatItemMaterial.mainTexture = texture;
-        if (flatItemMaterial.HasProperty("_BaseColor"))
-            flatItemMaterial.SetColor("_BaseColor", Color.white);
-        if (flatItemMaterial.HasProperty("_Color"))
-            flatItemMaterial.SetColor("_Color", Color.white);
+        flatItemPropertyBlock.Clear();
+        flatItemPropertyBlock.SetTexture("_BaseMap", texture);
+        flatItemPropertyBlock.SetTexture("_MainTex", texture);
+        flatItemPropertyBlock.SetColor("_BaseColor", Color.white);
+        flatItemPropertyBlock.SetColor("_Color", Color.white);
+        flatItemMeshRenderer.SetPropertyBlock(flatItemPropertyBlock);
     }
 
     private static void ConfigurePixelArtTexture(Texture texture)

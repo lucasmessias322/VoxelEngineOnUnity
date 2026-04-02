@@ -79,11 +79,16 @@ public class ItemAtlasDataSO : ScriptableObject
 
     public bool TryGetUvRect(Item item, out Rect uvRect)
     {
+        return TryGetUvRect(item, out uvRect, applyInset: true);
+    }
+
+    public bool TryGetUvRect(Item item, out Rect uvRect, bool applyInset)
+    {
         uvRect = default;
         if (!TryGetMapping(item, out ItemAtlasMapping mapping))
             return false;
 
-        return TryGetUvRect(mapping, out uvRect);
+        return TryGetUvRect(mapping, out uvRect, applyInset);
     }
 
     public bool TryGetAspect(Item item, out float aspect)
@@ -99,6 +104,11 @@ public class ItemAtlasDataSO : ScriptableObject
 
     public bool TryGetPixelRect(Item item, out Rect pixelRect)
     {
+        return TryGetPixelRect(item, out pixelRect, applyInset: true);
+    }
+
+    public bool TryGetPixelRect(Item item, out Rect pixelRect, bool applyInset)
+    {
         pixelRect = default;
         if (!TryGetMapping(item, out ItemAtlasMapping mapping))
             return false;
@@ -106,10 +116,10 @@ public class ItemAtlasDataSO : ScriptableObject
         if (!TryGetTexture(out Texture2D texture) || texture == null)
             return false;
 
-        return TryGetPixelRect(mapping, texture, out pixelRect);
+        return TryGetPixelRect(mapping, texture, out pixelRect, applyInset);
     }
 
-    private bool TryGetUvRect(ItemAtlasMapping mapping, out Rect uvRect)
+    private bool TryGetUvRect(ItemAtlasMapping mapping, out Rect uvRect, bool applyInset)
     {
         uvRect = default;
 
@@ -125,7 +135,7 @@ public class ItemAtlasDataSO : ScriptableObject
 
         float cellWidth = 1f / tilesX;
         float cellHeight = 1f / tilesY;
-        Vector2 inset = CalculateUvInset(cellWidth, cellHeight);
+        Vector2 inset = CalculateUvInset(cellWidth, cellHeight, applyInset);
 
         float minX = tile.x * cellWidth + inset.x;
         float minY = tile.y * cellHeight + inset.y;
@@ -139,7 +149,7 @@ public class ItemAtlasDataSO : ScriptableObject
         return true;
     }
 
-    private bool TryGetPixelRect(ItemAtlasMapping mapping, Texture2D texture, out Rect pixelRect)
+    private bool TryGetPixelRect(ItemAtlasMapping mapping, Texture2D texture, out Rect pixelRect, bool applyInset)
     {
         pixelRect = default;
         if (texture == null)
@@ -157,7 +167,7 @@ public class ItemAtlasDataSO : ScriptableObject
 
         float cellWidth = (float)texture.width / tilesX;
         float cellHeight = (float)texture.height / tilesY;
-        Vector2 inset = CalculatePixelInset(texture, cellWidth, cellHeight);
+        Vector2 inset = CalculatePixelInset(texture, cellWidth, cellHeight, applyInset);
 
         float minX = tile.x * cellWidth + inset.x;
         float minY = tile.y * cellHeight + inset.y;
@@ -171,8 +181,11 @@ public class ItemAtlasDataSO : ScriptableObject
         return true;
     }
 
-    private Vector2 CalculateUvInset(float cellWidth, float cellHeight)
+    private Vector2 CalculateUvInset(float cellWidth, float cellHeight, bool applyInset)
     {
+        if (!applyInset)
+            return Vector2.zero;
+
         if (TryGetTexture(out Texture2D texture) && texture != null && paddingPixels > 0)
         {
             return new Vector2(
@@ -186,8 +199,11 @@ public class ItemAtlasDataSO : ScriptableObject
             Mathf.Min(safeInset, cellHeight * 0.49f));
     }
 
-    private Vector2 CalculatePixelInset(Texture2D texture, float cellWidth, float cellHeight)
+    private Vector2 CalculatePixelInset(Texture2D texture, float cellWidth, float cellHeight, bool applyInset)
     {
+        if (!applyInset)
+            return Vector2.zero;
+
         if (texture != null && paddingPixels > 0)
         {
             return new Vector2(
