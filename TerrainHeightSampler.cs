@@ -4,6 +4,8 @@ using Unity.Mathematics;
 
 public struct TerrainNoiseSampleState
 {
+    // Acumula cada "canal" de ruido separadamente para que o relevo final
+    // possa combinar continentalness, erosao, morros e montanhas sem reamostrar.
     public bool hasActiveLayers;
     public bool hasTypedRoles;
     public float legacyNoiseTotal;
@@ -35,6 +37,7 @@ public static class TerrainHeightSampler
         int worldHeight,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        // Etapa 1 do pipeline de terreno: transforma o ruido em uma altura final de superficie.
         float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, offsetX, offsetZ, biomeNoiseSettings);
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
@@ -49,6 +52,7 @@ public static class TerrainHeightSampler
         int worldHeight,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        // Etapa 1 do pipeline de terreno: transforma o ruido em uma altura final de superficie.
         float terrainSignal = SampleTerrainSignal(worldX, worldZ, noiseLayers, offsetX, offsetZ, biomeNoiseSettings);
         return GetHeightFromTerrainSignal(terrainSignal, baseHeight, worldHeight);
     }
@@ -109,6 +113,7 @@ public static class TerrainHeightSampler
 
         sampleState.hasActiveLayers = true;
 
+        // Offsets por camada permitem deslocar canais especificos sem mexer no seed global.
         float nx = (worldX + offsetX) + layer.offset.x;
         float nz = (worldZ + offsetZ) + layer.offset.y;
 
@@ -116,6 +121,8 @@ public static class TerrainHeightSampler
         if (layer.redistributionModifier != 1f || layer.exponent != 1f)
             sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
 
+        // Layers sem role continuam alimentando o caminho legado; layers tipadas
+        // entram no compositor mais moderno inspirado no terrain shaping do Minecraft.
         MyNoise.AccumulateLayerByRole(
             layer,
             sample,
@@ -145,6 +152,7 @@ public static class TerrainHeightSampler
     {
         if (!sampleState.hasActiveLayers)
         {
+            // Compatibilidade com worlds/perfis antigos que nao possuem noise layers configuradas.
             float nx = worldX * LegacyFallbackScale + offsetX;
             float nz = worldZ * LegacyFallbackScale + offsetZ;
             sampleState.legacyNoiseTotal = noise.cnoise(new float2(nx, nz)) * 0.5f + 0.5f;
@@ -153,6 +161,8 @@ public static class TerrainHeightSampler
         }
 
         BiomeTerrainSettings terrainSettings = BiomeUtility.BlendTerrainSettings(worldX, worldZ, biomeNoiseSettings);
+        // Se houver canais tipados, usamos o compositor moderno; caso contrario,
+        // apenas modelamos o ruido legado com os multiplicadores do bioma atual.
         return sampleState.hasTypedRoles
             ? MyNoise.ComposeMinecraftLikeTerrainSignal(
                 sampleState.continentalTotal,

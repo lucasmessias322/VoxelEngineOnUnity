@@ -3,6 +3,7 @@ using Unity.Mathematics;
 
 public struct TerrainSurfaceData
 {
+    // Decisao final de materiais da coluna depois de considerar bioma, praia, altitude e inclinacao.
     public int surfaceHeight;
     public int surfaceLayerDepth;
     public BiomeType biome;
@@ -37,6 +38,7 @@ public static class TerrainSurfaceRules
         int southEastHeight,
         int southWestHeight)
     {
+        // Usa um gradiente estilo Sobel para medir o quanto a coluna "puxa" para um lado.
         float gradientX = (northEastHeight + 2f * eastHeight + southEastHeight) - (northWestHeight + 2f * westHeight + southWestHeight);
         float gradientZ = (southWestHeight + 2f * southHeight + southEastHeight) - (northWestHeight + 2f * northHeight + northEastHeight);
         return math.sqrt(gradientX * gradientX + gradientZ * gradientZ) * 0.125f;
@@ -67,6 +69,7 @@ public static class TerrainSurfaceRules
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        // Etapa 3 do pipeline: converte relevo + clima em blocos visiveis para o topo da coluna.
         bool isBeach = surfaceHeight <= seaLevel + BeachHeightMargin;
         bool isHighMountain = surfaceHeight >= baseHeight + HighMountainHeightOffset;
         float highMountain01 = math.saturate((surfaceHeight - (baseHeight + HighMountainHeightOffset - 12f)) / 20f);
@@ -82,6 +85,7 @@ public static class TerrainSurfaceRules
         float surfaceNoiseScale = math.max(0.018f, biomeNoiseSettings.coldSurfaceNoiseScale * 0.75f);
         float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, surfaceNoiseScale);
         float slopeStoneMask = math.saturate((slope01 - SlopeStoneStart01) / math.max(0.01f, SlopeStoneFull01 - SlopeStoneStart01));
+        // Mistura altitude alta e inclinacao para decidir quando a rocha deve "aflorar".
         float exposedStoneMask = math.saturate(math.max(highMountain01, slopeStoneMask * 0.92f + highMountain01 * 0.25f));
         float stoneThreshold = 0.60f + (surfaceNoise - 0.5f) * 0.16f;
         int surfaceLayerDepth = ResolveSurfaceLayerDepth(terrainSettings, slope01, isBeach, highMountain01, exposedStoneMask);
@@ -135,6 +139,7 @@ public static class TerrainSurfaceRules
     [BurstCompile]
     public static BlockType GetBlockTypeAtHeight(int y, in TerrainSurfaceData surface)
     {
+        // Materializa a coluna virtual: topo, subsolo, pedra e deepslate.
         if (y == surface.surfaceHeight)
             return surface.surfaceBlock;
 
@@ -184,6 +189,7 @@ public static class TerrainSurfaceRules
         ref BlockType surfaceBlock,
         ref BlockType subsurfaceBlock)
     {
+        // O bioma frio ainda pode variar com altitude: pedra exposta e neve nao dependem so do bioma base.
         BiomeTerrainBlendWeights weights = BiomeUtility.GetTerrainBlendWeights(temperature, humidity, biomeNoiseSettings);
         float coldMask = weights.taiga;
         if (coldMask <= 1e-3f)

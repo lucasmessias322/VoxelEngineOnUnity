@@ -148,6 +148,8 @@ public static class MeshGenerator
 
 
 
+    // Primeiro job da pipeline: calcula a altura de cada coluna, inclusive o padding
+    // usado por costura entre chunks, superficie e sistemas de iluminacao.
     [BurstCompile]
     private struct HeightmapJob : IJobParallelFor
     {
@@ -191,6 +193,8 @@ public static class MeshGenerator
 
 
 
+    // Reaproveita o height cache para gerar um contexto semantico por coluna
+    // (slope, cliff, bioma e materiais de superficie) uma unica vez.
     [BurstCompile]
     private struct BuildTerrainColumnContextCacheJob : IJobParallelFor
     {
@@ -285,6 +289,8 @@ public static class MeshGenerator
         }
     }
 
+    // Preenche o casco base do terreno; etapas como cavernas, agua, arvores e edits
+    // entram depois para manter a pipeline previsivel.
     [BurstCompile]
     struct PopulateTerrainJob : IJobParallelFor
     {
@@ -549,6 +555,8 @@ public static class MeshGenerator
         out NativeArray<bool> subchunkNonEmpty
     )
     {
+        // A pipeline trabalha com dois volumes padded:
+        // um para dados do terreno e outro para opacidade/luz, que pode pedir mais borda.
         // 1. Fixar o borderSize em 1 (PadrÃƒÂ£o para Ambient Occlusion e Costura)
 
         // 2. AlocaÃƒÂ§ÃƒÂµes dos Arrays IntermÃƒÂ©dios que fluem entre os Jobs (TempJob)
@@ -682,6 +690,8 @@ public static class MeshGenerator
             stages = ChunkData.ChunkDataStageFlags.None
         };
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃƒÂªncia no heightHandle
+        // O PopulateTerrainJob ja escreveu o terreno base. A partir daqui encadeamos
+        // apenas estagios mutaveis: cavernas, minerios, agua, arvores e block edits.
         JobHandle caveChunkDataHandle;
         JobHandle oreChunkDataHandle;
         JobHandle waterChunkDataHandle;
@@ -689,6 +699,7 @@ public static class MeshGenerator
         JobHandle finalChunkDataHandle;
         if (!enableVoxelLighting)
         {
+            // Caminho mais barato: sem voxel lighting nao precisamos do segundo volume de opacidade.
             var caveChunkDataJob = baseChunkDataJob;
             caveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
             caveChunkDataHandle = caveChunkDataJob.Schedule(populateHandle);
@@ -789,6 +800,8 @@ public static class MeshGenerator
         JobHandle spaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
         {
+            // A mesma mascara e compartilhada entre terreno e opacidade para que
+            // cavernas e iluminacao concordem exatamente nas bordas.
             sharedSpaghettiCarveMask.Dispose();
             sharedSpaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
             var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob

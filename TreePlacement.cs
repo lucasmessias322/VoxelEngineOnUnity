@@ -23,6 +23,7 @@ public static class TreePlacement
         NativeArray<int> heightCache,
         int heightStride)
     {
+        // Converte instancias abstratas em troncos/folhas dentro do volume padded do chunk.
         if (treeInstances.Length == 0)
             return;
 
@@ -57,6 +58,7 @@ public static class TreePlacement
                 localZ + horizontalReach < activeMinZ ||
                 localZ - horizontalReach > activeMaxZ;
 
+            // Mesmo que o tronco nasca fora da area ativa, ainda vale gerar se a copa entrar no chunk.
             if (missesActiveArea)
                 continue;
 
@@ -194,6 +196,7 @@ public static class TreePlacement
         int chunkSizeY,
         BlockType trunkType)
     {
+        // Troncos podem substituir ar e folhas, mas nunca sobrescrevem outro tronco.
         if (lx < 0 || lx >= voxelSizeX || lz < 0 || lz >= voxelSizeZ)
             return false;
         if (ly < 0 || ly >= chunkSizeY)

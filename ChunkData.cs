@@ -27,6 +27,8 @@ public static class ChunkData
         BlockEdits = 1 << 3
     }
 
+    // Este job nao cria o terreno base do zero; ele pega o chunk ja preenchido
+    // e aplica as etapas procedurais que alteram voxels.
     [BurstCompile]
     public struct ChunkDataJob : IJob
     {
@@ -88,6 +90,7 @@ public static class ChunkData
             // 2. Popular voxels (terreno, ÃƒÂ¡gua)
             //PopulateTerrainColumns(heightCache, blockTypes, solids, voxelSizeX, voxelSizeZ);
 
+            // Cada stage pode ser agendado separadamente para compor uma pipeline deterministica.
             if ((stages & ChunkDataStageFlags.Caves) != 0)
             {
                 switch (caveGenerationMode)
@@ -111,6 +114,8 @@ public static class ChunkData
             if ((stages & ChunkDataStageFlags.Trees) != 0 && enableTrees)
             {
                 // NOVO: Gere as ÃƒÂ¡rvores aqui
+                // As arvores sao resolvidas como instancias antes de escrever voxels,
+                // evitando conflitos diferentes entre chunks vizinhos.
                 NativeList<TreeInstance> trees = GenerateTreeInstances();
 
                 // AplicaÃƒÂ§ÃƒÂ£o existente (agora com trees local)
@@ -130,6 +135,8 @@ public static class ChunkData
 
         private bool HasSharedSpaghettiCarveMask()
         {
+            // Quando a iluminacao usa um volume maior, reaproveitamos a mesma mascara
+            // de caverna para manter terreno e opacidade sincronizados.
             return spaghettiCarveMask.IsCreated &&
                    spaghettiCarveMask.Length > 0 &&
                    spaghettiCaveSettings.enabled &&
@@ -145,6 +152,8 @@ public static class ChunkData
             int voxelPlaneSize,
             int heightStride)
         {
+            // A mascara pronta e aplicada primeiro nas colunas internas; depois tratamos
+            // a costura das bordas em separado para nao depender da ordem entre chunks.
             int maskVoxelSizeX = spaghettiCarveMaskVoxelSizeX;
             int maskVoxelPlaneSize = spaghettiCarveMaskVoxelPlaneSize;
             if (maskVoxelSizeX <= 0 ||
@@ -262,6 +271,7 @@ public static class ChunkData
 
         private NativeList<TreeInstance> GenerateTreeInstances()
         {
+            // A lista final contem apenas candidatos vencedores para este chunk padded.
             NativeList<TreeInstance> trees = new NativeList<TreeInstance>(128, Allocator.Temp);
             for (int i = 0; i < treeSpawnRules.Length; i++)
                 GenerateTreeInstancesForRule(treeSpawnRules[i], ref trees);
@@ -290,6 +300,8 @@ public static class ChunkData
             int maxSpacingRadius = TreeGenerationMetrics.GetPlacementSpacingRadius(rule.treeStyle, settings);
             int neighborCellRadius = math.max(1, (maxSpacingRadius + cellSize - 1) / cellSize);
             int cacheCapacity = GetTreeCandidateCacheCapacity(cellX0, cellX1, cellZ0, cellZ1, neighborCellRadius);
+            // O cache por celula evita recalcular candidatos quando multiplos chunks
+            // inspecionam a mesma area de conflito perto da borda.
             NativeHashMap<long, TreeCandidateCacheEntry> candidateCache = new NativeHashMap<long, TreeCandidateCacheEntry>(cacheCapacity, Allocator.Temp);
 
             try
@@ -364,11 +376,14 @@ public static class ChunkData
                 return false;
             }
 
+            // A posicao dentro da celula tambem e deterministica, entao qualquer chunk
+            // que observe esta mesma celula chega ao mesmo candidato.
             float offsetNoiseX = noise.cnoise(new float2(noiseX + 1f, noiseZ + 1f)) * 0.5f + 0.5f;
             float offsetNoiseZ = noise.cnoise(new float2(noiseX + 2f, noiseZ + 2f)) * 0.5f + 0.5f;
             int worldX = cellX * cellSize + (int)math.round(offsetNoiseX * (cellSize - 1));
             int worldZ = cellZ * cellSize + (int)math.round(offsetNoiseZ * (cellSize - 1));
 
+            // O candidato so sobrevive se a coluna suportar aquela arvore naquele bioma.
             TerrainColumnContext columnContext = GetColumnContextInternal(worldX, worldZ);
             int surfaceY = columnContext.surfaceHeight;
             if (surfaceY <= 0 || surfaceY >= SizeY || surfaceY < seaLevel)
@@ -1679,6 +1694,8 @@ public static class ChunkData
             int chunkMinX = coord.x * SizeX;
             int chunkMinZ = coord.y * SizeZ;
 
+            // Cada chunk tambem processa sementes dos vizinhos imediatos para que um veio
+            // que cruza a fronteira continue existindo do outro lado.
             for (int ruleIndex = 0; ruleIndex < oreSettings.Length; ruleIndex++)
             {
                 OreSpawnSettings rule = oreSettings[ruleIndex];
@@ -1904,6 +1921,7 @@ public static class ChunkData
 
         private void ApplyBlockEditsToVoxels(NativeArray<byte> blockTypes, NativeArray<bool> solids, int voxelSizeX, int voxelSizeZ)
         {
+            // Overrides do jogador entram por ultimo para sempre vencer o resultado procedural.
             if (blockEdits.Length == 0) return;
 
             int voxelPlaneSize = voxelSizeX * SizeY;

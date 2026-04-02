@@ -13,6 +13,7 @@ public enum BiomeType : byte
 [Serializable]
 public struct BiomeTerrainSettings
 {
+    // Multiplicadores que dizem como um bioma dobra o mesmo sinal de relevo.
     public float reliefMultiplier;
     public float hillsMultiplier;
     public float mountainMultiplier;
@@ -93,6 +94,7 @@ public struct BiomeTerrainBlendWeights
 
 public struct BiomeNoiseSettings
 {
+    // Snapshot compacto enviado para jobs Burst sem depender do MonoBehaviour World.
     public float temperatureScale;
     public float humidityScale;
     public float2 temperatureOffset;
@@ -134,6 +136,7 @@ public static class BiomeUtility
     [BurstCompile]
     public static BiomeClimateSample SampleClimate(int worldX, int worldZ, in BiomeNoiseSettings settings)
     {
+        // Clima e relevo sao amostrados separados para permitir transicoes suaves entre biomas.
         float temperature = SampleTemperature(worldX, worldZ, settings);
         float humidity = SampleHumidity(worldX, worldZ, settings);
         return new BiomeClimateSample
@@ -281,6 +284,7 @@ public static class BiomeUtility
     [BurstCompile]
     public static BiomeTerrainSettings BlendTerrainSettings(float temperature, float humidity, in BiomeNoiseSettings settings)
     {
+        // Em vez de "trocar de preset" na fronteira do bioma, interpolamos todos os parametros.
         BiomeTerrainBlendWeights weights = GetTerrainBlendWeights(temperature, humidity, settings);
 
         return new BiomeTerrainSettings
@@ -336,6 +340,7 @@ public static class BiomeUtility
     [BurstCompile]
     public static BiomeTerrainBlendWeights GetTerrainBlendWeights(float temperature, float humidity, in BiomeNoiseSettings settings)
     {
+        // Os pesos sempre somam 1 para que a transicao entre biomas seja continua.
         float blend = math.max(0.01f, settings.terrainBlendRange);
         float warm = Smooth01(temperature, settings.savannaMinTemperature - blend, settings.savannaMinTemperature + blend);
         float desertHot = Smooth01(temperature, settings.desertMinTemperature - blend, settings.desertMinTemperature + blend);

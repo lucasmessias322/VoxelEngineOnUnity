@@ -97,6 +97,7 @@ public partial class World : MonoBehaviour
             return;
         }
 
+        // Mantemos uma tabela unica por tipo para evitar buscas e conflitos durante a geracao.
         List<BiomeDefinitionSO> uniqueDefinitions = new List<BiomeDefinitionSO>(source.Length);
         for (int i = 0; i < source.Length; i++)
         {
@@ -149,6 +150,7 @@ public partial class World : MonoBehaviour
 
     private void InitializeBiomeNoiseOffsets()
     {
+        // Quando o usuario nao fixa offsets, derivamos do seed para manter mundos repetiveis.
         if (biomeTemperatureOffset == Vector2.zero)
             biomeTemperatureOffset = new Vector2(seed * 0.173f, seed * -0.241f);
 
@@ -161,6 +163,7 @@ public partial class World : MonoBehaviour
         if (!biomeNoiseSettingsDirty)
             return cachedBiomeNoiseSettings;
 
+        // Consolida o estado do inspector + ScriptableObjects em um snapshot seguro para jobs.
         BiomeTerrainSettings desertTerrainSettings = SanitizeBiomeTerrainSettings(desertTerrain, BiomeTerrainSettings.DesertDefault);
         BiomeTerrainSettings savannaTerrainSettings = SanitizeBiomeTerrainSettings(savannaTerrain, BiomeTerrainSettings.SavannaDefault);
         BiomeTerrainSettings meadowTerrainSettings = SanitizeBiomeTerrainSettings(meadowTerrain, BiomeTerrainSettings.MeadowDefault);

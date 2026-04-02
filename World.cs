@@ -571,6 +571,7 @@ public partial class World : MonoBehaviour
 
     private void EnsureNativeGenerationCaches()
     {
+        // Copia a configuracao viva do World para NativeArrays persistentes usados pelos jobs.
         bool cachesCreated = cachedNativeNoiseLayers.IsCreated &&
                              cachedNativeBlockMappings.IsCreated &&
                              cachedNativeEffectiveLightOpacityByBlock.IsCreated &&
@@ -585,6 +586,7 @@ public partial class World : MonoBehaviour
         if (nativeGenerationConfigDirty && cachesCreated &&
             (pendingDataJobs.Count > 0 || pendingMeshes.Count > 0))
         {
+            // Evita trocar buffers no meio de jobs ainda em voo.
             return;
         }
 
@@ -987,6 +989,7 @@ public partial class World : MonoBehaviour
     {
         treeSpawnRulesDirty = false;
 
+        // As regras de spawn sao derivadas dos biomas para centralizar a configuracao.
         List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(12);
         AddTreeRulesFromBiomeDefinitions(rules);
         SortTreeSpawnRules(rules);
@@ -2349,7 +2352,7 @@ public partial class World : MonoBehaviour
         activeChunks.Add(coord, chunk);
         RequestHighBuildMeshRebuild(coord);
 
-        // Build edits from blockOverrides
+        // Coleta overrides do jogador antes da geracao para que o chunk ja nasca consistente.
         var editsList = new List<BlockEdit>();
         int dataBorderSize = GetDetailedGenerationBorderSize();
         int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
@@ -2375,6 +2378,8 @@ public partial class World : MonoBehaviour
 
         // InjeÃ§Ã£o da luz global
         // Light injection corrected for rebuild (uses borderSize)
+        // O volume de luz precisa do mesmo recorte padded do chunk para manter costura
+        // com vizinhos e considerar colunas globais ja conhecidas.
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
@@ -2392,6 +2397,8 @@ public partial class World : MonoBehaviour
         }
 
         // Agendamento do data job
+        // A partir daqui a geracao entra na pipeline Burst/Jobs:
+        // heightmap, superficie, cavernas, minerios, agua, arvores, edits e iluminacao.
         MeshGenerator.ScheduleDataJob(
             coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
             baseHeight, offsetX, offsetZ, seaLevel,

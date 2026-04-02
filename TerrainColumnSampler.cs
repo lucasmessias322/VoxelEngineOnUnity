@@ -3,6 +3,7 @@ using Unity.Collections;
 
 public struct TerrainColumnContext
 {
+    // Snapshot completo de uma coluna apos olhar a altura central e os 8 vizinhos.
     public int worldX;
     public int worldZ;
     public int surfaceHeight;
@@ -39,6 +40,7 @@ public static class TerrainColumnSampler
         float seaLevel,
         in BiomeNoiseSettings biomeNoiseSettings)
     {
+        // A altura dos vizinhos vira um contexto semantico: slope, cliff e materiais da superficie.
         float slope = TerrainSurfaceRules.GetSlopeFromNeighborHeights(
             northHeight,
             southHeight,
@@ -191,8 +193,8 @@ public static class TerrainColumnSampler
             return false;
         }
 
-        // Edge samples do not have a full 8-neighbor context inside the cache.
-        // Falling back to noise here keeps biome/cliff decisions consistent across chunk borders.
+        // As bordas do cache nao possuem os 8 vizinhos necessarios para slope/cliff.
+        // Nesses casos o caller reamostra por ruido para nao criar costuras entre chunks.
         if (cacheX <= 0 || cacheX >= heightStride - 1 || cacheZ <= 0 || cacheZ >= heightDepth - 1)
         {
             columnContext = default;

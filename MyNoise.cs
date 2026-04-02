@@ -6,6 +6,7 @@ using UnityEngine;
 [Serializable]
 public enum TerrainNoiseRole : byte
 {
+    // Cada role representa um canal semantico do relevo, nao apenas "mais ruido".
     LegacyAdditive = 0,
     Continentalness = 1,
     Erosion = 2,
@@ -72,6 +73,8 @@ public static class MyNoise
         ref float mountainTotal,
         ref float mountainWeight)
     {
+        // Separa as noise layers por papel para que a composicao final possa tratar
+        // continentalness, erosao e montanhas de forma independente.
         float weight = math.max(1e-5f, layer.amplitude);
 
         switch (layer.role)
@@ -155,6 +158,8 @@ public static class MyNoise
         in BiomeTerrainSettings biomeTerrain,
         in TerrainSplineShaperSettings terrainShaper)
     {
+        // Junta os canais de relevo em um unico delta de altura seguindo um fluxo
+        // parecido com o terrain shaping moderno do Minecraft.
         if (!terrainShaper.enabled)
             return ComposePreSplineMinecraftTerrainSignal(
                 continentalTotal,
@@ -197,6 +202,8 @@ public static class MyNoise
         float legacyDetail = GetLegacyCenteredNoise(legacyTotal, legacyWeight) * math.lerp(1.75f, 8.25f, ruggedness);
         float inlandness = math.saturate(offset * 0.5f + 0.55f);
 
+        // Morros, foothills e montanhas nascem do mesmo conjunto de canais,
+        // mas com mascaras diferentes para evitar picos em todo lugar.
         float hills = hillsNoise
             * math.max(1f, hillsWeight)
             * math.lerp(0.10f, 0.72f, ruggedness)
@@ -258,6 +265,7 @@ public static class MyNoise
         float legacyWeight,
         in BiomeTerrainSettings biomeTerrain)
     {
+        // Fallback para presets antigos que ainda nao usam splines de shaping.
         float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);
         float hillsMultiplier = math.max(0f, biomeTerrain.hillsMultiplier);
         float mountainMultiplier = math.max(0f, biomeTerrain.mountainMultiplier);
