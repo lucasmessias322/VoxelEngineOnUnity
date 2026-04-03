@@ -1482,7 +1482,7 @@ public static class ChunkData
     }
 
     [BurstCompile]
-    public struct FillWaterAboveTerrainJob : IJobParallelFor
+    public struct FillWaterBelowSeaLevelJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<int> heightCache;
         [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
@@ -1492,6 +1492,7 @@ public static class ChunkData
         public int seaLevel;
         public byte waterBlockId;
         public bool waterIsSolid;
+        public bool fillAllAirBelowSeaLevel;
 
         public void Execute(int index)
         {
@@ -1502,16 +1503,24 @@ public static class ChunkData
 
             int cacheX = index % heightStride;
             int cacheZ = index / heightStride;
-            int h = heightCache[index];
-            int startY = math.max(0, h + 1);
+            int voxelSizeX = heightStride;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int startY = 3;
+            if (!fillAllAirBelowSeaLevel)
+            {
+                int h = heightCache[index];
+                startY = math.max(0, h + 1);
+            }
+
             if (startY > maxY)
                 return;
 
-            int voxelSizeX = heightStride;
-            int voxelPlaneSize = voxelSizeX * SizeY;
             int voxelIndex = cacheX + startY * voxelSizeX + cacheZ * voxelPlaneSize;
             for (int y = startY; y <= maxY; y++, voxelIndex += voxelSizeX)
             {
+                if (blockTypes[voxelIndex] != (byte)BlockType.Air)
+                    continue;
+
                 blockTypes[voxelIndex] = waterBlockId;
                 solids[voxelIndex] = waterIsSolid;
             }

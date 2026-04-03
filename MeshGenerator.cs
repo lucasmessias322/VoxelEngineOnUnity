@@ -964,7 +964,7 @@ public static class MeshGenerator
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
             oreChunkDataHandle = oreChunkDataJob.Schedule(caveChunkDataHandle);
 
-            var fillWaterAboveTerrainJob = new ChunkData.FillWaterAboveTerrainJob
+            var fillWaterBelowSeaLevelJob = new ChunkData.FillWaterBelowSeaLevelJob
             {
                 heightCache = heightCache,
                 blockTypes = blockTypes,
@@ -972,9 +972,10 @@ public static class MeshGenerator
                 border = dataBorderSize,
                 seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
                 waterBlockId = (byte)BlockType.Water,
-                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid,
+                fillAllAirBelowSeaLevel = terrainDensitySettings.enabled
             };
-            waterChunkDataHandle = fillWaterAboveTerrainJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+            waterChunkDataHandle = fillWaterBelowSeaLevelJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
 
             treeChunkDataHandle = waterChunkDataHandle;
             if (enableTrees)
@@ -1076,7 +1077,7 @@ public static class MeshGenerator
         stagedOreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
         oreChunkDataHandle = stagedOreChunkDataJob.Schedule(caveChunkDataHandle);
 
-        var stagedFillWaterAboveTerrainJob = new ChunkData.FillWaterAboveTerrainJob
+        var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillWaterBelowSeaLevelJob
         {
             heightCache = heightCache,
             blockTypes = blockTypes,
@@ -1084,9 +1085,10 @@ public static class MeshGenerator
             border = dataBorderSize,
             seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
             waterBlockId = (byte)BlockType.Water,
-            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid,
+            fillAllAirBelowSeaLevel = terrainDensitySettings.enabled
         };
-        waterChunkDataHandle = stagedFillWaterAboveTerrainJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+        waterChunkDataHandle = stagedFillWaterBelowSeaLevelJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
 
         treeChunkDataHandle = waterChunkDataHandle;
         if (enableTrees)
