@@ -1482,9 +1482,9 @@ public static class ChunkData
     }
 
     [BurstCompile]
-    public struct FillWaterBelowSeaLevelJob : IJobParallelFor
+    public struct FillTerrainVoidWaterBelowSeaLevelJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<int> heightCache;
+        [ReadOnly] public NativeArray<bool> baseSolids;
         [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
         [NativeDisableParallelForRestriction] public NativeArray<bool> solids;
 
@@ -1492,32 +1492,27 @@ public static class ChunkData
         public int seaLevel;
         public byte waterBlockId;
         public bool waterIsSolid;
-        public bool fillAllAirBelowSeaLevel;
 
         public void Execute(int index)
         {
             int heightStride = SizeX + 2 * border;
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
             int maxY = math.min(seaLevel, SizeY - 1);
-            if (maxY < 0)
+            if (maxY < 3 || !baseSolids.IsCreated || !blockTypes.IsCreated || !solids.IsCreated)
                 return;
 
             int cacheX = index % heightStride;
             int cacheZ = index / heightStride;
-            int voxelSizeX = heightStride;
-            int voxelPlaneSize = voxelSizeX * SizeY;
-            int startY = 3;
-            if (!fillAllAirBelowSeaLevel)
+            int voxelIndex = cacheX + 3 * voxelSizeX + cacheZ * voxelPlaneSize;
+            for (int y = 3; y <= maxY; y++, voxelIndex += voxelSizeX)
             {
-                int h = heightCache[index];
-                startY = math.max(0, h + 1);
-            }
+                if ((uint)voxelIndex >= (uint)baseSolids.Length)
+                    return;
 
-            if (startY > maxY)
-                return;
+                if (baseSolids[voxelIndex])
+                    continue;
 
-            int voxelIndex = cacheX + startY * voxelSizeX + cacheZ * voxelPlaneSize;
-            for (int y = startY; y <= maxY; y++, voxelIndex += voxelSizeX)
-            {
                 if (blockTypes[voxelIndex] != (byte)BlockType.Air)
                     continue;
 

@@ -718,6 +718,18 @@ public static class MeshGenerator
     }
 
     [BurstCompile]
+    private struct CopyBoolArrayJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<bool> source;
+        [NativeDisableParallelForRestriction] public NativeArray<bool> destination;
+
+        public void Execute(int index)
+        {
+            destination[index] = source[index];
+        }
+    }
+
+    [BurstCompile]
     private struct DisposeIntArrayJob : IJob
     {
         [DeallocateOnJobCompletion] public NativeArray<int> values;
@@ -848,6 +860,7 @@ public static class MeshGenerator
         heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.Persistent);
         blockTypes = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         solids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
+        NativeArray<bool> baseTerrainSolids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
         NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
@@ -958,6 +971,12 @@ public static class MeshGenerator
             spaghettiCarveMaskOffsetZ = 0,
             stages = ChunkData.ChunkDataStageFlags.None
         };
+        var copyBaseTerrainSolidsJob = new CopyBoolArrayJob
+        {
+            source = solids,
+            destination = baseTerrainSolids
+        };
+        JobHandle copyBaseTerrainSolidsHandle = copyBaseTerrainSolidsJob.Schedule(dataTotalVoxels, 128, populateHandle);
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃƒÂªncia no heightHandle
         // O PopulateTerrainJob ja escreveu o terreno base. A partir daqui encadeamos
         // apenas estagios mutaveis: cavernas, minerios, agua, arvores e block edits.
@@ -971,24 +990,27 @@ public static class MeshGenerator
             // Caminho mais barato: sem voxel lighting nao precisamos do segundo volume de opacidade.
             var caveChunkDataJob = baseChunkDataJob;
             caveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
-            caveChunkDataHandle = caveChunkDataJob.Schedule(surfaceMaterialHandle);
+            caveChunkDataHandle = caveChunkDataJob.Schedule(
+                JobHandle.CombineDependencies(surfaceMaterialHandle, copyBaseTerrainSolidsHandle));
 
             var oreChunkDataJob = baseChunkDataJob;
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
             oreChunkDataHandle = oreChunkDataJob.Schedule(caveChunkDataHandle);
 
-            var fillWaterBelowSeaLevelJob = new ChunkData.FillWaterBelowSeaLevelJob
+            var fillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
             {
-                heightCache = heightCache,
+                baseSolids = baseTerrainSolids,
                 blockTypes = blockTypes,
                 solids = solids,
                 border = dataBorderSize,
                 seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
                 waterBlockId = (byte)BlockType.Water,
-                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid,
-                fillAllAirBelowSeaLevel = terrainDensitySettings.enabled
+                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
             };
-            waterChunkDataHandle = fillWaterBelowSeaLevelJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+            waterChunkDataHandle = fillWaterBelowSeaLevelJob.Schedule(
+                dataTotalHeightPoints,
+                32,
+                JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
 
             treeChunkDataHandle = waterChunkDataHandle;
             if (enableTrees)
@@ -1005,6 +1027,8 @@ public static class MeshGenerator
                 blockEditChunkDataJob.stages = ChunkData.ChunkDataStageFlags.BlockEdits;
                 finalChunkDataHandle = blockEditChunkDataJob.Schedule(treeChunkDataHandle);
             }
+
+            JobHandle disposeBaseTerrainSolidsHandle = baseTerrainSolids.Dispose(finalChunkDataHandle);
 
             var snapshotJob = new BuildChunkSnapshotAndFlagsJob
             {
@@ -1031,6 +1055,7 @@ public static class MeshGenerator
 
             dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle);
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeEmptySpaghettiCarveMaskHandle);
+            dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsHandle);
             return;
         }
 
@@ -1079,8 +1104,8 @@ public static class MeshGenerator
         }
 
         JobHandle caveChunkDependency = useSharedSpaghettiCarveMask
-            ? JobHandle.CombineDependencies(surfaceMaterialHandle, spaghettiCarveMaskHandle)
-            : surfaceMaterialHandle;
+            ? JobHandle.CombineDependencies(surfaceMaterialHandle, spaghettiCarveMaskHandle, copyBaseTerrainSolidsHandle)
+            : JobHandle.CombineDependencies(surfaceMaterialHandle, copyBaseTerrainSolidsHandle);
 
         var stagedCaveChunkDataJob = baseChunkDataJob;
         stagedCaveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
@@ -1090,18 +1115,20 @@ public static class MeshGenerator
         stagedOreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
         oreChunkDataHandle = stagedOreChunkDataJob.Schedule(caveChunkDataHandle);
 
-        var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillWaterBelowSeaLevelJob
+        var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
         {
-            heightCache = heightCache,
+            baseSolids = baseTerrainSolids,
             blockTypes = blockTypes,
             solids = solids,
             border = dataBorderSize,
             seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
             waterBlockId = (byte)BlockType.Water,
-            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid,
-            fillAllAirBelowSeaLevel = terrainDensitySettings.enabled
+            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
         };
-        waterChunkDataHandle = stagedFillWaterBelowSeaLevelJob.Schedule(dataTotalHeightPoints, 32, oreChunkDataHandle);
+        waterChunkDataHandle = stagedFillWaterBelowSeaLevelJob.Schedule(
+            dataTotalHeightPoints,
+            32,
+            JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
 
         treeChunkDataHandle = waterChunkDataHandle;
         if (enableTrees)
@@ -1118,6 +1145,7 @@ public static class MeshGenerator
             stagedBlockEditChunkDataJob.stages = ChunkData.ChunkDataStageFlags.BlockEdits;
             finalChunkDataHandle = stagedBlockEditChunkDataJob.Schedule(treeChunkDataHandle);
         }
+        JobHandle disposeBaseTerrainSolidsAfterLightingHandle = baseTerrainSolids.Dispose(finalChunkDataHandle);
         var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
         {
             blockTypes = blockTypes,
@@ -1238,6 +1266,7 @@ public static class MeshGenerator
             lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle)),
             disposeDataColumnContextAfterLightingHandle,
             buildChunkSnapshotHandle);
+        dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsAfterLightingHandle);
     }
 
     public static void ScheduleMeshJob(
