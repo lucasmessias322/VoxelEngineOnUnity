@@ -786,8 +786,6 @@ public static class MeshGenerator
         bool enableTrees,
         NativeArray<OreSpawnSettings> oreSettings,
         NativeArray<TreeSpawnRuleData> treeSpawnRules,
-        CaveGenerationMode caveGenerationMode,
-        WormCaveSettings caveSettings,
         SpaghettiCaveSettings spaghettiCaveSettings,
         bool enableVoxelLighting,
         bool enableHorizontalSkylight,
@@ -935,8 +933,6 @@ public static class MeshGenerator
             treeSpawnRules = treeSpawnRules,
             oreSettings = oreSettings,
             oreSeed = oreSeed,
-            caveGenerationMode = caveGenerationMode,
-            caveSettings = caveSettings,
             spaghettiCaveSettings = spaghettiCaveSettings,
 
             enableTrees = enableTrees,
@@ -1042,7 +1038,6 @@ public static class MeshGenerator
         bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
             dataBorderSize,
             lightBorderSize,
-            caveGenerationMode,
             spaghettiCaveSettings);
         JobHandle spaghettiCarveMaskHandle = default;
         if (useSharedSpaghettiCarveMask)
@@ -3238,10 +3233,9 @@ public static class LightOpacitySpaghettiCaveUtility
     private const float DoubleNoiseWarp = 1.0181269f;
     private const float NoiseOffsetMagnitude = 2048f;
 
-    public static bool ShouldApply(int dataBorderSize, int lightBorderSize, CaveGenerationMode caveGenerationMode, in SpaghettiCaveSettings settings)
+    public static bool ShouldApply(int dataBorderSize, int lightBorderSize, in SpaghettiCaveSettings settings)
     {
         return lightBorderSize > dataBorderSize &&
-               caveGenerationMode == CaveGenerationMode.ModernSpaghetti &&
                settings.enabled;
     }
 

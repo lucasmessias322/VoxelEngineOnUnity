@@ -196,8 +196,6 @@ public partial class World
             enableTrees,
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
-            caveGenerationMode,
-            caveWormSettings,
             caveSpaghettiSettings,
             enableVoxelLighting,
             enableHorizontalSkylight,

@@ -36,81 +36,6 @@ public struct OreSpawnSettings
 }
 
 [Serializable]
-public struct WormCaveSettings
-{
-    public bool enabled;
-    [Range(0f, 1f)] public float spawnChance;
-    [Min(0)] public int minY;
-    [Min(0)] public int maxY;
-    [Min(1)] public int minWormsPerChunk;
-    [Min(1)] public int maxWormsPerChunk;
-    [Min(1)] public int minLength;
-    [Min(1)] public int maxLength;
-    [Range(0.1f, 4f)] public float stepSize;
-    [Range(0.5f, 8f)] public float minRadius;
-    [Range(0.5f, 8f)] public float maxRadius;
-    [Range(0f, 2f)] public float radiusJitter;
-    [Range(0f, 1f)] public float initialVerticalRange;
-    [Range(0f, 1f)] public float verticalClamp;
-    [Range(0f, 1f)] public float turnRate;
-    [Range(0f, 1f)] public float verticalTurnRate;
-    [Range(0f, 1f)] public float forkChance;
-    [Min(0)] public int maxForksPerWorm;
-    [Min(0)] public int minSurfaceDepth;
-    [Range(0f, 1f)] public float surfaceEntranceChance;
-    [Range(0f, 1f)] public float surfaceEntranceUpwardBias;
-    [Min(0)] public int sourceChunkRadius;
-    public int seedOffset;
-
-    public static WormCaveSettings Default => new WormCaveSettings
-    {
-        enabled = true,
-        spawnChance = 0.26f,
-        minY = 8,
-        maxY = 112,
-        minWormsPerChunk = 1,
-        maxWormsPerChunk = 2,
-        minLength = 30,
-        maxLength = 72,
-        stepSize = 1.15f,
-        minRadius = 1.3f,
-        maxRadius = 2.8f,
-        radiusJitter = 0.30f,
-        initialVerticalRange = 0.2f,
-        verticalClamp = 0.36f,
-        turnRate = 0.17f,
-        verticalTurnRate = 0.09f,
-        forkChance = 0.06f,
-        maxForksPerWorm = 1,
-        minSurfaceDepth = 4,
-        surfaceEntranceChance = 0.16f,
-        surfaceEntranceUpwardBias = 0.35f,
-        sourceChunkRadius = 1,
-        seedOffset = 13391
-    };
-
-    public bool LooksUninitialized =>
-        !enabled &&
-        spawnChance == 0f &&
-        minY == 0 &&
-        maxY == 0 &&
-        minWormsPerChunk == 0 &&
-        maxWormsPerChunk == 0 &&
-        minLength == 0 &&
-        maxLength == 0 &&
-        stepSize == 0f &&
-        minRadius == 0f &&
-        maxRadius == 0f;
-}
-
-[Serializable]
-public enum CaveGenerationMode : byte
-{
-    ModernSpaghetti = 0,
-    LegacyWorms = 1
-}
-
-[Serializable]
 public struct SpaghettiCaveSettings
 {
     public bool enabled;
@@ -196,8 +121,6 @@ public partial class World : MonoBehaviour
         }
         Instance = this;
 
-        if (caveWormSettings.LooksUninitialized)
-            caveWormSettings = WormCaveSettings.Default;
         if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
             caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
@@ -342,12 +265,8 @@ public partial class World : MonoBehaviour
         }
     };
 
-    [Header("Cave Settings")]
-    [Tooltip("Modo de geracao das cavernas. Modern Spaghetti usa density functions inspiradas no Minecraft moderno; Legacy Worms preserva o algoritmo antigo baseado em worms.")]
-    public CaveGenerationMode caveGenerationMode = CaveGenerationMode.ModernSpaghetti;
+    [Header("Spaghetti Cave Settings")]
     public SpaghettiCaveSettings caveSpaghettiSettings = SpaghettiCaveSettings.Default;
-    [Header("Legacy Worm Cave Settings")]
-    public WormCaveSettings caveWormSettings = WormCaveSettings.Default;
 
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
@@ -399,32 +318,6 @@ public partial class World : MonoBehaviour
     [Header("Debug / Physics")]
     [Tooltip("Ativa ou desativa o sistema de colliders dos blocos. Quando desligado, novos chunks nao geram collider.")]
     public bool enableBlockColliders = true;
-
-    [Header("Debug / Gizmos")]
-    [Tooltip("Ativa a renderizacao de gizmos de debug do sistema de chunks.")]
-    public bool debugDrawGizmos = false;
-    [Tooltip("Quando ativado, os gizmos so aparecem em Play Mode.")]
-    public bool debugGizmosOnlyWhenPlaying = true;
-    [Tooltip("Mostra os limites do chunk onde o player esta.")]
-    public bool debugDrawPlayerChunkBounds = true;
-    [Tooltip("Mostra a grade de chunks na area de renderDistance.")]
-    public bool debugDrawRenderDistanceGrid = true;
-    [Tooltip("Mostra os bounds dos chunks ativos.")]
-    public bool debugDrawActiveChunkBounds = true;
-    [Tooltip("Mostra chunks pendentes de geracao/mesh.")]
-    public bool debugDrawPendingChunkQueue = false;
-    [Tooltip("Mostra os bounds de cada subchunk dos chunks ativos.")]
-    public bool debugDrawSubchunkBounds = false;
-    [Tooltip("Quando ligado, desenha apenas subchunks com geometria.")]
-    public bool debugSubchunksOnlyWithGeometry = true;
-    [Range(0f, 0.25f)]
-    public float debugGizmoFillAlpha = 0.06f;
-
-    public Color debugPlayerChunkColor = new Color(1f, 0.8f, 0.15f, 1f);
-    public Color debugRenderGridColor = new Color(0.2f, 0.6f, 1f, 1f);
-    public Color debugActiveChunkColor = new Color(0.25f, 1f, 0.35f, 1f);
-    public Color debugPendingChunkColor = new Color(1f, 0.4f, 0.2f, 1f);
-    public Color debugSubchunkColor = new Color(0.85f, 0.4f, 1f, 1f);
 
     [Header("Lighting")]
     [Tooltip("Liga/desliga o calculo de iluminacao voxel/skylight para testes de performance. Quando desligado, os chunks usam brilho uniforme.")]
@@ -2418,8 +2311,6 @@ public partial class World : MonoBehaviour
             GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
-            caveGenerationMode,
-            caveWormSettings,
             caveSpaghettiSettings,
             enableVoxelLighting,
             enableHorizontalSkylight,
