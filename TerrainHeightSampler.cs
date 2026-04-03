@@ -2,6 +2,7 @@ using System;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Mathematics;
+using UnityEngine;
 
 public struct TerrainNoiseSampleState
 {
@@ -190,6 +191,9 @@ public static class TerrainHeightSampler
 public struct TerrainDensitySettings
 {
     public bool enabled;
+    [HideInInspector] public bool debugEnableDetailNoise;
+    [HideInInspector] public bool debugEnableOverhangNoise;
+    [HideInInspector] public bool debugEnableBiomeDensityMultipliers;
     public int verticalSampleStep;
     public float solidThreshold;
     public float surfaceSearchHeight;
@@ -214,6 +218,9 @@ public struct TerrainDensitySettings
     public static TerrainDensitySettings MinetestInspiredDefault => new TerrainDensitySettings
     {
         enabled = true,
+        debugEnableDetailNoise = true,
+        debugEnableOverhangNoise = true,
+        debugEnableBiomeDensityMultipliers = true,
         verticalSampleStep = 2,
         solidThreshold = 0f,
         surfaceSearchHeight = 24f,
@@ -282,6 +289,13 @@ public struct TerrainDensitySettings
         settings.overhangBandHeight = math.max(1f, settings.overhangBandHeight);
         settings.overhangBelowSurfaceAllowance = math.max(0f, settings.overhangBelowSurfaceAllowance);
         settings.overhangThreshold = math.clamp(settings.overhangThreshold, 0f, 1f);
+
+        if (!settings.debugEnableDetailNoise)
+            settings.detailAmplitude = 0f;
+
+        if (!settings.debugEnableOverhangNoise)
+            settings.overhangAmplitude = 0f;
+
         return settings;
     }
 }
@@ -301,6 +315,36 @@ public static class TerrainDensitySampler
     private const float OverhangOffsetX = -143.17f;
     private const float OverhangOffsetY = 53.21f;
     private const float OverhangOffsetZ = 87.61f;
+
+    [BurstCompile]
+    public static TerrainDensitySettings ResolveBiomeDensitySettings(
+        int worldX,
+        int worldZ,
+        in TerrainDensitySettings densitySettings,
+        in BiomeNoiseSettings biomeNoiseSettings)
+    {
+        if (!densitySettings.debugEnableBiomeDensityMultipliers)
+            return densitySettings.Sanitized();
+
+        return ApplyBiomeDensityMultipliers(
+            densitySettings,
+            BiomeUtility.BlendDensityMultipliers(worldX, worldZ, biomeNoiseSettings));
+    }
+
+    [BurstCompile]
+    public static TerrainDensitySettings ResolveBiomeDensitySettings(
+        float temperature,
+        float humidity,
+        in TerrainDensitySettings densitySettings,
+        in BiomeNoiseSettings biomeNoiseSettings)
+    {
+        if (!densitySettings.debugEnableBiomeDensityMultipliers)
+            return densitySettings.Sanitized();
+
+        return ApplyBiomeDensityMultipliers(
+            densitySettings,
+            BiomeUtility.BlendDensityMultipliers(temperature, humidity, biomeNoiseSettings));
+    }
 
     [BurstCompile]
     public static float SampleTerrainDensity(
@@ -428,6 +472,12 @@ public static class TerrainDensitySampler
             worldHeight,
             biomeNoiseSettings);
 
+        TerrainDensitySettings resolvedDensitySettings = ResolveBiomeDensitySettings(
+            worldX,
+            worldZ,
+            densitySettings,
+            biomeNoiseSettings);
+
         return SampleSurfaceHeightFromBaseSurface(
             worldX,
             worldZ,
@@ -435,7 +485,7 @@ public static class TerrainDensitySampler
             offsetX,
             offsetZ,
             worldHeight,
-            densitySettings);
+            resolvedDensitySettings);
     }
 
     public static int SampleSurfaceHeight(
@@ -459,6 +509,12 @@ public static class TerrainDensitySampler
             worldHeight,
             biomeNoiseSettings);
 
+        TerrainDensitySettings resolvedDensitySettings = ResolveBiomeDensitySettings(
+            worldX,
+            worldZ,
+            densitySettings,
+            biomeNoiseSettings);
+
         return SampleSurfaceHeightFromBaseSurface(
             worldX,
             worldZ,
@@ -466,7 +522,7 @@ public static class TerrainDensitySampler
             offsetX,
             offsetZ,
             worldHeight,
-            densitySettings);
+            resolvedDensitySettings);
     }
 
     [BurstCompile]
@@ -660,6 +716,35 @@ public static class TerrainDensitySampler
     private static float GetMinOverhangDensityContribution(float overhangMask, in TerrainDensitySettings densitySettings)
     {
         return ((0f - densitySettings.overhangThreshold) * 2f) * densitySettings.overhangAmplitude * overhangMask;
+    }
+
+    [BurstCompile]
+    private static TerrainDensitySettings ApplyBiomeDensityMultipliers(
+        in TerrainDensitySettings densitySettings,
+        in BiomeDensityMultipliers densityMultipliers)
+    {
+        TerrainDensitySettings resolvedSettings = densitySettings.Sanitized();
+        BiomeDensityMultipliers safeMultipliers = densityMultipliers.Sanitized();
+
+        resolvedSettings.solidThreshold *= safeMultipliers.solidThresholdMultiplier;
+        resolvedSettings.surfaceSearchHeight *= safeMultipliers.surfaceSearchHeightMultiplier;
+        resolvedSettings.baseSolidBias *= safeMultipliers.baseSolidBiasMultiplier;
+        resolvedSettings.detailScale *= safeMultipliers.detailScaleMultiplier;
+        resolvedSettings.detailAmplitude *= safeMultipliers.detailAmplitudeMultiplier;
+        resolvedSettings.detailPersistence *= safeMultipliers.detailPersistenceMultiplier;
+        resolvedSettings.detailLacunarity *= safeMultipliers.detailLacunarityMultiplier;
+        resolvedSettings.detailVerticalScale *= safeMultipliers.detailVerticalScaleMultiplier;
+        resolvedSettings.detailBandHeight *= safeMultipliers.detailBandHeightMultiplier;
+        resolvedSettings.overhangScale *= safeMultipliers.overhangScaleMultiplier;
+        resolvedSettings.overhangAmplitude *= safeMultipliers.overhangAmplitudeMultiplier;
+        resolvedSettings.overhangPersistence *= safeMultipliers.overhangPersistenceMultiplier;
+        resolvedSettings.overhangLacunarity *= safeMultipliers.overhangLacunarityMultiplier;
+        resolvedSettings.overhangVerticalScale *= safeMultipliers.overhangVerticalScaleMultiplier;
+        resolvedSettings.overhangBandHeight *= safeMultipliers.overhangBandHeightMultiplier;
+        resolvedSettings.overhangBelowSurfaceAllowance *= safeMultipliers.overhangBelowSurfaceAllowanceMultiplier;
+        resolvedSettings.overhangThreshold *= safeMultipliers.overhangThresholdMultiplier;
+
+        return resolvedSettings.Sanitized();
     }
 
     [BurstCompile]

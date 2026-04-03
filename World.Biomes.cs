@@ -168,6 +168,10 @@ public partial class World : MonoBehaviour
         BiomeTerrainSettings savannaTerrainSettings = SanitizeBiomeTerrainSettings(savannaTerrain, BiomeTerrainSettings.SavannaDefault);
         BiomeTerrainSettings meadowTerrainSettings = SanitizeBiomeTerrainSettings(meadowTerrain, BiomeTerrainSettings.MeadowDefault);
         BiomeTerrainSettings taigaTerrainSettings = SanitizeBiomeTerrainSettings(taigaTerrain, BiomeTerrainSettings.TaigaDefault);
+        BiomeDensityMultipliers desertDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Desert);
+        BiomeDensityMultipliers savannaDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Savanna);
+        BiomeDensityMultipliers meadowDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Meadow);
+        BiomeDensityMultipliers taigaDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Taiga);
 
         bool coldSettingsUninitialized = AreColdMountainSettingsUninitialized();
         cachedBiomeNoiseSettings = new BiomeNoiseSettings
@@ -186,6 +190,10 @@ public partial class World : MonoBehaviour
             savannaTerrain = savannaTerrainSettings,
             meadowTerrain = meadowTerrainSettings,
             taigaTerrain = taigaTerrainSettings,
+            desertDensity = desertDensitySettings,
+            savannaDensity = savannaDensitySettings,
+            meadowDensity = meadowDensitySettings,
+            taigaDensity = taigaDensitySettings,
             altitudeTemperatureFalloff = coldSettingsUninitialized ? DefaultAltitudeTemperatureFalloff : math.max(0.0001f, altitudeTemperatureFalloff),
             coldStoneStartHeightOffset = coldSettingsUninitialized ? DefaultColdStoneStartHeightOffset : coldStoneStartHeightOffset,
             coldStoneBlendRange = coldSettingsUninitialized ? DefaultColdStoneBlendRange : math.max(1f, coldStoneBlendRange),
@@ -225,6 +233,20 @@ public partial class World : MonoBehaviour
         raw.surfaceDepth = Mathf.Clamp(raw.surfaceDepth, 1f, 12f);
         raw.steepSurfaceDepth = Mathf.Clamp(raw.steepSurfaceDepth, 1f, raw.surfaceDepth);
         return raw;
+    }
+
+    private static BiomeDensityMultipliers SanitizeBiomeDensityMultipliers(BiomeDensityMultipliers raw)
+    {
+        return raw.Sanitized();
+    }
+
+    private BiomeDensityMultipliers ResolveBiomeDensityMultipliers(BiomeType biome)
+    {
+        BiomeDensityMultipliers resolved = BiomeDensityMultipliers.Identity;
+        if (TryGetBiomeDefinition(biome, out BiomeDefinitionSO definition) && definition.overrideDensityMultipliers)
+            resolved = definition.densityMultipliers;
+
+        return SanitizeBiomeDensityMultipliers(resolved);
     }
 
     private static bool IsBiomeTerrainSettingsUninitialized(BiomeTerrainSettings settings)

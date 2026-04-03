@@ -136,6 +136,7 @@ public partial class World : MonoBehaviour
     {
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
+        BiomeNoiseSettings biomeSettings = GetBiomeNoiseSettings();
         TerrainDensitySettings densitySettings = GetTerrainDensitySettings();
 
         if (densitySettings.enabled)
@@ -148,10 +149,16 @@ public partial class World : MonoBehaviour
                 offsetX,
                 offsetZ,
                 Chunk.SizeY,
-                GetBiomeNoiseSettings());
+                biomeSettings);
 
-            int guaranteedSolidY = TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, densitySettings);
-            int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, Chunk.SizeY, densitySettings);
+            TerrainDensitySettings resolvedDensitySettings = TerrainDensitySampler.ResolveBiomeDensitySettings(
+                worldX,
+                worldZ,
+                densitySettings,
+                biomeSettings);
+
+            int guaranteedSolidY = TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, resolvedDensitySettings);
+            int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, Chunk.SizeY, resolvedDensitySettings);
 
             if (worldPos.y > densityTopY)
                 return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
@@ -168,7 +175,7 @@ public partial class World : MonoBehaviour
                     Chunk.SizeY,
                     CliffTreshold,
                     seaLevel,
-                    GetBiomeNoiseSettings(),
+                    biomeSettings,
                     densitySettings);
 
                 return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, solidColumnContext.surface);
@@ -181,7 +188,7 @@ public partial class World : MonoBehaviour
                 baseSurfaceHeight,
                 offsetX,
                 offsetZ,
-                densitySettings))
+                resolvedDensitySettings))
             {
                 return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;
             }
@@ -196,7 +203,7 @@ public partial class World : MonoBehaviour
                 Chunk.SizeY,
                 CliffTreshold,
                 seaLevel,
-                GetBiomeNoiseSettings(),
+                biomeSettings,
                 densitySettings);
 
             return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, densityColumnContext.surface);
@@ -212,7 +219,7 @@ public partial class World : MonoBehaviour
             Chunk.SizeY,
             CliffTreshold,
             seaLevel,
-            GetBiomeNoiseSettings());
+            biomeSettings);
 
         if (worldPos.y > columnContext.surfaceHeight)
             return (worldPos.y <= seaLevel) ? BlockType.Water : BlockType.Air;

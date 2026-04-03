@@ -77,6 +77,92 @@ public struct BiomeTerrainSettings
     };
 }
 
+[Serializable]
+public struct BiomeDensityMultipliers
+{
+    // Multiplicadores aplicados por bioma sobre a configuracao base de densidade 3D.
+    public float solidThresholdMultiplier;
+    public float surfaceSearchHeightMultiplier;
+    public float baseSolidBiasMultiplier;
+    public float detailScaleMultiplier;
+    public float detailAmplitudeMultiplier;
+    public float detailPersistenceMultiplier;
+    public float detailLacunarityMultiplier;
+    public float detailVerticalScaleMultiplier;
+    public float detailBandHeightMultiplier;
+    public float overhangScaleMultiplier;
+    public float overhangAmplitudeMultiplier;
+    public float overhangPersistenceMultiplier;
+    public float overhangLacunarityMultiplier;
+    public float overhangVerticalScaleMultiplier;
+    public float overhangBandHeightMultiplier;
+    public float overhangBelowSurfaceAllowanceMultiplier;
+    public float overhangThresholdMultiplier;
+
+    public static BiomeDensityMultipliers Identity => new BiomeDensityMultipliers
+    {
+        solidThresholdMultiplier = 1f,
+        surfaceSearchHeightMultiplier = 1f,
+        baseSolidBiasMultiplier = 1f,
+        detailScaleMultiplier = 1f,
+        detailAmplitudeMultiplier = 1f,
+        detailPersistenceMultiplier = 1f,
+        detailLacunarityMultiplier = 1f,
+        detailVerticalScaleMultiplier = 1f,
+        detailBandHeightMultiplier = 1f,
+        overhangScaleMultiplier = 1f,
+        overhangAmplitudeMultiplier = 1f,
+        overhangPersistenceMultiplier = 1f,
+        overhangLacunarityMultiplier = 1f,
+        overhangVerticalScaleMultiplier = 1f,
+        overhangBandHeightMultiplier = 1f,
+        overhangBelowSurfaceAllowanceMultiplier = 1f,
+        overhangThresholdMultiplier = 1f
+    };
+
+    public bool LooksUninitialized =>
+        solidThresholdMultiplier == 0f &&
+        surfaceSearchHeightMultiplier == 0f &&
+        baseSolidBiasMultiplier == 0f &&
+        detailScaleMultiplier == 0f &&
+        detailAmplitudeMultiplier == 0f &&
+        detailPersistenceMultiplier == 0f &&
+        detailLacunarityMultiplier == 0f &&
+        detailVerticalScaleMultiplier == 0f &&
+        detailBandHeightMultiplier == 0f &&
+        overhangScaleMultiplier == 0f &&
+        overhangAmplitudeMultiplier == 0f &&
+        overhangPersistenceMultiplier == 0f &&
+        overhangLacunarityMultiplier == 0f &&
+        overhangVerticalScaleMultiplier == 0f &&
+        overhangBandHeightMultiplier == 0f &&
+        overhangBelowSurfaceAllowanceMultiplier == 0f &&
+        overhangThresholdMultiplier == 0f;
+
+    public BiomeDensityMultipliers Sanitized()
+    {
+        BiomeDensityMultipliers settings = LooksUninitialized ? Identity : this;
+        settings.solidThresholdMultiplier = math.max(0f, settings.solidThresholdMultiplier);
+        settings.surfaceSearchHeightMultiplier = math.max(0f, settings.surfaceSearchHeightMultiplier);
+        settings.baseSolidBiasMultiplier = math.max(0f, settings.baseSolidBiasMultiplier);
+        settings.detailScaleMultiplier = math.max(0f, settings.detailScaleMultiplier);
+        settings.detailAmplitudeMultiplier = math.max(0f, settings.detailAmplitudeMultiplier);
+        settings.detailPersistenceMultiplier = math.max(0f, settings.detailPersistenceMultiplier);
+        settings.detailLacunarityMultiplier = math.max(0f, settings.detailLacunarityMultiplier);
+        settings.detailVerticalScaleMultiplier = math.max(0f, settings.detailVerticalScaleMultiplier);
+        settings.detailBandHeightMultiplier = math.max(0f, settings.detailBandHeightMultiplier);
+        settings.overhangScaleMultiplier = math.max(0f, settings.overhangScaleMultiplier);
+        settings.overhangAmplitudeMultiplier = math.max(0f, settings.overhangAmplitudeMultiplier);
+        settings.overhangPersistenceMultiplier = math.max(0f, settings.overhangPersistenceMultiplier);
+        settings.overhangLacunarityMultiplier = math.max(0f, settings.overhangLacunarityMultiplier);
+        settings.overhangVerticalScaleMultiplier = math.max(0f, settings.overhangVerticalScaleMultiplier);
+        settings.overhangBandHeightMultiplier = math.max(0f, settings.overhangBandHeightMultiplier);
+        settings.overhangBelowSurfaceAllowanceMultiplier = math.max(0f, settings.overhangBelowSurfaceAllowanceMultiplier);
+        settings.overhangThresholdMultiplier = math.max(0f, settings.overhangThresholdMultiplier);
+        return settings;
+    }
+}
+
 public struct BiomeClimateSample
 {
     public float temperature;
@@ -110,6 +196,10 @@ public struct BiomeNoiseSettings
     public BiomeTerrainSettings savannaTerrain;
     public BiomeTerrainSettings meadowTerrain;
     public BiomeTerrainSettings taigaTerrain;
+    public BiomeDensityMultipliers desertDensity;
+    public BiomeDensityMultipliers savannaDensity;
+    public BiomeDensityMultipliers meadowDensity;
+    public BiomeDensityMultipliers taigaDensity;
 
     public float altitudeTemperatureFalloff;
     public float coldStoneStartHeightOffset;
@@ -334,6 +424,108 @@ public static class BiomeUtility
                 settings.savannaTerrain.steepSurfaceDepth * weights.savanna +
                 settings.meadowTerrain.steepSurfaceDepth * weights.meadow +
                 settings.taigaTerrain.steepSurfaceDepth * weights.taiga
+        };
+    }
+
+    [BurstCompile]
+    public static BiomeDensityMultipliers BlendDensityMultipliers(int worldX, int worldZ, in BiomeNoiseSettings settings)
+    {
+        BiomeClimateSample climate = SampleClimate(worldX, worldZ, settings);
+        return BlendDensityMultipliers(climate.temperature, climate.humidity, settings);
+    }
+
+    [BurstCompile]
+    public static BiomeDensityMultipliers BlendDensityMultipliers(float temperature, float humidity, in BiomeNoiseSettings settings)
+    {
+        BiomeTerrainBlendWeights weights = GetTerrainBlendWeights(temperature, humidity, settings);
+
+        return new BiomeDensityMultipliers
+        {
+            solidThresholdMultiplier =
+                settings.desertDensity.solidThresholdMultiplier * weights.desert +
+                settings.savannaDensity.solidThresholdMultiplier * weights.savanna +
+                settings.meadowDensity.solidThresholdMultiplier * weights.meadow +
+                settings.taigaDensity.solidThresholdMultiplier * weights.taiga,
+            surfaceSearchHeightMultiplier =
+                settings.desertDensity.surfaceSearchHeightMultiplier * weights.desert +
+                settings.savannaDensity.surfaceSearchHeightMultiplier * weights.savanna +
+                settings.meadowDensity.surfaceSearchHeightMultiplier * weights.meadow +
+                settings.taigaDensity.surfaceSearchHeightMultiplier * weights.taiga,
+            baseSolidBiasMultiplier =
+                settings.desertDensity.baseSolidBiasMultiplier * weights.desert +
+                settings.savannaDensity.baseSolidBiasMultiplier * weights.savanna +
+                settings.meadowDensity.baseSolidBiasMultiplier * weights.meadow +
+                settings.taigaDensity.baseSolidBiasMultiplier * weights.taiga,
+            detailScaleMultiplier =
+                settings.desertDensity.detailScaleMultiplier * weights.desert +
+                settings.savannaDensity.detailScaleMultiplier * weights.savanna +
+                settings.meadowDensity.detailScaleMultiplier * weights.meadow +
+                settings.taigaDensity.detailScaleMultiplier * weights.taiga,
+            detailAmplitudeMultiplier =
+                settings.desertDensity.detailAmplitudeMultiplier * weights.desert +
+                settings.savannaDensity.detailAmplitudeMultiplier * weights.savanna +
+                settings.meadowDensity.detailAmplitudeMultiplier * weights.meadow +
+                settings.taigaDensity.detailAmplitudeMultiplier * weights.taiga,
+            detailPersistenceMultiplier =
+                settings.desertDensity.detailPersistenceMultiplier * weights.desert +
+                settings.savannaDensity.detailPersistenceMultiplier * weights.savanna +
+                settings.meadowDensity.detailPersistenceMultiplier * weights.meadow +
+                settings.taigaDensity.detailPersistenceMultiplier * weights.taiga,
+            detailLacunarityMultiplier =
+                settings.desertDensity.detailLacunarityMultiplier * weights.desert +
+                settings.savannaDensity.detailLacunarityMultiplier * weights.savanna +
+                settings.meadowDensity.detailLacunarityMultiplier * weights.meadow +
+                settings.taigaDensity.detailLacunarityMultiplier * weights.taiga,
+            detailVerticalScaleMultiplier =
+                settings.desertDensity.detailVerticalScaleMultiplier * weights.desert +
+                settings.savannaDensity.detailVerticalScaleMultiplier * weights.savanna +
+                settings.meadowDensity.detailVerticalScaleMultiplier * weights.meadow +
+                settings.taigaDensity.detailVerticalScaleMultiplier * weights.taiga,
+            detailBandHeightMultiplier =
+                settings.desertDensity.detailBandHeightMultiplier * weights.desert +
+                settings.savannaDensity.detailBandHeightMultiplier * weights.savanna +
+                settings.meadowDensity.detailBandHeightMultiplier * weights.meadow +
+                settings.taigaDensity.detailBandHeightMultiplier * weights.taiga,
+            overhangScaleMultiplier =
+                settings.desertDensity.overhangScaleMultiplier * weights.desert +
+                settings.savannaDensity.overhangScaleMultiplier * weights.savanna +
+                settings.meadowDensity.overhangScaleMultiplier * weights.meadow +
+                settings.taigaDensity.overhangScaleMultiplier * weights.taiga,
+            overhangAmplitudeMultiplier =
+                settings.desertDensity.overhangAmplitudeMultiplier * weights.desert +
+                settings.savannaDensity.overhangAmplitudeMultiplier * weights.savanna +
+                settings.meadowDensity.overhangAmplitudeMultiplier * weights.meadow +
+                settings.taigaDensity.overhangAmplitudeMultiplier * weights.taiga,
+            overhangPersistenceMultiplier =
+                settings.desertDensity.overhangPersistenceMultiplier * weights.desert +
+                settings.savannaDensity.overhangPersistenceMultiplier * weights.savanna +
+                settings.meadowDensity.overhangPersistenceMultiplier * weights.meadow +
+                settings.taigaDensity.overhangPersistenceMultiplier * weights.taiga,
+            overhangLacunarityMultiplier =
+                settings.desertDensity.overhangLacunarityMultiplier * weights.desert +
+                settings.savannaDensity.overhangLacunarityMultiplier * weights.savanna +
+                settings.meadowDensity.overhangLacunarityMultiplier * weights.meadow +
+                settings.taigaDensity.overhangLacunarityMultiplier * weights.taiga,
+            overhangVerticalScaleMultiplier =
+                settings.desertDensity.overhangVerticalScaleMultiplier * weights.desert +
+                settings.savannaDensity.overhangVerticalScaleMultiplier * weights.savanna +
+                settings.meadowDensity.overhangVerticalScaleMultiplier * weights.meadow +
+                settings.taigaDensity.overhangVerticalScaleMultiplier * weights.taiga,
+            overhangBandHeightMultiplier =
+                settings.desertDensity.overhangBandHeightMultiplier * weights.desert +
+                settings.savannaDensity.overhangBandHeightMultiplier * weights.savanna +
+                settings.meadowDensity.overhangBandHeightMultiplier * weights.meadow +
+                settings.taigaDensity.overhangBandHeightMultiplier * weights.taiga,
+            overhangBelowSurfaceAllowanceMultiplier =
+                settings.desertDensity.overhangBelowSurfaceAllowanceMultiplier * weights.desert +
+                settings.savannaDensity.overhangBelowSurfaceAllowanceMultiplier * weights.savanna +
+                settings.meadowDensity.overhangBelowSurfaceAllowanceMultiplier * weights.meadow +
+                settings.taigaDensity.overhangBelowSurfaceAllowanceMultiplier * weights.taiga,
+            overhangThresholdMultiplier =
+                settings.desertDensity.overhangThresholdMultiplier * weights.desert +
+                settings.savannaDensity.overhangThresholdMultiplier * weights.savanna +
+                settings.meadowDensity.overhangThresholdMultiplier * weights.meadow +
+                settings.taigaDensity.overhangThresholdMultiplier * weights.taiga
         };
     }
 
