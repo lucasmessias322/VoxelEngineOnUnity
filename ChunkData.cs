@@ -1212,6 +1212,16 @@ public static class ChunkData
             int voxelPlaneSize,
             int heightStride)
         {
+            // O estágio de minério depende do height cache e do volume de voxels já estarem válidos.
+            // Em Burst, acessar um NativeArray vazio aborta o job inteiro, então falhamos de forma segura.
+            if (!heightCache.IsCreated || heightCache.Length == 0 ||
+                !blockTypes.IsCreated || blockTypes.Length == 0 ||
+                !solids.IsCreated || solids.Length == 0 ||
+                voxelSizeX <= 0 || voxelSizeZ <= 0 || voxelPlaneSize <= 0 || heightStride <= 0)
+            {
+                return;
+            }
+
             if (oreSettings.Length == 0)
                 return;
 
@@ -1346,7 +1356,11 @@ public static class ChunkData
                     if (localX < activeMinLocalX || localX > activeMaxLocalX)
                         continue;
 
-                    int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                    int columnIndex = localX + localZ * heightStride;
+                    if ((uint)columnIndex >= (uint)heightCache.Length)
+                        continue;
+
+                    int columnSurfaceY = heightCache[columnIndex];
                     int maxAllowedY = columnSurfaceY - minSurfaceDepth;
 
                     for (int oy = -radius; oy <= radius; oy++)
@@ -1366,6 +1380,9 @@ public static class ChunkData
                             continue;
 
                         int idx = localX + worldY * voxelSizeX + localZ * voxelPlaneSize;
+                        if ((uint)idx >= (uint)blockTypes.Length || (uint)idx >= (uint)solids.Length)
+                            continue;
+
                         BlockType existing = (BlockType)blockTypes[idx];
                         if (!CanReplaceForRule(existing, rule))
                             continue;
