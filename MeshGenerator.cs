@@ -289,41 +289,184 @@ public static class MeshGenerator
         }
     }
 
-    // Preenche o casco base do terreno; etapas como cavernas, agua, arvores e edits
-    // entram depois para manter a pipeline previsivel.
+    // Preenche primeiro apenas a "massa" do terreno. A camada superficial
+    // (grama, terra, areia, neve) entra depois, quando ja sabemos a altura
+    // real da superficie apos aplicar densidade 3D.
     [BurstCompile]
     struct PopulateTerrainJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
-        [NativeDisableParallelForRestriction]
-        [WriteOnly] public NativeArray<byte> blockTypes;
+        public Vector2Int coord;
+        public NativeArray<int> heightCache;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
+        [NativeDisableParallelForRestriction] public NativeArray<bool> solids;
 
-        [NativeDisableParallelForRestriction]
-        [WriteOnly] public NativeArray<bool> solids;
-        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+        public int border;
+        public float offsetX;
+        public float offsetZ;
+        public TerrainDensitySettings terrainDensitySettings;
+
+        public void Execute(int index)
+        {
+            int paddedSize = SizeX + 2 * border;
+            int lx = index % paddedSize;
+            int lz = index / paddedSize;
+            int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
+
+            int worldX = coord.x * SizeX + (lx - border);
+            int worldZ = coord.y * SizeZ + (lz - border);
+            int voxelSizeX = SizeX + 2 * border;
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int highestSolidY = 2;
+
+            int bedrockIndex = lx + lz * voxelPlaneSize;
+            for (int y = 0; y <= 2; y++, bedrockIndex += voxelSizeX)
+            {
+                blockTypes[bedrockIndex] = (byte)BlockType.Bedrock;
+                solids[bedrockIndex] = true;
+            }
+
+            if (!terrainDensitySettings.enabled)
+            {
+                int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
+                for (int y = 3; y <= baseSurfaceHeight; y++, fillIndex += voxelSizeX)
+                {
+                    solids[fillIndex] = true;
+                    highestSolidY = y;
+                }
+            }
+            else
+            {
+                int guaranteedSolidY = math.min(SizeY - 1, TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, terrainDensitySettings));
+                int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, SizeY, terrainDensitySettings);
+                int sampleStep = math.max(1, terrainDensitySettings.verticalSampleStep);
+
+                int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
+                for (int y = 3; y <= guaranteedSolidY; y++, fillIndex += voxelSizeX)
+                {
+                    solids[fillIndex] = true;
+                    highestSolidY = y;
+                }
+
+                int sampleStartY = math.max(guaranteedSolidY + 1, 3);
+                if (sampleStartY <= densityTopY)
+                {
+                    int previousY = sampleStartY;
+
+                    while (previousY <= densityTopY)
+                    {
+                        int nextY = math.min(densityTopY, previousY + sampleStep);
+                        int sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
+                        bool needsExactSampling = false;
+                        for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
+                        {
+                            TerrainDensityClassification classification = TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, terrainDensitySettings);
+                            if (classification == TerrainDensityClassification.Air)
+                                continue;
+
+                            if (classification == TerrainDensityClassification.Solid)
+                            {
+                                solids[sampleIndex] = true;
+                                highestSolidY = y;
+                                continue;
+                            }
+
+                            needsExactSampling = true;
+                        }
+
+                        if (needsExactSampling)
+                        {
+                            float previousDensity = TerrainDensitySampler.SampleTerrainDensity(
+                                worldX,
+                                previousY,
+                                worldZ,
+                                baseSurfaceHeight,
+                                offsetX,
+                                offsetZ,
+                                terrainDensitySettings);
+                            float nextDensity = nextY == previousY
+                                ? previousDensity
+                                : TerrainDensitySampler.SampleTerrainDensity(
+                                    worldX,
+                                    nextY,
+                                    worldZ,
+                                    baseSurfaceHeight,
+                                    offsetX,
+                                    offsetZ,
+                                    terrainDensitySettings);
+
+                            sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
+                            int ySpan = math.max(1, nextY - previousY);
+                            for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
+                            {
+                                if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, terrainDensitySettings) != TerrainDensityClassification.RequiresExactSample)
+                                    continue;
+
+                                float t = nextY == previousY ? 0f : (y - previousY) / (float)ySpan;
+                                float density = math.lerp(previousDensity, nextDensity, t);
+                                if (density <= terrainDensitySettings.solidThreshold)
+                                    continue;
+
+                                solids[sampleIndex] = true;
+                                highestSolidY = y;
+                            }
+                        }
+
+                        if (nextY == densityTopY)
+                            break;
+
+                        previousY = nextY;
+                    }
+                }
+            }
+
+            highestSolidY = math.max(2, highestSolidY);
+            heightCache[index] = highestSolidY;
+
+            int voxelIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
+            for (int y = 3; y <= highestSolidY; y++, voxelIndex += voxelSizeX)
+            {
+                if (!solids[voxelIndex])
+                    continue;
+
+                blockTypes[voxelIndex] = (byte)(y > highestSolidY - TerrainSurfaceRules.StoneTransitionDepth
+                    ? BlockType.Stone
+                    : BlockType.Deepslate);
+            }
+        }
+    }
+
+    [BurstCompile]
+    private struct ApplySurfaceMaterialsJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
+        [ReadOnly] public NativeArray<bool> solids;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
 
         public int border;
 
         public void Execute(int index)
         {
             int paddedSize = SizeX + 2 * border;
-
-            int lx = index % paddedSize;   // cacheX
-            int lz = index / paddedSize;   // cacheZ
-            TerrainColumnContext columnContext = columnContexts[index];
-            TerrainSurfaceData surfaceData = columnContext.surface;
+            int lx = index % paddedSize;
+            int lz = index / paddedSize;
+            TerrainSurfaceData surface = columnContexts[index].surface;
+            int surfaceY = math.min(surface.surfaceHeight, SizeY - 1);
+            if (surfaceY <= 2)
+                return;
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
+            int maxSurfaceDepth = math.max(1, surface.surfaceLayerDepth);
+            int solidLayersPainted = 0;
 
-            int maxSolidY = math.min(columnContext.surfaceHeight, SizeY - 1);
-            int idx = lx + lz * voxelPlaneSize;
-
-            for (int y = 0; y <= maxSolidY; y++, idx += voxelSizeX)
+            for (int y = surfaceY; y >= 3 && solidLayersPainted < maxSurfaceDepth; y--)
             {
-                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
-                blockTypes[idx] = (byte)bt;
-                solids[idx] = blockMappings[(int)bt].isSolid;
+                int voxelIndex = lx + y * voxelSizeX + lz * voxelPlaneSize;
+                if (!solids[voxelIndex])
+                    continue;
+
+                blockTypes[voxelIndex] = (byte)(solidLayersPainted == 0 ? surface.surfaceBlock : surface.subsurfaceBlock);
+                solidLayersPainted++;
             }
         }
     }
@@ -331,31 +474,135 @@ public static class MeshGenerator
     [BurstCompile]
     private struct PopulateLightOpacityJob : IJobParallelFor
     {
-        [ReadOnly] public NativeArray<TerrainColumnContext> columnContexts;
+        [ReadOnly] public NativeArray<int> heightCache;
         [WriteOnly, NativeDisableParallelForRestriction] public NativeArray<byte> opacity;
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
 
+        public Vector2Int coord;
         public int border;
+        public float offsetX;
+        public float offsetZ;
+        public TerrainDensitySettings terrainDensitySettings;
+        public int skipInnerMin;
+        public int skipInnerMaxExclusive;
 
         public void Execute(int index)
         {
             int paddedSize = SizeX + 2 * border;
-
             int lx = index % paddedSize;
             int lz = index / paddedSize;
-            TerrainColumnContext columnContext = columnContexts[index];
-            TerrainSurfaceData surfaceData = columnContext.surface;
+
+            if (skipInnerMaxExclusive > skipInnerMin
+                && lx >= skipInnerMin && lx < skipInnerMaxExclusive
+                && lz >= skipInnerMin && lz < skipInnerMaxExclusive)
+            {
+                return;
+            }
+
+            int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
+            int worldX = coord.x * SizeX + (lx - border);
+            int worldZ = coord.y * SizeZ + (lz - border);
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int maxSolidY = math.min(columnContext.surfaceHeight, SizeY - 1);
-            int voxelIndex = lx + lz * voxelPlaneSize;
+            byte solidOpacity = effectiveOpacityByBlock[(int)BlockType.Stone];
+            byte airOpacity = effectiveOpacityByBlock[(int)BlockType.Air];
 
-            for (int y = 0; y <= maxSolidY; y++, voxelIndex += voxelSizeX)
+            int voxelIndex = lx + lz * voxelPlaneSize;
+            for (int y = 0; y <= 2; y++, voxelIndex += voxelSizeX)
+                opacity[voxelIndex] = solidOpacity;
+
+            if (!terrainDensitySettings.enabled)
             {
-                BlockType bt = TerrainSurfaceRules.GetBlockTypeAtHeight(y, surfaceData);
-                opacity[voxelIndex] = effectiveOpacityByBlock[(int)bt];
+                for (int y = 3; y < SizeY; y++, voxelIndex += voxelSizeX)
+                    opacity[voxelIndex] = y <= baseSurfaceHeight ? solidOpacity : airOpacity;
+
+                return;
             }
+
+            int guaranteedSolidY = math.min(SizeY - 1, TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, terrainDensitySettings));
+            int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, SizeY, terrainDensitySettings);
+            int sampleStep = math.max(1, terrainDensitySettings.verticalSampleStep);
+
+            int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
+            for (int y = 3; y <= guaranteedSolidY; y++, fillIndex += voxelSizeX)
+                opacity[fillIndex] = solidOpacity;
+
+            int sampleStartY = math.max(guaranteedSolidY + 1, 3);
+            if (sampleStartY <= densityTopY)
+            {
+                int previousY = sampleStartY;
+
+                while (previousY <= densityTopY)
+                {
+                    int nextY = math.min(densityTopY, previousY + sampleStep);
+                    int sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
+                    bool needsExactSampling = false;
+                    for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
+                    {
+                        TerrainDensityClassification classification = TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, terrainDensitySettings);
+                        if (classification == TerrainDensityClassification.Solid)
+                        {
+                            opacity[sampleIndex] = solidOpacity;
+                            continue;
+                        }
+
+                        if (classification == TerrainDensityClassification.Air)
+                        {
+                            opacity[sampleIndex] = airOpacity;
+                            continue;
+                        }
+
+                        needsExactSampling = true;
+                    }
+
+                    if (needsExactSampling)
+                    {
+                        float previousDensity = TerrainDensitySampler.SampleTerrainDensity(
+                            worldX,
+                            previousY,
+                            worldZ,
+                            baseSurfaceHeight,
+                            offsetX,
+                            offsetZ,
+                            terrainDensitySettings);
+                        float nextDensity = nextY == previousY
+                            ? previousDensity
+                            : TerrainDensitySampler.SampleTerrainDensity(
+                                worldX,
+                                nextY,
+                                worldZ,
+                                baseSurfaceHeight,
+                                offsetX,
+                                offsetZ,
+                                terrainDensitySettings);
+
+                        sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
+                        int ySpan = math.max(1, nextY - previousY);
+                        for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
+                        {
+                            if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, terrainDensitySettings) != TerrainDensityClassification.RequiresExactSample)
+                                continue;
+
+                            float t = nextY == previousY ? 0f : (y - previousY) / (float)ySpan;
+                            float density = math.lerp(previousDensity, nextDensity, t);
+                            opacity[sampleIndex] = density > terrainDensitySettings.solidThreshold ? solidOpacity : airOpacity;
+                        }
+                    }
+
+                    if (nextY == densityTopY)
+                        break;
+
+                    previousY = nextY;
+                }
+            }
+            int airStartY = math.max(densityTopY + 1, 3);
+            if (airStartY >= SizeY)
+                return;
+
+            voxelIndex = lx + airStartY * voxelSizeX + lz * voxelPlaneSize;
+            for (int y = airStartY; y < SizeY; y++, voxelIndex += voxelSizeX)
+                opacity[voxelIndex] = airOpacity;
         }
     }
 
@@ -524,6 +771,7 @@ public static class MeshGenerator
         float globalOffsetZ,
         float seaLevel,
         BiomeNoiseSettings biomeNoiseSettings,
+        TerrainDensitySettings terrainDensitySettings,
         int oreSeed,
 
 
@@ -610,31 +858,19 @@ public static class MeshGenerator
             heightStride = dataHeightSize
         };
         JobHandle heightHandle = heightJob.Schedule(totalHeightPoints, 32); // Batch size 64 para paralelismo (ajuste se necessÃƒÂ¡rio)
-        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
-        var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
-        {
-            coord = coord,
-            heightCache = heightCache,
-            columnContexts = dataColumnContexts,
-            border = dataBorderSize,
-            seaLevel = seaLevel,
-            baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            biomeNoiseSettings = biomeNoiseSettings
-        };
-        JobHandle dataColumnContextHandle = buildDataColumnContextCacheJob.Schedule(dataTotalHeightPoints, 32, heightHandle);
-        heightHandle = dataColumnContextHandle;
-
         // ==========================================
         // JOB 1a: Populate Terrain Columns (PARALELO!)
         // ==========================================
         var populateJob = new PopulateTerrainJob
         {
-            columnContexts = dataColumnContexts,
+            coord = coord,
+            heightCache = heightCache,
             blockTypes = blockTypes,
             solids = solids,
-            blockMappings = blockMappings,
-            border = borderSize
+            border = borderSize,
+            offsetX = globalOffsetX,
+            offsetZ = globalOffsetZ,
+            terrainDensitySettings = terrainDensitySettings
         };
 
         int paddedSize = SizeX + 2 * borderSize;
@@ -648,6 +884,29 @@ public static class MeshGenerator
         // ==========================================
         // JOB 1: GeraÃƒÂ§ÃƒÂ£o de Dados (Terreno)
         // ==========================================
+        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
+        var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
+        {
+            coord = coord,
+            heightCache = heightCache,
+            columnContexts = dataColumnContexts,
+            border = dataBorderSize,
+            seaLevel = seaLevel,
+            baseHeight = baseHeight,
+            CliffTreshold = CliffTreshold,
+            biomeNoiseSettings = biomeNoiseSettings
+        };
+        JobHandle dataColumnContextHandle = buildDataColumnContextCacheJob.Schedule(dataTotalHeightPoints, 32, populateHandle);
+
+        var applySurfaceMaterialsJob = new ApplySurfaceMaterialsJob
+        {
+            columnContexts = dataColumnContexts,
+            solids = solids,
+            blockTypes = blockTypes,
+            border = borderSize
+        };
+        JobHandle surfaceMaterialHandle = applySurfaceMaterialsJob.Schedule(totalColumns, 32, dataColumnContextHandle);
+
         var baseChunkDataJob = new ChunkData.ChunkDataJob
         {
             coord = coord,
@@ -661,6 +920,7 @@ public static class MeshGenerator
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,
             biomeNoiseSettings = biomeNoiseSettings,
+            terrainDensitySettings = terrainDensitySettings,
 
 
             treeMargin = treeMargin,
@@ -702,7 +962,7 @@ public static class MeshGenerator
             // Caminho mais barato: sem voxel lighting nao precisamos do segundo volume de opacidade.
             var caveChunkDataJob = baseChunkDataJob;
             caveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
-            caveChunkDataHandle = caveChunkDataJob.Schedule(populateHandle);
+            caveChunkDataHandle = caveChunkDataJob.Schedule(surfaceMaterialHandle);
 
             var oreChunkDataJob = baseChunkDataJob;
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
@@ -779,19 +1039,6 @@ public static class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
-        NativeArray<TerrainColumnContext> lightColumnContexts = new NativeArray<TerrainColumnContext>(lightTotalHeightPoints, Allocator.Persistent);
-        var buildLightColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
-        {
-            coord = coord,
-            heightCache = lightHeightCache,
-            columnContexts = lightColumnContexts,
-            border = lightBorderSize,
-            seaLevel = seaLevel,
-            baseHeight = baseHeight,
-            CliffTreshold = CliffTreshold,
-            biomeNoiseSettings = biomeNoiseSettings
-        };
-        JobHandle lightColumnContextHandle = buildLightColumnContextCacheJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
         bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
             dataBorderSize,
             lightBorderSize,
@@ -823,8 +1070,8 @@ public static class MeshGenerator
         }
 
         JobHandle caveChunkDependency = useSharedSpaghettiCarveMask
-            ? JobHandle.CombineDependencies(populateHandle, spaghettiCarveMaskHandle)
-            : populateHandle;
+            ? JobHandle.CombineDependencies(surfaceMaterialHandle, spaghettiCarveMaskHandle)
+            : surfaceMaterialHandle;
 
         var stagedCaveChunkDataJob = baseChunkDataJob;
         stagedCaveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
@@ -872,12 +1119,18 @@ public static class MeshGenerator
 
         var populateLightOpacityJob = new PopulateLightOpacityJob
         {
-            columnContexts = lightColumnContexts,
+            heightCache = lightHeightCache,
             opacity = lightOpacityData,
             effectiveOpacityByBlock = effectiveOpacityByBlock,
-            border = lightBorderSize
+            coord = coord,
+            border = lightBorderSize,
+            offsetX = globalOffsetX,
+            offsetZ = globalOffsetZ,
+            terrainDensitySettings = terrainDensitySettings,
+            skipInnerMin = lightBorderSize > dataBorderSize ? lightBorderSize - dataBorderSize : 0,
+            skipInnerMaxExclusive = lightBorderSize > dataBorderSize ? (lightBorderSize - dataBorderSize) + dataVoxelSizeX : 0
         };
-        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightColumnContextHandle);
+        JobHandle populateLightOpacityHandle = populateLightOpacityJob.Schedule(lightTotalHeightPoints, 32, lightHeightHandle);
 
         JobHandle lightOpacityTerrainHandle = populateLightOpacityHandle;
         if (useSharedSpaghettiCarveMask)
@@ -899,11 +1152,6 @@ public static class MeshGenerator
             values = lightHeightCache
         };
         JobHandle disposeLightHeightCacheHandle = disposeLightHeightCacheJob.Schedule(lightOpacityTerrainHandle);
-        var disposeLightColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
-        {
-            values = lightColumnContexts
-        };
-        JobHandle disposeLightColumnContextHandle = disposeLightColumnContextCacheJob.Schedule(lightOpacityTerrainHandle);
         var disposeSpaghettiCarveMaskJob = new DisposeByteArrayJob
         {
             values = sharedSpaghettiCarveMask
@@ -931,9 +1179,6 @@ public static class MeshGenerator
 
         JobHandle lightOpacityCleanupHandle = JobHandle.CombineDependencies(
             disposeLightHeightCacheHandle,
-            disposeLightColumnContextHandle);
-        lightOpacityCleanupHandle = JobHandle.CombineDependencies(
-            lightOpacityCleanupHandle,
             disposeSpaghettiCarveMaskHandle);
         JobHandle lightOpacityHandle = JobHandle.CombineDependencies(
             copyGeneratedOpacityHandle,

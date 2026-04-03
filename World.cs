@@ -246,6 +246,10 @@ public partial class World : MonoBehaviour
     public int heightVariation = 32;
     public int seed = 1337;
 
+    [Header("Density Terrain")]
+    [Tooltip("Quando ativo, o terreno base deixa de usar apenas a altura da coluna e passa a combinar uma superficie 2D com ruido 3D para criar overhangs e saliencias.")]
+    public TerrainDensitySettings terrainDensity = TerrainDensitySettings.MinetestInspiredDefault;
+
     [Header("Block Data")]
     public BlockDataSO blockData;
 
@@ -493,6 +497,11 @@ public partial class World : MonoBehaviour
     private int _lastSimulationDistance = -1;
     private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
+
+    private TerrainDensitySettings GetTerrainDensitySettings()
+    {
+        return terrainDensity.Sanitized();
+    }
 
     private Vector2Int GetCurrentPlayerChunkCoord()
     {
@@ -2403,6 +2412,7 @@ public partial class World : MonoBehaviour
             coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
             baseHeight, offsetX, offsetZ, seaLevel,
             GetBiomeNoiseSettings(),
+            GetTerrainDensitySettings(),
             seed,
             nativeEdits, treeMargin, dataBorderSize, lightBorderSize, detailBorderSize,
             GetMaxTreeRadiusForGeneration(), CliffTreshold, enableTrees,

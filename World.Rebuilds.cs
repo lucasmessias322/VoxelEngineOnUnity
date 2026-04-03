@@ -184,6 +184,7 @@ public partial class World
             offsetZ,
             seaLevel,
             GetBiomeNoiseSettings(),
+            GetTerrainDensitySettings(),
             seed,
             nativeEdits,
             treeMargin,
