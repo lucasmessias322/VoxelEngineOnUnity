@@ -20,6 +20,7 @@ public class Chunk : MonoBehaviour
     public NativeArray<byte> voxelData;
     public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
+    public const int ColliderOccupancyWordsPerSubchunk = (SizeX * SubchunkHeight * SizeZ + 63) / 64;
 
     [SerializeField, HideInInspector] // Estado logico dos subchunks fica encapsulado no Chunk.
     private SubchunkState[] subchunks;
@@ -30,6 +31,9 @@ public class Chunk : MonoBehaviour
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
+    [NonSerialized] private ulong[] subchunkColliderOccupancyBits;
+    [NonSerialized] private bool[] subchunkColliderOccupancyValid;
+    [NonSerialized] private bool[] subchunkColliderOccupancyHasSolids;
     [NonSerialized] public ulong[] subchunkVisibilityMasks;
     [NonSerialized] public bool[] subchunkVisibilityValid;
     [NonSerialized] public ulong lastLightingContextHash;
@@ -161,6 +165,7 @@ public class Chunk : MonoBehaviour
             subchunks[i].hasColliderData = false;
             subchunks[i].isVisible = true;
             subchunkColliderBuilders[i].Clear();
+            ClearSubchunkColliderOccupancy(i);
         }
 
         int visualSliceCount = GetVisualSliceCount(visualSubchunksPerRenderer);
@@ -346,6 +351,15 @@ public class Chunk : MonoBehaviour
         return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].hasColliderData;
     }
 
+    public bool HasSubchunkColliderOccupancy(int subchunkIndex)
+    {
+        return IsSubchunkIndexValid(subchunkIndex) &&
+               subchunkColliderOccupancyValid != null &&
+               subchunkColliderOccupancyHasSolids != null &&
+               subchunkColliderOccupancyValid[subchunkIndex] &&
+               subchunkColliderOccupancyHasSolids[subchunkIndex];
+    }
+
     public bool IsSubchunkVisible(int subchunkIndex)
     {
         return IsSubchunkIndexValid(subchunkIndex) && subchunks[subchunkIndex].isVisible;
@@ -394,6 +408,69 @@ public class Chunk : MonoBehaviour
         colliderBuilder.SetEnabled(shouldEnable);
     }
 
+    public void UpdateSubchunkColliderOccupancy(NativeArray<ulong> occupancyBits, int dirtySubchunkMask)
+    {
+        EnsureSubchunkStorage();
+
+        if (!occupancyBits.IsCreated || occupancyBits.Length < SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk)
+        {
+            for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
+            {
+                if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
+                    continue;
+
+                ClearSubchunkColliderOccupancy(subchunkIndex);
+            }
+
+            return;
+        }
+
+        for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
+        {
+            if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
+                continue;
+
+            int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
+            bool hasSolids = false;
+            for (int wordIndex = 0; wordIndex < ColliderOccupancyWordsPerSubchunk; wordIndex++)
+            {
+                ulong word = occupancyBits[wordOffset + wordIndex];
+                subchunkColliderOccupancyBits[wordOffset + wordIndex] = word;
+                hasSolids |= word != 0UL;
+            }
+
+            subchunkColliderOccupancyValid[subchunkIndex] = true;
+            subchunkColliderOccupancyHasSolids[subchunkIndex] = hasSolids;
+        }
+    }
+
+    public bool TryActivateCachedSubchunkColliders(int subchunkIndex)
+    {
+        if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
+            return false;
+
+        if (!subchunks[subchunkIndex].hasGeometry || !subchunks[subchunkIndex].canHaveColliders)
+            return false;
+
+        if (!TryGetSubchunkColliderOccupancyRange(subchunkIndex, out int wordOffset))
+            return false;
+
+        int startY = subchunkIndex * SubchunkHeight;
+        int endY = Mathf.Min(startY + SubchunkHeight, SizeY);
+        bool restored = colliderBuilder.TryRestoreCachedColliders(
+            subchunkColliderOccupancyBits,
+            wordOffset,
+            ColliderOccupancyWordsPerSubchunk,
+            startY,
+            endY,
+            out bool hasColliders);
+
+        if (restored)
+            subchunks[subchunkIndex].hasColliderData = hasColliders;
+
+        return restored && hasColliders;
+    }
+
     public void ClearSubchunkMesh(int subchunkIndex)
     {
         if (!IsSubchunkIndexValid(subchunkIndex))
@@ -402,6 +479,7 @@ public class Chunk : MonoBehaviour
         subchunks[subchunkIndex].hasGeometry = false;
         subchunks[subchunkIndex].canHaveColliders = false;
         ClearSubchunkColliderData(subchunkIndex);
+        ClearSubchunkColliderOccupancy(subchunkIndex);
     }
 
     public void ClearSubchunkColliderData(int subchunkIndex)
@@ -429,7 +507,53 @@ public class Chunk : MonoBehaviour
             return;
         }
 
+        if (TryGetSubchunkColliderOccupancyRange(subchunkIndex, out int wordOffset))
+        {
+            subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(
+                gameObject,
+                subchunkColliderOccupancyBits,
+                wordOffset,
+                ColliderOccupancyWordsPerSubchunk,
+                startY,
+                endY);
+            return;
+        }
+
         subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, startY, endY);
+    }
+
+    private bool TryGetSubchunkColliderOccupancyRange(int subchunkIndex, out int wordOffset)
+    {
+        wordOffset = 0;
+        EnsureSubchunkStorage();
+
+        if (!IsSubchunkIndexValid(subchunkIndex) ||
+            subchunkColliderOccupancyValid == null ||
+            subchunkColliderOccupancyBits == null ||
+            !subchunkColliderOccupancyValid[subchunkIndex])
+        {
+            return false;
+        }
+
+        wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
+        return true;
+    }
+
+    private void ClearSubchunkColliderOccupancy(int subchunkIndex)
+    {
+        EnsureSubchunkStorage();
+        if (!IsSubchunkIndexValid(subchunkIndex) ||
+            subchunkColliderOccupancyBits == null ||
+            subchunkColliderOccupancyValid == null ||
+            subchunkColliderOccupancyHasSolids == null)
+        {
+            return;
+        }
+
+        int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
+        Array.Clear(subchunkColliderOccupancyBits, wordOffset, ColliderOccupancyWordsPerSubchunk);
+        subchunkColliderOccupancyValid[subchunkIndex] = false;
+        subchunkColliderOccupancyHasSolids[subchunkIndex] = false;
     }
 
     private void EnsureSubchunkStorage()
@@ -439,6 +563,16 @@ public class Chunk : MonoBehaviour
 
         if (subchunkColliderBuilders == null || subchunkColliderBuilders.Length != SubchunksPerColumn)
             subchunkColliderBuilders = new SubchunkColliderBuilder[SubchunksPerColumn];
+
+        int colliderOccupancyWordCount = SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk;
+        if (subchunkColliderOccupancyBits == null || subchunkColliderOccupancyBits.Length != colliderOccupancyWordCount)
+            subchunkColliderOccupancyBits = new ulong[colliderOccupancyWordCount];
+
+        if (subchunkColliderOccupancyValid == null || subchunkColliderOccupancyValid.Length != SubchunksPerColumn)
+            subchunkColliderOccupancyValid = new bool[SubchunksPerColumn];
+
+        if (subchunkColliderOccupancyHasSolids == null || subchunkColliderOccupancyHasSolids.Length != SubchunksPerColumn)
+            subchunkColliderOccupancyHasSolids = new bool[SubchunksPerColumn];
 
         for (int i = 0; i < subchunkColliderBuilders.Length; i++)
         {

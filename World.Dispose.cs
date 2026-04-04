@@ -54,6 +54,7 @@ public partial class World
         SafeDisposeNativeArray(ref pd.fastRebuildOverrides);
         SafeDisposeNativeArray(ref pd.postCompletionOverrides);
         SafeDisposeNativeArray(ref pd.postCompletionDirtyColumns);
+        SafeDisposeNativeArray(ref pd.subchunkColliderOccupancy);
         SafeDisposeNativeArray(ref pd.subchunkNonEmpty);
         pd.postOverrideRefreshScheduled = false;
     }

@@ -754,14 +754,19 @@ public static class MeshGenerator
     private struct BuildChunkSnapshotAndFlagsJob : IJob
     {
         [ReadOnly] public NativeArray<byte> blockTypes;
+        [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [WriteOnly] public NativeArray<byte> voxelSnapshot;
         public NativeArray<bool> subchunkNonEmpty;
+        public NativeArray<ulong> subchunkColliderOccupancy;
         public int borderSize;
 
         public void Execute()
         {
             for (int s = 0; s < SubchunksPerColumn; s++)
                 subchunkNonEmpty[s] = false;
+
+            for (int i = 0; i < subchunkColliderOccupancy.Length; i++)
+                subchunkColliderOccupancy[i] = 0UL;
 
             int voxelSizeX = SizeX + 2 * borderSize;
             int voxelPlaneSize = voxelSizeX * SizeY;
@@ -779,9 +784,33 @@ public static class MeshGenerator
                         voxelSnapshot[dstIndex] = (byte)blockType;
                         if (blockType != BlockType.Air)
                             subchunkNonEmpty[subchunkIndex] = true;
+
+                        if (!IsBlockCollidable(blockType))
+                            continue;
+
+                        int localY = y - subchunkIndex * Chunk.SubchunkHeight;
+                        int localIndex = x + localY * Chunk.SizeX + z * Chunk.SizeX * Chunk.SubchunkHeight;
+                        int wordIndex = subchunkIndex * Chunk.ColliderOccupancyWordsPerSubchunk + (localIndex >> 6);
+                        subchunkColliderOccupancy[wordIndex] |= 1UL << (localIndex & 63);
                     }
                 }
             }
+        }
+
+        private bool IsBlockCollidable(BlockType blockType)
+        {
+            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+                return false;
+
+            if (TorchPlacementUtility.IsTorchLike(blockType))
+                return false;
+
+            int mapIndex = (int)blockType;
+            if (mapIndex < 0 || mapIndex >= blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[mapIndex];
+            return mapping.isSolid && !mapping.isEmpty;
         }
     }
 
@@ -822,7 +851,8 @@ public static class MeshGenerator
         out NativeArray<bool> solids,
         out NativeArray<byte> light,
         out NativeArray<byte> lightOpacityData,
-        out NativeArray<bool> subchunkNonEmpty
+        out NativeArray<bool> subchunkNonEmpty,
+        out NativeArray<ulong> subchunkColliderOccupancy
     )
     {
         // A pipeline trabalha com dois volumes padded:
@@ -834,6 +864,10 @@ public static class MeshGenerator
         // intermediÃƒÆ’Ã‚Â¡rios abaixo nÃƒÆ’Ã‚Â£o podem usar TempJob.
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
         subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
+        subchunkColliderOccupancy = new NativeArray<ulong>(
+            SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk,
+            Allocator.Persistent,
+            NativeArrayOptions.ClearMemory);
 
         int dataHeightSize = SizeX + 2 * dataBorderSize;
         int dataTotalHeightPoints = dataHeightSize * dataHeightSize;
@@ -1033,8 +1067,10 @@ public static class MeshGenerator
             var snapshotJob = new BuildChunkSnapshotAndFlagsJob
             {
                 blockTypes = blockTypes,
+                blockMappings = blockMappings,
                 voxelSnapshot = chunkVoxelSnapshot,
                 subchunkNonEmpty = subchunkNonEmpty,
+                subchunkColliderOccupancy = subchunkColliderOccupancy,
                 borderSize = dataBorderSize
             };
             JobHandle snapshotHandle = snapshotJob.Schedule(finalChunkDataHandle);
@@ -1149,8 +1185,10 @@ public static class MeshGenerator
         var buildChunkSnapshotJob = new BuildChunkSnapshotAndFlagsJob
         {
             blockTypes = blockTypes,
+            blockMappings = blockMappings,
             voxelSnapshot = chunkVoxelSnapshot,
             subchunkNonEmpty = subchunkNonEmpty,
+            subchunkColliderOccupancy = subchunkColliderOccupancy,
             borderSize = dataBorderSize
         };
         JobHandle buildChunkSnapshotHandle = buildChunkSnapshotJob.Schedule(finalChunkDataHandle);

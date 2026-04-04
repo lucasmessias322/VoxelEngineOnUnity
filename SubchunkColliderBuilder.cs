@@ -34,24 +34,64 @@ internal sealed class SubchunkColliderBuilder
         PrepareOccupancyBuffer(volume, out ulong[] occupancyBits, out int occupancyWordCount);
         bool hasSolidBlocks = FillOccupancyBuffer(voxelData, blockMappings, clampedStartY, height, occupancyBits);
 
-        if (TryRestoreCachedColliders(owner, clampedStartY, height, occupancyBits, occupancyWordCount, out bool restoredHasColliders))
+        if (TryRestoreCachedColliderLayoutInternal(occupancyBits, 0, occupancyWordCount, clampedStartY, height, out bool restoredHasColliders))
             return restoredHasColliders;
 
         if (!hasSolidBlocks)
         {
-            CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordCount, 0);
+            CacheColliderLayout(clampedStartY, height, occupancyBits, 0, occupancyWordCount, 0);
             activeBoxColliderCount = 0;
             DisableUnusedColliders(0);
             return false;
         }
 
         PrepareBuffers(volume, out bool[] solids, out bool[] visited);
-        FillSolidBufferFromOccupancy(occupancyBits, volume, solids);
+        FillSolidBufferFromOccupancy(occupancyBits, 0, volume, solids);
 
         int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
         activeBoxColliderCount = colliderCount;
         DisableUnusedColliders(colliderCount);
-        CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordCount, colliderCount);
+        CacheColliderLayout(clampedStartY, height, occupancyBits, 0, occupancyWordCount, colliderCount);
+        return colliderCount > 0;
+    }
+
+    public bool TryBuild(
+        GameObject owner,
+        ulong[] occupancyBits,
+        int occupancyWordOffset,
+        int occupancyWordCount,
+        int startY,
+        int endY)
+    {
+        if (!TryResolveBuildRange(startY, endY, out int clampedStartY, out int height) ||
+            occupancyBits == null ||
+            occupancyWordOffset < 0 ||
+            occupancyWordCount <= 0 ||
+            occupancyWordOffset + occupancyWordCount > occupancyBits.Length)
+        {
+            Clear();
+            return false;
+        }
+
+        if (TryRestoreCachedColliderLayoutInternal(occupancyBits, occupancyWordOffset, occupancyWordCount, clampedStartY, height, out bool restoredHasColliders))
+            return restoredHasColliders;
+
+        if (!HasAnyOccupiedWord(occupancyBits, occupancyWordOffset, occupancyWordCount))
+        {
+            CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordOffset, occupancyWordCount, 0);
+            activeBoxColliderCount = 0;
+            DisableUnusedColliders(0);
+            return false;
+        }
+
+        int volume = Chunk.SizeX * height * Chunk.SizeZ;
+        PrepareBuffers(volume, out bool[] solids, out bool[] visited);
+        FillSolidBufferFromOccupancy(occupancyBits, occupancyWordOffset, volume, solids);
+
+        int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
+        activeBoxColliderCount = colliderCount;
+        DisableUnusedColliders(colliderCount);
+        CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordOffset, occupancyWordCount, colliderCount);
         return colliderCount > 0;
     }
 
@@ -71,6 +111,27 @@ internal sealed class SubchunkColliderBuilder
         DisableUnusedColliders(0);
     }
 
+    public bool TryRestoreCachedColliders(
+        ulong[] occupancyBits,
+        int occupancyWordOffset,
+        int occupancyWordCount,
+        int startY,
+        int endY,
+        out bool hasColliders)
+    {
+        hasColliders = false;
+        if (!TryResolveBuildRange(startY, endY, out int clampedStartY, out int height) ||
+            occupancyBits == null ||
+            occupancyWordOffset < 0 ||
+            occupancyWordCount <= 0 ||
+            occupancyWordOffset + occupancyWordCount > occupancyBits.Length)
+        {
+            return false;
+        }
+
+        return TryRestoreCachedColliderLayoutInternal(occupancyBits, occupancyWordOffset, occupancyWordCount, clampedStartY, height, out hasColliders);
+    }
+
     private static bool TryResolveBuildRange(
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
@@ -85,6 +146,18 @@ internal sealed class SubchunkColliderBuilder
         if (!voxelData.IsCreated || blockMappings == null || blockMappings.Length == 0)
             return false;
 
+        clampedStartY = Mathf.Clamp(startY, 0, Chunk.SizeY);
+        int clampedEndY = Mathf.Clamp(endY, 0, Chunk.SizeY);
+        height = clampedEndY - clampedStartY;
+        return height > 0;
+    }
+
+    private static bool TryResolveBuildRange(
+        int startY,
+        int endY,
+        out int clampedStartY,
+        out int height)
+    {
         clampedStartY = Mathf.Clamp(startY, 0, Chunk.SizeY);
         int clampedEndY = Mathf.Clamp(endY, 0, Chunk.SizeY);
         height = clampedEndY - clampedStartY;
@@ -145,11 +218,11 @@ internal sealed class SubchunkColliderBuilder
         return hasSolidBlocks;
     }
 
-    private static void FillSolidBufferFromOccupancy(ulong[] occupancyBits, int volume, bool[] solids)
+    private static void FillSolidBufferFromOccupancy(ulong[] occupancyBits, int occupancyWordOffset, int volume, bool[] solids)
     {
         for (int index = 0; index < volume; index++)
         {
-            int wordIndex = index >> 6;
+            int wordIndex = occupancyWordOffset + (index >> 6);
             if ((occupancyBits[wordIndex] & (1UL << (index & 63))) != 0)
                 solids[index] = true;
         }
@@ -303,12 +376,23 @@ internal sealed class SubchunkColliderBuilder
         return x + y * sizeX + z * sizeX * sizeY;
     }
 
-    private bool TryRestoreCachedColliders(
-        GameObject owner,
+    private static bool HasAnyOccupiedWord(ulong[] occupancyBits, int occupancyWordOffset, int occupancyWordCount)
+    {
+        for (int i = 0; i < occupancyWordCount; i++)
+        {
+            if (occupancyBits[occupancyWordOffset + i] != 0UL)
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool TryRestoreCachedColliderLayoutInternal(
+        ulong[] occupancyBits,
+        int occupancyWordOffset,
+        int occupancyWordCount,
         int clampedStartY,
         int height,
-        ulong[] occupancyBits,
-        int occupancyWordCount,
         out bool hasColliders)
     {
         hasColliders = false;
@@ -317,7 +401,7 @@ internal sealed class SubchunkColliderBuilder
             cachedStartY != clampedStartY ||
             cachedHeight != height ||
             cachedColliderOccupancyWordCount != occupancyWordCount ||
-            !OccupancyMatchesCache(occupancyBits, occupancyWordCount))
+            !OccupancyMatchesCache(occupancyBits, occupancyWordOffset, occupancyWordCount))
         {
             return false;
         }
@@ -341,11 +425,11 @@ internal sealed class SubchunkColliderBuilder
         return true;
     }
 
-    private bool OccupancyMatchesCache(ulong[] occupancyBits, int occupancyWordCount)
+    private bool OccupancyMatchesCache(ulong[] occupancyBits, int occupancyWordOffset, int occupancyWordCount)
     {
         for (int i = 0; i < occupancyWordCount; i++)
         {
-            if (cachedColliderOccupancyBits[i] != occupancyBits[i])
+            if (cachedColliderOccupancyBits[i] != occupancyBits[occupancyWordOffset + i])
                 return false;
         }
 
@@ -370,11 +454,12 @@ internal sealed class SubchunkColliderBuilder
         int clampedStartY,
         int height,
         ulong[] occupancyBits,
+        int occupancyWordOffset,
         int occupancyWordCount,
         int colliderCount)
     {
         EnsureCachedOccupancyBuffer(occupancyWordCount);
-        Array.Copy(occupancyBits, cachedColliderOccupancyBits, occupancyWordCount);
+        Array.Copy(occupancyBits, occupancyWordOffset, cachedColliderOccupancyBits, 0, occupancyWordCount);
         cachedColliderOccupancyWordCount = occupancyWordCount;
         cachedColliderCount = colliderCount;
         cachedStartY = clampedStartY;

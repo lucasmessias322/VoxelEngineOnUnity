@@ -772,6 +772,13 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
+            if (chunk.HasSubchunkColliderData(request.subchunkIndex))
+            {
+                chunk.SetSubchunkColliderSystemEnabled(request.subchunkIndex, true);
+                processed++;
+                continue;
+            }
+
             int startY = request.subchunkIndex * Chunk.SubchunkHeight;
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
             chunk.RebuildSubchunkColliders(request.subchunkIndex, chunk.voxelData, blockMappings, startY, endY);
@@ -1088,6 +1095,7 @@ public partial class World : MonoBehaviour
         public NativeArray<BlockEdit> fastRebuildOverrides;
         public NativeArray<BlockEdit> postCompletionOverrides;
         public NativeArray<byte> postCompletionDirtyColumns;
+        public NativeArray<ulong> subchunkColliderOccupancy;
 
         public NativeArray<bool> subchunkNonEmpty;
         public int dirtySubchunkMask;
@@ -1211,6 +1219,7 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<int> heightCache;
         public NativeArray<bool> subchunkNonEmpty;
+        public NativeArray<ulong> subchunkColliderOccupancy;
         public NativeArray<byte> dirtyColumns;
 
         public int chunkMinX;
@@ -1277,6 +1286,9 @@ public partial class World : MonoBehaviour
             for (int sub = 0; sub < Chunk.SubchunksPerColumn; sub++)
                 subchunkNonEmpty[sub] = false;
 
+            for (int i = 0; i < subchunkColliderOccupancy.Length; i++)
+                subchunkColliderOccupancy[i] = 0UL;
+
             for (int localZ = 0; localZ < Chunk.SizeZ; localZ++)
             {
                 int iz = localZ + borderSize;
@@ -1286,13 +1298,38 @@ public partial class World : MonoBehaviour
                     int voxelIndex = ix + iz * voxelPlaneSize;
                     for (int y = 0; y < Chunk.SizeY; y++, voxelIndex += voxelSizeX)
                     {
-                        if (blockTypes[voxelIndex] == (byte)BlockType.Air)
+                        BlockType blockType = (BlockType)blockTypes[voxelIndex];
+                        if (blockType == BlockType.Air)
                             continue;
 
                         subchunkNonEmpty[y / Chunk.SubchunkHeight] = true;
+                        if (IsBlockCollidable(blockType))
+                        {
+                            int subchunkIndex = y / Chunk.SubchunkHeight;
+                            int localY = y - subchunkIndex * Chunk.SubchunkHeight;
+                            int localIndex = localX + localY * Chunk.SizeX + localZ * Chunk.SizeX * Chunk.SubchunkHeight;
+                            int wordIndex = subchunkIndex * Chunk.ColliderOccupancyWordsPerSubchunk + (localIndex >> 6);
+                            subchunkColliderOccupancy[wordIndex] |= 1UL << (localIndex & 63);
+                        }
                     }
                 }
             }
+        }
+
+        private bool IsBlockCollidable(BlockType blockType)
+        {
+            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+                return false;
+
+            if (TorchPlacementUtility.IsTorchLike(blockType))
+                return false;
+
+            int mapIndex = (int)blockType;
+            if (mapIndex < 0 || mapIndex >= blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[mapIndex];
+            return mapping.isSolid && !mapping.isEmpty;
         }
     }
 
@@ -1305,6 +1342,7 @@ public partial class World : MonoBehaviour
         public NativeArray<bool> solids;
         public NativeArray<int> heightCache;
         public NativeArray<bool> subchunkNonEmpty;
+        public NativeArray<ulong> subchunkColliderOccupancy;
 
         public int borderSize;
         public int voxelSizeX;
@@ -1315,6 +1353,9 @@ public partial class World : MonoBehaviour
         {
             for (int s = 0; s < Chunk.SubchunksPerColumn; s++)
                 subchunkNonEmpty[s] = false;
+
+            for (int i = 0; i < subchunkColliderOccupancy.Length; i++)
+                subchunkColliderOccupancy[i] = 0UL;
 
             for (int iz = 0; iz < voxelSizeZ; iz++)
             {
@@ -1339,13 +1380,38 @@ public partial class World : MonoBehaviour
                         {
                             int subIdx = y / Chunk.SubchunkHeight;
                             if (subIdx >= 0 && subIdx < Chunk.SubchunksPerColumn)
+                            {
                                 subchunkNonEmpty[subIdx] = true;
+                                if (IsBlockCollidable(blockType))
+                                {
+                                    int localY = y - subIdx * Chunk.SubchunkHeight;
+                                    int localIndex = relX + localY * Chunk.SizeX + relZ * Chunk.SizeX * Chunk.SubchunkHeight;
+                                    int wordIndex = subIdx * Chunk.ColliderOccupancyWordsPerSubchunk + (localIndex >> 6);
+                                    subchunkColliderOccupancy[wordIndex] |= 1UL << (localIndex & 63);
+                                }
+                            }
                         }
                     }
 
                     heightCache[ix + iz * voxelSizeX] = highestSolidY;
                 }
             }
+        }
+
+        private bool IsBlockCollidable(BlockType blockType)
+        {
+            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+                return false;
+
+            if (TorchPlacementUtility.IsTorchLike(blockType))
+                return false;
+
+            int mapIndex = (int)blockType;
+            if (mapIndex < 0 || mapIndex >= blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[mapIndex];
+            return mapping.isSolid && !mapping.isEmpty;
         }
     }
 
@@ -1745,7 +1811,7 @@ public partial class World : MonoBehaviour
                         SyncCurrentBlockOverridesToVoxelSnapshot(pd.coord, pd.borderSize, activeChunk.voxelData);
                     activeChunk.hasVoxelSnapshot = true;
 
-                    ScheduleSubchunkMeshJobs(pd, activeChunk);
+                    ScheduleSubchunkMeshJobs(ref pd, activeChunk);
                 }
             }
             else
@@ -1795,7 +1861,7 @@ public partial class World : MonoBehaviour
                         if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
                             updatedSectionVisibility = true;
 
-                        bool hasSolidColliderGeometry = range.opaqueCount > 0 || range.transparentCount > 0;
+                        bool hasSolidColliderGeometry = activeChunk.HasSubchunkColliderOccupancy(subchunkIndex);
                         if (range.vertexCount > 0)
                         {
                             activeChunk.SetSubchunkMeshState(subchunkIndex, true, hasSolidColliderGeometry);
@@ -1804,7 +1870,15 @@ public partial class World : MonoBehaviour
                             if (pm.buildColliders)
                             {
                                 if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
-                                    EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                                {
+                                    if (!activeChunk.TryActivateCachedSubchunkColliders(subchunkIndex))
+                                    {
+                                        activeChunk.ClearSubchunkColliderData(subchunkIndex);
+                                        EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                                    }
+                                    else
+                                        activeChunk.SetSubchunkColliderSystemEnabled(subchunkIndex, true);
+                                }
                                 else
                                     activeChunk.ClearSubchunkColliderData(subchunkIndex);
                             }
@@ -1964,6 +2038,7 @@ public partial class World : MonoBehaviour
             !pd.solids.IsCreated ||
             !pd.heightCache.IsCreated ||
             !pd.subchunkNonEmpty.IsCreated ||
+            !pd.subchunkColliderOccupancy.IsCreated ||
             chunk == null ||
             !chunk.voxelData.IsCreated)
         {
@@ -1990,6 +2065,7 @@ public partial class World : MonoBehaviour
             solids = pd.solids,
             heightCache = pd.heightCache,
             subchunkNonEmpty = pd.subchunkNonEmpty,
+            subchunkColliderOccupancy = pd.subchunkColliderOccupancy,
             dirtyColumns = dirtyColumns,
             chunkMinX = pd.coord.x * Chunk.SizeX,
             chunkMinZ = pd.coord.y * Chunk.SizeZ,
@@ -2133,10 +2209,12 @@ public partial class World : MonoBehaviour
         }
     }
 
-    private void ScheduleSubchunkMeshJobs(PendingData pd, Chunk activeChunk)
+    private void ScheduleSubchunkMeshJobs(ref PendingData pd, Chunk activeChunk)
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
+        activeChunk.UpdateSubchunkColliderOccupancy(pd.subchunkColliderOccupancy, dirtySubchunkMask);
+        SafeDisposeNativeArray(ref pd.subchunkColliderOccupancy);
         List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.Persistent);
         for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
@@ -2585,7 +2663,8 @@ public partial class World : MonoBehaviour
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
             out NativeArray<byte> lightOpacityData,
-            out NativeArray<bool> subchunkNonEmpty
+            out NativeArray<bool> subchunkNonEmpty,
+            out NativeArray<ulong> subchunkColliderOccupancy
         );
         NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
 
@@ -2608,6 +2687,7 @@ public partial class World : MonoBehaviour
             fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
             fastRebuildOverrides = default,
+            subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = GetFullSubchunkMask(),
             rebuildColliders = enableBlockColliders
@@ -2656,6 +2736,10 @@ public partial class World : MonoBehaviour
         NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<ulong> subchunkColliderOccupancy = new NativeArray<ulong>(
+            Chunk.SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk,
+            Allocator.Persistent,
+            NativeArrayOptions.ClearMemory);
         NativeArray<byte> lightOpacityData = default;
         NativeArray<byte> blockLightData = default;
         NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -2712,6 +2796,7 @@ public partial class World : MonoBehaviour
             solids = solids,
             heightCache = heightCache,
             subchunkNonEmpty = subchunkNonEmpty,
+            subchunkColliderOccupancy = subchunkColliderOccupancy,
             borderSize = copyBorderSize,
             voxelSizeX = copyVoxelSizeX,
             voxelSizeZ = copyVoxelSizeZ,
@@ -2802,6 +2887,7 @@ public partial class World : MonoBehaviour
             fastRebuildSnapshotVoxelData = snapshotVoxelData,
             fastRebuildSnapshotLoadedChunks = snapshotLoadedChunks,
             fastRebuildOverrides = nativeOverrides,
+            subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
             rebuildColliders = rebuildColliders

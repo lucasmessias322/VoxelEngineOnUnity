@@ -208,7 +208,8 @@ public partial class World
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
             out NativeArray<byte> lightOpacityData,
-            out NativeArray<bool> subchunkNonEmpty);
+            out NativeArray<bool> subchunkNonEmpty,
+            out NativeArray<ulong> subchunkColliderOccupancy);
 
         NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
 
@@ -231,6 +232,7 @@ public partial class World
             fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
             fastRebuildOverrides = default,
+            subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
             rebuildColliders = rebuildColliders
