@@ -210,7 +210,7 @@ public partial class World
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty);
 
-        NativeArray<byte> knownVoxelData = CreateFullyKnownVoxelMask(blockTypes.Length);
+        NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
 
         pendingDataJobs.Add(new PendingData
         {
@@ -218,6 +218,7 @@ public partial class World
             heightCache = heightCache,
             blockTypes = blockTypes,
             knownVoxelData = knownVoxelData,
+            useKnownVoxelData = false,
             solids = solids,
             light = light,
             borderSize = dataBorderSize,
@@ -234,6 +235,7 @@ public partial class World
             dirtySubchunkMask = dirtySubchunkMask,
             rebuildColliders = rebuildColliders
         });
+        pendingJobPrioritiesDirty = true;
 
         chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
@@ -318,6 +320,7 @@ public partial class World
             pendingDataJobs[index] = pendingDataJobs[last];
 
         pendingDataJobs.RemoveAt(last);
+        pendingJobPrioritiesDirty = true;
     }
 
     private void RemovePendingMeshAtSwapBack(int index)
@@ -330,5 +333,6 @@ public partial class World
             pendingMeshes[index] = pendingMeshes[last];
 
         pendingMeshes.RemoveAt(last);
+        pendingJobPrioritiesDirty = true;
     }
 }

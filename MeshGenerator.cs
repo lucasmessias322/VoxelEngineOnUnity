@@ -1278,6 +1278,7 @@ public static class MeshGenerator
         NativeArray<int3> suppressedGrassBillboards,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<byte> knownVoxelData,
+        bool useKnownVoxelData,
         int atlasTilesX,
         int atlasTilesY,
         bool generateSides,
@@ -1329,6 +1330,7 @@ public static class MeshGenerator
             suppressedGrassBillboards = suppressedGrassBillboards,
             subchunkNonEmpty = subchunkNonEmpty,
             knownVoxelData = knownVoxelData,
+            useKnownVoxelData = useKnownVoxelData,
 
             border = borderSize,
             atlasTilesX = atlasTilesX,
@@ -1378,6 +1380,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
         [ReadOnly] public NativeArray<byte> knownVoxelData;
+        public bool useKnownVoxelData;
 
         public int border;
         public int atlasTilesX;
@@ -2986,7 +2989,7 @@ public static class MeshGenerator
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
                 return false;
 
-            if (!knownVoxelData.IsCreated)
+            if (!useKnownVoxelData)
                 return true;
 
             int idx = x + y * voxelSizeX + z * voxelPlaneSize;
@@ -3000,13 +3003,13 @@ public static class MeshGenerator
                 return false;
 
             idx = x + y * voxelSizeX + z * voxelPlaneSize;
-            if (!knownVoxelData.IsCreated || knownVoxelData[idx] != 0)
+            if (!useKnownVoxelData || knownVoxelData[idx] != 0)
                 return true;
 
             int clampedX = math.clamp(x, border, border + SizeX - 1);
             int clampedZ = math.clamp(z, border, border + SizeZ - 1);
             idx = clampedX + y * voxelSizeX + clampedZ * voxelPlaneSize;
-            return !knownVoxelData.IsCreated || knownVoxelData[idx] != 0;
+            return !useKnownVoxelData || knownVoxelData[idx] != 0;
         }
 
         private byte GetVertexAO(Vector3Int pos, Vector3Int d1, Vector3Int d2, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)

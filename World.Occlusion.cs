@@ -145,6 +145,13 @@ public partial class World : MonoBehaviour
     {
         if (preferMainCameraForOcclusion)
         {
+            if (cachedOcclusionCamera != null &&
+                cachedOcclusionCamera.isActiveAndEnabled &&
+                cachedOcclusionCamera.CompareTag("MainCamera"))
+            {
+                return cachedOcclusionCamera;
+            }
+
             Camera mainCamera = Camera.main;
             if (mainCamera != null)
             {
@@ -153,7 +160,7 @@ public partial class World : MonoBehaviour
             }
         }
 
-        if (cachedOcclusionCamera != null)
+        if (cachedOcclusionCamera != null && cachedOcclusionCamera.isActiveAndEnabled)
             return cachedOcclusionCamera;
 
         if (player == null)

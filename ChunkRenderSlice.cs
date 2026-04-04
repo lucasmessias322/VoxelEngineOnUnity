@@ -188,10 +188,25 @@ public class ChunkRenderSlice : MonoBehaviour
         NativeArray<int> indexData,
         SliceMeshTotals totals)
     {
+        if (subchunkCount <= 1)
+        {
+            NativeArray<MeshGenerator.PackedChunkVertex>.Copy(vertices.AsArray(), vertexData, totals.vertexCount);
+
+            int opaqueWriteOffset = 0;
+            int transparentWriteOffset = totals.opaqueCount;
+            int waterWriteOffset = totals.opaqueCount + totals.TotalTransparentLikeCount;
+
+            CopyTriangleRange(indexData, ref opaqueWriteOffset, opaqueTris);
+            CopyTriangleRange(indexData, ref transparentWriteOffset, transparentTris);
+            CopyTriangleRange(indexData, ref transparentWriteOffset, billboardTris);
+            CopyTriangleRange(indexData, ref waterWriteOffset, waterTris);
+            return;
+        }
+
         int targetVertexStart = 0;
-        int opaqueWriteOffset = 0;
-        int transparentWriteOffset = totals.opaqueCount;
-        int waterWriteOffset = totals.opaqueCount + totals.TotalTransparentLikeCount;
+        int opaqueWriteOffsetMulti = 0;
+        int transparentWriteOffsetMulti = totals.opaqueCount;
+        int waterWriteOffsetMulti = totals.opaqueCount + totals.TotalTransparentLikeCount;
 
         for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
         {
@@ -206,10 +221,10 @@ public class ChunkRenderSlice : MonoBehaviour
                 targetVertexStart,
                 range.vertexCount);
 
-            CopyTriangleRangeRebased(indexData, ref opaqueWriteOffset, opaqueTris, range.opaqueStart, range.opaqueCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref transparentWriteOffset, transparentTris, range.transparentStart, range.transparentCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref transparentWriteOffset, billboardTris, range.billboardStart, range.billboardCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref waterWriteOffset, waterTris, range.waterStart, range.waterCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref opaqueWriteOffsetMulti, opaqueTris, range.opaqueStart, range.opaqueCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref transparentWriteOffsetMulti, transparentTris, range.transparentStart, range.transparentCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref transparentWriteOffsetMulti, billboardTris, range.billboardStart, range.billboardCount, targetVertexStart);
+            CopyTriangleRangeRebased(indexData, ref waterWriteOffsetMulti, waterTris, range.waterStart, range.waterCount, targetVertexStart);
 
             targetVertexStart += range.vertexCount;
         }
@@ -250,6 +265,19 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         return false;
+    }
+
+    private static void CopyTriangleRange(
+        NativeArray<int> target,
+        ref int targetStart,
+        NativeList<int> source)
+    {
+        int count = source.Length;
+        if (count <= 0)
+            return;
+
+        NativeArray<int>.Copy(source.AsArray(), 0, target, targetStart, count);
+        targetStart += count;
     }
 
     private static void CopyTriangleRangeRebased(

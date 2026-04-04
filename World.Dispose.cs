@@ -32,6 +32,13 @@ public partial class World
         SafeDisposeNativeArray(ref pd.fastRebuildOverrides);
     }
 
+    private static void DisposePostCompletionOverrideInputs(ref PendingData pd)
+    {
+        SafeDisposeNativeArray(ref pd.postCompletionOverrides);
+        SafeDisposeNativeArray(ref pd.postCompletionDirtyColumns);
+        pd.postOverrideRefreshScheduled = false;
+    }
+
     private static void DisposeDataJobResources(ref PendingData pd)
     {
         SafeDisposeNativeArray(ref pd.heightCache);
@@ -45,7 +52,10 @@ public partial class World
         SafeDisposeNativeArray(ref pd.fastRebuildSnapshotVoxelData);
         SafeDisposeNativeArray(ref pd.fastRebuildSnapshotLoadedChunks);
         SafeDisposeNativeArray(ref pd.fastRebuildOverrides);
+        SafeDisposeNativeArray(ref pd.postCompletionOverrides);
+        SafeDisposeNativeArray(ref pd.postCompletionDirtyColumns);
         SafeDisposeNativeArray(ref pd.subchunkNonEmpty);
+        pd.postOverrideRefreshScheduled = false;
     }
 
     private void DisposePendingMesh(PendingMesh pm)

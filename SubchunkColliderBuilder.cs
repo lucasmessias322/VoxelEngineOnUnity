@@ -9,6 +9,13 @@ internal sealed class SubchunkColliderBuilder
     private int activeBoxColliderCount;
     private bool[] colliderSolidsBuffer;
     private bool[] colliderVisitedBuffer;
+    private ulong[] colliderOccupancyBuffer;
+    private ulong[] cachedColliderOccupancyBits;
+    private int cachedColliderOccupancyWordCount;
+    private int cachedColliderCount;
+    private int cachedStartY = -1;
+    private int cachedHeight;
+    private bool hasCachedColliderLayout;
 
     public bool TryBuild(
         GameObject owner,
@@ -24,12 +31,27 @@ internal sealed class SubchunkColliderBuilder
         }
 
         int volume = Chunk.SizeX * height * Chunk.SizeZ;
+        PrepareOccupancyBuffer(volume, out ulong[] occupancyBits, out int occupancyWordCount);
+        bool hasSolidBlocks = FillOccupancyBuffer(voxelData, blockMappings, clampedStartY, height, occupancyBits);
+
+        if (TryRestoreCachedColliders(owner, clampedStartY, height, occupancyBits, occupancyWordCount, out bool restoredHasColliders))
+            return restoredHasColliders;
+
+        if (!hasSolidBlocks)
+        {
+            CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordCount, 0);
+            activeBoxColliderCount = 0;
+            DisableUnusedColliders(0);
+            return false;
+        }
+
         PrepareBuffers(volume, out bool[] solids, out bool[] visited);
-        FillSolidBuffer(voxelData, blockMappings, clampedStartY, height, solids);
+        FillSolidBufferFromOccupancy(occupancyBits, volume, solids);
 
         int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
         activeBoxColliderCount = colliderCount;
         DisableUnusedColliders(colliderCount);
+        CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordCount, colliderCount);
         return colliderCount > 0;
     }
 
@@ -78,13 +100,22 @@ internal sealed class SubchunkColliderBuilder
         Array.Clear(visited, 0, volume);
     }
 
-    private static void FillSolidBuffer(
+    private void PrepareOccupancyBuffer(int volume, out ulong[] occupancyBits, out int occupancyWordCount)
+    {
+        occupancyWordCount = Mathf.Max(1, (volume + 63) >> 6);
+        EnsureOccupancyBuffers(occupancyWordCount);
+        occupancyBits = colliderOccupancyBuffer;
+        Array.Clear(occupancyBits, 0, occupancyWordCount);
+    }
+
+    private static bool FillOccupancyBuffer(
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
         int clampedStartY,
         int height,
-        bool[] solids)
+        ulong[] occupancyBits)
     {
+        bool hasSolidBlocks = false;
         int plane = Chunk.SizeX * Chunk.SizeZ;
 
         for (int y = 0; y < height; y++)
@@ -105,9 +136,22 @@ internal sealed class SubchunkColliderBuilder
                         continue;
 
                     int localIndex = x + localYBase + localZBase;
-                    solids[localIndex] = true;
+                    occupancyBits[localIndex >> 6] |= 1UL << (localIndex & 63);
+                    hasSolidBlocks = true;
                 }
             }
+        }
+
+        return hasSolidBlocks;
+    }
+
+    private static void FillSolidBufferFromOccupancy(ulong[] occupancyBits, int volume, bool[] solids)
+    {
+        for (int index = 0; index < volume; index++)
+        {
+            int wordIndex = index >> 6;
+            if ((occupancyBits[wordIndex] & (1UL << (index & 63))) != 0)
+                solids[index] = true;
         }
     }
 
@@ -259,6 +303,85 @@ internal sealed class SubchunkColliderBuilder
         return x + y * sizeX + z * sizeX * sizeY;
     }
 
+    private bool TryRestoreCachedColliders(
+        GameObject owner,
+        int clampedStartY,
+        int height,
+        ulong[] occupancyBits,
+        int occupancyWordCount,
+        out bool hasColliders)
+    {
+        hasColliders = false;
+
+        if (!hasCachedColliderLayout ||
+            cachedStartY != clampedStartY ||
+            cachedHeight != height ||
+            cachedColliderOccupancyWordCount != occupancyWordCount ||
+            !OccupancyMatchesCache(occupancyBits, occupancyWordCount))
+        {
+            return false;
+        }
+
+        if (cachedColliderCount <= 0)
+        {
+            activeBoxColliderCount = 0;
+            DisableUnusedColliders(0);
+            return true;
+        }
+
+        if (!CanRestoreCachedColliderComponents(cachedColliderCount))
+            return false;
+
+        for (int i = 0; i < cachedColliderCount; i++)
+            boxColliders[i].enabled = true;
+
+        activeBoxColliderCount = cachedColliderCount;
+        DisableUnusedColliders(cachedColliderCount);
+        hasColliders = true;
+        return true;
+    }
+
+    private bool OccupancyMatchesCache(ulong[] occupancyBits, int occupancyWordCount)
+    {
+        for (int i = 0; i < occupancyWordCount; i++)
+        {
+            if (cachedColliderOccupancyBits[i] != occupancyBits[i])
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool CanRestoreCachedColliderComponents(int colliderCount)
+    {
+        if (boxColliders.Count < colliderCount)
+            return false;
+
+        for (int i = 0; i < colliderCount; i++)
+        {
+            if (boxColliders[i] == null)
+                return false;
+        }
+
+        return true;
+    }
+
+    private void CacheColliderLayout(
+        int clampedStartY,
+        int height,
+        ulong[] occupancyBits,
+        int occupancyWordCount,
+        int colliderCount)
+    {
+        EnsureCachedOccupancyBuffer(occupancyWordCount);
+        Array.Copy(occupancyBits, cachedColliderOccupancyBits, occupancyWordCount);
+        cachedColliderOccupancyWordCount = occupancyWordCount;
+        cachedColliderCount = colliderCount;
+        cachedStartY = clampedStartY;
+        cachedHeight = height;
+        hasCachedColliderLayout = true;
+    }
+
     private void EnsureColliderBuffers(int volume)
     {
         if (volume <= 0)
@@ -269,6 +392,24 @@ internal sealed class SubchunkColliderBuilder
 
         if (colliderVisitedBuffer == null || colliderVisitedBuffer.Length < volume)
             colliderVisitedBuffer = new bool[volume];
+    }
+
+    private void EnsureOccupancyBuffers(int occupancyWordCount)
+    {
+        if (occupancyWordCount <= 0)
+            return;
+
+        if (colliderOccupancyBuffer == null || colliderOccupancyBuffer.Length < occupancyWordCount)
+            colliderOccupancyBuffer = new ulong[occupancyWordCount];
+    }
+
+    private void EnsureCachedOccupancyBuffer(int occupancyWordCount)
+    {
+        if (occupancyWordCount <= 0)
+            return;
+
+        if (cachedColliderOccupancyBits == null || cachedColliderOccupancyBits.Length < occupancyWordCount)
+            cachedColliderOccupancyBits = new ulong[occupancyWordCount];
     }
 
     private static bool IsBlockCollidable(byte blockId, BlockTextureMapping[] blockMappings)
