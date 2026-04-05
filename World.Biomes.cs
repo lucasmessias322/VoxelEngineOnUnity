@@ -13,6 +13,10 @@ public partial class World : MonoBehaviour
     private const float DefaultColdSnowBlendRange = 22f;
     private const float DefaultColdSnowTemperatureThreshold = 0.30f;
     private const float DefaultColdSurfaceNoiseScale = 0.045f;
+    private const float BiomeTemperatureSeedOffsetX = 0.173f;
+    private const float BiomeTemperatureSeedOffsetY = -0.241f;
+    private const float BiomeHumiditySeedOffsetX = -0.137f;
+    private const float BiomeHumiditySeedOffsetY = 0.197f;
 
     [Header("Biome Definitions")]
     [Tooltip("Dados do bioma via ScriptableObject. Se vazio, o World tenta carregar automaticamente de Resources/Biomes.")]
@@ -150,12 +154,8 @@ public partial class World : MonoBehaviour
 
     private void InitializeBiomeNoiseOffsets()
     {
-        // Quando o usuario nao fixa offsets, derivamos do seed para manter mundos repetiveis.
-        if (biomeTemperatureOffset == Vector2.zero)
-            biomeTemperatureOffset = new Vector2(seed * 0.173f, seed * -0.241f);
-
-        if (biomeHumidityOffset == Vector2.zero)
-            biomeHumidityOffset = new Vector2(seed * -0.137f, seed * 0.197f);
+        biomeTemperatureOffset = SanitizeBiomeOffset(biomeTemperatureOffset);
+        biomeHumidityOffset = SanitizeBiomeOffset(biomeHumidityOffset);
     }
 
     private BiomeNoiseSettings GetBiomeNoiseSettings()
@@ -164,6 +164,14 @@ public partial class World : MonoBehaviour
             return cachedBiomeNoiseSettings;
 
         // Consolida o estado do inspector + ScriptableObjects em um snapshot seguro para jobs.
+        Vector2 effectiveTemperatureOffset = GetSeededBiomeOffset(
+            biomeTemperatureOffset,
+            BiomeTemperatureSeedOffsetX,
+            BiomeTemperatureSeedOffsetY);
+        Vector2 effectiveHumidityOffset = GetSeededBiomeOffset(
+            biomeHumidityOffset,
+            BiomeHumiditySeedOffsetX,
+            BiomeHumiditySeedOffsetY);
         BiomeTerrainSettings desertTerrainSettings = SanitizeBiomeTerrainSettings(desertTerrain, BiomeTerrainSettings.DesertDefault);
         BiomeTerrainSettings savannaTerrainSettings = SanitizeBiomeTerrainSettings(savannaTerrain, BiomeTerrainSettings.SavannaDefault);
         BiomeTerrainSettings meadowTerrainSettings = SanitizeBiomeTerrainSettings(meadowTerrain, BiomeTerrainSettings.MeadowDefault);
@@ -178,8 +186,8 @@ public partial class World : MonoBehaviour
         {
             temperatureScale = math.max(0.0001f, biomeTemperatureScale),
             humidityScale = math.max(0.0001f, biomeHumidityScale),
-            temperatureOffset = new float2(biomeTemperatureOffset.x, biomeTemperatureOffset.y),
-            humidityOffset = new float2(biomeHumidityOffset.x, biomeHumidityOffset.y),
+            temperatureOffset = new float2(effectiveTemperatureOffset.x, effectiveTemperatureOffset.y),
+            humidityOffset = new float2(effectiveHumidityOffset.x, effectiveHumidityOffset.y),
             terrainBlendRange = math.max(0.01f, coldSettingsUninitialized ? DefaultBiomeTerrainBlendRange : biomeTerrainBlendRange),
             desertMinTemperature = math.saturate(desertMinTemperature),
             desertMaxHumidity = math.saturate(desertMaxHumidity),
@@ -272,6 +280,22 @@ public partial class World : MonoBehaviour
                coldSnowBlendRange == 0f &&
                coldSnowTemperatureThreshold == 0f &&
                coldSurfaceNoiseScale == 0f;
+    }
+
+    private Vector2 GetSeededBiomeOffset(Vector2 configuredOffset, float xMultiplier, float yMultiplier)
+    {
+        return configuredOffset + new Vector2(seed * xMultiplier, seed * yMultiplier);
+    }
+
+    private static Vector2 SanitizeBiomeOffset(Vector2 offset)
+    {
+        if (float.IsNaN(offset.x) || float.IsInfinity(offset.x))
+            offset.x = 0f;
+
+        if (float.IsNaN(offset.y) || float.IsInfinity(offset.y))
+            offset.y = 0f;
+
+        return offset;
     }
 
     private BiomeType GetBiomeAt(int worldX, int worldZ)
