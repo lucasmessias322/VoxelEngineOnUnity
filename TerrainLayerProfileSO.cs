@@ -77,8 +77,8 @@ public class TerrainLayerProfileSO : ScriptableObject
                 octaves: 3,
                 persistence: 0.55f,
                 lacunarity: 2.1f,
-                redistributionModifier: 1.15f,
-                exponent: 1.22f,
+                redistributionModifier: 1f,
+                exponent: 1f,
                 ridgeFactor: 1f
             ),
             CreateNoiseLayer(
@@ -90,7 +90,7 @@ public class TerrainLayerProfileSO : ScriptableObject
                 lacunarity: 2.3f,
                 redistributionModifier: 1.28f,
                 exponent: 1.28f,
-                ridgeFactor: 2.55f
+                ridgeFactor: 1f
             ),
         };
 

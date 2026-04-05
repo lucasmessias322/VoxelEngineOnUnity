@@ -127,6 +127,33 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    public static bool UsesSemanticTerrainShaping(TerrainNoiseRole role)
+    {
+        switch (role)
+        {
+            case TerrainNoiseRole.Continentalness:
+            case TerrainNoiseRole.Erosion:
+            case TerrainNoiseRole.PeaksValleys:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    [BurstCompile]
+    public static bool UsesLegacyRidgeSharpening(TerrainNoiseRole role)
+    {
+        return role == TerrainNoiseRole.LegacyAdditive;
+    }
+
+    [BurstCompile]
+    public static float GetMinecraftPeaksAndValleys(float weirdness)
+    {
+        // Mesma transformacao usada pelo vanilla para derivar ridges_folded a partir de weirdness.
+        return -(math.abs(math.abs(weirdness) - (2f / 3f)) - (1f / 3f)) * 3f;
+    }
+
+    [BurstCompile]
     private static float SmoothThreshold(float value, float min, float max)
     {
         float t = math.saturate((value - min) / math.max(1e-5f, max - min));
@@ -190,17 +217,17 @@ public static class MyNoise
         float continentalness = continentalness01 * 2f - 1f;
         float erosion = erosion01 * 2f - 1f;
         float hillsNoise = hillsNoise01 * 2f - 1f;
+        // No Overworld moderno, o canal semanticamente equivalente aqui e o weirdness.
         float ridges = peaksValleys01 * 2f - 1f;
-        float peakSignal = math.abs(ridges);
-        float mountainSignal = math.saturate((mountainNoise01 - 0.48f) / 0.52f);
-        // Fase 1: o shaping agora le um noise point com multiplos canais.
-        // Por compatibilidade com os assets atuais, ridgesFolded ainda usa o sinal de pico dobrado [0..1].
+        float ridgesFolded = GetMinecraftPeaksAndValleys(ridges);
+        float ridgePeakMask = math.saturate(ridgesFolded);
+        float mountainVariation = mountainWeight > 0f ? mountainNoise01 : 0.5f;
         TerrainShapePoint shapePoint = new TerrainShapePoint
         {
             continents = continentalness,
             erosion = erosion,
             ridges = ridges,
-            ridgesFolded = peakSignal
+            ridgesFolded = ridgesFolded
         };
 
         float flatness = math.saturate(TerrainSplineGraphEvaluator.Evaluate(
@@ -213,7 +240,7 @@ public static class MyNoise
             terrainShaper,
             TerrainSplineGraphTarget.Jaggedness,
             shapePoint,
-            peakSignal));
+            ridgesFolded));
         float offset = TerrainSplineGraphEvaluator.Evaluate(
             terrainShaper,
             TerrainSplineGraphTarget.Offset,
@@ -224,8 +251,8 @@ public static class MyNoise
         float legacyDetail = GetLegacyCenteredNoise(legacyTotal, legacyWeight) * math.lerp(1.75f, 8.25f, ruggedness);
         float inlandness = math.saturate(offset * 0.5f + 0.55f);
 
-        // Morros, foothills e montanhas nascem do mesmo conjunto de canais,
-        // mas com mascaras diferentes para evitar picos em todo lugar.
+        // Morros, foothills e montanhas passam a nascer do trio
+        // continents/erosion/weirdness, com MountainNoise servindo so como variacao secundaria.
         float hills = hillsNoise
             * math.max(1f, hillsWeight)
             * math.lerp(0.10f, 0.72f, ruggedness)
@@ -234,20 +261,22 @@ public static class MyNoise
             * math.max(1f, hillsWeight)
             * ruggedness
             * inlandness
+            * math.lerp(1f, 0.7f, ridgePeakMask)
             * 0.34f
             * math.lerp(0.7f, 1f, hillsMultiplier);
-        float mountains = math.pow(mountainSignal, 2.35f)
-            * math.max(1f, mountainWeight)
+        float mountains = math.pow(ridgePeakMask, 1.35f)
+            * math.max(1f, mountainWeight) * 0.12f
+            * math.lerp(0.78f, 1.18f, mountainVariation)
             * jaggedness
             * ruggedness
             * inlandness
             * mountainMultiplier;
-        float cliffAccent = math.pow(math.saturate((mountainNoise01 - 0.63f) / 0.37f), 2.4f)
-            * math.max(1f, mountainWeight)
+        float cliffAccent = math.pow(ridgePeakMask, 2.1f)
+            * math.max(1f, mountainWeight) * 0.05f
+            * math.pow(math.saturate((mountainVariation - 0.56f) / 0.44f), 1.8f)
             * jaggedness
             * ruggedness
             * inlandness
-            * 0.28f
             * mountainMultiplier;
 
         float terrain = continentalBaseline + legacyDetail + hills + foothills + mountains + cliffAccent;
@@ -263,7 +292,7 @@ public static class MyNoise
         terrain = ApplyTerracing(terrain, 2f, hillsTerraceMask * 0.38f);
 
         float mountainTerraceMask = inlandness
-            * jaggedness
+            * math.max(jaggedness, ridgePeakMask)
             * ruggedness
             * SmoothThreshold(terrain, 12f, 42f)
             * math.lerp(1f, 0.7f, flattenStrength);
@@ -368,7 +397,9 @@ public static class MyNoise
         int octaves = math.max(1, layer.octaves);
         float persistence = math.clamp(layer.persistence, 0f, 1f);
         float lacunarity = math.max(1f, layer.lacunarity);
-        float ridgeFactor = math.max(1f, layer.ridgeFactor);
+        float ridgeFactor = UsesLegacyRidgeSharpening(layer.role)
+            ? math.max(1f, layer.ridgeFactor)
+            : 1f;
 
         float total = 0f;
         float amplitude = 1f;

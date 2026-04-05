@@ -118,7 +118,8 @@ public static class TerrainHeightSampler
         float nz = (worldZ + offsetZ) + layer.offset.y;
 
         float sample = MyNoise.OctavePerlin(nx, nz, layer);
-        if (layer.redistributionModifier != 1f || layer.exponent != 1f)
+        if (!MyNoise.UsesSemanticTerrainShaping(layer.role) &&
+            (layer.redistributionModifier != 1f || layer.exponent != 1f))
             sample = MyNoise.Redistribution(sample, layer.redistributionModifier, layer.exponent);
 
         // Layers sem role continuam alimentando o caminho legado; layers tipadas
