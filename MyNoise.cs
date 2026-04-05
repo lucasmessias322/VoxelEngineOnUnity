@@ -193,10 +193,32 @@ public static class MyNoise
         float ridges = peaksValleys01 * 2f - 1f;
         float peakSignal = math.abs(ridges);
         float mountainSignal = math.saturate((mountainNoise01 - 0.48f) / 0.52f);
-        float flatness = math.saturate(TerrainSplineEvaluator.Evaluate(terrainShaper.factorSpline, erosion, erosion01));
+        // Fase 1: o shaping agora le um noise point com multiplos canais.
+        // Por compatibilidade com os assets atuais, ridgesFolded ainda usa o sinal de pico dobrado [0..1].
+        TerrainShapePoint shapePoint = new TerrainShapePoint
+        {
+            continents = continentalness,
+            erosion = erosion,
+            ridges = ridges,
+            ridgesFolded = peakSignal
+        };
+
+        float flatness = math.saturate(TerrainSplineGraphEvaluator.Evaluate(
+            terrainShaper,
+            TerrainSplineGraphTarget.Factor,
+            shapePoint,
+            erosion01));
         float ruggedness = 1f - flatness;
-        float jaggedness = math.max(0f, TerrainSplineEvaluator.Evaluate(terrainShaper.jaggednessSpline, peakSignal, peakSignal));
-        float offset = TerrainSplineEvaluator.Evaluate(terrainShaper.offsetSpline, continentalness, continentalness);
+        float jaggedness = math.max(0f, TerrainSplineGraphEvaluator.Evaluate(
+            terrainShaper,
+            TerrainSplineGraphTarget.Jaggedness,
+            shapePoint,
+            peakSignal));
+        float offset = TerrainSplineGraphEvaluator.Evaluate(
+            terrainShaper,
+            TerrainSplineGraphTarget.Offset,
+            shapePoint,
+            continentalness);
 
         float continentalBaseline = offset * math.max(1f, continentalWeight) * 0.82f;
         float legacyDetail = GetLegacyCenteredNoise(legacyTotal, legacyWeight) * math.lerp(1.75f, 8.25f, ruggedness);
