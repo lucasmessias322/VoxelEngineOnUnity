@@ -10,6 +10,12 @@ public static class TerrainDensitySampler
     private const float OverhangOffsetX = -143.17f;
     private const float OverhangOffsetY = 53.21f;
     private const float OverhangOffsetZ = 87.61f;
+    private const float OverhangContinentsOffsetX = 521.37f;
+    private const float OverhangContinentsOffsetZ = -214.29f;
+    private const float OverhangErosionOffsetX = -318.42f;
+    private const float OverhangErosionOffsetZ = 461.93f;
+    private const float OverhangRidgesOffsetX = 702.15f;
+    private const float OverhangRidgesOffsetZ = 119.74f;
 
     [BurstCompile]
     public static TerrainDensitySettings ResolveBiomeDensitySettings(
@@ -76,21 +82,29 @@ public static class TerrainDensitySampler
 
         float overhangMask = GetOverhangMask(worldY, baseSurfaceHeight, densitySettings);
         float overhangNoise = 0f;
+        float overhangPlacementMask = 0f;
         if (overhangMask > 1e-5f && densitySettings.overhangAmplitude > 1e-5f)
         {
-            overhangNoise = SampleRidgedSimplex3D(
-                sampleX + OverhangOffsetX,
-                sampleY + OverhangOffsetY,
-                sampleZ + OverhangOffsetZ,
-                densitySettings.overhangScale,
-                densitySettings.overhangVerticalScale,
-                densitySettings.overhangOctaves,
-                densitySettings.overhangPersistence,
-                densitySettings.overhangLacunarity);
+            overhangPlacementMask = GetOverhangPlacementMask(worldX, worldZ, offsetX, offsetZ, densitySettings);
+            if (overhangPlacementMask > 1e-5f)
+            {
+                overhangNoise = SampleRidgedSimplex3D(
+                    sampleX + OverhangOffsetX,
+                    sampleY + OverhangOffsetY,
+                    sampleZ + OverhangOffsetZ,
+                    densitySettings.overhangScale,
+                    densitySettings.overhangVerticalScale,
+                    densitySettings.overhangOctaves,
+                    densitySettings.overhangPersistence,
+                    densitySettings.overhangLacunarity);
+            }
         }
 
         float detailDensity = detailNoise * densitySettings.detailAmplitude * detailMask;
-        float overhangDensity = ((overhangNoise - densitySettings.overhangThreshold) * 2f) * densitySettings.overhangAmplitude * overhangMask;
+        float overhangDensity = ComputeOverhangSignal(overhangNoise, densitySettings)
+            * densitySettings.overhangAmplitude
+            * overhangMask
+            * overhangPlacementMask;
         return baseDensity + detailDensity + overhangDensity;
     }
 
@@ -387,30 +401,95 @@ public static class TerrainDensitySampler
     [BurstCompile]
     private static float GetDetailMask(int worldY, int baseSurfaceHeight, in TerrainDensitySettings densitySettings)
     {
-        return math.saturate(1f - math.abs(worldY - baseSurfaceHeight) / densitySettings.detailBandHeight);
+        return math.abs(worldY - baseSurfaceHeight) <= densitySettings.detailBandHeight ? 1f : 0f;
     }
 
     [BurstCompile]
     private static float GetOverhangMask(int worldY, int baseSurfaceHeight, in TerrainDensitySettings densitySettings)
     {
-        float overhangBaseY = baseSurfaceHeight - densitySettings.overhangBelowSurfaceAllowance;
-        float overhangBelowMask = densitySettings.overhangBelowSurfaceAllowance > 0f
-            ? math.saturate((worldY - overhangBaseY) / densitySettings.overhangBelowSurfaceAllowance)
-            : 1f;
-        float overhangAboveMask = math.saturate(1f - math.max(0f, worldY - baseSurfaceHeight) / densitySettings.overhangBandHeight);
-        return overhangBelowMask * overhangAboveMask;
+        float baseDensity = GetBaseDensity(worldY, baseSurfaceHeight, densitySettings);
+        float minY = baseSurfaceHeight - densitySettings.overhangBelowSurfaceAllowance;
+        float maxY = baseSurfaceHeight + densitySettings.overhangBandHeight;
+        bool withinVerticalBand = worldY >= minY && worldY <= maxY;
+        bool withinIsoBand = math.abs(baseDensity) <= densitySettings.overhangIsoBandHeight;
+        return withinVerticalBand && withinIsoBand ? 1f : 0f;
     }
 
     [BurstCompile]
     private static float GetMaxOverhangDensityContribution(float overhangMask, in TerrainDensitySettings densitySettings)
     {
-        return ((1f - densitySettings.overhangThreshold) * 2f) * densitySettings.overhangAmplitude * overhangMask;
+        return densitySettings.overhangAmplitude * overhangMask;
     }
 
     [BurstCompile]
     private static float GetMinOverhangDensityContribution(float overhangMask, in TerrainDensitySettings densitySettings)
     {
-        return ((0f - densitySettings.overhangThreshold) * 2f) * densitySettings.overhangAmplitude * overhangMask;
+        return -densitySettings.overhangCarveStrength * densitySettings.overhangAmplitude * overhangMask;
+    }
+
+    [BurstCompile]
+    private static float ComputeOverhangSignal(float overhangNoise, in TerrainDensitySettings densitySettings)
+    {
+        if (overhangNoise >= densitySettings.overhangThreshold)
+            return 1f;
+
+        if (densitySettings.overhangCarveStrength <= 1e-5f)
+            return 0f;
+
+        float carveThreshold = densitySettings.overhangThreshold * 0.55f;
+        return overhangNoise <= carveThreshold ? -densitySettings.overhangCarveStrength : 0f;
+    }
+
+    [BurstCompile]
+    private static float GetOverhangPlacementMask(
+        int worldX,
+        int worldZ,
+        float offsetX,
+        float offsetZ,
+        in TerrainDensitySettings densitySettings)
+    {
+        float sampleX = worldX + offsetX;
+        float sampleZ = worldZ + offsetZ;
+
+        float continents = SampleFractalSimplex2D(
+            sampleX + OverhangContinentsOffsetX,
+            sampleZ + OverhangContinentsOffsetZ,
+            densitySettings.overhangPlacementScale,
+            densitySettings.overhangPlacementOctaves,
+            densitySettings.overhangPlacementPersistence,
+            densitySettings.overhangPlacementLacunarity);
+        float erosion = SampleFractalSimplex2D(
+            sampleX + OverhangErosionOffsetX,
+            sampleZ + OverhangErosionOffsetZ,
+            densitySettings.overhangPlacementScale,
+            densitySettings.overhangPlacementOctaves,
+            densitySettings.overhangPlacementPersistence,
+            densitySettings.overhangPlacementLacunarity);
+        float ridges = SampleFractalSimplex2D(
+            sampleX + OverhangRidgesOffsetX,
+            sampleZ + OverhangRidgesOffsetZ,
+            densitySettings.overhangPlacementScale,
+            densitySettings.overhangPlacementOctaves,
+            densitySettings.overhangPlacementPersistence,
+            densitySettings.overhangPlacementLacunarity);
+
+        float continentalness01 = continents * 0.5f + 0.5f;
+        float erosion01 = erosion * 0.5f + 0.5f;
+        float ridgesFolded = MyNoise.GetMinecraftPeaksAndValleys(ridges);
+
+        float inlandMask = SmoothStep(continentalness01, densitySettings.overhangContinentalnessMin, 1f);
+        float erosionMask = 1f - SmoothStep(erosion01, densitySettings.overhangErosionMax, 1f);
+        float ridgeMask = SmoothStep(ridgesFolded, densitySettings.overhangRidgeMin, 1f);
+        float placement = math.saturate(inlandMask * erosionMask * ridgeMask);
+
+        return math.pow(placement, densitySettings.overhangPlacementSharpness);
+    }
+
+    [BurstCompile]
+    private static float SmoothStep(float value, float min, float max)
+    {
+        float t = math.saturate((value - min) / math.max(1e-5f, max - min));
+        return t * t * (3f - 2f * t);
     }
 
     [BurstCompile]
@@ -440,6 +519,40 @@ public static class TerrainDensitySampler
         resolvedSettings.overhangThreshold *= safeMultipliers.overhangThresholdMultiplier;
 
         return resolvedSettings.Sanitized();
+    }
+
+    [BurstCompile]
+    private static float SampleFractalSimplex2D(
+        float x,
+        float z,
+        float scale,
+        int octaves,
+        float persistence,
+        float lacunarity)
+    {
+        float total = 0f;
+        float amplitude = 1f;
+        float frequency = 1f;
+        float amplitudeSum = 0f;
+        float safeScale = math.max(0.001f, scale);
+        int safeOctaves = math.max(1, octaves);
+
+        for (int i = 0; i < safeOctaves; i++)
+        {
+            float2 samplePoint = new float2(
+                (x * frequency) / safeScale,
+                (z * frequency) / safeScale);
+
+            total += noise.snoise(samplePoint) * amplitude;
+            amplitudeSum += amplitude;
+            amplitude *= math.clamp(persistence, 0f, 1f);
+            frequency *= math.max(1f, lacunarity);
+        }
+
+        if (amplitudeSum <= 1e-5f)
+            return 0f;
+
+        return math.clamp(total / amplitudeSum, -1f, 1f);
     }
 
     [BurstCompile]

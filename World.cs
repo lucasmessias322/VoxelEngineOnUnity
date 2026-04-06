@@ -171,7 +171,7 @@ public partial class World : MonoBehaviour
 
     [Header("Density Terrain")]
     [Tooltip("Quando ativo, o terreno base deixa de usar apenas a altura da coluna e passa a combinar uma superficie 2D com ruido 3D para criar overhangs e saliencias.")]
-    public TerrainDensitySettings terrainDensity = TerrainDensitySettings.MinetestInspiredDefault;
+    public TerrainDensitySettings terrainDensity = TerrainDensitySettings.MinecraftLikeDefault;
 
     [Header("Density Debug")]
     [Tooltip("Debug: desliga o ruido fino 3D perto da superficie sem desligar a densidade 3D inteira.")]
