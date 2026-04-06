@@ -55,7 +55,7 @@ public partial class World : MonoBehaviour
     public BlockType GetBlockAt(Vector3Int worldPos)
     {
         if (blockOverrides.TryGetValue(worldPos, out BlockType overridden))
-            return overridden;
+            return ResolveWaterStateForDebug(overridden);
 
         if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
             return BlockType.Air;
@@ -77,7 +77,7 @@ public partial class World : MonoBehaviour
             if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
             {
                 int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
-                return (BlockType)chunk.voxelData[idx];
+                return ResolveWaterStateForDebug((BlockType)chunk.voxelData[idx]);
             }
         }
 
@@ -103,7 +103,7 @@ public partial class World : MonoBehaviour
             int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, Chunk.SizeY, resolvedDensitySettings);
 
             if (worldPos.y > densityTopY)
-                return worldPos.y <= seaLevel ? BlockType.Water : BlockType.Air;
+                return GetProceduralSeaBlockOrAir(worldPos.y);
 
             if (worldPos.y <= guaranteedSolidY)
             {
@@ -117,7 +117,7 @@ public partial class World : MonoBehaviour
             if (!TerrainDensitySampler.IsSolidAt(
                 worldX, worldPos.y, worldZ, baseSurfaceHeight, offsetX, offsetZ, resolvedDensitySettings))
             {
-                return worldPos.y <= seaLevel ? BlockType.Water : BlockType.Air;
+                return GetProceduralSeaBlockOrAir(worldPos.y);
             }
 
             TerrainColumnContext densityColumnContext = TerrainDensitySampler.SampleColumnContext(
@@ -132,7 +132,7 @@ public partial class World : MonoBehaviour
             Chunk.SizeY, CliffTreshold, seaLevel, biomeSettings);
 
         if (worldPos.y > columnContext.surfaceHeight)
-            return worldPos.y <= seaLevel ? BlockType.Water : BlockType.Air;
+            return GetProceduralSeaBlockOrAir(worldPos.y);
 
         return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, columnContext.surface);
     }

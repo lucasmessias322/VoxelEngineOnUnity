@@ -188,6 +188,8 @@ public partial class World : MonoBehaviour
     [Header("Sea Settings")]
     public int seaLevel = 62;
     public BlockType waterBlock = BlockType.Water;
+    [Tooltip("Debug: desativa a geracao e simulacao de agua no mundo.")]
+    public bool enableWater = true;
 
     public int CliffTreshold = 2;
 
@@ -380,6 +382,7 @@ public partial class World : MonoBehaviour
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
+    private bool lastEnableWater = true;
     private bool lastDebugEnable3DDetailNoise = true;
     private bool lastDebugEnable3DOverhangNoise = true;
     private bool lastDebugEnableBiome3DDensityMultipliers = true;
@@ -414,6 +417,22 @@ public partial class World : MonoBehaviour
         settings.debugEnableOverhangNoise = debugEnable3DOverhangNoise;
         settings.debugEnableBiomeDensityMultipliers = debugEnableBiome3DDensityMultipliers;
         return settings.Sanitized();
+    }
+
+    private BlockType ResolveWaterStateForDebug(BlockType blockType)
+    {
+        if (!enableWater && FluidBlockUtility.IsWater(blockType))
+            return BlockType.Air;
+
+        return blockType;
+    }
+
+    private BlockType GetProceduralSeaBlockOrAir(int worldY)
+    {
+        if (!enableWater || worldY > seaLevel)
+            return BlockType.Air;
+
+        return BlockType.Water;
     }
 
     private void EnsureTerrainDensityDebugSettingsInitialized()
@@ -871,6 +890,7 @@ public partial class World : MonoBehaviour
             Vector3Int worldPos = relevantTerrainOverridePositions[i];
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
+            overrideType = ResolveWaterStateForDebug(overrideType);
 
             editsList.Add(new BlockEdit
             {
@@ -1075,6 +1095,7 @@ public partial class World : MonoBehaviour
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
+        lastEnableWater = enableWater;
         lastDebugEnable3DDetailNoise = debugEnable3DDetailNoise;
         lastDebugEnable3DOverhangNoise = debugEnable3DOverhangNoise;
         lastDebugEnableBiome3DDensityMultipliers = debugEnableBiome3DDensityMultipliers;
@@ -1550,6 +1571,7 @@ public partial class World : MonoBehaviour
                 continue;
             if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
                 continue;
+            overrideType = ResolveWaterStateForDebug(overrideType);
 
             int ix = worldPos.x - chunkMinX + borderSize;
             int iz = worldPos.z - chunkMinZ + borderSize;
@@ -1646,6 +1668,7 @@ public partial class World : MonoBehaviour
             Vector3Int worldPos = relevantTerrainOverridePositions[i];
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
+            overrideType = ResolveWaterStateForDebug(overrideType);
 
             UpdateVoxelSnapshotCell(voxelSnapshot, chunkMinX, chunkMinZ, worldPos, overrideType);
         }
@@ -2187,7 +2210,7 @@ public partial class World : MonoBehaviour
         // heightmap, superficie, cavernas, minerios, agua, arvores, edits e iluminacao.
         MeshGenerator.ScheduleDataJob(
             coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
-            baseHeight, offsetX, offsetZ, seaLevel,
+            baseHeight, offsetX, offsetZ, seaLevel, enableWater,
             GetBiomeNoiseSettings(),
             GetTerrainDensitySettings(),
             seed,
@@ -2307,6 +2330,7 @@ public partial class World : MonoBehaviour
             snapshotLoadedChunks = snapshotLoadedChunks,
             blockTypes = blockTypes,
             knownVoxelData = knownVoxelData,
+            disableWater = !enableWater,
             borderSize = copyBorderSize,
             voxelSizeX = copyVoxelSizeX,
             voxelPlaneSize = copyVoxelPlaneSize,
@@ -2357,6 +2381,7 @@ public partial class World : MonoBehaviour
                 snapshotLoadedChunks = snapshotLoadedChunks,
                 effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
                 opacity = lightOpacityData,
+                disableWater = !enableWater,
                 borderSize = lightBorderSize,
                 voxelSizeX = lightVoxelSizeX,
                 snapshotChunkRadius = snapshotChunkRadius,
@@ -2529,7 +2554,7 @@ public partial class World : MonoBehaviour
                     if (hasLoadedColumn)
                     {
                         int srcIdx = srcColumnBase + y * Chunk.SizeX * Chunk.SizeZ;
-                        bt = (BlockType)srcChunk.voxelData[srcIdx];
+                        bt = ResolveWaterStateForDebug((BlockType)srcChunk.voxelData[srcIdx]);
                     }
                     else
                     {
@@ -2592,7 +2617,7 @@ public partial class World : MonoBehaviour
                     if (hasLoadedColumn)
                     {
                         int srcIdx = srcColumnBase + y * Chunk.SizeX * Chunk.SizeZ;
-                        bt = (BlockType)srcChunk.voxelData[srcIdx];
+                        bt = ResolveWaterStateForDebug((BlockType)srcChunk.voxelData[srcIdx]);
                     }
                     else
                     {
@@ -2636,6 +2661,7 @@ public partial class World : MonoBehaviour
                 continue;
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
+            overrideType = ResolveWaterStateForDebug(overrideType);
 
             int ix = worldPos.x - chunkMinX + borderSize;
             int iz = worldPos.z - chunkMinZ + borderSize;

@@ -49,6 +49,7 @@ public partial class World
     {
         bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;
         bool aoChanged = lastEnableAmbientOcclusion != enableAmbientOcclusion;
+        bool waterChanged = lastEnableWater != enableWater;
         bool horizontalLightingChanged = enableVoxelLighting && lastEnableHorizontalSkylight != enableHorizontalSkylight;
         bool densityDebugChanged =
             lastDebugEnable3DDetailNoise != debugEnable3DDetailNoise ||
@@ -63,13 +64,20 @@ public partial class World
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
+        lastEnableWater = enableWater;
         lastDebugEnable3DDetailNoise = debugEnable3DDetailNoise;
         lastDebugEnable3DOverhangNoise = debugEnable3DOverhangNoise;
         lastDebugEnableBiome3DDensityMultipliers = debugEnableBiome3DDensityMultipliers;
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
 
-        if (!lightingChanged && !aoChanged && !horizontalLightingChanged && !horizontalLightingParamsChanged && !densityDebugChanged)
+        if (!enableWater && waterChanged)
+        {
+            queuedWaterUpdates.Clear();
+            queuedWaterUpdateSet.Clear();
+        }
+
+        if (!lightingChanged && !aoChanged && !waterChanged && !horizontalLightingChanged && !horizontalLightingParamsChanged && !densityDebugChanged)
             return;
 
         foreach (var kv in activeChunks)

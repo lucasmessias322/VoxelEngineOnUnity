@@ -183,6 +183,7 @@ public partial class World
             offsetX,
             offsetZ,
             seaLevel,
+            enableWater,
             GetBiomeNoiseSettings(),
             GetTerrainDensitySettings(),
             seed,

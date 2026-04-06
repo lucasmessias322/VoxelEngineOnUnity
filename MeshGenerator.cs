@@ -795,6 +795,7 @@ public static class MeshGenerator
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
+        bool enableWater,
         BiomeNoiseSettings biomeNoiseSettings,
         TerrainDensitySettings terrainDensitySettings,
         int oreSeed,
@@ -1003,20 +1004,27 @@ public static class MeshGenerator
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
             oreChunkDataHandle = oreChunkDataJob.Schedule(caveChunkDataHandle);
 
-            var fillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
+            if (enableWater)
             {
-                baseSolids = baseTerrainSolids,
-                blockTypes = blockTypes,
-                solids = solids,
-                border = dataBorderSize,
-                seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
-                waterBlockId = (byte)BlockType.Water,
-                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
-            };
-            waterChunkDataHandle = fillWaterBelowSeaLevelJob.Schedule(
-                dataTotalHeightPoints,
-                32,
-                JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
+                var fillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
+                {
+                    baseSolids = baseTerrainSolids,
+                    blockTypes = blockTypes,
+                    solids = solids,
+                    border = dataBorderSize,
+                    seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
+                    waterBlockId = (byte)BlockType.Water,
+                    waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+                };
+                waterChunkDataHandle = fillWaterBelowSeaLevelJob.Schedule(
+                    dataTotalHeightPoints,
+                    32,
+                    JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
+            }
+            else
+            {
+                waterChunkDataHandle = JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle);
+            }
 
             treeChunkDataHandle = waterChunkDataHandle;
             if (enableTrees)
@@ -1123,20 +1131,27 @@ public static class MeshGenerator
         stagedOreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
         oreChunkDataHandle = stagedOreChunkDataJob.Schedule(caveChunkDataHandle);
 
-        var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
+        if (enableWater)
         {
-            baseSolids = baseTerrainSolids,
-            blockTypes = blockTypes,
-            solids = solids,
-            border = dataBorderSize,
-            seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
-            waterBlockId = (byte)BlockType.Water,
-            waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
-        };
-        waterChunkDataHandle = stagedFillWaterBelowSeaLevelJob.Schedule(
-            dataTotalHeightPoints,
-            32,
-            JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
+            var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
+            {
+                baseSolids = baseTerrainSolids,
+                blockTypes = blockTypes,
+                solids = solids,
+                border = dataBorderSize,
+                seaLevel = math.min(SizeY - 1, (int)math.floor(seaLevel)),
+                waterBlockId = (byte)BlockType.Water,
+                waterIsSolid = blockMappings[(int)BlockType.Water].isSolid
+            };
+            waterChunkDataHandle = stagedFillWaterBelowSeaLevelJob.Schedule(
+                dataTotalHeightPoints,
+                32,
+                JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle));
+        }
+        else
+        {
+            waterChunkDataHandle = JobHandle.CombineDependencies(oreChunkDataHandle, copyBaseTerrainSolidsHandle);
+        }
 
         treeChunkDataHandle = waterChunkDataHandle;
         if (enableTrees)

@@ -73,6 +73,7 @@ public partial class World : MonoBehaviour
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
         public NativeArray<byte> blockTypes;
         public NativeArray<byte> knownVoxelData;
+        public bool disableWater;
         public int borderSize;
         public int voxelSizeX;
         public int voxelPlaneSize;
@@ -112,7 +113,10 @@ public partial class World : MonoBehaviour
 
             int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
             knownVoxelData[index] = 1;
-            blockTypes[index] = snapshotVoxelData[srcIndex];
+            byte blockId = snapshotVoxelData[srcIndex];
+            if (disableWater && FluidBlockUtility.IsWater((BlockType)blockId))
+                blockId = (byte)BlockType.Air;
+            blockTypes[index] = blockId;
         }
 
         private static int FloorDiv(int value, int divisor)
@@ -365,6 +369,7 @@ public partial class World : MonoBehaviour
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
         [ReadOnly] public NativeArray<byte> effectiveOpacityByBlock;
         public NativeArray<byte> opacity;
+        public bool disableWater;
         public int borderSize;
         public int voxelSizeX;
         public int snapshotChunkRadius;
@@ -400,7 +405,10 @@ public partial class World : MonoBehaviour
             }
 
             int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
-            opacity[index] = effectiveOpacityByBlock[snapshotVoxelData[srcIndex]];
+            byte blockId = snapshotVoxelData[srcIndex];
+            if (disableWater && FluidBlockUtility.IsWater((BlockType)blockId))
+                blockId = (byte)BlockType.Air;
+            opacity[index] = effectiveOpacityByBlock[blockId];
         }
 
         private static int FloorDiv(int value, int divisor)

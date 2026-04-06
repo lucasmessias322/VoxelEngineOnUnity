@@ -67,9 +67,10 @@ public partial class World
         foreach (var kv in blockOverrides)
         {
             Vector3Int p = kv.Key;
+            BlockType effectiveType = ResolveWaterStateForDebug(kv.Value);
             if (p.y < Chunk.SizeY) continue;
             if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
-            if (kv.Value == BlockType.Air) continue;
+            if (effectiveType == BlockType.Air) continue;
 
             if (positions == null) positions = new HashSet<Vector3Int>();
             positions.Add(p);
@@ -128,7 +129,9 @@ public partial class World
         Dictionary<int, List<Vector3Int>> bySection = new Dictionary<int, List<Vector3Int>>();
         foreach (Vector3Int p in positions)
         {
-            if (!blockOverrides.TryGetValue(p, out BlockType t) || t == BlockType.Air) continue;
+            if (!blockOverrides.TryGetValue(p, out BlockType t)) continue;
+            t = ResolveWaterStateForDebug(t);
+            if (t == BlockType.Air) continue;
             int section = GetHighSectionIndex(p.y);
             if (section < 0) continue;
             if (!bySection.TryGetValue(section, out List<Vector3Int> list))
@@ -185,6 +188,7 @@ public partial class World
         foreach (Vector3Int pos in positions)
         {
             if (!blockOverrides.TryGetValue(pos, out BlockType blockType)) continue;
+            blockType = ResolveWaterStateForDebug(blockType);
             if (blockType == BlockType.Air) continue;
 
             BlockTextureMapping mapping = GetMappingSafe(blockType);
@@ -390,6 +394,7 @@ public partial class World
             Vector3Int pos = positions[i];
             if (!blockOverrides.TryGetValue(pos, out BlockType type))
                 continue;
+            type = ResolveWaterStateForDebug(type);
 
             BlockTextureMapping mapping = GetMappingSafe(type);
             if (!IsHighBuildColliderBlock(type, mapping))
@@ -604,7 +609,7 @@ public partial class World
     private BlockType GetBlockForHighMesh(Vector3Int pos)
     {
         if (blockOverrides.TryGetValue(pos, out BlockType t))
-            return t;
+            return ResolveWaterStateForDebug(t);
 
         if (pos.y < 0) return BlockType.Air;
         if (pos.y >= Chunk.SizeY) return BlockType.Air;

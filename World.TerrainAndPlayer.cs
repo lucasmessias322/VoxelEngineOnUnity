@@ -62,6 +62,9 @@ public partial class World : MonoBehaviour
 
     public void SetBlockAt(Vector3Int worldPos, BlockType type, bool placedByPlayer = false)
     {
+        if (!enableWater && FluidBlockUtility.IsWater(type))
+            type = BlockType.Air;
+
         if (worldPos.y <= 2)
         {
             Debug.Log("Tentativa de modificar Bedrock/abaixo ignorada: " + worldPos);
@@ -429,7 +432,7 @@ public partial class World : MonoBehaviour
 
     private void ProcessQueuedWaterUpdates()
     {
-        if (!enableWaterSimulation || queuedWaterUpdates.Count == 0)
+        if (!enableWater || !enableWaterSimulation || queuedWaterUpdates.Count == 0)
             return;
 
         float now = Time.time;
@@ -669,6 +672,9 @@ public partial class World : MonoBehaviour
 
     private bool IsFixedWaterSource(Vector3Int worldPos)
     {
+        if (!enableWater)
+            return false;
+
         if (persistentWaterSources.Contains(worldPos))
             return true;
 
@@ -739,7 +745,7 @@ public partial class World : MonoBehaviour
             persistentWaterSources.Add(worldPos);
         }
 
-        if (!enableWaterSimulation)
+        if (!enableWater || !enableWaterSimulation)
             return;
 
         float delay = Mathf.Max(0f, waterTickInterval);
@@ -750,7 +756,7 @@ public partial class World : MonoBehaviour
 
     private void TryQueueWaterUpdate(Vector3Int worldPos, float delaySeconds = 0f)
     {
-        if (!enableWaterSimulation)
+        if (!enableWater || !enableWaterSimulation)
             return;
 
         if (worldPos.y <= 2 || worldPos.y >= Chunk.SizeY)
