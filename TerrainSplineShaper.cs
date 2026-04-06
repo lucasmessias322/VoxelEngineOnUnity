@@ -428,15 +428,8 @@ public struct TerrainSplineShaperSettings
     [HideInInspector] public TerrainSplineGraphNode node13;
     [HideInInspector] public TerrainSplineGraphNode node14;
     [HideInInspector] public TerrainSplineGraphNode node15;
-    public TerrainSpline offsetSpline;
-    public TerrainSpline factorSpline;
-    public TerrainSpline jaggednessSpline;
 
-    public bool HasAnyControlPoints =>
-        math.clamp(graphNodeCount, 0, MaxGraphNodes) > 0 ||
-        math.clamp(offsetSpline.pointCount, 0, TerrainSpline.MaxPoints) > 0 ||
-        math.clamp(factorSpline.pointCount, 0, TerrainSpline.MaxPoints) > 0 ||
-        math.clamp(jaggednessSpline.pointCount, 0, TerrainSpline.MaxPoints) > 0;
+    public bool HasAnyControlPoints => math.clamp(graphNodeCount, 0, MaxGraphNodes) > 0;
 
     public static TerrainSplineShaperSettings Disabled => new TerrainSplineShaperSettings
     {
@@ -444,20 +437,18 @@ public struct TerrainSplineShaperSettings
         graphNodeCount = 0,
         offsetRootNodeIndex = -1,
         factorRootNodeIndex = -1,
-        jaggednessRootNodeIndex = -1,
-        offsetSpline = default,
-        factorSpline = default,
-        jaggednessSpline = default
+        jaggednessRootNodeIndex = -1
     };
 
     public static TerrainSplineShaperSettings MinecraftModernDefault => new TerrainSplineShaperSettings
     {
         enabled = true,
-        graphNodeCount = 0,
-        offsetRootNodeIndex = -1,
-        factorRootNodeIndex = -1,
-        jaggednessRootNodeIndex = -1,
-        offsetSpline = CreateWithSmoothing(
+        graphNodeCount = 3,
+        offsetRootNodeIndex = 0,
+        factorRootNodeIndex = 1,
+        jaggednessRootNodeIndex = 2,
+        node0 = CreateDefaultNodeFromLegacy(
+            TerrainSplineInput.Continents,
             0.34f,
             new TerrainSplinePoint(-1.00f, -0.86f, 0.00f),
             new TerrainSplinePoint(-0.82f, -0.72f, 0.12f),
@@ -467,7 +458,8 @@ public struct TerrainSplineShaperSettings
             new TerrainSplinePoint(0.44f, 0.44f, 0.54f),
             new TerrainSplinePoint(0.72f, 0.90f, 0.48f),
             new TerrainSplinePoint(1.00f, 1.12f, 0.00f)),
-        factorSpline = CreateWithSmoothing(
+        node1 = CreateDefaultNodeFromLegacy(
+            TerrainSplineInput.Erosion,
             0.26f,
             new TerrainSplinePoint(-1.00f, 0.05f, 0.00f),
             new TerrainSplinePoint(-0.56f, 0.12f, 0.08f),
@@ -475,7 +467,8 @@ public struct TerrainSplineShaperSettings
             new TerrainSplinePoint(0.16f, 0.58f, 0.18f),
             new TerrainSplinePoint(0.42f, 0.84f, 0.10f),
             new TerrainSplinePoint(1.00f, 1.00f, 0.00f)),
-        jaggednessSpline = CreateWithSmoothing(
+        node2 = CreateDefaultNodeFromLegacy(
+            TerrainSplineInput.RidgesFolded,
             0.18f,
             new TerrainSplinePoint(0.00f, 0.00f, 0.00f),
             new TerrainSplinePoint(0.24f, 0.02f, 0.00f),
@@ -536,37 +529,15 @@ public struct TerrainSplineShaperSettings
     {
         TerrainSplineShaperSettings sanitized = this;
         sanitized.graphNodeCount = math.clamp(graphNodeCount, 0, MaxGraphNodes);
-        sanitized.offsetSpline = offsetSpline.Sanitized();
-        sanitized.factorSpline = factorSpline.Sanitized();
-        sanitized.jaggednessSpline = jaggednessSpline.Sanitized();
 
         TerrainSplineGraphNode[] nodes = new TerrainSplineGraphNode[MaxGraphNodes];
         for (int i = 0; i < sanitized.graphNodeCount; i++)
             nodes[i] = sanitized.GetNode(i).Sanitized();
 
         int nodeCursor = sanitized.graphNodeCount;
-        int offsetRoot = SanitizeRootIndex(offsetRootNodeIndex, sanitized.graphNodeCount);
-        int factorRoot = SanitizeRootIndex(factorRootNodeIndex, sanitized.graphNodeCount);
-        int jaggednessRoot = SanitizeRootIndex(jaggednessRootNodeIndex, sanitized.graphNodeCount);
-
-        EnsureLegacyFallbackNode(
-            ref nodes,
-            ref nodeCursor,
-            sanitized.offsetSpline,
-            TerrainSplineInput.Continents,
-            ref offsetRoot);
-        EnsureLegacyFallbackNode(
-            ref nodes,
-            ref nodeCursor,
-            sanitized.factorSpline,
-            TerrainSplineInput.Erosion,
-            ref factorRoot);
-        EnsureLegacyFallbackNode(
-            ref nodes,
-            ref nodeCursor,
-            sanitized.jaggednessSpline,
-            TerrainSplineInput.RidgesFolded,
-            ref jaggednessRoot);
+        int offsetRoot = SanitizeRootIndex(offsetRootNodeIndex, nodeCursor);
+        int factorRoot = SanitizeRootIndex(factorRootNodeIndex, nodeCursor);
+        int jaggednessRoot = SanitizeRootIndex(jaggednessRootNodeIndex, nodeCursor);
 
         for (int i = 0; i < nodeCursor; i++)
         {
@@ -602,94 +573,20 @@ public struct TerrainSplineShaperSettings
         return rootIndex >= 0 && rootIndex < graphNodeCount ? rootIndex : -1;
     }
 
-    private static void EnsureLegacyFallbackNode(
-        ref TerrainSplineGraphNode[] nodes,
-        ref int nodeCursor,
-        in TerrainSpline legacySpline,
-        TerrainSplineInput input,
-        ref int rootIndex)
-    {
-        if (rootIndex >= 0)
-            return;
-
-        TerrainSpline sanitizedLegacy = legacySpline.Sanitized();
-        if (!sanitizedLegacy.enabled || sanitizedLegacy.pointCount <= 0 || nodeCursor >= MaxGraphNodes)
-            return;
-
-        nodes[nodeCursor] = TerrainSplineGraphNode.FromLegacy(sanitizedLegacy, input);
-        rootIndex = nodeCursor;
-        nodeCursor++;
-    }
-
     private static TerrainSpline CreateWithSmoothing(float smoothing, params TerrainSplinePoint[] points)
     {
         TerrainSpline spline = TerrainSpline.Create(points);
         spline.smoothing = math.saturate(smoothing);
         return spline;
     }
-}
 
-public static class TerrainSplineEvaluator
-{
-    [BurstCompile]
-    public static float Evaluate(in TerrainSpline spline, float input, float fallback)
+    private static TerrainSplineGraphNode CreateDefaultNodeFromLegacy(
+        TerrainSplineInput input,
+        float smoothing,
+        params TerrainSplinePoint[] points)
     {
-        if (!spline.enabled)
-            return fallback;
-
-        int count = math.clamp(spline.pointCount, 0, TerrainSpline.MaxPoints);
-        if (count <= 0)
-            return fallback;
-
-        TerrainSplinePoint first = spline.GetPoint(0);
-        if (count == 1)
-            return first.value;
-
-        if (input <= first.location)
-            return first.value;
-
-        TerrainSplinePoint previous = first;
-        for (int i = 1; i < count; i++)
-        {
-            TerrainSplinePoint current = spline.GetPoint(i);
-            if (input <= current.location)
-            {
-                float delta = current.location - previous.location;
-                if (math.abs(delta) <= 1e-5f)
-                    return current.value;
-
-                float t = math.saturate((input - previous.location) / delta);
-                float linear = math.lerp(previous.value, current.value, t);
-                float smooth = EvaluateHermite(previous, current, previous.value, current.value, delta, t);
-                return math.lerp(linear, smooth, math.saturate(spline.smoothing));
-            }
-
-            previous = current;
-        }
-
-        return previous.value;
-    }
-
-    [BurstCompile]
-    private static float EvaluateHermite(
-        in TerrainSplinePoint start,
-        in TerrainSplinePoint end,
-        float startValue,
-        float endValue,
-        float delta,
-        float t)
-    {
-        float tt = t * t;
-        float ttt = tt * t;
-        float h00 = 2f * ttt - 3f * tt + 1f;
-        float h10 = ttt - 2f * tt + t;
-        float h01 = -2f * ttt + 3f * tt;
-        float h11 = ttt - tt;
-
-        return h00 * startValue +
-               h10 * delta * start.GetDerivativeOut() +
-               h01 * endValue +
-               h11 * delta * end.GetDerivativeIn();
+        TerrainSpline spline = CreateWithSmoothing(smoothing, points);
+        return TerrainSplineGraphNode.FromLegacy(spline, input).Sanitized();
     }
 }
 
@@ -703,18 +600,18 @@ public static class TerrainSplineGraphEvaluator
         float fallback)
     {
         if (!settings.enabled)
-            return EvaluateLegacy(settings, target, shapePoint, fallback);
+            return fallback;
 
         int rootIndex = GetRootIndex(settings, target);
         int graphNodeCount = math.clamp(settings.graphNodeCount, 0, TerrainSplineShaperSettings.MaxGraphNodes);
         if (rootIndex < 0 || rootIndex >= graphNodeCount)
-            return EvaluateLegacy(settings, target, shapePoint, fallback);
+            return fallback;
 
         FixedList128Bytes<float> nodeValues = default;
         for (int nodeIndex = 0; nodeIndex < graphNodeCount; nodeIndex++)
         {
             TerrainSplineGraphNode node = settings.GetNode(nodeIndex);
-            float nodeFallback = GetLegacyNodeFallback(settings, target, shapePoint, fallback, node.input);
+            float nodeFallback = GetNodeFallback(target, shapePoint, fallback, node.input);
             nodeValues.Add(EvaluateNode(node, nodeValues, shapePoint, nodeFallback));
         }
 
@@ -802,25 +699,6 @@ public static class TerrainSplineGraphEvaluator
     }
 
     [BurstCompile]
-    private static float EvaluateLegacy(
-        in TerrainSplineShaperSettings settings,
-        TerrainSplineGraphTarget target,
-        in TerrainShapePoint shapePoint,
-        float fallback)
-    {
-        switch (target)
-        {
-            case TerrainSplineGraphTarget.Offset:
-                return TerrainSplineEvaluator.Evaluate(settings.offsetSpline, shapePoint.continents, fallback);
-            case TerrainSplineGraphTarget.Factor:
-                return TerrainSplineEvaluator.Evaluate(settings.factorSpline, shapePoint.erosion, fallback);
-            case TerrainSplineGraphTarget.Jaggedness:
-            default:
-                return TerrainSplineEvaluator.Evaluate(settings.jaggednessSpline, shapePoint.ridgesFolded, fallback);
-        }
-    }
-
-    [BurstCompile]
     private static int GetRootIndex(in TerrainSplineShaperSettings settings, TerrainSplineGraphTarget target)
     {
         switch (target)
@@ -836,25 +714,23 @@ public static class TerrainSplineGraphEvaluator
     }
 
     [BurstCompile]
-    private static float GetLegacyNodeFallback(
-        in TerrainSplineShaperSettings settings,
+    private static float GetNodeFallback(
         TerrainSplineGraphTarget target,
         in TerrainShapePoint shapePoint,
         float fallback,
         TerrainSplineInput nodeInput)
     {
-        float targetFallback = EvaluateLegacy(settings, target, shapePoint, fallback);
         switch (nodeInput)
         {
             case TerrainSplineInput.Continents:
-                return target == TerrainSplineGraphTarget.Offset ? targetFallback : shapePoint.continents;
+                return target == TerrainSplineGraphTarget.Offset ? fallback : shapePoint.continents;
             case TerrainSplineInput.Erosion:
-                return target == TerrainSplineGraphTarget.Factor ? targetFallback : shapePoint.erosion;
+                return target == TerrainSplineGraphTarget.Factor ? fallback : shapePoint.erosion;
             case TerrainSplineInput.Ridges:
                 return shapePoint.ridges;
             case TerrainSplineInput.RidgesFolded:
             default:
-                return target == TerrainSplineGraphTarget.Jaggedness ? targetFallback : shapePoint.ridgesFolded;
+                return target == TerrainSplineGraphTarget.Jaggedness ? fallback : shapePoint.ridgesFolded;
         }
     }
 }

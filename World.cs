@@ -169,18 +169,8 @@ public partial class World : MonoBehaviour
     public int heightVariation = 32;
     public int seed = 1337;
 
-    [Header("Density Terrain")]
-    [Tooltip("Quando ativo, o terreno base deixa de usar apenas a altura da coluna e passa a combinar uma superficie 2D com ruido 3D para criar overhangs e saliencias.")]
-    public TerrainDensitySettings terrainDensity = TerrainDensitySettings.MinetestInspiredDefault;
-
-    [Header("Density Debug")]
-    [Tooltip("Debug: desliga o ruido fino 3D perto da superficie sem desligar a densidade 3D inteira.")]
-    public bool debugEnable3DDetailNoise = true;
-    [Tooltip("Debug: desliga apenas os overhangs/saliencias 3D para isolar a massa base do terreno.")]
-    public bool debugEnable3DOverhangNoise = true;
-    [Tooltip("Debug: ignora os multiplicadores 3D por bioma e usa somente a densidade base.")]
-    public bool debugEnableBiome3DDensityMultipliers = true;
-    [SerializeField, HideInInspector] private int terrainDensityDebugSettingsVersion = 1;
+    [SerializeField, HideInInspector]
+    private TerrainDensitySettings terrainDensity = TerrainDensitySettings.MinetestInspiredDefault;
 
     [Header("Block Data")]
     public BlockDataSO blockData;
@@ -380,9 +370,6 @@ public partial class World : MonoBehaviour
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
-    private bool lastDebugEnable3DDetailNoise = true;
-    private bool lastDebugEnable3DOverhangNoise = true;
-    private bool lastDebugEnableBiome3DDensityMultipliers = true;
     private int lastHorizontalSkylightStepLoss = 1;
     private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
@@ -407,24 +394,12 @@ public partial class World : MonoBehaviour
 
     private TerrainDensitySettings GetTerrainDensitySettings()
     {
-        EnsureTerrainDensityDebugSettingsInitialized();
-
         TerrainDensitySettings settings = terrainDensity.Sanitized();
-        settings.debugEnableDetailNoise = debugEnable3DDetailNoise;
-        settings.debugEnableOverhangNoise = debugEnable3DOverhangNoise;
-        settings.debugEnableBiomeDensityMultipliers = debugEnableBiome3DDensityMultipliers;
-        return settings.Sanitized();
-    }
-
-    private void EnsureTerrainDensityDebugSettingsInitialized()
-    {
-        if (terrainDensityDebugSettingsVersion >= 1)
-            return;
-
-        debugEnable3DDetailNoise = true;
-        debugEnable3DOverhangNoise = true;
-        debugEnableBiome3DDensityMultipliers = true;
-        terrainDensityDebugSettingsVersion = 1;
+        settings.enabled = false;
+        settings.debugEnableDetailNoise = false;
+        settings.debugEnableOverhangNoise = false;
+        settings.debugEnableBiomeDensityMultipliers = false;
+        return settings;
     }
 
     private Vector2Int GetCurrentPlayerChunkCoord()
@@ -1075,9 +1050,6 @@ public partial class World : MonoBehaviour
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
-        lastDebugEnable3DDetailNoise = debugEnable3DDetailNoise;
-        lastDebugEnable3DOverhangNoise = debugEnable3DOverhangNoise;
-        lastDebugEnableBiome3DDensityMultipliers = debugEnableBiome3DDensityMultipliers;
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
     }
@@ -1153,7 +1125,6 @@ public partial class World : MonoBehaviour
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
         EnsureTerrainSplineShaperInitialized();
-        EnsureTerrainDensityDebugSettingsInitialized();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;

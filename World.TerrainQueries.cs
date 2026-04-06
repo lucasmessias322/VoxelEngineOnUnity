@@ -89,43 +89,6 @@ public partial class World : MonoBehaviour
         int worldX = worldPos.x;
         int worldZ = worldPos.z;
         BiomeNoiseSettings biomeSettings = GetBiomeNoiseSettings();
-        TerrainDensitySettings densitySettings = GetTerrainDensitySettings();
-
-        if (densitySettings.enabled)
-        {
-            int baseSurfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(
-                worldX, worldZ, noiseLayers, baseHeight, offsetX, offsetZ, Chunk.SizeY, biomeSettings);
-
-            TerrainDensitySettings resolvedDensitySettings = TerrainDensitySampler.ResolveBiomeDensitySettings(
-                worldX, worldZ, densitySettings, biomeSettings);
-
-            int guaranteedSolidY = TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, resolvedDensitySettings);
-            int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, Chunk.SizeY, resolvedDensitySettings);
-
-            if (worldPos.y > densityTopY)
-                return worldPos.y <= seaLevel ? BlockType.Water : BlockType.Air;
-
-            if (worldPos.y <= guaranteedSolidY)
-            {
-                TerrainColumnContext solidColumnContext = TerrainDensitySampler.SampleColumnContext(
-                    worldX, worldZ, noiseLayers, baseHeight, offsetX, offsetZ,
-                    Chunk.SizeY, CliffTreshold, seaLevel, biomeSettings, densitySettings);
-
-                return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, solidColumnContext.surface);
-            }
-
-            if (!TerrainDensitySampler.IsSolidAt(
-                worldX, worldPos.y, worldZ, baseSurfaceHeight, offsetX, offsetZ, resolvedDensitySettings))
-            {
-                return worldPos.y <= seaLevel ? BlockType.Water : BlockType.Air;
-            }
-
-            TerrainColumnContext densityColumnContext = TerrainDensitySampler.SampleColumnContext(
-                worldX, worldZ, noiseLayers, baseHeight, offsetX, offsetZ,
-                Chunk.SizeY, CliffTreshold, seaLevel, biomeSettings, densitySettings);
-
-            return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, densityColumnContext.surface);
-        }
 
         TerrainColumnContext columnContext = TerrainColumnSampler.SampleFromNoise(
             worldX, worldZ, noiseLayers, baseHeight, offsetX, offsetZ,
@@ -139,7 +102,7 @@ public partial class World : MonoBehaviour
 
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
-        return TerrainDensitySampler.SampleSurfaceHeight(
+        return TerrainHeightSampler.SampleSurfaceHeight(
             worldX,
             worldZ,
             noiseLayers,
@@ -147,8 +110,7 @@ public partial class World : MonoBehaviour
             offsetX,
             offsetZ,
             Chunk.SizeY,
-            GetBiomeNoiseSettings(),
-            GetTerrainDensitySettings());
+            GetBiomeNoiseSettings());
     }
 
     private static int FloorDiv(int a, int b)

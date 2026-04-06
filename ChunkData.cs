@@ -594,30 +594,17 @@ public static class ChunkData
                 return columnContext;
             }
 
-            return terrainDensitySettings.enabled
-                ? TerrainDensitySampler.SampleColumnContext(
-                    worldX,
-                    worldZ,
-                    noiseLayers,
-                    baseHeight,
-                    offsetX,
-                    offsetZ,
-                    SizeY,
-                    CliffTreshold,
-                    seaLevel,
-                    biomeNoiseSettings,
-                    terrainDensitySettings)
-                : TerrainColumnSampler.SampleFromNoise(
-                    worldX,
-                    worldZ,
-                    noiseLayers,
-                    baseHeight,
-                    offsetX,
-                    offsetZ,
-                    SizeY,
-                    CliffTreshold,
-                    seaLevel,
-                    biomeNoiseSettings);
+            return TerrainColumnSampler.SampleFromNoise(
+                worldX,
+                worldZ,
+                noiseLayers,
+                baseHeight,
+                offsetX,
+                offsetZ,
+                SizeY,
+                CliffTreshold,
+                seaLevel,
+                biomeNoiseSettings);
         }
 
         private bool TryGetColumnContextFromCache(int worldX, int worldZ, out TerrainColumnContext columnContext)

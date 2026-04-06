@@ -289,9 +289,8 @@ public static class MeshGenerator
         }
     }
 
-    // Preenche primeiro apenas a "massa" do terreno. A camada superficial
-    // (grama, terra, areia, neve) entra depois, quando ja sabemos a altura
-    // real da superficie apos aplicar densidade 3D.
+    // Preenche primeiro apenas a "massa" do terreno usando heightmap.
+    // A camada superficial (grama, terra, areia, neve) entra depois.
     [BurstCompile]
     struct PopulateTerrainJob : IJobParallelFor
     {
@@ -312,14 +311,6 @@ public static class MeshGenerator
             int lx = index % paddedSize;
             int lz = index / paddedSize;
             int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
-
-            int worldX = coord.x * SizeX + (lx - border);
-            int worldZ = coord.y * SizeZ + (lz - border);
-            TerrainDensitySettings resolvedDensitySettings = TerrainDensitySampler.ResolveBiomeDensitySettings(
-                worldX,
-                worldZ,
-                terrainDensitySettings,
-                biomeNoiseSettings);
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
             int highestSolidY = 2;
@@ -331,84 +322,11 @@ public static class MeshGenerator
                 solids[bedrockIndex] = true;
             }
 
-            if (!resolvedDensitySettings.enabled)
+            int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
+            for (int y = 3; y <= baseSurfaceHeight; y++, fillIndex += voxelSizeX)
             {
-                int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
-                for (int y = 3; y <= baseSurfaceHeight; y++, fillIndex += voxelSizeX)
-                {
-                    solids[fillIndex] = true;
-                    highestSolidY = y;
-                }
-            }
-            else
-            {
-                int guaranteedSolidY = math.min(SizeY - 1, TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, resolvedDensitySettings));
-                int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, SizeY, resolvedDensitySettings);
-                int sampleStep = math.max(1, resolvedDensitySettings.verticalSampleStep);
-
-                int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
-                for (int y = 3; y <= guaranteedSolidY; y++, fillIndex += voxelSizeX)
-                {
-                    solids[fillIndex] = true;
-                    highestSolidY = y;
-                }
-
-                int sampleStartY = math.max(guaranteedSolidY + 1, 3);
-                if (sampleStartY <= densityTopY)
-                {
-                    int previousY = sampleStartY;
-
-                    while (previousY <= densityTopY)
-                    {
-                        int nextY = math.min(densityTopY, previousY + sampleStep);
-                        int sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                        bool needsExactSampling = false;
-                        for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
-                        {
-                            TerrainDensityClassification classification = TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings);
-                            if (classification == TerrainDensityClassification.Air)
-                                continue;
-
-                            if (classification == TerrainDensityClassification.Solid)
-                            {
-                                solids[sampleIndex] = true;
-                                highestSolidY = y;
-                                continue;
-                            }
-
-                            needsExactSampling = true;
-                        }
-
-                        if (needsExactSampling)
-                        {
-                            sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                            for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
-                            {
-                                if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings) != TerrainDensityClassification.RequiresExactSample)
-                                    continue;
-
-                                float density = TerrainDensitySampler.SampleTerrainDensity(
-                                    worldX,
-                                    y,
-                                    worldZ,
-                                    baseSurfaceHeight,
-                                    offsetX,
-                                    offsetZ,
-                                    resolvedDensitySettings);
-                                if (density <= resolvedDensitySettings.solidThreshold)
-                                    continue;
-
-                                solids[sampleIndex] = true;
-                                highestSolidY = y;
-                            }
-                        }
-
-                        if (nextY == densityTopY)
-                            break;
-
-                        previousY = nextY;
-                    }
-                }
+                solids[fillIndex] = true;
+                highestSolidY = y;
             }
 
             highestSolidY = math.max(2, highestSolidY);
@@ -493,13 +411,6 @@ public static class MeshGenerator
             }
 
             int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
-            int worldX = coord.x * SizeX + (lx - border);
-            int worldZ = coord.y * SizeZ + (lz - border);
-            TerrainDensitySettings resolvedDensitySettings = TerrainDensitySampler.ResolveBiomeDensitySettings(
-                worldX,
-                worldZ,
-                terrainDensitySettings,
-                biomeNoiseSettings);
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
@@ -510,83 +421,8 @@ public static class MeshGenerator
             for (int y = 0; y <= 2; y++, voxelIndex += voxelSizeX)
                 opacity[voxelIndex] = solidOpacity;
 
-            if (!resolvedDensitySettings.enabled)
-            {
-                for (int y = 3; y < SizeY; y++, voxelIndex += voxelSizeX)
-                    opacity[voxelIndex] = y <= baseSurfaceHeight ? solidOpacity : airOpacity;
-
-                return;
-            }
-
-            int guaranteedSolidY = math.min(SizeY - 1, TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, resolvedDensitySettings));
-            int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, SizeY, resolvedDensitySettings);
-            int sampleStep = math.max(1, resolvedDensitySettings.verticalSampleStep);
-
-            int fillIndex = lx + 3 * voxelSizeX + lz * voxelPlaneSize;
-            for (int y = 3; y <= guaranteedSolidY; y++, fillIndex += voxelSizeX)
-                opacity[fillIndex] = solidOpacity;
-
-            int sampleStartY = math.max(guaranteedSolidY + 1, 3);
-            if (sampleStartY <= densityTopY)
-            {
-                int previousY = sampleStartY;
-
-                while (previousY <= densityTopY)
-                {
-                    int nextY = math.min(densityTopY, previousY + sampleStep);
-                    int sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                    bool needsExactSampling = false;
-                    for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
-                    {
-                        TerrainDensityClassification classification = TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings);
-                        if (classification == TerrainDensityClassification.Solid)
-                        {
-                            opacity[sampleIndex] = solidOpacity;
-                            continue;
-                        }
-
-                        if (classification == TerrainDensityClassification.Air)
-                        {
-                            opacity[sampleIndex] = airOpacity;
-                            continue;
-                        }
-
-                        needsExactSampling = true;
-                    }
-
-                    if (needsExactSampling)
-                    {
-                        sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                        for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
-                        {
-                            if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings) != TerrainDensityClassification.RequiresExactSample)
-                                continue;
-
-                            float density = TerrainDensitySampler.SampleTerrainDensity(
-                                worldX,
-                                y,
-                                worldZ,
-                                baseSurfaceHeight,
-                                offsetX,
-                                offsetZ,
-                                resolvedDensitySettings);
-                            opacity[sampleIndex] = density > resolvedDensitySettings.solidThreshold ? solidOpacity : airOpacity;
-                        }
-                    }
-
-                    if (nextY == densityTopY)
-                        break;
-
-                    previousY = nextY;
-                }
-            }
-            int airStartY = math.max(densityTopY + 1, 3);
-            if (airStartY >= SizeY)
-                return;
-
-            voxelIndex = lx + airStartY * voxelSizeX + lz * voxelPlaneSize;
-            for (int y = airStartY; y < SizeY; y++, voxelIndex += voxelSizeX)
-                opacity[voxelIndex] = airOpacity;
+            for (int y = 3; y < SizeY; y++, voxelIndex += voxelSizeX)
+                opacity[voxelIndex] = y <= baseSurfaceHeight ? solidOpacity : airOpacity;
         }
     }
 
