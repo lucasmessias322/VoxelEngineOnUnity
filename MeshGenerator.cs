@@ -381,34 +381,20 @@ public static class MeshGenerator
 
                         if (needsExactSampling)
                         {
-                            float previousDensity = TerrainDensitySampler.SampleTerrainDensity(
-                                worldX,
-                                previousY,
-                                worldZ,
-                                baseSurfaceHeight,
-                                offsetX,
-                                offsetZ,
-                                resolvedDensitySettings);
-                            float nextDensity = nextY == previousY
-                                ? previousDensity
-                                : TerrainDensitySampler.SampleTerrainDensity(
-                                    worldX,
-                                    nextY,
-                                    worldZ,
-                                    baseSurfaceHeight,
-                                    offsetX,
-                                    offsetZ,
-                                    resolvedDensitySettings);
-
                             sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                            int ySpan = math.max(1, nextY - previousY);
                             for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
                             {
                                 if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings) != TerrainDensityClassification.RequiresExactSample)
                                     continue;
 
-                                float t = nextY == previousY ? 0f : (y - previousY) / (float)ySpan;
-                                float density = math.lerp(previousDensity, nextDensity, t);
+                                float density = TerrainDensitySampler.SampleTerrainDensity(
+                                    worldX,
+                                    y,
+                                    worldZ,
+                                    baseSurfaceHeight,
+                                    offsetX,
+                                    offsetZ,
+                                    resolvedDensitySettings);
                                 if (density <= resolvedDensitySettings.solidThreshold)
                                     continue;
 
@@ -570,34 +556,20 @@ public static class MeshGenerator
 
                     if (needsExactSampling)
                     {
-                        float previousDensity = TerrainDensitySampler.SampleTerrainDensity(
-                            worldX,
-                            previousY,
-                            worldZ,
-                            baseSurfaceHeight,
-                            offsetX,
-                            offsetZ,
-                            resolvedDensitySettings);
-                        float nextDensity = nextY == previousY
-                            ? previousDensity
-                            : TerrainDensitySampler.SampleTerrainDensity(
-                                worldX,
-                                nextY,
-                                worldZ,
-                                baseSurfaceHeight,
-                                offsetX,
-                                offsetZ,
-                                resolvedDensitySettings);
-
                         sampleIndex = lx + previousY * voxelSizeX + lz * voxelPlaneSize;
-                        int ySpan = math.max(1, nextY - previousY);
                         for (int y = previousY; y <= nextY; y++, sampleIndex += voxelSizeX)
                         {
                             if (TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings) != TerrainDensityClassification.RequiresExactSample)
                                 continue;
 
-                            float t = nextY == previousY ? 0f : (y - previousY) / (float)ySpan;
-                            float density = math.lerp(previousDensity, nextDensity, t);
+                            float density = TerrainDensitySampler.SampleTerrainDensity(
+                                worldX,
+                                y,
+                                worldZ,
+                                baseSurfaceHeight,
+                                offsetX,
+                                offsetZ,
+                                resolvedDensitySettings);
                             opacity[sampleIndex] = density > resolvedDensitySettings.solidThreshold ? solidOpacity : airOpacity;
                         }
                     }
