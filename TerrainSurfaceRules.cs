@@ -6,10 +6,12 @@ public struct TerrainSurfaceData
     // Decisao final de materiais da coluna depois de considerar bioma, praia, altitude e inclinacao.
     public int surfaceHeight;
     public int surfaceLayerDepth;
+    public int waterDepth;
     public BiomeType biome;
     public BlockType surfaceBlock;
     public BlockType subsurfaceBlock;
     public bool isBeach;
+    public bool isUnderwater;
     public bool isCliff;
     public bool isHighMountain;
     public float slope;
@@ -70,7 +72,12 @@ public static class TerrainSurfaceRules
         in BiomeNoiseSettings biomeNoiseSettings)
     {
         // Etapa 3 do pipeline: converte relevo + clima em blocos visiveis para o topo da coluna.
-        bool isBeach = surfaceHeight <= seaLevel + BeachHeightMargin;
+        CoastSurfaceThresholdSettings coastSurface = biomeNoiseSettings.coastSurface;
+        if (coastSurface.LooksUninitialized)
+            coastSurface = CoastSurfaceThresholdSettings.Default;
+
+        bool isUnderwater = surfaceHeight < seaLevel;
+        int waterDepth = math.max(0, (int)math.ceil(seaLevel - surfaceHeight));
         bool isHighMountain = surfaceHeight >= baseHeight + HighMountainHeightOffset;
         float highMountain01 = math.saturate((surfaceHeight - (baseHeight + HighMountainHeightOffset - 12f)) / 20f);
 
@@ -79,18 +86,84 @@ public static class TerrainSurfaceRules
         BlockType biomeSurfaceBlock = BiomeUtility.GetSurfaceBlock(climate.biome, biomeNoiseSettings);
         BlockType biomeSubsurfaceBlock = BiomeUtility.GetSubsurfaceBlock(climate.biome, biomeNoiseSettings);
 
-        BlockType surfaceBlock = isBeach ? BlockType.Sand : biomeSurfaceBlock;
-        BlockType subsurfaceBlock = isBeach ? BlockType.Sand : biomeSubsurfaceBlock;
+        BlockType surfaceBlock = biomeSurfaceBlock;
+        BlockType subsurfaceBlock = biomeSubsurfaceBlock;
 
         float surfaceNoiseScale = math.max(0.018f, biomeNoiseSettings.coldSurfaceNoiseScale * 0.75f);
         float surfaceNoise = SampleSurfaceNoise01(worldX, worldZ, surfaceNoiseScale);
+        float coastalNoise = SampleSurfaceNoise01(
+            worldX + 131,
+            worldZ - 173,
+            math.max(0.010f, surfaceNoiseScale * 0.58f));
+        float shoreHeightMask = math.saturate(
+            (seaLevel + BeachHeightMargin + 1f - surfaceHeight)
+            / math.max(1f, BeachHeightMargin + 2f));
+        float gentleBeachSlopeMask = 1f - math.saturate(
+            (slope01 - coastSurface.beachSlopeSoft01)
+            / math.max(0.01f, coastSurface.beachSlopeHard01 - coastSurface.beachSlopeSoft01));
+        float beachMask = math.saturate(shoreHeightMask * gentleBeachSlopeMask);
+        float beachThreshold = coastSurface.beachThresholdBase + (coastalNoise - 0.5f) * coastSurface.beachThresholdNoiseSpan;
+        bool isBeach = !isUnderwater && beachMask >= beachThreshold;
+
         float slopeStoneMask = math.saturate((slope01 - SlopeStoneStart01) / math.max(0.01f, SlopeStoneFull01 - SlopeStoneStart01));
         // Mistura altitude alta e inclinacao para decidir quando a rocha deve "aflorar".
         float exposedStoneMask = math.saturate(math.max(highMountain01, slopeStoneMask * 0.92f + highMountain01 * 0.25f));
         float stoneThreshold = 0.60f + (surfaceNoise - 0.5f) * 0.16f;
         int surfaceLayerDepth = ResolveSurfaceLayerDepth(terrainSettings, slope01, isBeach, highMountain01, exposedStoneMask);
 
-        if (!isBeach)
+        if (isUnderwater)
+        {
+            float deepWaterStoneMask = math.saturate(
+                (waterDepth - coastSurface.underwaterStoneStartDepth)
+                / math.max(1f, coastSurface.underwaterStoneStartDepth));
+            float underwaterSlopeStoneMask = math.saturate(
+                (slope01 - coastSurface.underwaterSlopeStoneStart01)
+                / math.max(0.01f, coastSurface.underwaterSlopeStoneFull01 - coastSurface.underwaterSlopeStoneStart01));
+            float underwaterStoneMask = math.saturate(math.max(deepWaterStoneMask, underwaterSlopeStoneMask));
+            float underwaterStoneThreshold = coastSurface.underwaterStoneThresholdBase + (coastalNoise - 0.5f) * coastSurface.underwaterStoneThresholdNoiseSpan;
+            bool preferStoneFloor = underwaterStoneMask >= underwaterStoneThreshold && waterDepth > 1;
+
+            if (preferStoneFloor)
+            {
+                surfaceBlock = BlockType.Stone;
+                subsurfaceBlock = BlockType.Stone;
+                surfaceLayerDepth = 1;
+            }
+            else
+            {
+                surfaceBlock = BlockType.Sand;
+                subsurfaceBlock = BlockType.Sand;
+                int sandDepth = 4 + math.max(0, math.min(3, waterDepth / 3));
+                if (waterDepth <= coastSurface.underwaterSandMaxDepth)
+                    sandDepth++;
+
+                surfaceLayerDepth = math.max(surfaceLayerDepth, sandDepth);
+            }
+
+            isBeach = false;
+        }
+        else if (isBeach)
+        {
+            surfaceBlock = BlockType.Sand;
+            subsurfaceBlock = BlockType.Sand;
+            surfaceLayerDepth = math.max(surfaceLayerDepth, 4);
+        }
+        else
+        {
+            float shoreTransitionMask = math.saturate(
+                (seaLevel + coastSurface.shoreBlendHeightMargin - surfaceHeight)
+                / math.max(1f, coastSurface.shoreBlendHeightMargin - BeachHeightMargin + 1f));
+            float shorePatchMask = shoreTransitionMask
+                * (1f - slope01)
+                * math.saturate(0.58f + (coastalNoise - 0.5f) * 0.9f);
+            if (shorePatchMask >= coastSurface.shorePatchThreshold && surfaceBlock == BlockType.Grass)
+            {
+                subsurfaceBlock = BlockType.Sand;
+                surfaceLayerDepth = math.max(surfaceLayerDepth, 3);
+            }
+        }
+
+        if (!isBeach && !isUnderwater)
         {
             if (exposedStoneMask >= stoneThreshold)
             {
@@ -121,14 +194,18 @@ public static class TerrainSurfaceRules
                 surfaceLayerDepth = math.min(surfaceLayerDepth, surfaceBlock == BlockType.Stone ? 1 : 2);
         }
 
+        surfaceLayerDepth = math.clamp(surfaceLayerDepth, 1, MaxSurfaceLayerDepth);
+
         return new TerrainSurfaceData
         {
             surfaceHeight = surfaceHeight,
             surfaceLayerDepth = surfaceLayerDepth,
+            waterDepth = waterDepth,
             biome = climate.biome,
             surfaceBlock = surfaceBlock,
             subsurfaceBlock = subsurfaceBlock,
             isBeach = isBeach,
+            isUnderwater = isUnderwater,
             isCliff = isCliff,
             isHighMountain = isHighMountain,
             slope = slope,

@@ -62,6 +62,10 @@ public partial class World : MonoBehaviour
     [Min(0.001f)]
     public float coldSurfaceNoiseScale = DefaultColdSurfaceNoiseScale;
 
+    [Header("Coast / Underwater Surface")]
+    [Tooltip("Thresholds usados pelas surface rules de costa e fundo submerso (ajuste em runtime).")]
+    public CoastSurfaceThresholdSettings coastSurface = CoastSurfaceThresholdSettings.Default;
+
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
     private MaterialPropertyBlock biomeTintPropertyBlock;
     private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
@@ -176,6 +180,7 @@ public partial class World : MonoBehaviour
         BiomeTerrainSettings savannaTerrainSettings = SanitizeBiomeTerrainSettings(savannaTerrain, BiomeTerrainSettings.SavannaDefault);
         BiomeTerrainSettings meadowTerrainSettings = SanitizeBiomeTerrainSettings(meadowTerrain, BiomeTerrainSettings.MeadowDefault);
         BiomeTerrainSettings taigaTerrainSettings = SanitizeBiomeTerrainSettings(taigaTerrain, BiomeTerrainSettings.TaigaDefault);
+        CoastSurfaceThresholdSettings coastSurfaceSettings = coastSurface.Sanitized();
         BiomeDensityMultipliers desertDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Desert);
         BiomeDensityMultipliers savannaDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Savanna);
         BiomeDensityMultipliers meadowDensitySettings = ResolveBiomeDensityMultipliers(BiomeType.Meadow);
@@ -217,6 +222,7 @@ public partial class World : MonoBehaviour
             meadowSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Meadow),
             taigaSurfaceBlock = GetSurfaceBlockForBiome(BiomeType.Taiga),
             taigaSubsurfaceBlock = GetSubsurfaceBlockForBiome(BiomeType.Taiga),
+            coastSurface = coastSurfaceSettings,
             terrainShaper = terrainSplineShaper.Sanitized()
         };
 

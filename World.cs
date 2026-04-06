@@ -1050,6 +1050,13 @@ public partial class World : MonoBehaviour
     private void OnValidate()
     {
         RefreshTerrainGenerationRuntimeState();
+
+        if (!Application.isPlaying || isShuttingDown || activeChunks == null || activeChunks.Count == 0)
+            return;
+
+        List<Vector2Int> loadedCoords = new List<Vector2Int>(activeChunks.Keys);
+        for (int i = 0; i < loadedCoords.Count; i++)
+            RequestChunkRebuild(loadedCoords[i]);
     }
 
     private void Start()

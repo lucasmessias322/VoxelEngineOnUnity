@@ -78,6 +78,72 @@ public struct BiomeTerrainSettings
 }
 
 [Serializable]
+public struct CoastSurfaceThresholdSettings
+{
+    // Thresholds para ajustar costa e fundo submerso sem recompilar.
+    public float beachSlopeSoft01;
+    public float beachSlopeHard01;
+    public int shoreBlendHeightMargin;
+    public int underwaterSandMaxDepth;
+    public int underwaterStoneStartDepth;
+    public float underwaterSlopeStoneStart01;
+    public float underwaterSlopeStoneFull01;
+    public float beachThresholdBase;
+    public float beachThresholdNoiseSpan;
+    public float underwaterStoneThresholdBase;
+    public float underwaterStoneThresholdNoiseSpan;
+    public float shorePatchThreshold;
+
+    public static CoastSurfaceThresholdSettings Default => new CoastSurfaceThresholdSettings
+    {
+        beachSlopeSoft01 = 0.30f,
+        beachSlopeHard01 = 0.62f,
+        shoreBlendHeightMargin = 5,
+        underwaterSandMaxDepth = 7,
+        underwaterStoneStartDepth = 11,
+        underwaterSlopeStoneStart01 = 0.55f,
+        underwaterSlopeStoneFull01 = 0.88f,
+        beachThresholdBase = 0.48f,
+        beachThresholdNoiseSpan = 0.18f,
+        underwaterStoneThresholdBase = 0.56f,
+        underwaterStoneThresholdNoiseSpan = 0.16f,
+        shorePatchThreshold = 0.72f
+    };
+
+    public bool LooksUninitialized =>
+        beachSlopeSoft01 == 0f &&
+        beachSlopeHard01 == 0f &&
+        shoreBlendHeightMargin == 0 &&
+        underwaterSandMaxDepth == 0 &&
+        underwaterStoneStartDepth == 0 &&
+        underwaterSlopeStoneStart01 == 0f &&
+        underwaterSlopeStoneFull01 == 0f &&
+        beachThresholdBase == 0f &&
+        beachThresholdNoiseSpan == 0f &&
+        underwaterStoneThresholdBase == 0f &&
+        underwaterStoneThresholdNoiseSpan == 0f &&
+        shorePatchThreshold == 0f;
+
+    public CoastSurfaceThresholdSettings Sanitized()
+    {
+        CoastSurfaceThresholdSettings settings = LooksUninitialized ? Default : this;
+        settings.beachSlopeSoft01 = math.saturate(settings.beachSlopeSoft01);
+        settings.beachSlopeHard01 = math.clamp(settings.beachSlopeHard01, settings.beachSlopeSoft01 + 0.01f, 1f);
+        settings.shoreBlendHeightMargin = math.clamp(settings.shoreBlendHeightMargin, 2, 24);
+        settings.underwaterSandMaxDepth = math.clamp(settings.underwaterSandMaxDepth, 0, 32);
+        settings.underwaterStoneStartDepth = math.clamp(settings.underwaterStoneStartDepth, 1, 48);
+        settings.underwaterSlopeStoneStart01 = math.saturate(settings.underwaterSlopeStoneStart01);
+        settings.underwaterSlopeStoneFull01 = math.clamp(settings.underwaterSlopeStoneFull01, settings.underwaterSlopeStoneStart01 + 0.01f, 1f);
+        settings.beachThresholdBase = math.saturate(settings.beachThresholdBase);
+        settings.beachThresholdNoiseSpan = math.clamp(settings.beachThresholdNoiseSpan, 0f, 1f);
+        settings.underwaterStoneThresholdBase = math.saturate(settings.underwaterStoneThresholdBase);
+        settings.underwaterStoneThresholdNoiseSpan = math.clamp(settings.underwaterStoneThresholdNoiseSpan, 0f, 1f);
+        settings.shorePatchThreshold = math.saturate(settings.shorePatchThreshold);
+        return settings;
+    }
+}
+
+[Serializable]
 public struct BiomeDensityMultipliers
 {
     // Multiplicadores aplicados por bioma sobre a configuracao base de densidade 3D.
@@ -217,6 +283,8 @@ public struct BiomeNoiseSettings
     public BlockType meadowSubsurfaceBlock;
     public BlockType taigaSurfaceBlock;
     public BlockType taigaSubsurfaceBlock;
+
+    public CoastSurfaceThresholdSettings coastSurface;
 
     public TerrainSplineShaperSettings terrainShaper;
 }
