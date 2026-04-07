@@ -264,15 +264,22 @@ public static class VegetationBillboardUtility
         float safeScale = math.max(1e-4f, noiseScale);
         float scaledChance = math.max(0f, baseChance) * math.max(0f, chanceMultiplier);
 
-        float macro = noise.snoise(new float2(
-            (worldX + 123.17f) * safeScale * 0.62f,
-            (worldZ - 91.73f) * safeScale * 0.62f
-        )) * 0.5f + 0.5f;
+        uint domainHash = Hash3D(worldX, 0, worldZ, 0x517CC1B7u);
+        float jitterX = HashToSignedUnit(MixHash(domainHash ^ 0x91E10DA5u)) * 0.45f;
+        float jitterZ = HashToSignedUnit(MixHash(domainHash ^ 0xC79E7B1Du)) * 0.45f;
+        float2 p = new float2(worldX + jitterX, worldZ + jitterZ) * safeScale;
 
-        float detail = noise.snoise(new float2(
-            (worldX - 47.31f) * safeScale * 1.93f,
-            (worldZ + 67.19f) * safeScale * 1.93f
-        )) * 0.5f + 0.5f;
+        // Rotacao + warp leve evita padroes em linha quando a chance e muito baixa.
+        float2 rotatedA = new float2(
+            p.x * 0.8660254f - p.y * 0.5f,
+            p.x * 0.5f + p.y * 0.8660254f);
+        float2 rotatedB = new float2(
+            p.x * 0.5f + p.y * 0.8660254f,
+            -p.x * 0.8660254f + p.y * 0.5f);
+        float warp = noise.snoise(rotatedB * 0.71f + new float2(19.31f, -43.73f));
+
+        float macro = noise.snoise(rotatedA * 0.62f + new float2(123.17f, -91.73f) + warp * 0.45f) * 0.5f + 0.5f;
+        float detail = noise.snoise(rotatedB * 1.93f + new float2(-47.31f, 67.19f) + warp * 0.95f) * 0.5f + 0.5f;
 
         float patch = math.saturate(math.lerp(macro, detail, 0.35f));
         float cluster = patch * patch * (3f - 2f * patch);
@@ -282,34 +289,34 @@ public static class VegetationBillboardUtility
     [BurstCompile]
     public static uint ComputeVariantHash(int worldX, int worldY, int worldZ)
     {
-        return math.hash(new int3(worldX * 17 + 3, worldY * 31 + 5, worldZ * 13 + 7));
+        return Hash3D(worldX, worldY, worldZ, 0xA2C79E29u);
     }
 
     [BurstCompile]
     public static float ComputeJitterOffset(uint variantHash, int shift, float jitter)
     {
-        float unit = HashToUnit01(variantHash, shift);
-        return (unit * 2f - 1f) * math.max(0f, jitter);
+        uint jitterHash = MixHash(variantHash ^ (uint)(shift * 0x9E3779B9) ^ 0xB5297A4Du);
+        return HashToSignedUnit(jitterHash) * math.max(0f, jitter);
     }
 
     [BurstCompile]
     public static float ComputeHeight(float baseHeight, uint variantHash)
     {
-        float scale = math.lerp(MinHeightScale, MaxHeightScale, HashToUnit01(variantHash, 0));
+        float scale = math.lerp(MinHeightScale, MaxHeightScale, HashToUnit01(MixHash(variantHash ^ 0x1B56C4E9u)));
         return math.max(0.2f, baseHeight * scale);
     }
 
     [BurstCompile]
     public static float ComputeHalfWidth(uint variantHash)
     {
-        float scale = math.lerp(MinWidthScale, MaxWidthScale, HashToUnit01(variantHash, 24));
+        float scale = math.lerp(MinWidthScale, MaxWidthScale, HashToUnit01(MixHash(variantHash ^ 0x8765ABCDu)));
         return BaseHalfWidth * scale;
     }
 
     [BurstCompile]
     public static float ComputeBaseYOffset(uint variantHash)
     {
-        float centered = HashToUnit01(variantHash, 20) * 2f - 1f;
+        float centered = HashToSignedUnit(MixHash(variantHash ^ 0xDEADBEEFu));
         return BaseYOffset + centered * YOffsetVariance;
     }
 
@@ -364,8 +371,10 @@ public static class VegetationBillboardUtility
             : 1f;
 
         float effectiveChance = ComputeEffectiveChance(worldX, worldZ, baseChance, noiseScale, chanceMultiplier);
-        uint chanceHash = math.hash(new int3(worldX, worldY, worldZ));
-        float chanceRoll = (chanceHash & 0x00FFFFFF) / 16777215f;
+        uint chanceHash = Hash3D(worldX, worldY, worldZ, 0xD8163841u);
+        float chanceRoll = HashToUnit01(chanceHash);
+        float microVariance = math.lerp(0.85f, 1.15f, HashToUnit01(MixHash(chanceHash ^ 0x3C6EF372u)));
+        effectiveChance = math.saturate(effectiveChance * microVariance);
         if (chanceRoll > effectiveChance)
             return false;
 
@@ -373,7 +382,7 @@ public static class VegetationBillboardUtility
         if (!hasBiomeRule)
             return true;
 
-        float pickTarget = HashToUnit01(variationHash, 24) * math.max(1e-5f, totalWeight);
+        float pickTarget = HashToUnit01(MixHash(variationHash ^ 0x9E3779B9u)) * math.max(1e-5f, totalWeight);
         float accumulatedWeight = 0f;
 
         for (int i = 0; i < rules.Length; i++)
@@ -447,8 +456,10 @@ public static class VegetationBillboardUtility
             : 1f;
 
         float effectiveChance = ComputeEffectiveChance(worldX, worldZ, baseChance, noiseScale, chanceMultiplier);
-        uint chanceHash = math.hash(new int3(worldX, worldY, worldZ));
-        float chanceRoll = (chanceHash & 0x00FFFFFF) / 16777215f;
+        uint chanceHash = Hash3D(worldX, worldY, worldZ, 0xD8163841u);
+        float chanceRoll = HashToUnit01(chanceHash);
+        float microVariance = math.lerp(0.85f, 1.15f, HashToUnit01(MixHash(chanceHash ^ 0x3C6EF372u)));
+        effectiveChance = math.saturate(effectiveChance * microVariance);
         if (chanceRoll > effectiveChance)
             return false;
 
@@ -456,7 +467,7 @@ public static class VegetationBillboardUtility
         if (!hasBiomeRule)
             return true;
 
-        float pickTarget = HashToUnit01(variationHash, 24) * math.max(1e-5f, totalWeight);
+        float pickTarget = HashToUnit01(MixHash(variationHash ^ 0x9E3779B9u)) * math.max(1e-5f, totalWeight);
         float accumulatedWeight = 0f;
 
         for (int i = 0; i < rules.Length; i++)
@@ -478,9 +489,39 @@ public static class VegetationBillboardUtility
     }
 
     [BurstCompile]
-    private static float HashToUnit01(uint hash, int shift)
+    private static uint Hash3D(int x, int y, int z, uint salt)
     {
-        return ((hash >> shift) & 0xFF) / 255f;
+        unchecked
+        {
+            uint h = (uint)x * 0x9E3779B9u;
+            h ^= (uint)y * 0x85EBCA6Bu;
+            h ^= (uint)z * 0xC2B2AE35u;
+            h ^= salt;
+            return MixHash(h);
+        }
+    }
+
+    [BurstCompile]
+    private static uint MixHash(uint value)
+    {
+        value ^= value >> 16;
+        value *= 0x7FEB352Du;
+        value ^= value >> 15;
+        value *= 0x846CA68Bu;
+        value ^= value >> 16;
+        return value;
+    }
+
+    [BurstCompile]
+    private static float HashToUnit01(uint hash)
+    {
+        return (hash & 0x00FFFFFFu) / 16777215f;
+    }
+
+    [BurstCompile]
+    private static float HashToSignedUnit(uint hash)
+    {
+        return HashToUnit01(hash) * 2f - 1f;
     }
 }
 

@@ -2272,6 +2272,7 @@ public partial class World : MonoBehaviour
                 Vector2Int coord = _tempToRemove[i];
                 if (activeChunks.TryGetValue(coord, out Chunk chunk))
                 {
+                    InvalidateChunkBiomeTintCache(coord);
                     chunk.ResetChunk();
                     chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
