@@ -89,7 +89,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 lastCrackStage = -1;
             }
 
-            float breakDuration = GetBreakDurationSeconds(GetBillboardBreakType());
+            float breakDuration = GetBreakDurationSeconds(GetBillboardBreakType(sel));
             breakProgress01 += Time.deltaTime / breakDuration;
             UpdateCrackOverlay(sel, breakProgress01);
 
@@ -214,12 +214,19 @@ public class PlayerBlockBreaker : MonoBehaviour
         return toolType != ToolType.None;
     }
 
-    BlockType GetBillboardBreakType()
+    BlockType GetBillboardBreakType(Vector3Int billboardPos)
     {
-        if (World.Instance != null)
-            return World.Instance.grassBillboardBlockType;
+        World world = World.Instance;
+        if (world != null &&
+            world.TryResolveVegetationBillboardAt(billboardPos, out BlockType resolvedType, out _))
+        {
+            return resolvedType;
+        }
 
-        return BlockType.Leaves;
+        if (world != null)
+            return world.grassBillboardBlockType;
+
+        return BlockType.short_grass4;
     }
 
     ToolType ResolvePreferredTool(BlockType blockType, BlockTextureMapping mapping)
@@ -344,7 +351,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         World world = World.Instance;
         BlockType overlayType = breakingIsBillboard || world == null
-            ? GetBillboardBreakType()
+            ? GetBillboardBreakType(blockPos)
             : world.GetBlockAt(blockPos);
 
         Bounds overlayBounds = ResolveBlockBounds(blockPos, overlayType);

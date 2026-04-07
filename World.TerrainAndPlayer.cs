@@ -88,9 +88,8 @@ public partial class World : MonoBehaviour
         if (type != BlockType.Air)
             RemoveSuppressedGrassBillboard(worldPos);
 
-        // If ground changes from grass to anything else, clear suppression above it.
-        if (type != BlockType.Grass)
-            RemoveSuppressedGrassBillboard(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
+        // Ground changed: clear suppression above so biome vegetation can be re-evaluated.
+        RemoveSuppressedGrassBillboard(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
 
         // Keep explicit Air overrides so broken procedural terrain stays removed.
         // Removing the key would make GetBlockAt() fall back to procedural data again.

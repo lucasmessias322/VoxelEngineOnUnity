@@ -294,7 +294,7 @@ public partial class World : MonoBehaviour
     public bool enableGrassBillboards = true;
     [Range(0f, 1f)]
     public float grassBillboardChance = 0.22f;
-    public BlockType grassBillboardBlockType = BlockType.Leaves;
+    public BlockType grassBillboardBlockType = BlockType.short_grass4;
     [Range(0.2f, 2f)]
     public float grassBillboardHeight = 0.9f;
     [Range(0.01f, 1f)]
@@ -378,12 +378,15 @@ public partial class World : MonoBehaviour
     private int lastHorizontalSkylightStepLoss = 1;
     private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
+    private VegetationBillboardRuleData[] cachedVegetationBillboardRules = Array.Empty<VegetationBillboardRuleData>();
     private bool treeSpawnRulesDirty = true;
+    private bool vegetationBillboardRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
+    private NativeArray<VegetationBillboardRuleData> cachedNativeVegetationBillboardRules;
     private bool nativeGenerationConfigDirty = true;
     private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
 
@@ -491,6 +494,7 @@ public partial class World : MonoBehaviour
         if (cachedNativeEffectiveLightOpacityByBlock.IsCreated) cachedNativeEffectiveLightOpacityByBlock.Dispose();
         if (cachedNativeOreSettings.IsCreated) cachedNativeOreSettings.Dispose();
         if (cachedNativeTreeSpawnRules.IsCreated) cachedNativeTreeSpawnRules.Dispose();
+        if (cachedNativeVegetationBillboardRules.IsCreated) cachedNativeVegetationBillboardRules.Dispose();
     }
 
     private void EnsureNativeGenerationCaches()
@@ -500,7 +504,8 @@ public partial class World : MonoBehaviour
                              cachedNativeBlockMappings.IsCreated &&
                              cachedNativeEffectiveLightOpacityByBlock.IsCreated &&
                              cachedNativeOreSettings.IsCreated &&
-                             cachedNativeTreeSpawnRules.IsCreated;
+                             cachedNativeTreeSpawnRules.IsCreated &&
+                             cachedNativeVegetationBillboardRules.IsCreated;
 
         if (!nativeGenerationConfigDirty && cachesCreated)
         {
@@ -522,6 +527,7 @@ public partial class World : MonoBehaviour
             : Array.Empty<BlockTextureMapping>();
         OreSpawnSettings[] runtimeOreSettings = oreSettings ?? Array.Empty<OreSpawnSettings>();
         TreeSpawnRuleData[] runtimeTreeSpawnRules = GetActiveTreeSpawnRules();
+        VegetationBillboardRuleData[] runtimeVegetationBillboardRules = GetActiveVegetationBillboardRules();
 
         cachedNativeNoiseLayers = new NativeArray<NoiseLayer>(runtimeNoiseLayers, Allocator.Persistent);
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
@@ -530,6 +536,7 @@ public partial class World : MonoBehaviour
             cachedNativeEffectiveLightOpacityByBlock[i] = ChunkLighting.GetEffectiveOpacity(runtimeBlockMappings[i]);
         cachedNativeOreSettings = new NativeArray<OreSpawnSettings>(runtimeOreSettings, Allocator.Persistent);
         cachedNativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(runtimeTreeSpawnRules, Allocator.Persistent);
+        cachedNativeVegetationBillboardRules = new NativeArray<VegetationBillboardRuleData>(runtimeVegetationBillboardRules, Allocator.Persistent);
         nativeGenerationConfigDirty = false;
     }
 
@@ -971,6 +978,58 @@ public partial class World : MonoBehaviour
         return cachedTreeSpawnRules;
     }
 
+    private VegetationBillboardRuleData[] GetActiveVegetationBillboardRules()
+    {
+        if (vegetationBillboardRulesDirty)
+            RebuildVegetationBillboardRuleCache();
+
+        return cachedVegetationBillboardRules;
+    }
+
+    public bool TryResolveVegetationBillboardAt(Vector3Int billboardPos, out BlockType billboardBlockType, out uint variationHash)
+    {
+        billboardBlockType = grassBillboardBlockType;
+        variationHash = 0u;
+
+        if (!enableGrassBillboards || grassBillboardChance <= 0f || billboardPos.y <= 0)
+            return false;
+        if (IsGrassBillboardSuppressed(billboardPos))
+            return false;
+        if (GetBlockAt(billboardPos) != BlockType.Air)
+            return false;
+
+        BlockType groundBlockType = GetBlockAt(new Vector3Int(billboardPos.x, billboardPos.y - 1, billboardPos.z));
+        return TryResolveVegetationBillboardRule(
+            billboardPos.x,
+            billboardPos.y,
+            billboardPos.z,
+            groundBlockType,
+            out billboardBlockType,
+            out variationHash);
+    }
+
+    public bool TryResolveVegetationBillboardRule(
+        int worldX,
+        int worldY,
+        int worldZ,
+        BlockType groundBlockType,
+        out BlockType billboardBlockType,
+        out uint variationHash)
+    {
+        return VegetationBillboardUtility.TryResolveBillboardRule(
+            GetBiomeNoiseSettings(),
+            GetActiveVegetationBillboardRules(),
+            worldX,
+            worldY,
+            worldZ,
+            groundBlockType,
+            grassBillboardChance,
+            grassBillboardNoiseScale,
+            grassBillboardBlockType,
+            out billboardBlockType,
+            out variationHash);
+    }
+
     private int GetMaxTreeCanopyRadiusForGeneration()
     {
         TreeSpawnRuleData[] rules = GetActiveTreeSpawnRules();
@@ -1025,6 +1084,38 @@ public partial class World : MonoBehaviour
         cachedTreeSpawnRules = rules.Count > 0 ? rules.ToArray() : Array.Empty<TreeSpawnRuleData>();
     }
 
+    private void RebuildVegetationBillboardRuleCache()
+    {
+        vegetationBillboardRulesDirty = false;
+
+        List<VegetationBillboardRuleData> rules = new List<VegetationBillboardRuleData>(16);
+        AddVegetationRulesFromBiomeDefinitions(rules);
+
+        if (rules.Count > 1)
+        {
+            rules.Sort((a, b) =>
+            {
+                int biomeCompare = a.biome.CompareTo(b.biome);
+                if (biomeCompare != 0)
+                    return biomeCompare;
+
+                int groundCompare = a.groundBlock.CompareTo(b.groundBlock);
+                if (groundCompare != 0)
+                    return groundCompare;
+
+                int weightCompare = b.weight.CompareTo(a.weight);
+                if (weightCompare != 0)
+                    return weightCompare;
+
+                return a.billboardBlock.CompareTo(b.billboardBlock);
+            });
+        }
+
+        cachedVegetationBillboardRules = rules.Count > 0
+            ? rules.ToArray()
+            : Array.Empty<VegetationBillboardRuleData>();
+    }
+
     private void AddTreeRulesFromBiomeDefinitions(List<TreeSpawnRuleData> rules)
     {
         BiomeDefinitionSO[] definitions = GetConfiguredBiomeDefinitions();
@@ -1051,6 +1142,57 @@ public partial class World : MonoBehaviour
                     biome = definition.biomeType,
                     treeStyle = treeConfig.treeStyle,
                     settings = sanitized
+                });
+            }
+        }
+    }
+
+    private void AddVegetationRulesFromBiomeDefinitions(List<VegetationBillboardRuleData> rules)
+    {
+        BiomeDefinitionSO[] definitions = GetConfiguredBiomeDefinitions();
+        if (definitions == null || definitions.Length == 0)
+            return;
+
+        for (int i = 0; i < definitions.Length; i++)
+        {
+            BiomeDefinitionSO definition = definitions[i];
+            if (definition == null || !definition.hasVegetationBillboards)
+                continue;
+
+            float chanceMultiplier = Mathf.Max(0f, definition.vegetationChanceMultiplier);
+            BiomeVegetationBillboardConfig[] configs = definition.vegetationBillboards;
+            bool addedBiomeRule = false;
+
+            if (configs != null)
+            {
+                for (int j = 0; j < configs.Length; j++)
+                {
+                    BiomeVegetationBillboardConfig config = configs[j];
+                    if (!config.enabled || config.blockType == BlockType.Air)
+                        continue;
+
+                    rules.Add(new VegetationBillboardRuleData
+                    {
+                        biome = definition.biomeType,
+                        groundBlock = config.groundBlockType == BlockType.Air ? BlockType.Grass : config.groundBlockType,
+                        billboardBlock = config.blockType,
+                        weight = config.weight > 0f ? config.weight : 1f,
+                        chanceMultiplier = chanceMultiplier
+                    });
+                    addedBiomeRule = true;
+                }
+            }
+
+            // Compatibilidade: sem regras explicitas no bioma, usa o billboard global somente sobre Grass.
+            if (!addedBiomeRule && grassBillboardBlockType != BlockType.Air)
+            {
+                rules.Add(new VegetationBillboardRuleData
+                {
+                    biome = definition.biomeType,
+                    groundBlock = BlockType.Grass,
+                    billboardBlock = grassBillboardBlockType,
+                    weight = 1f,
+                    chanceMultiplier = chanceMultiplier
                 });
             }
         }
@@ -1912,7 +2054,7 @@ public partial class World : MonoBehaviour
                     pd.coord.x, pd.coord.y,
                     scheduledSubchunkMask,
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
-                    grassBillboardNoiseScale, grassBillboardJitter,
+                    grassBillboardNoiseScale, grassBillboardJitter, cachedNativeVegetationBillboardRules, GetBiomeNoiseSettings(),
                     effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
                     out JobHandle meshHandle,
                     out NativeList<MeshGenerator.PackedChunkVertex> vertices,

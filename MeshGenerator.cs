@@ -1850,6 +1850,8 @@ public static class MeshGenerator
         float grassBillboardHeight,
         float grassBillboardNoiseScale,
         float grassBillboardJitter,
+        NativeArray<VegetationBillboardRuleData> vegetationBillboardRules,
+        BiomeNoiseSettings biomeNoiseSettings,
         float aoStrength,
         float aoCurveExponent,
         float aoMinLight,
@@ -1903,6 +1905,8 @@ public static class MeshGenerator
             grassBillboardHeight = grassBillboardHeight,
             grassBillboardNoiseScale = grassBillboardNoiseScale,
             grassBillboardJitter = grassBillboardJitter,
+            vegetationBillboardRules = vegetationBillboardRules,
+            biomeNoiseSettings = biomeNoiseSettings,
             aoStrength = aoStrength,
             aoCurveExponent = aoCurveExponent,
             aoMinLight = aoMinLight,
@@ -1938,6 +1942,7 @@ public static class MeshGenerator
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> light;
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
+        [ReadOnly] public NativeArray<VegetationBillboardRuleData> vegetationBillboardRules;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
         [ReadOnly] public NativeArray<byte> knownVoxelData;
         public bool useKnownVoxelData;
@@ -1954,6 +1959,7 @@ public static class MeshGenerator
         public float grassBillboardHeight;
         public float grassBillboardNoiseScale;
         public float grassBillboardJitter;
+        public BiomeNoiseSettings biomeNoiseSettings;
         public float aoStrength;
         public float aoCurveExponent;
         public float aoMinLight;
@@ -2640,17 +2646,8 @@ public static class MeshGenerator
             bool generateGrassBillboards = enableGrassBillboards && grassBillboardChance > 0f;
             float noiseScale = 0f;
             float jitter = 0f;
-            Vector2 grassBillboardAtlasUv = default;
-            float grassBillboardTint = 0f;
             if (generateGrassBillboards)
             {
-                BlockTextureMapping grassBillboardMapping = blockMappings[(int)grassBillboardBlockType];
-                Vector2Int grassBillboardTile = grassBillboardMapping.GetTileCoord(BlockFace.Front);
-                grassBillboardAtlasUv = new Vector2(
-                    grassBillboardTile.x * invAtlasTilesX + 0.001f,
-                    grassBillboardTile.y * invAtlasTilesY + 0.001f
-                );
-                grassBillboardTint = grassBillboardMapping.GetTint(BlockFace.Front) ? 1f : 0f;
                 noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
                 jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
             }
@@ -2688,9 +2685,7 @@ public static class MeshGenerator
                             }
                         }
 
-                        if (!generateGrassBillboards ||
-                            blockType != BlockType.Grass ||
-                            y + 1 >= SizeY)
+                        if (!generateGrassBillboards || y + 1 >= SizeY)
                         {
                             continue;
                         }
@@ -2705,47 +2700,69 @@ public static class MeshGenerator
 
                         int worldX = chunkCoordX * SizeX + (x - border);
                         int worldZ = chunkCoordZ * SizeZ + (z - border);
-                        if (!ShouldGenerateGrassBillboard(worldX, py, worldZ, noiseScale))
+                        if (!TryResolveVegetationBillboardRule(blockType, worldX, py, worldZ, noiseScale, out BlockType billboardBlockType, out uint variationHash))
                             continue;
 
-                        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
-                        float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
-                        float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
+                        int billboardMappingIndex = (int)billboardBlockType;
+                        if ((uint)billboardMappingIndex >= (uint)blockMappings.Length)
+                            continue;
+
+                        BlockTextureMapping billboardMapping = blockMappings[billboardMappingIndex];
+                        Vector2Int billboardTile = billboardMapping.GetTileCoord(BlockFace.Front);
+                        Vector2 billboardAtlasUv = new Vector2(
+                            billboardTile.x * invAtlasTilesX + 0.001f,
+                            billboardTile.y * invAtlasTilesY + 0.001f);
+                        float billboardTint = billboardMapping.GetTint(BlockFace.Front) ? 1f : 0f;
+
+                        float jx = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 8, jitter);
+                        float jz = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 16, jitter);
+                        float billboardHeight = VegetationBillboardUtility.ComputeHeight(grassBillboardHeight, variationHash);
+                        float billboardHalfWidth = VegetationBillboardUtility.ComputeHalfWidth(variationHash);
+                        float centerYOffset = VegetationBillboardUtility.ComputeBaseYOffset(variationHash);
                         byte packed = light[upIdx];
                         byte billboardLight = (byte)math.max(
                             (int)LightUtils.GetSkyLight(packed),
                             (int)LightUtils.GetBlockLight(packed)
                         );
                         float light01 = billboardLight / 15f;
-                        Vector3 center = new Vector3((x - border) + 0.5f + jx, py - 0.02f, (z - border) + 0.5f + jz);
-                        AddBillboardCross(center, grassBillboardHeight, grassBillboardAtlasUv, light01, grassBillboardTint);
+                        Vector3 center = new Vector3((x - border) + 0.5f + jx, py + centerYOffset, (z - border) + 0.5f + jz);
+                        AddBillboardCross(center, billboardHeight, billboardHalfWidth, billboardAtlasUv, light01, billboardTint);
                     }
                 }
             }
         }
 
-        private bool ShouldGenerateGrassBillboard(int worldX, int worldY, int worldZ, float noiseScale)
+        private bool TryResolveVegetationBillboardRule(
+            BlockType groundBlockType,
+            int worldX,
+            int worldY,
+            int worldZ,
+            float noiseScale,
+            out BlockType billboardBlockType,
+            out uint variationHash)
         {
-            float n = noise.snoise(new float2(
-                (worldX + 123.17f) * noiseScale,
-                (worldZ - 91.73f) * noiseScale
-            )) * 0.5f + 0.5f;
+            billboardBlockType = BlockType.Air;
+            variationHash = 0u;
 
-            float effectiveChance = math.saturate(
-                grassBillboardChance * math.lerp(0.35f, 1.65f, n)
-            );
-
-            uint h = math.hash(new int3(worldX, worldY, worldZ));
-            float chance = (h & 0x00FFFFFF) / 16777215f;
-            if (chance > effectiveChance)
+            if (IsSuppressedGrassBillboard(worldX, worldY, worldZ))
                 return false;
 
-            return !IsSuppressedGrassBillboard(worldX, worldY, worldZ);
+            return VegetationBillboardUtility.TryResolveBillboardRule(
+                biomeNoiseSettings,
+                vegetationBillboardRules,
+                worldX,
+                worldY,
+                worldZ,
+                groundBlockType,
+                grassBillboardChance,
+                noiseScale,
+                grassBillboardBlockType,
+                out billboardBlockType,
+                out variationHash);
         }
 
-        private void AddBillboardCross(Vector3 center, float height, Vector2 atlasUv, float light01, float tint)
+        private void AddBillboardCross(Vector3 center, float height, float halfWidth, Vector2 atlasUv, float light01, float tint)
         {
-            const float halfWidth = 0.38f;
             Vector3 a0 = center + new Vector3(-halfWidth, 0f, -halfWidth);
             Vector3 a1 = center + new Vector3(halfWidth, 0f, halfWidth);
             Vector3 a2 = a1 + new Vector3(0f, height, 0f);

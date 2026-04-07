@@ -1,5 +1,6 @@
 using System;
 using Unity.Burst;
+using Unity.Collections;
 using Unity.Mathematics;
 
 public enum BiomeType : byte
@@ -231,6 +232,256 @@ public struct BiomeNoiseSettings
     public CoastSurfaceThresholdSettings coastSurface;
 
     public TerrainSplineShaperSettings terrainShaper;
+}
+
+public struct VegetationBillboardRuleData
+{
+    public BiomeType biome;
+    public BlockType groundBlock;
+    public BlockType billboardBlock;
+    public float weight;
+    public float chanceMultiplier;
+}
+
+public static class VegetationBillboardUtility
+{
+    private const float MinHeightScale = 0.82f;
+    private const float MaxHeightScale = 1.22f;
+    private const float MinWidthScale = 0.84f;
+    private const float MaxWidthScale = 1.12f;
+    private const float BaseHalfWidth = 0.38f;
+    private const float BaseYOffset = -0.02f;
+    private const float YOffsetVariance = 0.012f;
+
+    [BurstCompile]
+    public static float ComputeEffectiveChance(
+        int worldX,
+        int worldZ,
+        float baseChance,
+        float noiseScale,
+        float chanceMultiplier = 1f)
+    {
+        float safeScale = math.max(1e-4f, noiseScale);
+        float scaledChance = math.max(0f, baseChance) * math.max(0f, chanceMultiplier);
+
+        float macro = noise.snoise(new float2(
+            (worldX + 123.17f) * safeScale * 0.62f,
+            (worldZ - 91.73f) * safeScale * 0.62f
+        )) * 0.5f + 0.5f;
+
+        float detail = noise.snoise(new float2(
+            (worldX - 47.31f) * safeScale * 1.93f,
+            (worldZ + 67.19f) * safeScale * 1.93f
+        )) * 0.5f + 0.5f;
+
+        float patch = math.saturate(math.lerp(macro, detail, 0.35f));
+        float cluster = patch * patch * (3f - 2f * patch);
+        return math.saturate(scaledChance * math.lerp(0.18f, 1.9f, cluster));
+    }
+
+    [BurstCompile]
+    public static uint ComputeVariantHash(int worldX, int worldY, int worldZ)
+    {
+        return math.hash(new int3(worldX * 17 + 3, worldY * 31 + 5, worldZ * 13 + 7));
+    }
+
+    [BurstCompile]
+    public static float ComputeJitterOffset(uint variantHash, int shift, float jitter)
+    {
+        float unit = HashToUnit01(variantHash, shift);
+        return (unit * 2f - 1f) * math.max(0f, jitter);
+    }
+
+    [BurstCompile]
+    public static float ComputeHeight(float baseHeight, uint variantHash)
+    {
+        float scale = math.lerp(MinHeightScale, MaxHeightScale, HashToUnit01(variantHash, 0));
+        return math.max(0.2f, baseHeight * scale);
+    }
+
+    [BurstCompile]
+    public static float ComputeHalfWidth(uint variantHash)
+    {
+        float scale = math.lerp(MinWidthScale, MaxWidthScale, HashToUnit01(variantHash, 24));
+        return BaseHalfWidth * scale;
+    }
+
+    [BurstCompile]
+    public static float ComputeBaseYOffset(uint variantHash)
+    {
+        float centered = HashToUnit01(variantHash, 20) * 2f - 1f;
+        return BaseYOffset + centered * YOffsetVariance;
+    }
+
+    [BurstCompile]
+    public static bool TryResolveBillboardRule(
+        in BiomeNoiseSettings biomeNoiseSettings,
+        NativeArray<VegetationBillboardRuleData> rules,
+        int worldX,
+        int worldY,
+        int worldZ,
+        BlockType groundBlock,
+        float baseChance,
+        float noiseScale,
+        BlockType fallbackBillboardBlock,
+        out BlockType billboardBlock,
+        out uint variationHash)
+    {
+        variationHash = 0u;
+        billboardBlock = fallbackBillboardBlock;
+
+        BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+        float totalWeight = 0f;
+        float weightedChanceMultiplier = 0f;
+        bool hasBiomeRule = false;
+        BlockType firstMatchingBlock = fallbackBillboardBlock;
+
+        for (int i = 0; i < rules.Length; i++)
+        {
+            VegetationBillboardRuleData rule = rules[i];
+            if (rule.biome != biome || rule.groundBlock != groundBlock || rule.billboardBlock == BlockType.Air)
+                continue;
+
+            float ruleWeight = rule.weight > 0f ? rule.weight : 1f;
+            totalWeight += ruleWeight;
+            weightedChanceMultiplier += ruleWeight * math.max(0f, rule.chanceMultiplier);
+
+            if (!hasBiomeRule)
+            {
+                hasBiomeRule = true;
+                firstMatchingBlock = rule.billboardBlock;
+            }
+        }
+
+        if (!hasBiomeRule)
+        {
+            if (groundBlock != BlockType.Grass || fallbackBillboardBlock == BlockType.Air)
+                return false;
+        }
+
+        float chanceMultiplier = hasBiomeRule
+            ? weightedChanceMultiplier / math.max(1e-5f, totalWeight)
+            : 1f;
+
+        float effectiveChance = ComputeEffectiveChance(worldX, worldZ, baseChance, noiseScale, chanceMultiplier);
+        uint chanceHash = math.hash(new int3(worldX, worldY, worldZ));
+        float chanceRoll = (chanceHash & 0x00FFFFFF) / 16777215f;
+        if (chanceRoll > effectiveChance)
+            return false;
+
+        variationHash = ComputeVariantHash(worldX, worldY, worldZ);
+        if (!hasBiomeRule)
+            return true;
+
+        float pickTarget = HashToUnit01(variationHash, 24) * math.max(1e-5f, totalWeight);
+        float accumulatedWeight = 0f;
+
+        for (int i = 0; i < rules.Length; i++)
+        {
+            VegetationBillboardRuleData rule = rules[i];
+            if (rule.biome != biome || rule.groundBlock != groundBlock || rule.billboardBlock == BlockType.Air)
+                continue;
+
+            accumulatedWeight += rule.weight > 0f ? rule.weight : 1f;
+            if (pickTarget <= accumulatedWeight)
+            {
+                billboardBlock = rule.billboardBlock;
+                return true;
+            }
+        }
+
+        billboardBlock = firstMatchingBlock;
+        return true;
+    }
+
+    public static bool TryResolveBillboardRule(
+        in BiomeNoiseSettings biomeNoiseSettings,
+        VegetationBillboardRuleData[] rules,
+        int worldX,
+        int worldY,
+        int worldZ,
+        BlockType groundBlock,
+        float baseChance,
+        float noiseScale,
+        BlockType fallbackBillboardBlock,
+        out BlockType billboardBlock,
+        out uint variationHash)
+    {
+        variationHash = 0u;
+        billboardBlock = fallbackBillboardBlock;
+
+        BiomeType biome = BiomeUtility.GetBiomeType(worldX, worldZ, biomeNoiseSettings);
+        float totalWeight = 0f;
+        float weightedChanceMultiplier = 0f;
+        bool hasBiomeRule = false;
+        BlockType firstMatchingBlock = fallbackBillboardBlock;
+
+        if (rules != null)
+        {
+            for (int i = 0; i < rules.Length; i++)
+            {
+                VegetationBillboardRuleData rule = rules[i];
+                if (rule.biome != biome || rule.groundBlock != groundBlock || rule.billboardBlock == BlockType.Air)
+                    continue;
+
+                float ruleWeight = rule.weight > 0f ? rule.weight : 1f;
+                totalWeight += ruleWeight;
+                weightedChanceMultiplier += ruleWeight * math.max(0f, rule.chanceMultiplier);
+
+                if (!hasBiomeRule)
+                {
+                    hasBiomeRule = true;
+                    firstMatchingBlock = rule.billboardBlock;
+                }
+            }
+        }
+
+        if (!hasBiomeRule)
+        {
+            if (groundBlock != BlockType.Grass || fallbackBillboardBlock == BlockType.Air)
+                return false;
+        }
+
+        float chanceMultiplier = hasBiomeRule
+            ? weightedChanceMultiplier / math.max(1e-5f, totalWeight)
+            : 1f;
+
+        float effectiveChance = ComputeEffectiveChance(worldX, worldZ, baseChance, noiseScale, chanceMultiplier);
+        uint chanceHash = math.hash(new int3(worldX, worldY, worldZ));
+        float chanceRoll = (chanceHash & 0x00FFFFFF) / 16777215f;
+        if (chanceRoll > effectiveChance)
+            return false;
+
+        variationHash = ComputeVariantHash(worldX, worldY, worldZ);
+        if (!hasBiomeRule)
+            return true;
+
+        float pickTarget = HashToUnit01(variationHash, 24) * math.max(1e-5f, totalWeight);
+        float accumulatedWeight = 0f;
+
+        for (int i = 0; i < rules.Length; i++)
+        {
+            VegetationBillboardRuleData rule = rules[i];
+            if (rule.biome != biome || rule.groundBlock != groundBlock || rule.billboardBlock == BlockType.Air)
+                continue;
+
+            accumulatedWeight += rule.weight > 0f ? rule.weight : 1f;
+            if (pickTarget <= accumulatedWeight)
+            {
+                billboardBlock = rule.billboardBlock;
+                return true;
+            }
+        }
+
+        billboardBlock = firstMatchingBlock;
+        return true;
+    }
+
+    [BurstCompile]
+    private static float HashToUnit01(uint hash, int shift)
+    {
+        return ((hash >> shift) & 0xFF) / 255f;
+    }
 }
 
 public static class BiomeUtility

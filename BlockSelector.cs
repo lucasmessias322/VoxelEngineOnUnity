@@ -242,11 +242,12 @@ public class BlockSelector : MonoBehaviour
                 maxDistance,
                 voxel,
                 out Vector3Int billboardNormal,
-                out Vector3Int groundPos))
+                out Vector3Int groundPos,
+                out BlockType billboardType))
             {
                 hitBlock = voxel;
                 hitNormal = billboardNormal;
-                hitType = World.Instance.grassBillboardBlockType;
+                hitType = billboardType;
                 isBillboardHit = true;
                 billboardGroundPos = groundPos;
                 return true;
@@ -504,10 +505,12 @@ public class BlockSelector : MonoBehaviour
         float maxDistance,
         Vector3Int voxel,
         out Vector3Int hitNormal,
-        out Vector3Int groundPos)
+        out Vector3Int groundPos,
+        out BlockType billboardType)
     {
         hitNormal = Vector3Int.zero;
         groundPos = new Vector3Int(int.MinValue, 0, 0);
+        billboardType = BlockType.Air;
 
         World world = World.Instance;
         if (world == null || !world.enableGrassBillboards || world.grassBillboardChance <= 0f)
@@ -516,44 +519,18 @@ public class BlockSelector : MonoBehaviour
         if (voxel.y <= 0)
             return false;
 
-        if (world.GetBlockAt(voxel) != BlockType.Air)
-            return false;
-
-        if (world.IsGrassBillboardSuppressed(voxel))
-            return false;
-
         Vector3Int groundCandidate = new Vector3Int(voxel.x, voxel.y - 1, voxel.z);
-        if (world.GetBlockAt(groundCandidate) != BlockType.Grass)
+        if (!world.TryResolveVegetationBillboardAt(voxel, out billboardType, out uint variationHash))
             return false;
 
-        int worldX = voxel.x;
-        int worldZ = voxel.z;
-        int py = voxel.y;
-
-        float noiseScale = math.max(1e-4f, world.grassBillboardNoiseScale);
         float jitter = math.clamp(world.grassBillboardJitter, 0f, 0.35f);
+        float jx = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 8, jitter);
+        float jz = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 16, jitter);
+        float height = VegetationBillboardUtility.ComputeHeight(world.grassBillboardHeight, variationHash);
+        float halfWidth = VegetationBillboardUtility.ComputeHalfWidth(variationHash);
+        float centerYOffset = VegetationBillboardUtility.ComputeBaseYOffset(variationHash);
 
-        float n = noise.snoise(new float2(
-            (worldX + 123.17f) * noiseScale,
-            (worldZ - 91.73f) * noiseScale
-        )) * 0.5f + 0.5f;
-
-        float effectiveChance = math.saturate(
-            world.grassBillboardChance * math.lerp(0.35f, 1.65f, n)
-        );
-
-        uint h = math.hash(new int3(worldX, py, worldZ));
-        float chance = (h & 0x00FFFFFF) / 16777215f;
-        if (chance > effectiveChance)
-            return false;
-
-        uint h2 = math.hash(new int3(worldX * 17 + 3, py * 31 + 5, worldZ * 13 + 7));
-        float jx = ((((h2 >> 8) & 0xFF) / 255f) * 2f - 1f) * jitter;
-        float jz = ((((h2 >> 16) & 0xFF) / 255f) * 2f - 1f) * jitter;
-
-        Vector3 center = new Vector3(worldX + 0.5f + jx, py - 0.02f, worldZ + 0.5f + jz);
-        float height = world.grassBillboardHeight;
-        const float halfWidth = 0.38f;
+        Vector3 center = new Vector3(voxel.x + 0.5f + jx, voxel.y + centerYOffset, voxel.z + 0.5f + jz);
 
         if (RayHitsBillboardPlane(ray, center, height, halfWidth, new Vector3(1f, 0f, -1f), new Vector3(1f, 0f, 1f), maxDistance) ||
             RayHitsBillboardPlane(ray, center, height, halfWidth, new Vector3(1f, 0f, 1f), new Vector3(1f, 0f, -1f), maxDistance))

@@ -9,6 +9,15 @@ public struct BiomeTreeConfig
     public TreeSettings settings;
 }
 
+[Serializable]
+public struct BiomeVegetationBillboardConfig
+{
+    public bool enabled;
+    public BlockType blockType;
+    public BlockType groundBlockType;
+    [Min(0f)] public float weight;
+}
+
 [CreateAssetMenu(fileName = "BiomeDefinition", menuName = "ScriptableObjects/Biome Definition", order = 2)]
 public class BiomeDefinitionSO : ScriptableObject
 {
@@ -29,6 +38,11 @@ public class BiomeDefinitionSO : ScriptableObject
     [Header("Trees")]
     public bool hasTrees = true;
     public BiomeTreeConfig[] treeConfigs = Array.Empty<BiomeTreeConfig>();
+
+    [Header("Billboard Vegetation")]
+    public bool hasVegetationBillboards = true;
+    [Range(0f, 2f)] public float vegetationChanceMultiplier = 1f;
+    public BiomeVegetationBillboardConfig[] vegetationBillboards = Array.Empty<BiomeVegetationBillboardConfig>();
 
     private void OnValidate()
     {
