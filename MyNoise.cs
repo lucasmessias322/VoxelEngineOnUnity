@@ -30,10 +30,20 @@ public struct NoiseLayer
     public float redistributionModifier;
     public float exponent;
     public float ridgeFactor;
+    public float domainWarpStrength;
+    public float domainWarpScale;
+    public int domainWarpOctaves;
+    public float domainWarpGain;
+    public float domainWarpLacunarity;
 }
 
 public static class MyNoise
 {
+    private const int DomainWarpOctaves = 3;
+    private const float DomainWarpGain = 0.5f;
+    private const float DomainWarpLacunarity = 2.03f;
+    private const float DomainWarpScaleMultiplier = 0.88f;
+
     public static float RemapValue(float value, float initialMin, float initialMax, float outputMin, float outputMax)
     {
         return outputMin + (value - initialMin) * (outputMax - outputMin) / (initialMax - initialMin);
@@ -169,6 +179,73 @@ public static class MyNoise
     }
 
     [BurstCompile]
+    public static float GetDefaultDomainWarpStrength(TerrainNoiseRole role)
+    {
+        switch (role)
+        {
+            case TerrainNoiseRole.Continentalness:
+                return 0.35f;
+            case TerrainNoiseRole.Erosion:
+                return 0.75f;
+            case TerrainNoiseRole.HillsNoise:
+                return 1.2f;
+            case TerrainNoiseRole.PeaksValleys:
+                return 1.05f;
+            case TerrainNoiseRole.MountainNoise:
+                return 1.4f;
+            default:
+                return 0.55f;
+        }
+    }
+
+    [BurstCompile]
+    private static float2 SampleDomainWarp(float nx, float nz, in NoiseLayer layer)
+    {
+        float scale = math.max(1e-5f, layer.scale);
+        float warpStrength = layer.domainWarpStrength > 0f
+            ? layer.domainWarpStrength
+            : GetDefaultDomainWarpStrength(layer.role);
+        if (warpStrength <= 0f)
+            return float2.zero;
+
+        float warpScaleMultiplier = layer.domainWarpScale > 0f
+            ? layer.domainWarpScale
+            : DomainWarpScaleMultiplier;
+        int warpOctaves = layer.domainWarpOctaves > 0
+            ? layer.domainWarpOctaves
+            : DomainWarpOctaves;
+        float warpGain = layer.domainWarpGain > 0f && layer.domainWarpGain < 1f
+            ? layer.domainWarpGain
+            : DomainWarpGain;
+        float warpLacunarity = layer.domainWarpLacunarity > 1f
+            ? layer.domainWarpLacunarity
+            : DomainWarpLacunarity;
+
+        float safeScale = math.max(1e-5f, scale);
+        float baseFrequency = 1f / math.max(42f, safeScale * warpScaleMultiplier);
+        float amplitude = math.clamp(safeScale * 0.20f, 3f, 64f) * warpStrength;
+
+        float x = nx * baseFrequency;
+        float z = nz * baseFrequency;
+
+        float2 warp = float2.zero;
+        float octaveAmplitude = 1f;
+        float octaveFrequency = 1f;
+
+        for (int i = 0; i < warpOctaves; i++)
+        {
+            float2 sampleA = new float2((x + 37.2f) * octaveFrequency, (z - 19.7f) * octaveFrequency);
+            float2 sampleB = new float2((x - 53.4f) * octaveFrequency, (z + 12.8f) * octaveFrequency);
+            warp += new float2(noise.snoise(sampleA), noise.snoise(sampleB)) * octaveAmplitude;
+
+            octaveAmplitude *= warpGain;
+            octaveFrequency *= warpLacunarity;
+        }
+
+        return warp * amplitude;
+    }
+
+    [BurstCompile]
     public static float ComposeMinecraftLikeTerrainSignal(
         float continentalTotal,
         float continentalWeight,
@@ -201,12 +278,20 @@ public static class MyNoise
                 mountainWeight,
                 legacyTotal,
                 legacyWeight,
-                biomeTerrain);
+                biomeTerrain,
+                terrainShaper);
 
         float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);
         float hillsMultiplier = math.max(0f, biomeTerrain.hillsMultiplier);
         float mountainMultiplier = math.max(0f, biomeTerrain.mountainMultiplier);
         float flattenStrength = math.saturate(biomeTerrain.flattenStrength);
+        float mountainSignalStart = math.clamp(terrainShaper.mountainSignalStart, 0f, 0.95f);
+        float mountainSignalRange = math.max(0.05f, terrainShaper.mountainSignalRange);
+        float mountainPeakExponent = math.max(0.2f, terrainShaper.mountainPeakExponent);
+        float jaggednessPeakFloor = math.max(0f, terrainShaper.jaggednessPeakFloor);
+        float ridgeChiselStrength = math.max(0f, terrainShaper.ridgeChiselStrength);
+        float ridgeChiselExponent = math.max(0.3f, terrainShaper.ridgeChiselExponent);
+        float ridgeChiselFlattenAttenuation = math.saturate(terrainShaper.ridgeChiselFlattenAttenuation);
 
         float continentalness01 = GetWeightedRoleSample(continentalTotal, continentalWeight, 0.5f);
         float erosion01 = GetWeightedRoleSample(erosionTotal, erosionWeight, 1f);
@@ -217,10 +302,12 @@ public static class MyNoise
         float continentalness = continentalness01 * 2f - 1f;
         float erosion = erosion01 * 2f - 1f;
         float hillsNoise = hillsNoise01 * 2f - 1f;
-        // No Overworld moderno, o canal semanticamente equivalente aqui e o weirdness.
+        // Mantemos ridges/ridgesFolded apenas para compatibilidade de splines.
+        // Picos de montanha passam a vir do canal MountainNoise (sem folded ridges).
         float ridges = peaksValleys01 * 2f - 1f;
         float ridgesFolded = GetMinecraftPeaksAndValleys(ridges);
-        float ridgePeakMask = math.saturate(ridgesFolded);
+        float mountainSignal = math.saturate((mountainNoise01 - mountainSignalStart) / mountainSignalRange);
+        float mountainPeakMask = math.pow(mountainSignal, mountainPeakExponent);
         float mountainVariation = mountainWeight > 0f ? mountainNoise01 : 0.5f;
         TerrainShapePoint shapePoint = new TerrainShapePoint
         {
@@ -236,11 +323,15 @@ public static class MyNoise
             shapePoint,
             erosion01));
         float ruggedness = 1f - flatness;
-        float jaggedness = math.max(0f, TerrainSplineGraphEvaluator.Evaluate(
+        TerrainShapePoint jaggednessShapePoint = shapePoint;
+        jaggednessShapePoint.ridges = mountainSignal * 2f - 1f;
+        jaggednessShapePoint.ridgesFolded = mountainSignal;
+        float jaggednessFromSpline = math.max(0f, TerrainSplineGraphEvaluator.Evaluate(
             terrainShaper,
             TerrainSplineGraphTarget.Jaggedness,
-            shapePoint,
-            ridgesFolded));
+            jaggednessShapePoint,
+            mountainSignal));
+        float jaggedness = math.max(jaggednessFromSpline, mountainPeakMask * jaggednessPeakFloor);
         float offset = TerrainSplineGraphEvaluator.Evaluate(
             terrainShaper,
             TerrainSplineGraphTarget.Offset,
@@ -261,25 +352,41 @@ public static class MyNoise
             * math.max(1f, hillsWeight)
             * ruggedness
             * inlandness
-            * math.lerp(1f, 0.7f, ridgePeakMask)
+            * math.lerp(1f, 0.85f, mountainPeakMask)
             * 0.34f
             * math.lerp(0.7f, 1f, hillsMultiplier);
-        float mountains = math.pow(ridgePeakMask, 1.35f)
+        float mountains = math.pow(mountainPeakMask, 1.35f)
             * math.max(1f, mountainWeight) * 0.12f
             * math.lerp(0.78f, 1.18f, mountainVariation)
             * jaggedness
             * ruggedness
             * inlandness
             * mountainMultiplier;
-        float cliffAccent = math.pow(ridgePeakMask, 2.1f)
+        float cliffAccent = math.pow(mountainPeakMask, 2.1f)
             * math.max(1f, mountainWeight) * 0.05f
             * math.pow(math.saturate((mountainVariation - 0.56f) / 0.44f), 1.8f)
             * jaggedness
             * ruggedness
             * inlandness
             * mountainMultiplier;
+        // Massa-base do macico para evitar picos em anel ("caldeira") quando
+        // o sinal de crista anula o centro localmente.
+        float massifCore = math.pow(math.saturate((mountainVariation - 0.34f) / 0.66f), 1.2f)
+            * math.max(1f, mountainWeight) * 0.10f
+            * ruggedness
+            * inlandness
+            * mountainMultiplier;
+        // Incisao de cristas/vales para dar aspecto "esculpido" em vez de cupula lisa.
+        float ridgeChiselSignal = math.abs(ridges);
+        float ridgeChisel = math.pow(ridgeChiselSignal, 1.65f)
+            * mountainPeakMask
+            * ruggedness
+            * inlandness
+            * math.lerp(1f, ridgeChiselFlattenAttenuation, flattenStrength)
+            * ridgeChiselStrength
+            * mountainMultiplier;
 
-        float terrain = continentalBaseline + legacyDetail + hills + foothills + mountains + cliffAccent;
+        float terrain = continentalBaseline + legacyDetail + hills + foothills + mountains + cliffAccent + massifCore - ridgeChisel;
         float flattenedTerrain = continentalBaseline + legacyDetail * 0.42f;
         terrain = math.lerp(terrain, flattenedTerrain, flattenStrength * math.lerp(0.42f, 1f, flatness));
         terrain = continentalBaseline + (terrain - continentalBaseline) * reliefMultiplier;
@@ -292,7 +399,7 @@ public static class MyNoise
         terrain = ApplyTerracing(terrain, 2f, hillsTerraceMask * 0.38f);
 
         float mountainTerraceMask = inlandness
-            * math.max(jaggedness, ridgePeakMask)
+            * math.max(jaggedness, mountainPeakMask)
             * ruggedness
             * SmoothThreshold(terrain, 12f, 42f)
             * math.lerp(1f, 0.7f, flattenStrength);
@@ -314,7 +421,8 @@ public static class MyNoise
         float mountainWeight,
         float legacyTotal,
         float legacyWeight,
-        in BiomeTerrainSettings biomeTerrain)
+        in BiomeTerrainSettings biomeTerrain,
+        in TerrainSplineShaperSettings terrainShaper)
     {
         // Fallback para presets antigos que ainda nao usam splines de shaping.
         float reliefMultiplier = math.max(0.05f, biomeTerrain.reliefMultiplier);
@@ -323,27 +431,34 @@ public static class MyNoise
         float flattenStrength = math.saturate(biomeTerrain.flattenStrength);
         float erosionBias = biomeTerrain.erosionBias;
         float erosionPower = math.max(0.1f, biomeTerrain.erosionPower);
+        float mountainSignalStart = math.clamp(terrainShaper.mountainSignalStart, 0f, 0.95f);
+        float mountainSignalRange = math.max(0.05f, terrainShaper.mountainSignalRange);
+        float mountainPeakExponent = math.max(0.2f, terrainShaper.mountainPeakExponent);
+        float ridgeChiselStrength = math.max(0f, terrainShaper.ridgeChiselStrength);
+        float ridgeChiselExponent = math.max(0.3f, terrainShaper.ridgeChiselExponent);
+        float ridgeChiselFlattenAttenuation = math.saturate(terrainShaper.ridgeChiselFlattenAttenuation);
 
         float continentalness01 = GetWeightedRoleSample(continentalTotal, continentalWeight, 0.5f);
         float erosion01 = GetWeightedRoleSample(erosionTotal, erosionWeight, 1f);
         float hillsNoise01 = GetWeightedRoleSample(hillsTotal, hillsWeight, 0.5f);
-        float peaksValleys01 = GetWeightedRoleSample(peaksValleysTotal, peaksValleysWeight, 0f);
+        float peaksValleys01 = GetWeightedRoleSample(peaksValleysTotal, peaksValleysWeight, 0.5f);
         float mountainNoise01 = GetWeightedRoleSample(mountainTotal, mountainWeight, 0.5f);
 
         float continentalness = (continentalness01 - 0.5f) * math.max(1f, continentalWeight);
         float erosion = math.saturate(math.pow(math.saturate(erosion01 + erosionBias), erosionPower));
         float erosionInv = 1f - erosion;
         float hillsNoise = hillsNoise01 * 2f - 1f;
-        float peakSignal = peaksValleysWeight > 0f ? math.abs(peaksValleys01 * 2f - 1f) : 0f;
-        float mountainSignal = math.saturate((mountainNoise01 - 0.52f) / 0.48f);
+        float mountainSignal = math.saturate((mountainNoise01 - mountainSignalStart) / mountainSignalRange);
 
         float inlandMask = SmoothThreshold(continentalness01, 0.46f, 0.62f);
         float foothillMask = SmoothThreshold(continentalness01, 0.41f, 0.58f) * math.pow(erosionInv, 0.85f);
-        float peakMask = SmoothThreshold(peakSignal, 0.52f, 0.82f);
-        float mountainMask = inlandMask * peakMask * math.pow(erosionInv, 1.35f);
+        float mountainPeakMask = math.pow(mountainSignal, mountainPeakExponent);
+        float mountainMask = inlandMask * mountainPeakMask * math.pow(erosionInv, 1.35f);
+        float ridgeChiselSignal = math.abs(peaksValleys01 * 2f - 1f);
         float cliffMask = mountainMask
             * SmoothThreshold(mountainNoise01, 0.6f, 0.88f)
-            * SmoothThreshold(peakSignal, 0.6f, 0.9f);
+            * SmoothThreshold(mountainSignal, 0.28f, 0.82f)
+            * math.lerp(0.78f, 1.12f, ridgeChiselSignal);
 
         float hills = hillsNoise * math.max(1f, hillsWeight) * math.lerp(0.22f, 0.82f, erosion) * hillsMultiplier;
         float foothills = math.max(0f, hillsNoise) * math.max(1f, hillsWeight) * 0.7f * foothillMask * math.lerp(0.55f, 1f, hillsMultiplier);
@@ -357,9 +472,22 @@ public static class MyNoise
             * math.max(1f, mountainWeight)
             * mountainMask
             * mountainMultiplier;
+        float massifCore = math.pow(math.saturate((mountainNoise01 - 0.34f) / 0.66f), 1.15f)
+            * math.max(1f, mountainWeight)
+            * inlandMask
+            * math.pow(erosionInv, 0.75f)
+            * 0.55f
+            * mountainMultiplier;
+        float ridgeChisel = math.pow(ridgeChiselSignal, ridgeChiselExponent)
+            * mountainPeakMask
+            * inlandMask
+            * math.pow(erosionInv, 1.05f)
+            * math.lerp(1f, ridgeChiselFlattenAttenuation, flattenStrength)
+            * ridgeChiselStrength
+            * mountainMultiplier;
 
         float baseline = continentalness + GetLegacyCenteredNoise(legacyTotal, legacyWeight);
-        float terrain = baseline + hills + foothills + mountains + cliffAccent;
+        float terrain = baseline + hills + foothills + mountains + cliffAccent + massifCore - ridgeChisel;
         float flattenedBaseline = baseline + math.max(0f, continentalness) * 0.12f;
         terrain = math.lerp(terrain, flattenedBaseline, flattenStrength);
         terrain = baseline + (terrain - baseline) * reliefMultiplier;
@@ -400,6 +528,9 @@ public static class MyNoise
         float ridgeFactor = UsesLegacyRidgeSharpening(layer.role)
             ? math.max(1f, layer.ridgeFactor)
             : 1f;
+        float2 domainWarp = SampleDomainWarp(nx + layer.offset.x * 1.93f, nz + layer.offset.y * -1.71f, layer);
+        float warpedNx = nx + domainWarp.x;
+        float warpedNz = nz + domainWarp.y;
 
         float total = 0f;
         float amplitude = 1f;
@@ -408,7 +539,7 @@ public static class MyNoise
 
         for (int i = 0; i < octaves; i++)
         {
-            float sample = noise.snoise(new float2((nx * frequency) / scale, (nz * frequency) / scale)) * 0.5f + 0.5f;
+            float sample = noise.snoise(new float2((warpedNx * frequency) / scale, (warpedNz * frequency) / scale)) * 0.5f + 0.5f;
 
             if (ridgeFactor > 1f)
             {

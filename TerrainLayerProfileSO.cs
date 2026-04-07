@@ -172,7 +172,12 @@ public class TerrainLayerProfileSO : ScriptableObject
             maxAmp = 0f,
             redistributionModifier = redistributionModifier,
             exponent = exponent,
-            ridgeFactor = ridgeFactor
+            ridgeFactor = ridgeFactor,
+            domainWarpStrength = MyNoise.GetDefaultDomainWarpStrength(role),
+            domainWarpScale = 0.88f,
+            domainWarpOctaves = 3,
+            domainWarpGain = 0.5f,
+            domainWarpLacunarity = 2.03f
         };
     }
 

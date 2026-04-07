@@ -406,6 +406,13 @@ public struct TerrainSplineGraphNode
 public struct TerrainSplineShaperSettings
 {
     public const int MaxGraphNodes = 16;
+    private const float DefaultMountainSignalStart = 0.40f;
+    private const float DefaultMountainSignalRange = 0.60f;
+    private const float DefaultMountainPeakExponent = 1.22f;
+    private const float DefaultJaggednessPeakFloor = 0.70f;
+    private const float DefaultRidgeChiselStrength = 0.22f;
+    private const float DefaultRidgeChiselExponent = 1.65f;
+    private const float DefaultRidgeChiselFlattenAttenuation = 0.38f;
 
     public bool enabled;
     [HideInInspector] public int graphNodeCount;
@@ -431,6 +438,13 @@ public struct TerrainSplineShaperSettings
     public TerrainSpline offsetSpline;
     public TerrainSpline factorSpline;
     public TerrainSpline jaggednessSpline;
+    public float mountainSignalStart;
+    public float mountainSignalRange;
+    public float mountainPeakExponent;
+    public float jaggednessPeakFloor;
+    public float ridgeChiselStrength;
+    public float ridgeChiselExponent;
+    public float ridgeChiselFlattenAttenuation;
 
     public bool HasAnyControlPoints =>
         math.clamp(graphNodeCount, 0, MaxGraphNodes) > 0 ||
@@ -447,7 +461,14 @@ public struct TerrainSplineShaperSettings
         jaggednessRootNodeIndex = -1,
         offsetSpline = default,
         factorSpline = default,
-        jaggednessSpline = default
+        jaggednessSpline = default,
+        mountainSignalStart = DefaultMountainSignalStart,
+        mountainSignalRange = DefaultMountainSignalRange,
+        mountainPeakExponent = DefaultMountainPeakExponent,
+        jaggednessPeakFloor = DefaultJaggednessPeakFloor,
+        ridgeChiselStrength = DefaultRidgeChiselStrength,
+        ridgeChiselExponent = DefaultRidgeChiselExponent,
+        ridgeChiselFlattenAttenuation = DefaultRidgeChiselFlattenAttenuation
     };
 
     public static TerrainSplineShaperSettings MinecraftModernDefault => new TerrainSplineShaperSettings
@@ -482,7 +503,14 @@ public struct TerrainSplineShaperSettings
             new TerrainSplinePoint(0.46f, 0.18f, 0.10f),
             new TerrainSplinePoint(0.64f, 0.52f, 0.24f),
             new TerrainSplinePoint(0.80f, 0.98f, 0.16f),
-            new TerrainSplinePoint(1.00f, 1.36f, 0.00f))
+            new TerrainSplinePoint(1.00f, 1.36f, 0.00f)),
+        mountainSignalStart = DefaultMountainSignalStart,
+        mountainSignalRange = DefaultMountainSignalRange,
+        mountainPeakExponent = DefaultMountainPeakExponent,
+        jaggednessPeakFloor = DefaultJaggednessPeakFloor,
+        ridgeChiselStrength = DefaultRidgeChiselStrength,
+        ridgeChiselExponent = DefaultRidgeChiselExponent,
+        ridgeChiselFlattenAttenuation = DefaultRidgeChiselFlattenAttenuation
     };
 
     public TerrainSplineGraphNode GetNode(int index)
@@ -539,6 +567,35 @@ public struct TerrainSplineShaperSettings
         sanitized.offsetSpline = offsetSpline.Sanitized();
         sanitized.factorSpline = factorSpline.Sanitized();
         sanitized.jaggednessSpline = jaggednessSpline.Sanitized();
+
+        bool sculptLooksUninitialized =
+            mountainSignalStart == 0f &&
+            mountainSignalRange == 0f &&
+            mountainPeakExponent == 0f &&
+            jaggednessPeakFloor == 0f &&
+            ridgeChiselStrength == 0f &&
+            ridgeChiselExponent == 0f &&
+            ridgeChiselFlattenAttenuation == 0f;
+        if (sculptLooksUninitialized)
+        {
+            sanitized.mountainSignalStart = DefaultMountainSignalStart;
+            sanitized.mountainSignalRange = DefaultMountainSignalRange;
+            sanitized.mountainPeakExponent = DefaultMountainPeakExponent;
+            sanitized.jaggednessPeakFloor = DefaultJaggednessPeakFloor;
+            sanitized.ridgeChiselStrength = DefaultRidgeChiselStrength;
+            sanitized.ridgeChiselExponent = DefaultRidgeChiselExponent;
+            sanitized.ridgeChiselFlattenAttenuation = DefaultRidgeChiselFlattenAttenuation;
+        }
+        else
+        {
+            sanitized.mountainSignalStart = math.clamp(mountainSignalStart, 0f, 0.95f);
+            sanitized.mountainSignalRange = math.clamp(mountainSignalRange, 0.05f, 2f);
+            sanitized.mountainPeakExponent = math.clamp(mountainPeakExponent, 0.2f, 6f);
+            sanitized.jaggednessPeakFloor = math.clamp(jaggednessPeakFloor, 0f, 2f);
+            sanitized.ridgeChiselStrength = math.clamp(ridgeChiselStrength, 0f, 2f);
+            sanitized.ridgeChiselExponent = math.clamp(ridgeChiselExponent, 0.3f, 6f);
+            sanitized.ridgeChiselFlattenAttenuation = math.clamp(ridgeChiselFlattenAttenuation, 0f, 1f);
+        }
 
         TerrainSplineGraphNode[] nodes = new TerrainSplineGraphNode[MaxGraphNodes];
         for (int i = 0; i < sanitized.graphNodeCount; i++)

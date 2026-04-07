@@ -1256,6 +1256,11 @@ public partial class World : MonoBehaviour
             if (layer.redistributionModifier == 0f) layer.redistributionModifier = 1.1f + i * 0.05f;
             if (layer.exponent == 0f) layer.exponent = 1.1f;
             if (layer.ridgeFactor <= 0f) layer.ridgeFactor = 1f + i * 0.2f;
+            if (layer.domainWarpStrength <= 0f) layer.domainWarpStrength = MyNoise.GetDefaultDomainWarpStrength(layer.role);
+            if (layer.domainWarpScale <= 0f) layer.domainWarpScale = 0.88f;
+            if (layer.domainWarpOctaves <= 0) layer.domainWarpOctaves = 3;
+            if (layer.domainWarpGain <= 0f || layer.domainWarpGain >= 1f) layer.domainWarpGain = 0.5f;
+            if (layer.domainWarpLacunarity <= 1f) layer.domainWarpLacunarity = 2.03f;
 
             if (layer.offset == Vector2.zero)
                 layer.offset = new Vector2(i * 13.37f, i * 7.53f);
