@@ -25,6 +25,7 @@ public struct TreeInstance
     public int trunkHeight;
     public int canopyRadius;
     public int canopyHeight;
+    public int trunkClearance;
     public int spacingRadius;
     public TreeStyle treeStyle;
 }

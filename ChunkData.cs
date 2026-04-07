@@ -415,6 +415,7 @@ public static class ChunkData
             int maxTrunk = math.max(minTrunk, settings.maxHeight);
             int canopyRadius = math.max(0, settings.canopyRadius);
             int canopyHeight = math.max(1, settings.canopyHeight);
+            int trunkClearance = math.max(0, settings.trunkClearance);
             float heightNoise = noise.cnoise(new float2(
                 (worldX + 0.1f) * 0.137f + ruleSeed * 0.001f,
                 (worldZ + 0.1f) * 0.243f + ruleSeed * 0.001f)) * 0.5f + 0.5f;
@@ -430,6 +431,7 @@ public static class ChunkData
                 trunkHeight = trunkH,
                 canopyRadius = canopyRadius,
                 canopyHeight = canopyHeight,
+                trunkClearance = trunkClearance,
                 spacingRadius = spacingRadius,
                 treeStyle = rule.treeStyle
             };

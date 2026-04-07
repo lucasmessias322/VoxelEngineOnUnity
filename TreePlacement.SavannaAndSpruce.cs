@@ -176,6 +176,7 @@ public static partial class TreePlacement
         int trunkHeight,
         int canopyH,
         int canopyR,
+        int trunkClearance,
         int treeHash,
         NativeArray<byte> blockTypes,
         NativeArray<bool> solids,
@@ -185,73 +186,63 @@ public static partial class TreePlacement
         int voxelSizeZ,
         int voxelPlaneSize)
     {
-        int trunkTopY = surfaceY + trunkHeight;
-        int desiredFoliageLayers = math.max(5, canopyH);
-        int foliageStartY = math.max(surfaceY + 2, trunkTopY - desiredFoliageLayers + 1);
-        int foliageLayers = trunkTopY - foliageStartY + 1;
-        int maxRadius = math.max(2, canopyR);
-
-        if (foliageLayers <= 0)
+        int totalHeight = math.max(4, trunkHeight);
+        int topY = surfaceY + totalHeight;
+        if (topY < 0 || surfaceY >= chunkSizeY - 1)
             return;
 
-        for (int layerFromTop = 0; layerFromTop < foliageLayers; layerFromTop++)
-        {
-            int ly = trunkTopY - layerFromTop;
-            if (ly < 0 || ly >= chunkSizeY)
-                continue;
+        int clampedTopY = math.min(chunkSizeY - 1, topY);
+        uint rngState = InitializeTreeRandom(treeHash);
 
-            int radius = GetTaigaSpruceLayerRadius(layerFromTop, foliageLayers, maxRadius);
-            PlaceSpruceLayer(ix, iz, ly, radius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        // canopyH controls foliage depth; trunkClearance controls how much trunk stays exposed.
+        bool wrapWholeTrunk = trunkClearance <= 0;
+        int foliageBaseY;
+        if (wrapWholeTrunk)
+        {
+            // trunkClearance == 0 means "start foliage right above ground".
+            foliageBaseY = surfaceY + 1;
+        }
+        else
+        {
+            int availableLayers = math.max(1, clampedTopY - (surfaceY + 1) + 1);
+            int desiredLayers = math.max(3, canopyH);
+            int foliageLayers = math.clamp(desiredLayers, 1, availableLayers);
+
+            int baseFromLayers = clampedTopY - foliageLayers + 1;
+            int clampedClearance = math.clamp(trunkClearance, 0, totalHeight - 1);
+            int baseFromClearance = surfaceY + 1 + clampedClearance;
+
+            foliageBaseY = math.max(baseFromLayers, baseFromClearance);
+            foliageBaseY += NextRandomInt(ref rngState, 2);
+        }
+        foliageBaseY = math.clamp(foliageBaseY, surfaceY + 1, clampedTopY);
+
+        int configuredRadius = math.max(2, canopyR);
+        int maxRadius = math.clamp(math.max(configuredRadius, 2 + NextRandomInt(ref rngState, 2)), 2, 3);
+
+        int minimumLayerRadius = wrapWholeTrunk ? 1 : 0;
+        int layerRadius = minimumLayerRadius + NextRandomInt(ref rngState, 2);
+        int growthThreshold = 1;
+        int resetRadius = minimumLayerRadius;
+
+        for (int ly = clampedTopY; ly >= foliageBaseY; ly--)
+        {
+            PlaceSpruceLayer(ix, iz, ly, layerRadius, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            if (layerRadius >= growthThreshold)
+            {
+                layerRadius = resetRadius;
+                resetRadius = 1;
+                growthThreshold = math.min(maxRadius, growthThreshold + 1);
+            }
+            else
+            {
+                layerRadius++;
+            }
         }
 
-        PlaceSpruceTopCrown(ix, iz, trunkTopY, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-    }
-
-    private static int GetTaigaSpruceLayerRadius(int layerFromTop, int foliageLayers, int maxRadius)
-    {
-        if (maxRadius <= 0)
-            return 0;
-
-        int largeRingRadius = math.min(3, maxRadius);
-        int smallRingRadius = 1;
-        int layerFromBottom = (foliageLayers - 1) - layerFromTop;
-        int radius = (layerFromBottom & 1) == 0 ? largeRingRadius : smallRingRadius;
-
-        return math.clamp(radius, 1, maxRadius);
-    }
-
-    private static void PlaceSpruceTopCrown(
-        int ix,
-        int iz,
-        int trunkTopY,
-        NativeArray<byte> blockTypes,
-        NativeArray<bool> solids,
-        NativeArray<BlockTextureMapping> blockMappings,
-        int voxelSizeX,
-        int voxelSizeZ,
-        int voxelPlaneSize)
-    {
-        TryPlaceLeaf(ix, trunkTopY + 1, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
-        TryPlaceLeaf(ix, trunkTopY + 2, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
-        PlaceSpruceTopCross(ix, iz, trunkTopY, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-        PlaceSpruceTopCross(ix, iz, trunkTopY + 1, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-    }
-
-    private static void PlaceSpruceTopCross(
-        int ix,
-        int iz,
-        int ly,
-        NativeArray<byte> blockTypes,
-        NativeArray<bool> solids,
-        NativeArray<BlockTextureMapping> blockMappings,
-        int voxelSizeX,
-        int voxelSizeZ,
-        int voxelPlaneSize)
-    {
-        TryPlaceLeaf(ix - 1, ly, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
-        TryPlaceLeaf(ix + 1, ly, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
-        TryPlaceLeaf(ix, ly, iz - 1, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
-        TryPlaceLeaf(ix, ly, iz + 1, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
+        if (clampedTopY + 1 < chunkSizeY)
+            TryPlaceLeaf(ix, clampedTopY + 1, iz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
     }
 
     private static void PlaceSpruceLayer(
@@ -278,6 +269,25 @@ public static partial class TreePlacement
                 TryPlaceLeaf(ix + dx, ly, iz + dz, blockTypes, solids, blockMappings, voxelSizeX, voxelSizeZ, voxelPlaneSize, false);
             }
         }
+    }
+
+    private static uint InitializeTreeRandom(int treeHash)
+    {
+        uint state = (uint)treeHash ^ 0x9E3779B9u;
+        if (state == 0u)
+            state = 0xA341316Cu;
+        return state;
+    }
+
+    private static int NextRandomInt(ref uint state, int maxExclusive)
+    {
+        if (maxExclusive <= 1)
+            return 0;
+
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return (int)(state % (uint)maxExclusive);
     }
 
     private static void TryPlaceLeaf(

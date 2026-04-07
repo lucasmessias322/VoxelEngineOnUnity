@@ -14,6 +14,7 @@ public struct TreeSettings
     public int maxHeight;
     public int canopyRadius;
     public int canopyHeight;
+    public int trunkClearance;
     public int minSpacing;
     public float density;
     public float noiseScale;
@@ -1230,6 +1231,7 @@ public partial class World : MonoBehaviour
         s.maxHeight = Mathf.Max(s.minHeight, s.maxHeight);
         s.canopyRadius = Mathf.Max(0, s.canopyRadius);
         s.canopyHeight = Mathf.Max(1, s.canopyHeight);
+        s.trunkClearance = Mathf.Max(0, s.trunkClearance);
         s.minSpacing = Mathf.Max(1, s.minSpacing);
         s.density = Mathf.Clamp01(s.density);
         s.noiseScale = Mathf.Max(0.0001f, s.noiseScale);

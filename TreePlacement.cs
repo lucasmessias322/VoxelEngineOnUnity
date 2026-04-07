@@ -80,7 +80,17 @@ public static partial class TreePlacement
                 continue;
             }
 
-            for (int dy = 1; dy <= t.trunkHeight; dy++)
+            int trunkBlocksToPlace = t.trunkHeight;
+            if (isTaigaSpruce)
+            {
+                // Minecraft spruce usually leaves 0-2 top levels for foliage apex.
+                int spruceTopGap = (treeHash >> 8) & 0x3;
+                if (spruceTopGap > 2)
+                    spruceTopGap = 2;
+                trunkBlocksToPlace = math.max(1, trunkBlocksToPlace - spruceTopGap);
+            }
+
+            for (int dy = 1; dy <= trunkBlocksToPlace; dy++)
             {
                 int ty = surfaceY + dy;
                 if (ty >= chunkSizeY)
@@ -101,7 +111,7 @@ public static partial class TreePlacement
             else if (isTaigaSpruce)
             {
                 PlaceTaigaSpruceCanopy(
-                    ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
+                    ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, t.trunkClearance, treeHash,
                     blockTypes, solids, blockMappings,
                     chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize
                 );
