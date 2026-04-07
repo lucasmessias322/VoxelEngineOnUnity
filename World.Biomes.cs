@@ -67,6 +67,7 @@ public partial class World : MonoBehaviour
     public CoastSurfaceThresholdSettings coastSurface = CoastSurfaceThresholdSettings.Default;
 
     private static readonly int GrassTintPropertyId = Shader.PropertyToID("_GrassTint");
+    private static readonly int FolliageTintPropertyId = Shader.PropertyToID("_FolliageTint");
     private MaterialPropertyBlock biomeTintPropertyBlock;
     private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
     private BiomeDefinitionSO[] cachedBiomeDefinitions = Array.Empty<BiomeDefinitionSO>();
@@ -329,14 +330,40 @@ public partial class World : MonoBehaviour
         return Color.white;
     }
 
+    private Color GetFoliageTintForBiome(BiomeType biome)
+    {
+        if (TryGetBiomeDefinition(biome, out BiomeDefinitionSO definition))
+        {
+            Color configuredTint = definition.foliageTint;
+            if (configuredTint.maxColorComponent > 0f || configuredTint.a > 0f)
+                return configuredTint;
+
+            return definition.grassTint;
+        }
+
+        return Color.white;
+    }
+
+    private readonly struct ChunkBiomeTints
+    {
+        public readonly Color grassTint;
+        public readonly Color foliageTint;
+
+        public ChunkBiomeTints(Color grassTint, Color foliageTint)
+        {
+            this.grassTint = grassTint;
+            this.foliageTint = foliageTint;
+        }
+    }
+
     private void ApplyChunkBiomeTint(Chunk chunk, Vector2Int coord)
     {
         if (chunk == null || chunk.subRenderers == null)
             return;
 
-        Color grassTint = EvaluateChunkGrassTint(coord);
+        ChunkBiomeTints tints = EvaluateChunkBiomeTints(coord);
         for (int i = 0; i < chunk.subRenderers.Length; i++)
-            ApplyBiomeTintToRenderer(chunk.subRenderers[i], grassTint);
+            ApplyBiomeTintToRenderer(chunk.subRenderers[i], tints);
     }
 
     private void ApplyBiomeTintToRenderer(Renderer renderer, Vector2Int coord)
@@ -344,10 +371,10 @@ public partial class World : MonoBehaviour
         if (renderer == null)
             return;
 
-        ApplyBiomeTintToRenderer(renderer, EvaluateChunkGrassTint(coord));
+        ApplyBiomeTintToRenderer(renderer, EvaluateChunkBiomeTints(coord));
     }
 
-    private void ApplyBiomeTintToRenderer(Renderer renderer, Color grassTint)
+    private void ApplyBiomeTintToRenderer(Renderer renderer, ChunkBiomeTints tints)
     {
         if (renderer == null)
             return;
@@ -356,15 +383,19 @@ public partial class World : MonoBehaviour
             biomeTintPropertyBlock = new MaterialPropertyBlock();
 
         renderer.GetPropertyBlock(biomeTintPropertyBlock);
-        biomeTintPropertyBlock.SetColor(GrassTintPropertyId, grassTint);
+        biomeTintPropertyBlock.SetColor(GrassTintPropertyId, tints.grassTint);
+        biomeTintPropertyBlock.SetColor(FolliageTintPropertyId, tints.foliageTint);
         renderer.SetPropertyBlock(biomeTintPropertyBlock);
     }
 
-    private Color EvaluateChunkGrassTint(Vector2Int coord)
+    private ChunkBiomeTints EvaluateChunkBiomeTints(Vector2Int coord)
     {
         int centerX = coord.x * Chunk.SizeX + Chunk.SizeX / 2;
         int centerZ = coord.y * Chunk.SizeZ + Chunk.SizeZ / 2;
-        return GetGrassTintForBiome(GetBiomeAt(centerX, centerZ));
+        BiomeType biome = GetBiomeAt(centerX, centerZ);
+        return new ChunkBiomeTints(
+            GetGrassTintForBiome(biome),
+            GetFoliageTintForBiome(biome));
     }
 }
 

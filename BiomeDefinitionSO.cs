@@ -19,6 +19,7 @@ public class BiomeDefinitionSO : ScriptableObject
     public BlockType surfaceBlock = BlockType.Grass;
     public BlockType subsurfaceBlock = BlockType.Dirt;
     public Color grassTint = new Color(0.38f, 0.52f, 0.25f, 1f);
+    public Color foliageTint = new Color(0.38f, 0.52f, 0.25f, 1f);
 
     [Header("3D Density")]
     [Tooltip("Quando ativo, este asset aplica os multiplicadores de densidade 3D deste bioma.")]
