@@ -34,6 +34,7 @@ public partial class World : MonoBehaviour
         public JobHandle handle;
         public NativeArray<int> heightCache;
         public NativeArray<byte> blockTypes;
+        public NativeArray<byte> blockPlacementAxes;
         public NativeArray<byte> knownVoxelData;
         public bool useKnownVoxelData;
         public NativeArray<bool> solids;
@@ -168,6 +169,7 @@ public partial class World : MonoBehaviour
         [ReadOnly] public NativeArray<BlockEdit> overrides;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         public NativeArray<byte> blockTypes;
+        public NativeArray<byte> blockPlacementAxes;
         public NativeArray<bool> solids;
         public NativeArray<int> heightCache;
         public NativeArray<bool> subchunkNonEmpty;
@@ -202,6 +204,8 @@ public partial class World : MonoBehaviour
                 byte blockId = (byte)math.clamp(edit.type, 0, maxBlockIndex);
                 int voxelIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
                 blockTypes[voxelIndex] = blockId;
+                if (blockPlacementAxes.IsCreated && (uint)voxelIndex < (uint)blockPlacementAxes.Length)
+                    blockPlacementAxes[voxelIndex] = BlockPlacementRotationUtility.SanitizeAxisByte(edit.placementAxis);
                 solids[voxelIndex] = blockMappings[blockId].isSolid;
                 dirtyColumns[ix + iz * voxelSizeX] = 1;
 

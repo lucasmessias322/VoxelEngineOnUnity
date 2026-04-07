@@ -60,7 +60,11 @@ public partial class World : MonoBehaviour
     }
 
 
-    public void SetBlockAt(Vector3Int worldPos, BlockType type, bool placedByPlayer = false)
+    public void SetBlockAt(
+        Vector3Int worldPos,
+        BlockType type,
+        bool placedByPlayer = false,
+        BlockPlacementAxis placementAxis = BlockPlacementAxis.Y)
     {
         if (!enableWater && FluidBlockUtility.IsWater(type))
             type = BlockType.Air;
@@ -91,6 +95,7 @@ public partial class World : MonoBehaviour
         // Keep explicit Air overrides so broken procedural terrain stays removed.
         // Removing the key would make GetBlockAt() fall back to procedural data again.
         blockOverrides[worldPos] = type;
+        UpdateStoredPlacementAxis(worldPos, type, placementAxis);
 
         Vector2Int chunkCoord = new Vector2Int(
             Mathf.FloorToInt((float)worldPos.x / Chunk.SizeX),

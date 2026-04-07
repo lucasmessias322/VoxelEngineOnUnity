@@ -113,32 +113,13 @@ public static class TerrainSurfaceRules
 
         if (isUnderwater)
         {
-            float deepWaterStoneMask = math.saturate(
-                (waterDepth - coastSurface.underwaterStoneStartDepth)
-                / math.max(1f, coastSurface.underwaterStoneStartDepth));
-            float underwaterSlopeStoneMask = math.saturate(
-                (slope01 - coastSurface.underwaterSlopeStoneStart01)
-                / math.max(0.01f, coastSurface.underwaterSlopeStoneFull01 - coastSurface.underwaterSlopeStoneStart01));
-            float underwaterStoneMask = math.saturate(math.max(deepWaterStoneMask, underwaterSlopeStoneMask));
-            float underwaterStoneThreshold = coastSurface.underwaterStoneThresholdBase + (coastalNoise - 0.5f) * coastSurface.underwaterStoneThresholdNoiseSpan;
-            bool preferStoneFloor = underwaterStoneMask >= underwaterStoneThreshold && waterDepth > 1;
+            surfaceBlock = BlockType.Sand;
+            subsurfaceBlock = BlockType.Sand;
+            int sandDepth = 4 + math.max(0, math.min(3, waterDepth / 3));
+            if (waterDepth <= coastSurface.underwaterSandMaxDepth)
+                sandDepth++;
 
-            if (preferStoneFloor)
-            {
-                surfaceBlock = BlockType.Stone;
-                subsurfaceBlock = BlockType.Stone;
-                surfaceLayerDepth = 1;
-            }
-            else
-            {
-                surfaceBlock = BlockType.Sand;
-                subsurfaceBlock = BlockType.Sand;
-                int sandDepth = 4 + math.max(0, math.min(3, waterDepth / 3));
-                if (waterDepth <= coastSurface.underwaterSandMaxDepth)
-                    sandDepth++;
-
-                surfaceLayerDepth = math.max(surfaceLayerDepth, sandDepth);
-            }
+            surfaceLayerDepth = math.max(surfaceLayerDepth, sandDepth);
 
             isBeach = false;
         }

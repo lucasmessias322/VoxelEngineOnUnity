@@ -110,6 +110,7 @@ public struct BlockEdit
     public int y;
     public int z;
     public int type;
+    public byte placementAxis;
 }
 public static class MeshGenerator
 {
@@ -1297,6 +1298,7 @@ public static class MeshGenerator
     public static void ScheduleMeshJob(
         NativeArray<int> heightCache,
         NativeArray<byte> blockTypes,
+        NativeArray<byte> blockPlacementAxes,
         NativeArray<bool> solids,
         NativeArray<byte> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
@@ -1348,6 +1350,7 @@ public static class MeshGenerator
             startY = 0,
             endY = 0,
             blockTypes = blockTypes,
+            blockPlacementAxes = blockPlacementAxes,
             solids = solids,
             light = light, // Usa a luz previamente calculada e passada por parÃƒÂ¢metro
             heightCache = heightCache,
@@ -1399,6 +1402,7 @@ public static class MeshGenerator
         // DeallocateOnJobCompletion limpa todos estes arrays criados no Schedule.
         [ReadOnly] public NativeArray<int> heightCache;
         [ReadOnly] public NativeArray<byte> blockTypes;
+        [ReadOnly] public NativeArray<byte> blockPlacementAxes;
         [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> light;
@@ -1441,6 +1445,7 @@ public static class MeshGenerator
         private struct GreedyFaceData
         {
             public byte blockId;
+            public byte placementAxis;
             public byte valid;
             public byte faceLight;
             public byte surfaceHeight;
@@ -1673,6 +1678,17 @@ public static class MeshGenerator
             return mapping.isSolid && mapping.renderShape == BlockRenderShape.Cube;
         }
 
+        private byte GetBlockPlacementAxisValue(int voxelIndex)
+        {
+            if (!blockPlacementAxes.IsCreated)
+                return (byte)BlockPlacementAxis.Y;
+
+            if ((uint)voxelIndex >= (uint)blockPlacementAxes.Length)
+                return (byte)BlockPlacementAxis.Y;
+
+            return BlockPlacementRotationUtility.SanitizeAxisByte(blockPlacementAxes[voxelIndex]);
+        }
+
         private static bool HasFace(in GreedyFaceData face)
         {
             return face.valid != 0;
@@ -1683,6 +1699,7 @@ public static class MeshGenerator
             return HasFace(a) &&
                    HasFace(b) &&
                    a.blockId == b.blockId &&
+                   a.placementAxis == b.placementAxis &&
                    a.faceLight == b.faceLight &&
                    a.surfaceHeight == b.surfaceHeight;
         }
@@ -1704,6 +1721,43 @@ public static class MeshGenerator
                    bottom.ao2 == top.ao1 &&
                    bottom.light3 == top.light0 &&
                    bottom.light2 == top.light1;
+        }
+
+        private static Vector2 ComputePlacementAwareUv(
+            int u,
+            int v,
+            float rawU,
+            float rawV,
+            float posD,
+            BlockFace sampledFace,
+            BlockPlacementAxis placementAxis)
+        {
+            Vector3 worldCoords = new Vector3(
+                u == 0 ? rawU : v == 0 ? rawV : posD,
+                u == 1 ? rawU : v == 1 ? rawV : posD,
+                u == 2 ? rawU : v == 2 ? rawV : posD);
+
+            Vector3 canonicalCoords = ToCanonicalCoords(worldCoords, placementAxis);
+            return sampledFace switch
+            {
+                BlockFace.Top => new Vector2(canonicalCoords.x, canonicalCoords.z),
+                BlockFace.Bottom => new Vector2(canonicalCoords.x, canonicalCoords.z),
+                BlockFace.Right => new Vector2(canonicalCoords.z, canonicalCoords.y),
+                BlockFace.Left => new Vector2(canonicalCoords.z, canonicalCoords.y),
+                BlockFace.Front => new Vector2(canonicalCoords.x, canonicalCoords.y),
+                BlockFace.Back => new Vector2(canonicalCoords.x, canonicalCoords.y),
+                _ => new Vector2(canonicalCoords.x, canonicalCoords.y)
+            };
+        }
+
+        private static Vector3 ToCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)
+        {
+            return BlockPlacementRotationUtility.SanitizeAxis(placementAxis) switch
+            {
+                BlockPlacementAxis.X => new Vector3(-worldCoords.y, worldCoords.x, worldCoords.z),
+                BlockPlacementAxis.Z => new Vector3(worldCoords.x, worldCoords.z, -worldCoords.y),
+                _ => worldCoords
+            };
         }
 
         private static Vector3Int GetFaceVertexPlanePos(
@@ -2792,10 +2846,12 @@ public static class MeshGenerator
                                 light1 = (byte)math.max((int)light1, (int)faceLight);
                                 light2 = (byte)math.max((int)light2, (int)faceLight);
                                 light3 = (byte)math.max((int)light3, (int)faceLight);
+                                byte placementAxis = GetBlockPlacementAxisValue(idx);
 
                                 mask[maskIndex] = new GreedyFaceData
                                 {
                                     blockId = (byte)current,
+                                    placementAxis = placementAxis,
                                     valid = 1,
                                     faceLight = faceLight,
                                     surfaceHeight = 0,
@@ -2907,8 +2963,10 @@ public static class MeshGenerator
 
                                 int vIndex = GetCurrentSubchunkLocalVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
-                                bool tint = m.GetTint(faceType);
-                                Vector2Int tile = m.GetTileCoord(faceType);
+                                BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeAxis(bottomLeftFace.placementAxis);
+                                BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(m, faceType, placementAxis);
+                                bool tint = m.GetTint(sampledFace);
+                                Vector2Int tile = m.GetTileCoord(sampledFace);
                                 Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
 
                                 for (int l = 0; l < 4; l++)
@@ -2929,9 +2987,14 @@ public static class MeshGenerator
                                     if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
                                         py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-                                    Vector2 uvCoord = axis == 0 ? new Vector2(rawV, rawU) :
-                                                      axis == 1 ? new Vector2(rawV, rawU) :
-                                                                  new Vector2(rawU, rawV);
+                                    Vector2 uvCoord = ComputePlacementAwareUv(
+                                        u,
+                                        v,
+                                        rawU,
+                                        rawV,
+                                        posD,
+                                        sampledFace,
+                                        placementAxis);
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
                                     byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
@@ -3257,6 +3320,7 @@ public static class MeshGenerator
     {
         [DeallocateOnJobCompletion] public NativeArray<int> heightCache;
         [DeallocateOnJobCompletion] public NativeArray<byte> blockTypes;
+        [DeallocateOnJobCompletion] public NativeArray<byte> blockPlacementAxes;
         [DeallocateOnJobCompletion] public NativeArray<byte> knownVoxelData;
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
         [DeallocateOnJobCompletion] public NativeArray<byte> light;

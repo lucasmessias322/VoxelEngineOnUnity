@@ -3,6 +3,8 @@ using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
 public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2 }
+public enum BlockPlacementAxis : byte { Y = 0, X = 1, Z = 2 }
+public enum BlockPlacementRotationAxes : byte { Vertical = 0, Horizontal = 1, Both = 2 }
 
 public static class BlockFaceUtility
 {
@@ -249,6 +251,12 @@ public struct BlockTextureMapping
     [Min(0f)] public float breakTimeMultiplier;
     public ToolType preferredTool;
 
+    [Header("Placement Rotation")]
+    [Tooltip("Quando ativo, o bloco gira o eixo de exibicao ao ser colocado (estilo tronco do Minecraft).")]
+    public bool usePlacementAxisRotation;
+    [Tooltip("Vertical = eixo Y, Horizontal = eixo X/Z, Both = permite os dois.")]
+    public BlockPlacementRotationAxes placementRotationAxes;
+
     public byte lightOpacity;  // 0..15 (0 = nao reduz, 15 = bloqueia)
     public byte lightEmission; // 0..15 (Glowstone = 15, Torch = 14)
 
@@ -330,6 +338,126 @@ public struct BlockTextureMapping
             default:
                 return tintSide;
         }
+    }
+}
+
+public static class BlockPlacementRotationUtility
+{
+    public static BlockPlacementAxis SanitizeAxis(BlockPlacementAxis axis)
+    {
+        return axis switch
+        {
+            BlockPlacementAxis.X => BlockPlacementAxis.X,
+            BlockPlacementAxis.Z => BlockPlacementAxis.Z,
+            _ => BlockPlacementAxis.Y
+        };
+    }
+
+    public static BlockPlacementAxis SanitizeAxis(byte axis)
+    {
+        return SanitizeAxis((BlockPlacementAxis)axis);
+    }
+
+    public static byte SanitizeAxisByte(byte axis)
+    {
+        return (byte)SanitizeAxis(axis);
+    }
+
+    public static BlockPlacementAxis ResolvePlacementAxis(
+        BlockTextureMapping mapping,
+        Vector3Int hitNormal,
+        Vector3 lookForward)
+    {
+        if (!mapping.usePlacementAxisRotation)
+            return BlockPlacementAxis.Y;
+
+        return ResolvePlacementAxis(mapping.placementRotationAxes, hitNormal, lookForward);
+    }
+
+    public static BlockPlacementAxis ResolvePlacementAxis(
+        BlockPlacementRotationAxes allowedAxes,
+        Vector3Int hitNormal,
+        Vector3 lookForward)
+    {
+        return allowedAxes switch
+        {
+            BlockPlacementRotationAxes.Vertical => BlockPlacementAxis.Y,
+            BlockPlacementRotationAxes.Horizontal => ResolveHorizontalAxis(hitNormal, lookForward),
+            BlockPlacementRotationAxes.Both => ResolveAxisFromHitNormalOrFallback(hitNormal, lookForward),
+            _ => BlockPlacementAxis.Y
+        };
+    }
+
+    public static BlockFace ResolveFaceForPlacement(BlockTextureMapping mapping, BlockFace worldFace, BlockPlacementAxis axis)
+    {
+        if (!mapping.usePlacementAxisRotation)
+            return worldFace;
+
+        return RemapFace(worldFace, axis);
+    }
+
+    public static BlockFace RemapFace(BlockFace worldFace, BlockPlacementAxis axis)
+    {
+        axis = SanitizeAxis(axis);
+        if (axis == BlockPlacementAxis.Y)
+            return worldFace;
+
+        if (axis == BlockPlacementAxis.X)
+        {
+            return worldFace switch
+            {
+                BlockFace.Right => BlockFace.Top,
+                BlockFace.Left => BlockFace.Bottom,
+                BlockFace.Top => BlockFace.Right,
+                BlockFace.Bottom => BlockFace.Left,
+                BlockFace.Front => BlockFace.Front,
+                BlockFace.Back => BlockFace.Back,
+                _ => worldFace
+            };
+        }
+
+        return worldFace switch
+        {
+            BlockFace.Right => BlockFace.Right,
+            BlockFace.Left => BlockFace.Left,
+            BlockFace.Top => BlockFace.Back,
+            BlockFace.Bottom => BlockFace.Front,
+            BlockFace.Front => BlockFace.Top,
+            BlockFace.Back => BlockFace.Bottom,
+            _ => worldFace
+        };
+    }
+
+    private static BlockPlacementAxis ResolveAxisFromHitNormalOrFallback(Vector3Int hitNormal, Vector3 lookForward)
+    {
+        if (Mathf.Abs(hitNormal.x) > 0)
+            return BlockPlacementAxis.X;
+
+        if (Mathf.Abs(hitNormal.z) > 0)
+            return BlockPlacementAxis.Z;
+
+        if (Mathf.Abs(hitNormal.y) > 0)
+            return BlockPlacementAxis.Y;
+
+        return ResolveHorizontalAxisFromLookForward(lookForward);
+    }
+
+    private static BlockPlacementAxis ResolveHorizontalAxis(Vector3Int hitNormal, Vector3 lookForward)
+    {
+        if (Mathf.Abs(hitNormal.x) > 0)
+            return BlockPlacementAxis.X;
+
+        if (Mathf.Abs(hitNormal.z) > 0)
+            return BlockPlacementAxis.Z;
+
+        return ResolveHorizontalAxisFromLookForward(lookForward);
+    }
+
+    private static BlockPlacementAxis ResolveHorizontalAxisFromLookForward(Vector3 lookForward)
+    {
+        float absX = Mathf.Abs(lookForward.x);
+        float absZ = Mathf.Abs(lookForward.z);
+        return absX >= absZ ? BlockPlacementAxis.X : BlockPlacementAxis.Z;
     }
 }
 

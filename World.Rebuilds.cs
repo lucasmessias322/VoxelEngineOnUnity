@@ -213,12 +213,26 @@ public partial class World
             out NativeArray<ulong> subchunkColliderOccupancy);
 
         NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
+        int dataVoxelSizeX = Chunk.SizeX + 2 * dataBorderSize;
+        int dataVoxelSizeZ = Chunk.SizeZ + 2 * dataBorderSize;
+        int dataVoxelPlaneSize = dataVoxelSizeX * Chunk.SizeY;
+        NativeArray<byte> blockPlacementAxes = CreateDefaultPlacementAxisArray(blockTypes.Length);
+        ApplyPlacementAxesFromBlockEdits(
+            nativeEdits,
+            blockPlacementAxes,
+            coord.x * Chunk.SizeX,
+            coord.y * Chunk.SizeZ,
+            dataBorderSize,
+            dataVoxelSizeX,
+            dataVoxelSizeZ,
+            dataVoxelPlaneSize);
 
         pendingDataJobs.Add(new PendingData
         {
             handle = dataHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
+            blockPlacementAxes = blockPlacementAxes,
             knownVoxelData = knownVoxelData,
             useKnownVoxelData = false,
             solids = solids,

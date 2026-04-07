@@ -43,6 +43,7 @@ public partial class World
     {
         SafeDisposeNativeArray(ref pd.heightCache);
         SafeDisposeNativeArray(ref pd.blockTypes);
+        SafeDisposeNativeArray(ref pd.blockPlacementAxes);
         SafeDisposeNativeArray(ref pd.knownVoxelData);
         SafeDisposeNativeArray(ref pd.solids);
         SafeDisposeNativeArray(ref pd.light);

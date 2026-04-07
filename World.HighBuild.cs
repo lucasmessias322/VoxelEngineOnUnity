@@ -192,6 +192,7 @@ public partial class World
             if (blockType == BlockType.Air) continue;
 
             BlockTextureMapping mapping = GetMappingSafe(blockType);
+            BlockPlacementAxis placementAxis = GetStoredPlacementAxis(pos, blockType);
             if (mapping.isEmpty) continue;
 
             for (int f = 0; f < 6; f++)
@@ -219,7 +220,7 @@ public partial class World
                 uv0.Add(new Vector2(1f, 1f));
                 uv0.Add(new Vector2(0f, 1f));
 
-                Vector2Int tile = GetTileForFace(mapping, f);
+                Vector2Int tile = GetTileForFace(mapping, f, placementAxis);
                 Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
 
                 uv1.Add(atlasUv);
@@ -227,7 +228,7 @@ public partial class World
                 uv1.Add(atlasUv);
                 uv1.Add(atlasUv);
 
-                float tint = GetTintForFace(mapping, f) ? 1f : 0f;
+                float tint = GetTintForFace(mapping, f, placementAxis) ? 1f : 0f;
                 Vector4 extra = new Vector4(1f, tint, 1f, 0f);
                 uv2.Add(extra);
                 uv2.Add(extra);
@@ -643,14 +644,18 @@ public partial class World
         return !neighborOpaque;
     }
 
-    private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex)
+    private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex, BlockPlacementAxis axis)
     {
-        return mapping.GetTileCoord(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
+        BlockFace worldFace = BlockFaceUtility.FromCubeFaceIndex(faceIndex);
+        BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, axis);
+        return mapping.GetTileCoord(sampledFace);
     }
 
-    private static bool GetTintForFace(BlockTextureMapping mapping, int faceIndex)
+    private static bool GetTintForFace(BlockTextureMapping mapping, int faceIndex, BlockPlacementAxis axis)
     {
-        return mapping.GetTint(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
+        BlockFace worldFace = BlockFaceUtility.FromCubeFaceIndex(faceIndex);
+        BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, axis);
+        return mapping.GetTint(sampledFace);
     }
 
     private struct FaceDef

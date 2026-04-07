@@ -444,7 +444,13 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
 
-            World.Instance.SetBlockAt(placePos, placedBlockType, true);
+            Vector3 lookForward = cam != null ? cam.transform.forward : transform.forward;
+            BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
+                placedBlockType,
+                hitNormal,
+                lookForward);
+
+            World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }

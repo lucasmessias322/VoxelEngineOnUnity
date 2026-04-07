@@ -360,6 +360,7 @@ public partial class World : MonoBehaviour
 
     // Overrides and light
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
+    private readonly Dictionary<Vector3Int, BlockPlacementAxis> blockPlacementAxes = new Dictionary<Vector3Int, BlockPlacementAxis>();
     private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>();
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
@@ -850,6 +851,94 @@ public partial class World : MonoBehaviour
         }
     }
 
+    public BlockPlacementAxis ResolvePlacementAxisForPlacement(BlockType blockType, Vector3Int hitNormal, Vector3 lookForward)
+    {
+        if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
+            return BlockPlacementAxis.Y;
+
+        return BlockPlacementRotationUtility.ResolvePlacementAxis(mapping, hitNormal, lookForward);
+    }
+
+    private BlockPlacementAxis GetStoredPlacementAxis(Vector3Int worldPos, BlockType blockType)
+    {
+        if (!TryGetPlacementRotationMapping(blockType, out _))
+            return BlockPlacementAxis.Y;
+
+        if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
+            return BlockPlacementAxis.Y;
+
+        return BlockPlacementRotationUtility.SanitizeAxis(axis);
+    }
+
+    private void UpdateStoredPlacementAxis(Vector3Int worldPos, BlockType blockType, BlockPlacementAxis axis)
+    {
+        if (!TryGetPlacementRotationMapping(blockType, out _))
+        {
+            blockPlacementAxes.Remove(worldPos);
+            return;
+        }
+
+        BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeAxis(axis);
+        if (sanitized == BlockPlacementAxis.Y)
+        {
+            blockPlacementAxes.Remove(worldPos);
+            return;
+        }
+
+        blockPlacementAxes[worldPos] = sanitized;
+    }
+
+    private bool TryGetPlacementRotationMapping(BlockType blockType, out BlockTextureMapping mapping)
+    {
+        mapping = default;
+        if (blockType == BlockType.Air || blockData == null)
+            return false;
+
+        BlockTextureMapping? mappingResult = blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return false;
+
+        mapping = mappingResult.Value;
+        return mapping.usePlacementAxisRotation;
+    }
+
+    private static NativeArray<byte> CreateDefaultPlacementAxisArray(int length)
+    {
+        return new NativeArray<byte>(length, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+    }
+
+    private static void ApplyPlacementAxesFromBlockEdits(
+        NativeArray<BlockEdit> edits,
+        NativeArray<byte> blockPlacementAxes,
+        int chunkMinX,
+        int chunkMinZ,
+        int borderSize,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize)
+    {
+        if (!edits.IsCreated || edits.Length == 0 || !blockPlacementAxes.IsCreated)
+            return;
+
+        for (int i = 0; i < edits.Length; i++)
+        {
+            BlockEdit edit = edits[i];
+            if (edit.y < 0 || edit.y >= Chunk.SizeY)
+                continue;
+
+            int ix = edit.x - chunkMinX + borderSize;
+            int iz = edit.z - chunkMinZ + borderSize;
+            if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
+                continue;
+
+            int idx = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
+            if ((uint)idx >= (uint)blockPlacementAxes.Length)
+                continue;
+
+            blockPlacementAxes[idx] = BlockPlacementRotationUtility.SanitizeAxisByte(edit.placementAxis);
+        }
+    }
+
     private void AppendRelevantBlockEdits(Vector2Int coord, int borderSize, List<BlockEdit> editsList)
     {
         if (editsList == null)
@@ -868,7 +957,8 @@ public partial class World : MonoBehaviour
                 x = worldPos.x,
                 y = worldPos.y,
                 z = worldPos.z,
-                type = (int)overrideType
+                type = (int)overrideType,
+                placementAxis = (byte)GetStoredPlacementAxis(worldPos, overrideType)
             });
         }
     }
@@ -1600,6 +1690,7 @@ public partial class World : MonoBehaviour
             overrides = currentOverrides,
             blockMappings = cachedNativeBlockMappings,
             blockTypes = pd.blockTypes,
+            blockPlacementAxes = pd.blockPlacementAxes,
             solids = pd.solids,
             heightCache = pd.heightCache,
             subchunkNonEmpty = pd.subchunkNonEmpty,
@@ -1810,7 +1901,7 @@ public partial class World : MonoBehaviour
                 }
 
                 MeshGenerator.ScheduleMeshJob(
-                    pd.heightCache, pd.blockTypes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
+                    pd.heightCache, pd.blockTypes, pd.blockPlacementAxes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
                     pd.subchunkNonEmpty, pd.knownVoxelData, pd.useKnownVoxelData,
                     atlasTilesX, atlasTilesY, true, borderSize,
                     pd.coord.x, pd.coord.y,
@@ -1863,6 +1954,7 @@ public partial class World : MonoBehaviour
         {
             heightCache = pd.heightCache,
             blockTypes = pd.blockTypes,
+            blockPlacementAxes = pd.blockPlacementAxes,
             knownVoxelData = pd.knownVoxelData,
             solids = pd.solids,
             light = pd.light,
@@ -2206,12 +2298,26 @@ public partial class World : MonoBehaviour
             out NativeArray<ulong> subchunkColliderOccupancy
         );
         NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
+        int dataVoxelSizeX = Chunk.SizeX + 2 * dataBorderSize;
+        int dataVoxelSizeZ = Chunk.SizeZ + 2 * dataBorderSize;
+        int dataVoxelPlaneSize = dataVoxelSizeX * Chunk.SizeY;
+        NativeArray<byte> blockPlacementAxes = CreateDefaultPlacementAxisArray(blockTypes.Length);
+        ApplyPlacementAxesFromBlockEdits(
+            nativeEdits,
+            blockPlacementAxes,
+            chunkMinX,
+            chunkMinZ,
+            dataBorderSize,
+            dataVoxelSizeX,
+            dataVoxelSizeZ,
+            dataVoxelPlaneSize);
 
         pendingDataJobs.Add(new PendingData
         {
             handle = dataHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
+            blockPlacementAxes = blockPlacementAxes,
             knownVoxelData = knownVoxelData,
             useKnownVoxelData = false,
             solids = solids,
@@ -2271,6 +2377,7 @@ public partial class World : MonoBehaviour
 
         NativeArray<int> heightCache = new NativeArray<int>(copyTotalHeightPoints, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> blockTypes = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> blockPlacementAxes = CreateDefaultPlacementAxisArray(copyTotalVoxels);
         NativeArray<byte> knownVoxelData = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
         NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -2289,6 +2396,15 @@ public partial class World : MonoBehaviour
 
         int chunkMinX = coord.x * Chunk.SizeX;
         int chunkMinZ = coord.y * Chunk.SizeZ;
+        ApplyPlacementAxesFromBlockEdits(
+            nativeOverrides,
+            blockPlacementAxes,
+            chunkMinX,
+            chunkMinZ,
+            copyBorderSize,
+            copyVoxelSizeX,
+            copyVoxelSizeZ,
+            copyVoxelPlaneSize);
         if (enableVoxelLighting)
         {
             lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
@@ -2414,6 +2530,7 @@ public partial class World : MonoBehaviour
             handle = visualDataHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
+            blockPlacementAxes = blockPlacementAxes,
             knownVoxelData = knownVoxelData,
             useKnownVoxelData = true,
             solids = solids,
