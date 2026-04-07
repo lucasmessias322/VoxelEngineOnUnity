@@ -41,6 +41,7 @@ public partial class World
 
     private static void DisposeDataJobResources(ref PendingData pd)
     {
+        MeshGenerator.ReleaseDataJobTempBuffers(ref pd.tempBuffers);
         SafeDisposeNativeArray(ref pd.heightCache);
         SafeDisposeNativeArray(ref pd.blockTypes);
         SafeDisposeNativeArray(ref pd.blockPlacementAxes);

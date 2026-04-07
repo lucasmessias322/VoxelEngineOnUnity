@@ -119,6 +119,7 @@ public static class MeshGenerator
     private const int SizeZ = Chunk.SizeZ;
     private const float DefaultAOCurveExponent = 1.12f;
     private const int SpaghettiCarveMaskCacheMaxEntries = 24;
+    private const int TempGenerationPoolMaxArraysPerSize = 8;
 
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;
     private struct SpaghettiCarveMaskCacheEntry
@@ -135,6 +136,17 @@ public static class MeshGenerator
 
     private static readonly Dictionary<Vector2Int, SpaghettiCarveMaskCacheEntry> spaghettiCarveMaskNeighborCache = new Dictionary<Vector2Int, SpaghettiCarveMaskCacheEntry>();
     private static readonly List<KeyValuePair<Vector2Int, int>> spaghettiCarveMaskCacheSortBuffer = new List<KeyValuePair<Vector2Int, int>>(SpaghettiCarveMaskCacheMaxEntries + 8);
+    private static readonly Dictionary<int, Stack<NativeArray<byte>>> pooledTempByteArrays = new Dictionary<int, Stack<NativeArray<byte>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>> pooledTempDensitySettingsArrays = new Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<TerrainColumnContext>>> pooledTempColumnContextArrays = new Dictionary<int, Stack<NativeArray<TerrainColumnContext>>>();
+
+    public struct DataJobTempBuffers
+    {
+        public NativeArray<byte> densityClassifications;
+        public NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn;
+        public NativeArray<byte> terrainSolidMaskByColumn;
+        public NativeArray<TerrainColumnContext> dataColumnContexts;
+    }
 
     public static void ClearSpaghettiCarveMaskNeighborCache()
     {
@@ -149,6 +161,103 @@ public static class MeshGenerator
 
         spaghettiCarveMaskNeighborCache.Clear();
         spaghettiCarveMaskCacheSortBuffer.Clear();
+    }
+
+    public static void ClearDataJobTempBufferPool()
+    {
+        DisposePooledNativeArrays(pooledTempByteArrays);
+        DisposePooledNativeArrays(pooledTempDensitySettingsArrays);
+        DisposePooledNativeArrays(pooledTempColumnContextArrays);
+    }
+
+    private static DataJobTempBuffers RentDataJobTempBuffers(int totalVoxels, int totalHeightPoints)
+    {
+        DataJobTempBuffers buffers;
+        buffers.densityClassifications = RentPooledNativeArray(pooledTempByteArrays, totalVoxels);
+        buffers.resolvedDensitySettingsByColumn = RentPooledNativeArray(pooledTempDensitySettingsArrays, totalHeightPoints);
+        buffers.terrainSolidMaskByColumn = RentPooledNativeArray(pooledTempByteArrays, totalVoxels);
+        buffers.dataColumnContexts = RentPooledNativeArray(pooledTempColumnContextArrays, totalHeightPoints);
+        return buffers;
+    }
+
+    public static void ReleaseDataJobTempBuffers(ref DataJobTempBuffers buffers)
+    {
+        ReturnPooledNativeArray(pooledTempByteArrays, ref buffers.densityClassifications);
+        ReturnPooledNativeArray(pooledTempDensitySettingsArrays, ref buffers.resolvedDensitySettingsByColumn);
+        ReturnPooledNativeArray(pooledTempByteArrays, ref buffers.terrainSolidMaskByColumn);
+        ReturnPooledNativeArray(pooledTempColumnContextArrays, ref buffers.dataColumnContexts);
+        buffers = default;
+    }
+
+    private static NativeArray<T> RentPooledNativeArray<T>(
+        Dictionary<int, Stack<NativeArray<T>>> pool,
+        int length) where T : struct
+    {
+        if (length <= 0)
+            return new NativeArray<T>(0, Allocator.Persistent);
+
+        if (pool.TryGetValue(length, out Stack<NativeArray<T>> stack))
+        {
+            while (stack.Count > 0)
+            {
+                NativeArray<T> candidate = stack.Pop();
+                if (candidate.IsCreated && candidate.Length == length)
+                    return candidate;
+
+                if (candidate.IsCreated)
+                    candidate.Dispose();
+            }
+        }
+
+        return new NativeArray<T>(length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+    }
+
+    private static void ReturnPooledNativeArray<T>(
+        Dictionary<int, Stack<NativeArray<T>>> pool,
+        ref NativeArray<T> array) where T : struct
+    {
+        if (!array.IsCreated)
+        {
+            array = default;
+            return;
+        }
+
+        int length = array.Length;
+        if (length <= 0)
+        {
+            array.Dispose();
+            array = default;
+            return;
+        }
+
+        if (!pool.TryGetValue(length, out Stack<NativeArray<T>> stack))
+        {
+            stack = new Stack<NativeArray<T>>(TempGenerationPoolMaxArraysPerSize);
+            pool[length] = stack;
+        }
+
+        if (stack.Count >= TempGenerationPoolMaxArraysPerSize)
+            array.Dispose();
+        else
+            stack.Push(array);
+
+        array = default;
+    }
+
+    private static void DisposePooledNativeArrays<T>(Dictionary<int, Stack<NativeArray<T>>> pool) where T : struct
+    {
+        foreach (KeyValuePair<int, Stack<NativeArray<T>>> pair in pool)
+        {
+            Stack<NativeArray<T>> stack = pair.Value;
+            while (stack.Count > 0)
+            {
+                NativeArray<T> array = stack.Pop();
+                if (array.IsCreated)
+                    array.Dispose();
+            }
+        }
+
+        pool.Clear();
     }
 
     private static void DisposeSpaghettiCarveMaskCacheEntry(ref SpaghettiCarveMaskCacheEntry entry)
@@ -632,6 +741,7 @@ public static class MeshGenerator
     private struct SampleTerrainDensityClassificationJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<int> heightCache;
+        // Layout SoA cache-friendly: [columnIndex * SizeY + y]
         [NativeDisableParallelForRestriction] public NativeArray<byte> densityClassifications;
         [NativeDisableParallelForRestriction] public NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn;
 
@@ -646,8 +756,7 @@ public static class MeshGenerator
             int lx = index % paddedSize;
             int lz = index / paddedSize;
             int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
-            int voxelSizeX = paddedSize;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int columnBase = index * SizeY;
 
             int worldX = coord.x * SizeX + (lx - border);
             int worldZ = coord.y * SizeZ + (lz - border);
@@ -658,15 +767,14 @@ public static class MeshGenerator
                 biomeNoiseSettings);
             resolvedDensitySettingsByColumn[index] = resolvedDensitySettings;
 
-            int voxelIndex = lx + lz * voxelPlaneSize;
-            for (int y = 0; y <= 2; y++, voxelIndex += voxelSizeX)
-                densityClassifications[voxelIndex] = (byte)TerrainDensityClassification.Solid;
+            for (int y = 0; y <= 2; y++)
+                densityClassifications[columnBase + y] = (byte)TerrainDensityClassification.Solid;
 
             if (!resolvedDensitySettings.enabled)
             {
-                for (int y = 3; y < SizeY; y++, voxelIndex += voxelSizeX)
+                for (int y = 3; y < SizeY; y++)
                 {
-                    densityClassifications[voxelIndex] = (byte)(y <= baseSurfaceHeight
+                    densityClassifications[columnBase + y] = (byte)(y <= baseSurfaceHeight
                         ? TerrainDensityClassification.Solid
                         : TerrainDensityClassification.Air);
                 }
@@ -677,14 +785,14 @@ public static class MeshGenerator
             int guaranteedSolidY = math.min(SizeY - 1, TerrainDensitySampler.GetGuaranteedSolidY(baseSurfaceHeight, resolvedDensitySettings));
             int densityTopY = TerrainDensitySampler.GetDensityBandTopY(baseSurfaceHeight, SizeY, resolvedDensitySettings);
 
-            for (int y = 3; y <= guaranteedSolidY; y++, voxelIndex += voxelSizeX)
-                densityClassifications[voxelIndex] = (byte)TerrainDensityClassification.Solid;
+            for (int y = 3; y <= guaranteedSolidY; y++)
+                densityClassifications[columnBase + y] = (byte)TerrainDensityClassification.Solid;
 
-            for (int y = guaranteedSolidY + 1; y <= densityTopY; y++, voxelIndex += voxelSizeX)
-                densityClassifications[voxelIndex] = (byte)TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings);
+            for (int y = guaranteedSolidY + 1; y <= densityTopY; y++)
+                densityClassifications[columnBase + y] = (byte)TerrainDensitySampler.ClassifyDensityWithoutNoise(y, baseSurfaceHeight, resolvedDensitySettings);
 
-            for (int y = densityTopY + 1; y < SizeY; y++, voxelIndex += voxelSizeX)
-                densityClassifications[voxelIndex] = (byte)TerrainDensityClassification.Air;
+            for (int y = densityTopY + 1; y < SizeY; y++)
+                densityClassifications[columnBase + y] = (byte)TerrainDensityClassification.Air;
         }
     }
 
@@ -694,7 +802,8 @@ public static class MeshGenerator
         [NativeDisableParallelForRestriction] public NativeArray<int> heightCache;
         [ReadOnly] public NativeArray<byte> densityClassifications;
         [ReadOnly] public NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn;
-        [NativeDisableParallelForRestriction] public NativeArray<bool> solids;
+        // Layout SoA cache-friendly: [columnIndex * SizeY + y]
+        [NativeDisableParallelForRestriction] public NativeArray<byte> solidMaskByColumn;
 
         public Vector2Int coord;
         public int border;
@@ -708,17 +817,14 @@ public static class MeshGenerator
             int lz = index / paddedSize;
             int baseSurfaceHeight = math.clamp(heightCache[index], 1, SizeY - 1);
             TerrainDensitySettings resolvedDensitySettings = resolvedDensitySettingsByColumn[index];
-            int voxelSizeX = paddedSize;
-            int voxelPlaneSize = voxelSizeX * SizeY;
+            int columnBase = index * SizeY;
 
             int worldX = coord.x * SizeX + (lx - border);
             int worldZ = coord.y * SizeZ + (lz - border);
             int highestSolidY = 2;
-            int voxelIndex = lx + lz * voxelPlaneSize;
-
-            for (int y = 0; y < SizeY; y++, voxelIndex += voxelSizeX)
+            for (int y = 0; y < SizeY; y++)
             {
-                TerrainDensityClassification classification = (TerrainDensityClassification)densityClassifications[voxelIndex];
+                TerrainDensityClassification classification = (TerrainDensityClassification)densityClassifications[columnBase + y];
                 bool isSolid = classification == TerrainDensityClassification.Solid;
 
                 if (!isSolid && classification == TerrainDensityClassification.RequiresExactSample)
@@ -734,7 +840,7 @@ public static class MeshGenerator
                     isSolid = density > resolvedDensitySettings.solidThreshold;
                 }
 
-                solids[voxelIndex] = isSolid;
+                solidMaskByColumn[columnBase + y] = (byte)(isSolid ? 1 : 0);
                 if (isSolid)
                     highestSolidY = y;
             }
@@ -747,7 +853,8 @@ public static class MeshGenerator
     private struct PostProcessTerrainSolidBlocksJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<int> heightCache;
-        [ReadOnly] public NativeArray<bool> solids;
+        [ReadOnly] public NativeArray<byte> solidMaskByColumn;
+        [NativeDisableParallelForRestriction] public NativeArray<bool> solids;
         [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
 
         public int border;
@@ -760,14 +867,20 @@ public static class MeshGenerator
             int voxelSizeX = paddedSize;
             int voxelPlaneSize = voxelSizeX * SizeY;
             int highestSolidY = math.max(2, heightCache[index]);
+            int columnBase = index * SizeY;
 
             int voxelIndex = lx + lz * voxelPlaneSize;
             for (int y = 0; y <= 2; y++, voxelIndex += voxelSizeX)
+            {
+                solids[voxelIndex] = true;
                 blockTypes[voxelIndex] = (byte)BlockType.Bedrock;
+            }
 
             for (int y = 3; y < SizeY; y++, voxelIndex += voxelSizeX)
             {
-                if (!solids[voxelIndex])
+                bool isSolid = solidMaskByColumn[columnBase + y] != 0;
+                solids[voxelIndex] = isSolid;
+                if (!isSolid)
                 {
                     blockTypes[voxelIndex] = (byte)BlockType.Air;
                     continue;
@@ -1085,20 +1198,6 @@ public static class MeshGenerator
     }
 
     [BurstCompile]
-    private struct DisposeTerrainColumnContextArrayJob : IJob
-    {
-        [DeallocateOnJobCompletion] public NativeArray<TerrainColumnContext> values;
-        public void Execute() { }
-    }
-
-    [BurstCompile]
-    private struct DisposeTerrainDensitySettingsArrayJob : IJob
-    {
-        [DeallocateOnJobCompletion] public NativeArray<TerrainDensitySettings> values;
-        public void Execute() { }
-    }
-
-    [BurstCompile]
     private struct BuildChunkSnapshotAndFlagsJob : IJob
     {
         [ReadOnly] public NativeArray<byte> blockTypes;
@@ -1201,7 +1300,8 @@ public static class MeshGenerator
         out NativeArray<byte> light,
         out NativeArray<byte> lightOpacityData,
         out NativeArray<bool> subchunkNonEmpty,
-        out NativeArray<ulong> subchunkColliderOccupancy
+        out NativeArray<ulong> subchunkColliderOccupancy,
+        out DataJobTempBuffers tempBuffers
     )
     {
         // A pipeline trabalha com dois volumes padded:
@@ -1247,8 +1347,10 @@ public static class MeshGenerator
         light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
         lightOpacityData = default;
         NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
-        NativeArray<byte> densityClassifications = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
-        NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn = new NativeArray<TerrainDensitySettings>(dataTotalHeightPoints, Allocator.Persistent);
+        tempBuffers = RentDataJobTempBuffers(dataTotalVoxels, dataTotalHeightPoints);
+        NativeArray<byte> densityClassifications = tempBuffers.densityClassifications;
+        NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn = tempBuffers.resolvedDensitySettingsByColumn;
+        NativeArray<byte> terrainSolidMaskByColumn = tempBuffers.terrainSolidMaskByColumn;
 
         // ==========================================
         // JOB 0: GeraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do Heightmap (Paralelo)
@@ -1290,7 +1392,7 @@ public static class MeshGenerator
             heightCache = heightCache,
             densityClassifications = densityClassifications,
             resolvedDensitySettingsByColumn = resolvedDensitySettingsByColumn,
-            solids = solids,
+            solidMaskByColumn = terrainSolidMaskByColumn,
             border = borderSize,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ
@@ -1300,27 +1402,14 @@ public static class MeshGenerator
         var postProcessTerrainSolidBlocksJob = new PostProcessTerrainSolidBlocksJob
         {
             heightCache = heightCache,
+            solidMaskByColumn = terrainSolidMaskByColumn,
             solids = solids,
             blockTypes = blockTypes,
             border = borderSize
         };
         JobHandle postProcessTerrainSolidBlocksHandle = postProcessTerrainSolidBlocksJob.Schedule(totalColumns, 32, resolveTerrainSolidHandle);
 
-        var disposeDensityClassificationJob = new DisposeByteArrayJob
-        {
-            values = densityClassifications
-        };
-        JobHandle disposeDensityClassificationHandle = disposeDensityClassificationJob.Schedule(resolveTerrainSolidHandle);
-        var disposeResolvedDensitySettingsJob = new DisposeTerrainDensitySettingsArrayJob
-        {
-            values = resolvedDensitySettingsByColumn
-        };
-        JobHandle disposeResolvedDensitySettingsHandle = disposeResolvedDensitySettingsJob.Schedule(resolveTerrainSolidHandle);
-        JobHandle terrainDensityPipelineCleanupHandle = JobHandle.CombineDependencies(
-            disposeDensityClassificationHandle,
-            disposeResolvedDensitySettingsHandle);
-
-        NativeArray<TerrainColumnContext> dataColumnContexts = new NativeArray<TerrainColumnContext>(dataTotalHeightPoints, Allocator.Persistent);
+        NativeArray<TerrainColumnContext> dataColumnContexts = tempBuffers.dataColumnContexts;
         var buildDataColumnContextCacheJob = new BuildTerrainColumnContextCacheJob
         {
             coord = coord,
@@ -1390,7 +1479,7 @@ public static class MeshGenerator
             source = solids,
             destination = baseTerrainSolids
         };
-        JobHandle copyBaseTerrainSolidsHandle = copyBaseTerrainSolidsJob.Schedule(dataTotalVoxels, 128, resolveTerrainSolidHandle);
+        JobHandle copyBaseTerrainSolidsHandle = copyBaseTerrainSolidsJob.Schedule(dataTotalVoxels, 128, postProcessTerrainSolidBlocksHandle);
         // JobHandle chunkDataHandle = chunkDataJob.Schedule(heightHandle); // DependÃƒÆ’Ã‚Âªncia no heightHandle
         // A pipeline de densidade ja escreveu o terreno base. A partir daqui encadeamos
         // apenas estagios mutaveis: cavernas, minerios, agua, arvores e block edits.
@@ -1461,11 +1550,6 @@ public static class MeshGenerator
                 borderSize = dataBorderSize
             };
             JobHandle snapshotHandle = snapshotJob.Schedule(finalChunkDataHandle);
-            var disposeDataColumnContextCacheJob = new DisposeTerrainColumnContextArrayJob
-            {
-                values = dataColumnContexts
-            };
-            JobHandle disposeDataColumnContextHandle = disposeDataColumnContextCacheJob.Schedule(finalChunkDataHandle);
             byte fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
@@ -1476,10 +1560,9 @@ public static class MeshGenerator
             };
             JobHandle disposeEmptySpaghettiCarveMaskHandle = disposeEmptySpaghettiCarveMaskJob.Schedule(finalChunkDataHandle);
 
-            dataHandle = JobHandle.CombineDependencies(snapshotHandle, disposeDataColumnContextHandle);
+            dataHandle = snapshotHandle;
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeEmptySpaghettiCarveMaskHandle);
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsHandle);
-            dataHandle = JobHandle.CombineDependencies(dataHandle, terrainDensityPipelineCleanupHandle);
             return;
         }
 
@@ -1737,17 +1820,10 @@ public static class MeshGenerator
             outputOffsetZ = lightBorderSize - dataBorderSize,
             SizeY = SizeY
         };
-        var disposeDataColumnContextCacheAfterLightingJob = new DisposeTerrainColumnContextArrayJob
-        {
-            values = dataColumnContexts
-        };
-        JobHandle disposeDataColumnContextAfterLightingHandle = disposeDataColumnContextCacheAfterLightingJob.Schedule(finalChunkDataHandle);
         dataHandle = JobHandle.CombineDependencies(
             lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle)),
-            disposeDataColumnContextAfterLightingHandle,
             buildChunkSnapshotHandle);
         dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsAfterLightingHandle);
-        dataHandle = JobHandle.CombineDependencies(dataHandle, terrainDensityPipelineCleanupHandle);
     }
 
     public static void ScheduleMeshJob(

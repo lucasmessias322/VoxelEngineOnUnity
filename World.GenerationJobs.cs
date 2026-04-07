@@ -49,6 +49,7 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> fastRebuildSnapshotVoxelData;
         public NativeArray<byte> fastRebuildSnapshotLoadedChunks;
         public NativeArray<BlockEdit> fastRebuildOverrides;
+        public MeshGenerator.DataJobTempBuffers tempBuffers;
         public NativeArray<BlockEdit> postCompletionOverrides;
         public NativeArray<byte> postCompletionDirtyColumns;
         public NativeArray<ulong> subchunkColliderOccupancy;

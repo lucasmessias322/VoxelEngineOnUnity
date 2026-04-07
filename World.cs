@@ -1201,6 +1201,7 @@ public partial class World : MonoBehaviour
         }
 
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
+        MeshGenerator.ClearDataJobTempBufferPool();
         DisposeNativeGenerationCaches();
 
         if (Instance == this)
@@ -1241,6 +1242,7 @@ public partial class World : MonoBehaviour
         InitializeNoiseLayers();
         MarkBiomeCachesDirty();
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
+        MeshGenerator.ClearDataJobTempBufferPool();
     }
 
     private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)
@@ -1399,6 +1401,7 @@ public partial class World : MonoBehaviour
 
             // Complete and process
             pd.handle.Complete();
+            MeshGenerator.ReleaseDataJobTempBuffers(ref pd.tempBuffers);
             dataProcessedThisFrame++;
 
             bool completedPostOverrideRefresh = pd.postOverrideRefreshScheduled;
@@ -2297,7 +2300,8 @@ public partial class World : MonoBehaviour
             out NativeArray<byte> light,
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty,
-            out NativeArray<ulong> subchunkColliderOccupancy
+            out NativeArray<ulong> subchunkColliderOccupancy,
+            out MeshGenerator.DataJobTempBuffers dataJobTempBuffers
         );
         NativeArray<byte> knownVoxelData = CreateKnownVoxelPlaceholder();
         int dataVoxelSizeX = Chunk.SizeX + 2 * dataBorderSize;
@@ -2334,6 +2338,7 @@ public partial class World : MonoBehaviour
             fastRebuildSnapshotVoxelData = default,
             fastRebuildSnapshotLoadedChunks = default,
             fastRebuildOverrides = default,
+            tempBuffers = dataJobTempBuffers,
             subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = GetFullSubchunkMask(),
@@ -2547,6 +2552,7 @@ public partial class World : MonoBehaviour
             fastRebuildSnapshotVoxelData = snapshotVoxelData,
             fastRebuildSnapshotLoadedChunks = snapshotLoadedChunks,
             fastRebuildOverrides = nativeOverrides,
+            tempBuffers = default,
             subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
