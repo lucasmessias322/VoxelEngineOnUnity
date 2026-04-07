@@ -1200,6 +1200,7 @@ public partial class World : MonoBehaviour
                 chunk.CompleteTrackedJob();
         }
 
+        MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
         DisposeNativeGenerationCaches();
 
         if (Instance == this)
@@ -1239,6 +1240,7 @@ public partial class World : MonoBehaviour
         InitializeBiomeNoiseOffsets();
         InitializeNoiseLayers();
         MarkBiomeCachesDirty();
+        MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
     }
 
     private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)
