@@ -92,6 +92,10 @@ public partial class World : MonoBehaviour
     private static readonly int GrassTintCorner10PropertyId = Shader.PropertyToID("_GrassTintCorner10");
     private static readonly int GrassTintCorner01PropertyId = Shader.PropertyToID("_GrassTintCorner01");
     private static readonly int GrassTintCorner11PropertyId = Shader.PropertyToID("_GrassTintCorner11");
+    private static readonly int FolliageTintCorner00PropertyId = Shader.PropertyToID("_FolliageTintCorner00");
+    private static readonly int FolliageTintCorner10PropertyId = Shader.PropertyToID("_FolliageTintCorner10");
+    private static readonly int FolliageTintCorner01PropertyId = Shader.PropertyToID("_FolliageTintCorner01");
+    private static readonly int FolliageTintCorner11PropertyId = Shader.PropertyToID("_FolliageTintCorner11");
     private MaterialPropertyBlock biomeTintPropertyBlock;
     private readonly Dictionary<Vector2Int, ChunkBiomeTints> chunkBiomeTintCache = new Dictionary<Vector2Int, ChunkBiomeTints>(256);
     private bool biomeTintCacheSettingsInitialized;
@@ -401,6 +405,10 @@ public partial class World : MonoBehaviour
         public readonly Color grassCorner10;
         public readonly Color grassCorner01;
         public readonly Color grassCorner11;
+        public readonly Color foliageCorner00;
+        public readonly Color foliageCorner10;
+        public readonly Color foliageCorner01;
+        public readonly Color foliageCorner11;
         public readonly Vector2 originXZ;
         public readonly Vector2 invSizeXZ;
 
@@ -411,6 +419,10 @@ public partial class World : MonoBehaviour
             Color grassCorner10,
             Color grassCorner01,
             Color grassCorner11,
+            Color foliageCorner00,
+            Color foliageCorner10,
+            Color foliageCorner01,
+            Color foliageCorner11,
             Vector2 originXZ,
             Vector2 invSizeXZ)
         {
@@ -420,6 +432,10 @@ public partial class World : MonoBehaviour
             this.grassCorner10 = grassCorner10;
             this.grassCorner01 = grassCorner01;
             this.grassCorner11 = grassCorner11;
+            this.foliageCorner00 = foliageCorner00;
+            this.foliageCorner10 = foliageCorner10;
+            this.foliageCorner01 = foliageCorner01;
+            this.foliageCorner11 = foliageCorner11;
             this.originXZ = originXZ;
             this.invSizeXZ = invSizeXZ;
         }
@@ -508,6 +524,10 @@ public partial class World : MonoBehaviour
         biomeTintPropertyBlock.SetColor(GrassTintCorner10PropertyId, tints.grassCorner10);
         biomeTintPropertyBlock.SetColor(GrassTintCorner01PropertyId, tints.grassCorner01);
         biomeTintPropertyBlock.SetColor(GrassTintCorner11PropertyId, tints.grassCorner11);
+        biomeTintPropertyBlock.SetColor(FolliageTintCorner00PropertyId, tints.foliageCorner00);
+        biomeTintPropertyBlock.SetColor(FolliageTintCorner10PropertyId, tints.foliageCorner10);
+        biomeTintPropertyBlock.SetColor(FolliageTintCorner01PropertyId, tints.foliageCorner01);
+        biomeTintPropertyBlock.SetColor(FolliageTintCorner11PropertyId, tints.foliageCorner11);
         renderer.SetPropertyBlock(biomeTintPropertyBlock);
     }
 
@@ -590,6 +610,10 @@ public partial class World : MonoBehaviour
             corner10.grassTint,
             corner01.grassTint,
             corner11.grassTint,
+            corner00.foliageTint,
+            corner10.foliageTint,
+            corner01.foliageTint,
+            corner11.foliageTint,
             new Vector2(chunkMinX, chunkMinZ),
             new Vector2(1f / safeSizeX, 1f / safeSizeZ));
     }
