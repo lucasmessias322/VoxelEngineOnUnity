@@ -477,7 +477,8 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             out float2 localUV,
             out float2 atlasOrigin,
             out half3 extra,
-            out half subchunkIndex)
+            out half subchunkIndex,
+            out half windBendMask)
         {
             CompactOpaqueFace face = _CompactOpaqueFaces[faceIndex];
             uint localX = ExtractPackedBits(face.packed0, 0u, 0xFu);
@@ -556,6 +557,16 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 (half)tint0,
                 (half)ResolvePackedByte01(face.packed3, corner));
             subchunkIndex = (half)(localY / 16u);
+            float verticalWeightU = abs(edgeU0.y) * safeSpanU;
+            float verticalWeightV = abs(edgeV0.y) * safeSpanV;
+            float verticalWeightSum = verticalWeightU + verticalWeightV;
+            float verticalMask = verticalWeightSum > 1e-5
+                ? (cornerUV01.x * verticalWeightU + cornerUV01.y * verticalWeightV) / verticalWeightSum
+                : 1.0;
+            verticalMask = saturate(verticalMask);
+            verticalMask *= verticalMask;
+            float faceMask = saturate(1.0 - abs(normalWS0.y));
+            windBendMask = (half)lerp(1.0, verticalMask, faceMask);
         }
 
         half3 ResolveFolliageTintByWorldPosition(float3 positionWS)
@@ -585,9 +596,9 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             return frac((p.x + p.y) * p.x);
         }
 
-        void ApplyLeafWind(inout float3 positionWS, inout half3 normalWS, half windMask)
+        void ApplyLeafWind(inout float3 positionWS, inout half3 normalWS, half windMask, half bendMask)
         {
-            if (_EnableWind < 0.5 || windMask <= 0.0001h)
+            if (_EnableWind < 0.5 || windMask <= 0.0001h || bendMask <= 0.0001h)
                 return;
 
             float2 windDir = _WindDirection.xy;
@@ -616,7 +627,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float2 detailDir = float2(-windDir.y, windDir.x);
             float2 offsetXZ = windDir * (baseSway * swayAmplitude) + detailDir * (detailSway * detailAmplitude);
 
-            float finalMask = saturate((float)windMask);
+            float finalMask = saturate((float)windMask * (float)bendMask);
             positionWS.xz += offsetXZ * finalMask;
             positionWS.y += (baseSway * detailSway) * verticalAmplitude * finalMask;
 
@@ -654,10 +665,11 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 }
 
                 faceIndex += faceBaseIndex;
-                ResolveCompactOpaqueFaceData(faceIndex, vertexIndex, chunkOriginWS, positionWS, normalWS, localUV, atlasOrigin, extra, subchunkIndex);
+                half windBendMask = 1.0h;
+                ResolveCompactOpaqueFaceData(faceIndex, vertexIndex, chunkOriginWS, positionWS, normalWS, localUV, atlasOrigin, extra, subchunkIndex, windBendMask);
                 half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), foliageTint, saturate(extra.y));
-                ApplyLeafWind(positionWS, normalWS, saturate(extra.y));
+                ApplyLeafWind(positionWS, normalWS, saturate(extra.y), windBendMask);
                 return;
             }
 
@@ -688,7 +700,17 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 half tintMask = saturate((half)face.edgeU.w);
                 half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), foliageTint, tintMask);
-                ApplyLeafWind(positionWS, normalWS, tintMask);
+                float edgeVerticalWeightU = abs(face.edgeU.y);
+                float edgeVerticalWeightV = abs(face.edgeV.y);
+                float edgeVerticalWeightSum = edgeVerticalWeightU + edgeVerticalWeightV;
+                float verticalMask = edgeVerticalWeightSum > 1e-5
+                    ? (cornerUV01.x * edgeVerticalWeightU + cornerUV01.y * edgeVerticalWeightV) / edgeVerticalWeightSum
+                    : 1.0;
+                verticalMask = saturate(verticalMask);
+                verticalMask *= verticalMask;
+                float faceMask = saturate(1.0 - abs(normalWS.y));
+                half windBendMask = (half)lerp(1.0, verticalMask, faceMask);
+                ApplyLeafWind(positionWS, normalWS, tintMask, windBendMask);
                 return;
             }
 
@@ -703,7 +725,11 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
             half tintMask = saturate(input.uv2.y);
             tintColor = lerp(half3(1.0h, 1.0h, 1.0h), foliageTint, tintMask);
-            ApplyLeafWind(positionWS, normalWS, tintMask);
+            float verticalMask = saturate(localUV.y);
+            verticalMask *= verticalMask;
+            float faceMask = saturate(1.0 - abs(normalWS.y));
+            half windBendMask = (half)lerp(1.0, verticalMask, faceMask);
+            ApplyLeafWind(positionWS, normalWS, tintMask, windBendMask);
             subchunkIndex = (half)input.uv2.w;
         }
 
