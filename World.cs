@@ -77,6 +77,13 @@ public struct SpaghettiCaveSettings
         seedOffset == 48271;
 }
 
+public enum TreeLeafQualityMode : byte
+{
+    Medium = 0,
+    High = 1,
+    Ultra = 2
+}
+
 
 
 #region Utilities
@@ -291,6 +298,60 @@ public partial class World : MonoBehaviour
     [Header("Features Toggle")]
     public bool enableTrees = true;
 
+    [Header("Tree Leaves")]
+    [Tooltip("Medium = folhas voxel padrao. High = camada detalhada com sobreposicao em todas as folhas (estilo Vintage Story). Ultra = folhas 100% billboard de 4 faces (estilo Hytale).")]
+    public TreeLeafQualityMode treeLeafQuality = TreeLeafQualityMode.Medium;
+    [Tooltip("Densidade dos billboards extras de folha no modo High. Para visual estilo Vintage Story use 1.0.")]
+    [Range(0f, 1f)]
+    public float treeLeafFoliageSpawnChance = 1f;
+    [Tooltip("Altura minima do billboard extra de folha no modo High. Para visual estilo Vintage Story use valor > 1.")]
+    [Range(0.2f, 2.0f)]
+    public float treeLeafFoliageHeightMin = 1.08f;
+    [Tooltip("Altura maxima do billboard extra de folha no modo High.")]
+    [Range(0.2f, 2.0f)]
+    public float treeLeafFoliageHeightMax = 1.08f;
+    [Tooltip("Meia largura minima do billboard extra de folha. >0.5 cria sobreposicao alem do bloco (estilo Vintage Story).")]
+    [Range(0.5f, 1.0f)]
+    public float treeLeafFoliageHalfWidthMin = 0.72f;
+    [Tooltip("Meia largura maxima do billboard extra de folha. Valores maiores deixam o volume mais encorpado.")]
+    [Range(0.5f, 1.0f)]
+    public float treeLeafFoliageHalfWidthMax = 0.72f;
+    [Tooltip("Offset Y minimo da base do billboard extra de folha. Negativo estende para fora do bloco (estilo Vintage Story).")]
+    [Range(-0.2f, 0.4f)]
+    public float treeLeafFoliageBaseYOffsetMin = -0.04f;
+    [Tooltip("Offset Y maximo da base do billboard extra de folha dentro do bloco.")]
+    [Range(-0.2f, 0.4f)]
+    public float treeLeafFoliageBaseYOffsetMax = -0.04f;
+    [Tooltip("Jitter lateral do centro do billboard extra de folha. Para visual estilo Vintage Story use 0.")]
+    [Range(0f, 0.2f)]
+    public float treeLeafFoliageCenterJitter = 0f;
+
+    [Header("Tree Leaves Ultra (4 Faces)")]
+    [Tooltip("Altura do billboard de 4 faces usado no modo Ultra.")]
+    [Range(0.4f, 2.5f)]
+    public float treeLeafUltraBillboardHeight = 1.12f;
+    [Tooltip("Meia largura do billboard de 4 faces no modo Ultra. >0.5 cria sobreposicao alem do voxel.")]
+    [Range(0.5f, 1.6f)]
+    public float treeLeafUltraBillboardHalfWidth = 0.78f;
+    [Tooltip("Offset Y do centro do billboard de 4 faces no modo Ultra. 0 deixa pivot exatamente no centro do bloco.")]
+    [Range(-0.4f, 0.4f)]
+    public float treeLeafUltraBaseYOffset = 0f;
+    [Tooltip("Jitter lateral do centro do billboard de 4 faces no modo Ultra.")]
+    [Range(0f, 0.2f)]
+    public float treeLeafUltraCenterJitter = 0f;
+    [Tooltip("Rotacao base do conjunto de 4 faces no modo Ultra. 22.5 deixa mais proximo do visual Hytale.")]
+    [Range(0f, 45f)]
+    public float treeLeafUltraRotationOffsetDegrees = 22.5f;
+    [Tooltip("Variacao aleatoria de rotacao por bloco no modo Ultra.")]
+    [Range(0f, 30f)]
+    public float treeLeafUltraRotationRandomDegrees = 12f;
+    [Tooltip("Inclinacao base das faces do Ultra para manter volume quando visto de cima/baixo.")]
+    [Range(0f, 60f)]
+    public float treeLeafUltraFaceTiltDegrees = 34f;
+    [Tooltip("Variacao aleatoria da inclinacao das faces do Ultra.")]
+    [Range(0f, 30f)]
+    public float treeLeafUltraFaceTiltRandomDegrees = 14f;
+
     [Header("Billboard Grass")]
     public bool enableGrassBillboards = true;
     [Range(0f, 1f)]
@@ -376,6 +437,8 @@ public partial class World : MonoBehaviour
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
     private bool lastEnableWater = true;
+    private TreeLeafQualityMode lastTreeLeafQuality = TreeLeafQualityMode.Medium;
+    private int lastTreeLeafFoliageSettingsHash = int.MinValue;
     private int lastHorizontalSkylightStepLoss = 1;
     private int lastSunlightSmoothingPadding = 16;
     private TreeSpawnRuleData[] cachedTreeSpawnRules = Array.Empty<TreeSpawnRuleData>();
@@ -412,6 +475,31 @@ public partial class World : MonoBehaviour
             return BlockType.Air;
 
         return blockType;
+    }
+
+    private int ComputeTreeLeafFoliageSettingsHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp01(treeLeafFoliageSpawnChance) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageHeightMin, 0.2f, 2f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageHeightMax, 0.2f, 2f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageHalfWidthMin, 0.5f, 1f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageHalfWidthMax, 0.5f, 1f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageBaseYOffsetMin, -0.2f, 0.4f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageBaseYOffsetMax, -0.2f, 0.4f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafFoliageCenterJitter, 0f, 0.2f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraBillboardHeight, 0.4f, 2.5f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraBillboardHalfWidth, 0.5f, 1.6f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraBaseYOffset, -0.4f, 0.4f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraCenterJitter, 0f, 0.2f) * 10000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraRotationOffsetDegrees, 0f, 45f) * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraRotationRandomDegrees, 0f, 30f) * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraFaceTiltDegrees, 0f, 60f) * 1000f);
+            hash = hash * 31 + Mathf.RoundToInt(Mathf.Clamp(treeLeafUltraFaceTiltRandomDegrees, 0f, 30f) * 1000f);
+            return hash;
+        }
     }
 
     private BlockType GetProceduralSeaBlockOrAir(int worldY)
@@ -1301,6 +1389,8 @@ public partial class World : MonoBehaviour
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
         lastEnableWater = enableWater;
+        lastTreeLeafQuality = treeLeafQuality;
+        lastTreeLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
     }
@@ -2029,6 +2119,22 @@ public partial class World : MonoBehaviour
         if (affectedVisualSliceMask != 0)
         {
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
+            float leafFoliageSpawnChance = Mathf.Clamp01(treeLeafFoliageSpawnChance);
+            float leafFoliageHeightMin = Mathf.Clamp(treeLeafFoliageHeightMin, 0.2f, 2f);
+            float leafFoliageHeightMax = Mathf.Max(leafFoliageHeightMin, Mathf.Clamp(treeLeafFoliageHeightMax, 0.2f, 2f));
+            float leafFoliageHalfWidthMin = Mathf.Clamp(treeLeafFoliageHalfWidthMin, 0.5f, 1f);
+            float leafFoliageHalfWidthMax = Mathf.Max(leafFoliageHalfWidthMin, Mathf.Clamp(treeLeafFoliageHalfWidthMax, 0.5f, 1f));
+            float leafFoliageBaseYOffsetMin = Mathf.Clamp(treeLeafFoliageBaseYOffsetMin, -0.2f, 0.4f);
+            float leafFoliageBaseYOffsetMax = Mathf.Max(leafFoliageBaseYOffsetMin, Mathf.Clamp(treeLeafFoliageBaseYOffsetMax, -0.2f, 0.4f));
+            float leafFoliageCenterJitter = Mathf.Clamp(treeLeafFoliageCenterJitter, 0f, 0.2f);
+            float leafUltraHeight = Mathf.Clamp(treeLeafUltraBillboardHeight, 0.4f, 2.5f);
+            float leafUltraHalfWidth = Mathf.Clamp(treeLeafUltraBillboardHalfWidth, 0.5f, 1.6f);
+            float leafUltraBaseYOffset = Mathf.Clamp(treeLeafUltraBaseYOffset, -0.4f, 0.4f);
+            float leafUltraCenterJitter = Mathf.Clamp(treeLeafUltraCenterJitter, 0f, 0.2f);
+            float leafUltraRotationOffsetDegrees = Mathf.Clamp(treeLeafUltraRotationOffsetDegrees, 0f, 45f);
+            float leafUltraRotationRandomDegrees = Mathf.Clamp(treeLeafUltraRotationRandomDegrees, 0f, 30f);
+            float leafUltraFaceTiltDegrees = Mathf.Clamp(treeLeafUltraFaceTiltDegrees, 0f, 60f);
+            float leafUltraFaceTiltRandomDegrees = Mathf.Clamp(treeLeafUltraFaceTiltRandomDegrees, 0f, 30f);
 
             int visualSliceCount = activeChunk.visualSlices != null
                 ? activeChunk.visualSlices.Length
@@ -2058,6 +2164,15 @@ public partial class World : MonoBehaviour
                     enableGrassBillboards, grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter, cachedNativeVegetationBillboardRules, GetBiomeNoiseSettings(),
                     effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
+                    treeLeafQuality == TreeLeafQualityMode.High,
+                    treeLeafQuality == TreeLeafQualityMode.Ultra,
+                    leafFoliageSpawnChance, leafFoliageHeightMin, leafFoliageHeightMax,
+                    leafFoliageHalfWidthMin, leafFoliageHalfWidthMax,
+                    leafFoliageBaseYOffsetMin, leafFoliageBaseYOffsetMax,
+                    leafFoliageCenterJitter,
+                    leafUltraHeight, leafUltraHalfWidth, leafUltraBaseYOffset, leafUltraCenterJitter,
+                    leafUltraRotationOffsetDegrees, leafUltraRotationRandomDegrees,
+                    leafUltraFaceTiltDegrees, leafUltraFaceTiltRandomDegrees,
                     out JobHandle meshHandle,
                     out NativeList<MeshGenerator.PackedChunkVertex> vertices,
                     out NativeList<int> opaqueTriangles,

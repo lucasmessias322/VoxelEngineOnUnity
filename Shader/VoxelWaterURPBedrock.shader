@@ -6,7 +6,6 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
         [NoScaleOffset] _Atlas("Atlas (Optional Fallback)", 2D) = "white" {}
         [MainColor] _BaseColor("Base Color", Color) = (1, 1, 1, 1)
         _Color("Water Tint", Color) = (0.0, 0.376, 1.0, 1.0)
-        _FresnelColor("Fresnel Color", Color) = (0.0, 0.171, 1.0, 1.0)
 
         _AtlasSize("Atlas Size (Tiles XY)", Vector) = (32, 32, 0, 0)
         [Toggle] _AtlasOriginTopLeft("Atlas Origin Top Left", Float) = 0
@@ -18,14 +17,15 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
         _waveFrequency("Wave Frequency", Range(0.0, 6.0)) = 0.1
         _waveSpeed("Wave Speed", Range(0.0, 4.0)) = 0.1
         _WaveDirection("Wave Direction XZ", Vector) = (1, 0, 0, 0)
-        _normalStrengh("Surface Distortion", Range(0.0, 2.0)) = 1.0
 
         [Header(Water Shading)]
-        _alpha("Water Alpha", Range(0.0, 1.0)) = 0.8
+        _alpha("Water Alpha", Range(0.0, 1.0)) = 1.0
         _Maxalpha("Max Alpha", Range(0.0, 1.0)) = 0.99
-        _Power("Fresnel Power", Range(0.1, 8.0)) = 2.0
-        _EdgeStart("Fresnel Edge Start", Range(0.0, 1.0)) = 0.69
-        _EdgeEnd("Fresnel Edge End", Range(-1.0, 1.0)) = -0.24
+        [Header(Camera Distance Opacity)]
+        _DistanceAlphaNear("Near Opacity", Range(0.0, 1.0)) = 0.9
+        _DistanceAlphaFar("Far Opacity", Range(0.0, 1.0)) = 0.0
+        _DistanceFadeStart("Fade Start Distance", Range(0.0, 500.0)) = 0.0
+        _DistanceFadeEnd("Fade End Distance", Range(0.01, 1000.0)) = 80.0
         _TopStart("Top Foam Start", Range(0.0, 1.0)) = 0.35
         _Topend("Top Foam End", Range(0.0, 1.0)) = 0.48
         _foamAmount("Foam Amount", Range(0.0, 1.0)) = 0.1
@@ -79,7 +79,6 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
         CBUFFER_START(UnityPerMaterial)
             float4 _BaseColor;
             float4 _Color;
-            float4 _FresnelColor;
             float4 _DepthFoamColor;
             float4 _AtlasSize;
             float _AtlasOriginTopLeft;
@@ -89,12 +88,12 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             float _waveFrequency;
             float _waveSpeed;
             float4 _WaveDirection;
-            float _normalStrengh;
             float _alpha;
             float _Maxalpha;
-            float _Power;
-            float _EdgeStart;
-            float _EdgeEnd;
+            float _DistanceAlphaNear;
+            float _DistanceAlphaFar;
+            float _DistanceFadeStart;
+            float _DistanceFadeEnd;
             float _TopStart;
             float _Topend;
             float _foamAmount;
@@ -241,7 +240,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             normalWS = normalize(normalWS + half3(-slope.x, 0.0, -slope.y) * (half)(amplitude * waveFreq * 0.6));
         }
 
-        float2 ComputeFlowingAtlasUV(float2 localUV, float2 atlasOrigin, float3 positionWS, float flowSign)
+        float2 ComputeFlowingAtlasUV(float2 localUV, float2 atlasOrigin, float flowSign)
         {
             float2 tileUV = RepeatTileUV(localUV);
             float2 waveDir = NormalizeDirection(_WaveDirection.xy, float2(1.0, 0.0));
@@ -254,21 +253,14 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 wavePerp * (waveTime * flowSpeed * 0.61 * flowSign);
             flowOffset = frac(flowOffset);
 
-            float waveFreq = max(_waveFrequency, 0.001);
-            float2 distortion = float2(
-                sin(dot(positionWS.xz, waveDir * (waveFreq * 2.1)) + waveTime * 1.9),
-                cos(dot(positionWS.xz, wavePerp * (waveFreq * 1.7)) - waveTime * 1.6));
-
-            distortion *= _normalStrengh * 0.0025;
-
-            float2 flowedTileUV = RepeatTileUV(tileUV + flowOffset + distortion);
+            float2 flowedTileUV = RepeatTileUV(tileUV + flowOffset);
             return ResolveAtlasUV(flowedTileUV, atlasOrigin);
         }
 
         SurfaceSample SampleWaterSurface(float2 localUV, float2 atlasOrigin, float3 positionWS)
         {
-            float2 uvA = ComputeFlowingAtlasUV(localUV, atlasOrigin, positionWS, 1.0);
-            float2 uvB = ComputeFlowingAtlasUV(localUV, atlasOrigin, positionWS, -1.0);
+            float2 uvA = ComputeFlowingAtlasUV(localUV, atlasOrigin, 1.0);
+            float2 uvB = ComputeFlowingAtlasUV(localUV, atlasOrigin, -1.0);
 
             half4 sampleA = SampleWaterTexture(uvA);
             half4 sampleB = SampleWaterTexture(uvB);
@@ -309,12 +301,13 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             return saturate((half)(depthDelta / max(_DepthDistance, 1e-4)));
         }
 
-        half ComputeEdgeFresnel(half3 normalWS, float3 positionWS)
+        half ComputeDistanceOpacity(float3 positionWS)
         {
-            half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - positionWS);
-            half fresnel = 1.0h - saturate(dot(normalWS, viewDirWS));
-            half edgeRemap = saturate((fresnel - (half)_EdgeEnd) / max(0.0001h, (half)(_EdgeStart - _EdgeEnd)));
-            return pow(edgeRemap, (half)max(0.1, _Power));
+            float fadeRange = max(0.0001, _DistanceFadeEnd - _DistanceFadeStart);
+            float cameraDistance = distance(GetCameraPositionWS(), positionWS);
+            float fade01 = saturate((cameraDistance - _DistanceFadeStart) / fadeRange);
+            fade01 = smoothstep(0.0, 1.0, fade01);
+            return lerp((half)_DistanceAlphaNear, (half)_DistanceAlphaFar, (half)fade01);
         }
 
         half ComputeTopFoam(half3 normalWS)
@@ -352,24 +345,26 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             UNITY_SETUP_INSTANCE_ID(input);
             UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
+            half distanceOpacity = ComputeDistanceOpacity(input.positionWS);
+            if (distanceOpacity <= 0.0001h)
+                clip(-1.0h);
+
             SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
-            ApplyVoxelAlphaClip(surface.alpha);
+            ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
 
             half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
-
-            half fresnel = ComputeEdgeFresnel(normalWS, input.positionWS);
             half foam = ComputeTopFoam(normalWS);
-            half3 fresnelColor = _FresnelColor.rgb * fresnel * (half)_FoamIntensity;
             half3 foamColor = lerp(surface.color.rgb, half3(1.0h, 1.0h, 1.0h), saturate(foam * (half)_FoamIntensity));
             half depthFade = ComputeDepthFade01(input.positionCS, input.positionWS);
             half depthFoam = saturate((1.0h - depthFade) * (half)_DepthFoamStrength);
 
             half3 litBase = surface.color.rgb;
-            half3 finalColor = litBase + fresnelColor + (foamColor - surface.color.rgb) * (half)0.45;
+            half3 finalColor = litBase + (foamColor - surface.color.rgb) * (half)0.45;
             finalColor = lerp(finalColor, _DepthFoamColor.rgb, depthFoam);
             finalColor = ApplyVoxelFog(finalColor, input.positionWS);
 
-            half finalAlpha = saturate(surface.alpha + fresnel * (half)_FoamIntensity * 0.08h + foam * 0.05h + depthFoam * (half)_DepthFoamAlpha);
+            half finalAlpha = saturate(surface.alpha + foam * 0.05h + depthFoam * (half)_DepthFoamAlpha);
+            finalAlpha *= distanceOpacity;
             finalAlpha = min(finalAlpha, (half)_Maxalpha);
             return half4(finalColor, finalAlpha);
         }
@@ -450,8 +445,12 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
+                half distanceOpacity = ComputeDistanceOpacity(input.positionWS);
+                if (distanceOpacity <= 0.0001h)
+                    clip(-1.0h);
+
                 SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
-                ApplyVoxelAlphaClip(surface.alpha);
+                ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
                 return 0;
             }
             ENDHLSL
@@ -482,8 +481,12 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
+                half distanceOpacity = ComputeDistanceOpacity(input.positionWS);
+                if (distanceOpacity <= 0.0001h)
+                    clip(-1.0h);
+
                 SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
-                ApplyVoxelAlphaClip(surface.alpha);
+                ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
                 return input.positionCS.z;
             }
             ENDHLSL
@@ -513,10 +516,14 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
-                ApplyVoxelAlphaClip(surface.alpha);
+                half distanceOpacity = ComputeDistanceOpacity(input.positionWS);
+                if (distanceOpacity <= 0.0001h)
+                    clip(-1.0h);
 
                 half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
+                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
+                ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
+
                 return half4(normalWS, 0.0h);
             }
             ENDHLSL

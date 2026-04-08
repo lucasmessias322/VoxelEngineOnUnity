@@ -238,6 +238,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float2 atlasOrigin : TEXCOORD1;
             half3 normalWS : TEXCOORD2;
             half subchunkIndex : TEXCOORD3;
+            float3 positionWS : TEXCOORD4;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -330,19 +331,15 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
         half ComputeFaceShade(half3 normalWS)
         {
-            if (normalWS.y > 0.5h)
-                return (half)_Top;
-
-            if (normalWS.y < -0.5h)
-                return (half)_Bottom;
-
-            return (half)_Sides;
+            half yAbs = saturate(abs(normalWS.y));
+            return lerp((half)_Sides, (half)_Top, yAbs);
         }
 
         half ComputeWrappedDiffuse(half3 normalWS, half3 lightDirectionWS)
         {
             half wrap = saturate((half)_WrapLighting);
-            half ndl = dot(normalWS, lightDirectionWS);
+            // Folhagem e billboard devem receber luz nos dois lados para evitar manchas escuras.
+            half ndl = abs(dot(normalWS, lightDirectionWS));
             return saturate((ndl + wrap) / (1.0h + wrap));
         }
 
@@ -766,6 +763,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
             output.positionCS = TransformWorldToHClip(positionWS);
             output.normalWS = normalWS;
+            output.positionWS = positionWS;
             return output;
         }
         ENDHLSL
@@ -828,6 +826,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 output.positionCS = TransformWorldToHClip(ApplyShadowBias(positionWS, normalWS, lightDirectionWS));
                 output.positionCS = ApplyShadowClamping(output.positionCS);
                 output.normalWS = normalWS;
+                output.positionWS = positionWS;
                 return output;
             }
 

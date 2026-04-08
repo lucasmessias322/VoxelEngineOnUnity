@@ -1857,6 +1857,24 @@ public static class MeshGenerator
         float aoCurveExponent,
         float aoMinLight,
         bool useFastBedrockStyleMeshing,
+        bool enableHighQualityLeafFoliage,
+        bool enableUltraLeafBillboards,
+        float leafFoliageSpawnChance,
+        float leafFoliageHeightMin,
+        float leafFoliageHeightMax,
+        float leafFoliageHalfWidthMin,
+        float leafFoliageHalfWidthMax,
+        float leafFoliageBaseYOffsetMin,
+        float leafFoliageBaseYOffsetMax,
+        float leafFoliageCenterJitter,
+        float leafUltraBillboardHeight,
+        float leafUltraBillboardHalfWidth,
+        float leafUltraBaseYOffset,
+        float leafUltraCenterJitter,
+        float leafUltraRotationOffsetDegrees,
+        float leafUltraRotationRandomDegrees,
+        float leafUltraFaceTiltDegrees,
+        float leafUltraFaceTiltRandomDegrees,
         out JobHandle meshHandle,
         out NativeList<PackedChunkVertex> vertices,
         out NativeList<int> opaqueTriangles,
@@ -1912,6 +1930,24 @@ public static class MeshGenerator
             aoCurveExponent = aoCurveExponent,
             aoMinLight = aoMinLight,
             useFastBedrockStyleMeshing = useFastBedrockStyleMeshing,
+            enableHighQualityLeafFoliage = enableHighQualityLeafFoliage,
+            enableUltraLeafBillboards = enableUltraLeafBillboards,
+            leafFoliageSpawnChance = leafFoliageSpawnChance,
+            leafFoliageHeightMin = leafFoliageHeightMin,
+            leafFoliageHeightMax = leafFoliageHeightMax,
+            leafFoliageHalfWidthMin = leafFoliageHalfWidthMin,
+            leafFoliageHalfWidthMax = leafFoliageHalfWidthMax,
+            leafFoliageBaseYOffsetMin = leafFoliageBaseYOffsetMin,
+            leafFoliageBaseYOffsetMax = leafFoliageBaseYOffsetMax,
+            leafFoliageCenterJitter = leafFoliageCenterJitter,
+            leafUltraBillboardHeight = leafUltraBillboardHeight,
+            leafUltraBillboardHalfWidth = leafUltraBillboardHalfWidth,
+            leafUltraBaseYOffset = leafUltraBaseYOffset,
+            leafUltraCenterJitter = leafUltraCenterJitter,
+            leafUltraRotationOffsetDegrees = leafUltraRotationOffsetDegrees,
+            leafUltraRotationRandomDegrees = leafUltraRotationRandomDegrees,
+            leafUltraFaceTiltDegrees = leafUltraFaceTiltDegrees,
+            leafUltraFaceTiltRandomDegrees = leafUltraFaceTiltRandomDegrees,
             dirtySubchunkMask = dirtySubchunkMask,
             subchunkRanges = subchunkRanges,
 
@@ -1965,6 +2001,24 @@ public static class MeshGenerator
         public float aoCurveExponent;
         public float aoMinLight;
         public bool useFastBedrockStyleMeshing;
+        public bool enableHighQualityLeafFoliage;
+        public bool enableUltraLeafBillboards;
+        public float leafFoliageSpawnChance;
+        public float leafFoliageHeightMin;
+        public float leafFoliageHeightMax;
+        public float leafFoliageHalfWidthMin;
+        public float leafFoliageHalfWidthMax;
+        public float leafFoliageBaseYOffsetMin;
+        public float leafFoliageBaseYOffsetMax;
+        public float leafFoliageCenterJitter;
+        public float leafUltraBillboardHeight;
+        public float leafUltraBillboardHalfWidth;
+        public float leafUltraBaseYOffset;
+        public float leafUltraCenterJitter;
+        public float leafUltraRotationOffsetDegrees;
+        public float leafUltraRotationRandomDegrees;
+        public float leafUltraFaceTiltDegrees;
+        public float leafUltraFaceTiltRandomDegrees;
         public int dirtySubchunkMask;
         public NativeArray<SubchunkMeshRange> subchunkRanges;
 
@@ -2643,14 +2697,47 @@ public static class MeshGenerator
             float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
+            int voxelSizeZ = SizeZ + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
             bool generateGrassBillboards = enableGrassBillboards && grassBillboardChance > 0f;
+            bool generateHighLeafFoliage = enableHighQualityLeafFoliage;
+            bool generateUltraLeafFoliage = enableUltraLeafBillboards;
+            bool generateAnyLeafFoliage = generateHighLeafFoliage || generateUltraLeafFoliage;
             float noiseScale = 0f;
             float jitter = 0f;
+            Vector2 leavesAtlasUv = default;
+            float leavesTint = 0f;
             if (generateGrassBillboards)
             {
                 noiseScale = math.max(1e-4f, grassBillboardNoiseScale);
                 jitter = math.clamp(grassBillboardJitter, 0f, 0.35f);
+            }
+
+            if (generateAnyLeafFoliage)
+            {
+                int leavesMappingIndex = (int)BlockType.Leaves;
+                if ((uint)leavesMappingIndex >= (uint)blockMappings.Length)
+                {
+                    generateHighLeafFoliage = false;
+                    generateUltraLeafFoliage = false;
+                }
+                else
+                {
+                    BlockTextureMapping leavesMapping = blockMappings[leavesMappingIndex];
+                    if (leavesMapping.isEmpty)
+                    {
+                        generateHighLeafFoliage = false;
+                        generateUltraLeafFoliage = false;
+                    }
+                    else
+                    {
+                        Vector2Int leavesTile = leavesMapping.GetTileCoord(BlockFace.Front);
+                        leavesAtlasUv = new Vector2(
+                            leavesTile.x * invAtlasTilesX + 0.001f,
+                            leavesTile.y * invAtlasTilesY + 0.001f);
+                        leavesTint = leavesMapping.GetTint(BlockFace.Front) ? 1f : 0f;
+                    }
+                }
             }
 
             int minY = math.max(startY - 1, 0);
@@ -2670,7 +2757,7 @@ public static class MeshGenerator
                             BlockTextureMapping mapping = blockMappings[(int)blockType];
                             if (!mapping.isEmpty && mapping.renderShape != BlockRenderShape.Cube)
                             {
-                                float specialLight01 = GetSpecialMeshLight01(idx, voxelSizeX, light);
+                                float specialLight01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
                                 Vector3 origin = new Vector3(x - border, y, z - border);
 
                                 switch (mapping.renderShape)
@@ -2683,6 +2770,38 @@ public static class MeshGenerator
                                         AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
                                         break;
                                 }
+                            }
+                        }
+
+                        if ((generateHighLeafFoliage || generateUltraLeafFoliage) &&
+                            y >= startY &&
+                            blockType == BlockType.Leaves)
+                        {
+                            if (generateUltraLeafFoliage)
+                            {
+                                AddUltraLeafBillboardFoliage(
+                                    x,
+                                    y,
+                                    z,
+                                    light,
+                                    voxelSizeX,
+                                    voxelSizeZ,
+                                    leavesAtlasUv,
+                                    leavesTint);
+                            }
+                            else
+                            {
+                                TryAddHighQualityLeafFoliage(
+                                    x,
+                                    y,
+                                    z,
+                                    blockTypes,
+                                    light,
+                                    voxelSizeX,
+                                    voxelSizeZ,
+                                    voxelPlaneSize,
+                                    leavesAtlasUv,
+                                    leavesTint);
                             }
                         }
 
@@ -2731,6 +2850,135 @@ public static class MeshGenerator
                     }
                 }
             }
+        }
+
+        private void TryAddHighQualityLeafFoliage(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            NativeArray<byte> light,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            Vector2 atlasUv,
+            float tint)
+        {
+            int worldX = chunkCoordX * SizeX + (x - border);
+            int worldZ = chunkCoordZ * SizeZ + (z - border);
+            uint variationHash = VegetationBillboardUtility.ComputeVariantHash(worldX, y, worldZ);
+            float chanceRoll = (variationHash & 0x0000FFFFu) / 65535f;
+            float spawnChance = math.saturate(leafFoliageSpawnChance);
+            if (chanceRoll > spawnChance)
+                return;
+
+            float heightMin = math.max(0.2f, math.min(leafFoliageHeightMin, leafFoliageHeightMax));
+            float heightMax = math.max(heightMin, math.max(leafFoliageHeightMin, leafFoliageHeightMax));
+            float halfWidthMin = math.max(0.5f, math.min(leafFoliageHalfWidthMin, leafFoliageHalfWidthMax));
+            float halfWidthMax = math.max(halfWidthMin, math.max(leafFoliageHalfWidthMin, leafFoliageHalfWidthMax));
+            float baseYOffsetMin = math.min(leafFoliageBaseYOffsetMin, leafFoliageBaseYOffsetMax);
+            float baseYOffsetMax = math.max(leafFoliageBaseYOffsetMin, leafFoliageBaseYOffsetMax);
+            float centerJitter = math.max(0f, leafFoliageCenterJitter);
+
+            float jx = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 11, centerJitter);
+            float jz = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 17, centerJitter);
+            float baseYOffset = math.lerp(baseYOffsetMin, baseYOffsetMax, ((variationHash >> 16) & 0xFFu) / 255f);
+            float height = math.lerp(heightMin, heightMax, ((variationHash >> 24) & 0xFFu) / 255f);
+            float halfWidth = math.lerp(halfWidthMin, halfWidthMax, ((variationHash >> 8) & 0xFFu) / 255f);
+
+            float light01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
+            // Mantem o centro do billboard no centro do voxel para as quads cruzarem pelas diagonais do bloco.
+            Vector3 center = new Vector3((x - border) + 0.5f + jx, y + baseYOffset, (z - border) + 0.5f + jz);
+            AddBillboardCross(center, height, halfWidth, atlasUv, light01, tint);
+        }
+
+        private void AddUltraLeafBillboardFoliage(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> light,
+            int voxelSizeX,
+            int voxelSizeZ,
+            Vector2 atlasUv,
+            float tint)
+        {
+            int worldX = chunkCoordX * SizeX + (x - border);
+            int worldZ = chunkCoordZ * SizeZ + (z - border);
+            uint variationHash = VegetationBillboardUtility.ComputeVariantHash(worldX, y, worldZ);
+
+            float centerJitter = math.max(0f, leafUltraCenterJitter);
+            float jx = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 5, centerJitter);
+            float jz = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 13, centerJitter);
+            float height = math.max(0.4f, leafUltraBillboardHeight);
+            float halfWidth = math.max(0.5f, leafUltraBillboardHalfWidth);
+            float baseYOffset = math.clamp(leafUltraBaseYOffset, -0.4f, 0.4f);
+            float baseRotationDeg = math.clamp(leafUltraRotationOffsetDegrees, 0f, 45f);
+            float randomRotationRangeDeg = math.max(0f, leafUltraRotationRandomDegrees);
+            float baseTiltDeg = math.clamp(leafUltraFaceTiltDegrees, 0f, 60f);
+            float randomTiltRangeDeg = math.max(0f, leafUltraFaceTiltRandomDegrees);
+            float random01 = ((variationHash >> 20) & 0x3FFu) / 1023f;
+            float rotationDeg = baseRotationDeg + (random01 * 2f - 1f) * randomRotationRangeDeg;
+
+            float light01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
+            // Pivot no centro do voxel para manter volume aparente de qualquer angulo.
+            Vector3 center = new Vector3((x - border) + 0.5f + jx, y + 0.5f + baseYOffset, (z - border) + 0.5f + jz);
+            AddBillboardFourFaces(center, height, halfWidth, atlasUv, light01, tint, rotationDeg, baseTiltDeg, randomTiltRangeDeg, variationHash);
+        }
+
+        private void AddBillboardFourFaces(
+            Vector3 center,
+            float height,
+            float halfWidth,
+            Vector2 atlasUv,
+            float light01,
+            float tint,
+            float rotationOffsetDegrees,
+            float tiltBaseDegrees,
+            float tiltRandomDegrees,
+            uint variationHash)
+        {
+            float baseRad = math.radians(rotationOffsetDegrees);
+            for (int i = 0; i < 4; i++)
+            {
+                float angle = baseRad + i * (math.PI * 0.25f);
+                Vector2 dir = new Vector2(math.cos(angle), math.sin(angle));
+
+                float tiltNoise = ((variationHash >> (i * 8)) & 0xFFu) / 255f;
+                float tiltDegrees = tiltBaseDegrees + (tiltNoise * 2f - 1f) * tiltRandomDegrees;
+                if ((i & 1) != 0)
+                    tiltDegrees = -tiltDegrees;
+
+                AddBillboardPlane(center, height, halfWidth, dir, tiltDegrees, atlasUv, light01, tint);
+            }
+        }
+
+        private void AddBillboardPlane(
+            Vector3 center,
+            float height,
+            float halfWidth,
+            Vector2 horizontalDirectionXZ,
+            float tiltDegrees,
+            Vector2 atlasUv,
+            float light01,
+            float tint)
+        {
+            Vector3 right = new Vector3(horizontalDirectionXZ.x, 0f, horizontalDirectionXZ.y) * halfWidth;
+            Vector3 up = Vector3.up;
+
+            if (math.abs(tiltDegrees) > 0.001f)
+            {
+                float3 axis = math.normalize(new float3(horizontalDirectionXZ.x, 0f, horizontalDirectionXZ.y));
+                quaternion tilt = quaternion.AxisAngle(axis, math.radians(tiltDegrees));
+                float3 tiltedUp = math.mul(tilt, new float3(0f, 1f, 0f));
+                up = new Vector3(tiltedUp.x, tiltedUp.y, tiltedUp.z);
+            }
+
+            Vector3 halfUp = up * (height * 0.5f);
+            Vector3 p0 = center - right - halfUp;
+            Vector3 p1 = center + right - halfUp;
+            Vector3 p2 = center + right + halfUp;
+            Vector3 p3 = center - right + halfUp;
+            AddDoubleSidedQuad(p0, p1, p2, p3, atlasUv, light01, tint);
         }
 
         private bool TryResolveVegetationBillboardRule(
@@ -2788,6 +3036,20 @@ public static class MeshGenerator
             return false;
         }
 
+        private static Vector3 ComputeQuadPlaneNormal(Vector3 p0, Vector3 p1, Vector3 p2)
+        {
+            float3 edgeA = new float3(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z);
+            float3 edgeB = new float3(p2.x - p0.x, p2.y - p0.y, p2.z - p0.z);
+            float3 n = math.cross(edgeA, edgeB);
+            float lenSq = math.lengthsq(n);
+            if (lenSq <= 1e-8f)
+                return new Vector3(0f, 1f, 0f);
+
+            float invLen = math.rsqrt(lenSq);
+            n *= invLen;
+            return new Vector3(n.x, n.y, n.z);
+        }
+
         private void AddDoubleSidedQuad(
             Vector3 p0,
             Vector3 p1,
@@ -2798,13 +3060,13 @@ public static class MeshGenerator
             float tint)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector3 upNormal = new Vector3(0f, 1f, 0f);
+            Vector3 planeNormal = ComputeQuadPlaneNormal(p0, p1, p2);
 
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            AddPackedVertex(p0, upNormal, new Vector2(0f, 0f), atlasUv, e);
-            AddPackedVertex(p1, upNormal, new Vector2(1f, 0f), atlasUv, e);
-            AddPackedVertex(p2, upNormal, new Vector2(1f, 1f), atlasUv, e);
-            AddPackedVertex(p3, upNormal, new Vector2(0f, 1f), atlasUv, e);
+            AddPackedVertex(p0, planeNormal, new Vector2(0f, 0f), atlasUv, e);
+            AddPackedVertex(p1, planeNormal, new Vector2(1f, 0f), atlasUv, e);
+            AddPackedVertex(p2, planeNormal, new Vector2(1f, 1f), atlasUv, e);
+            AddPackedVertex(p3, planeNormal, new Vector2(0f, 1f), atlasUv, e);
 
             billboardTriangles.Add(vIndex + 0);
             billboardTriangles.Add(vIndex + 1);
@@ -3149,13 +3411,13 @@ public static class MeshGenerator
             NativeList<int> tris)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector3 upNormal = new Vector3(0f, 1f, 0f);
+            Vector3 planeNormal = ComputeQuadPlaneNormal(p0, p1, p2);
 
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            AddPackedVertex(p0, upNormal, new Vector2(0f, 0f), atlasUv, e);
-            AddPackedVertex(p1, upNormal, new Vector2(1f, 0f), atlasUv, e);
-            AddPackedVertex(p2, upNormal, new Vector2(1f, 1f), atlasUv, e);
-            AddPackedVertex(p3, upNormal, new Vector2(0f, 1f), atlasUv, e);
+            AddPackedVertex(p0, planeNormal, new Vector2(0f, 0f), atlasUv, e);
+            AddPackedVertex(p1, planeNormal, new Vector2(1f, 0f), atlasUv, e);
+            AddPackedVertex(p2, planeNormal, new Vector2(1f, 1f), atlasUv, e);
+            AddPackedVertex(p3, planeNormal, new Vector2(0f, 1f), atlasUv, e);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -3172,14 +3434,44 @@ public static class MeshGenerator
             tris.Add(vIndex + 2);
         }
 
-        private float GetSpecialMeshLight01(int idx, int voxelSizeX, NativeArray<byte> light)
+        private float GetSpecialMeshLight01(
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            NativeArray<byte> light)
         {
-            float light01 = GetResolvedLight01(light[idx]);
-            int aboveIdx = idx + voxelSizeX;
-            if (aboveIdx >= 0 && aboveIdx < light.Length)
-                light01 = math.max(light01, GetResolvedLight01(light[aboveIdx]));
-
+            float light01 = SampleSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
+            light01 = math.max(light01, SampleSpecialMeshLight01(x, y + 1, z, voxelSizeX, voxelSizeZ, light));
+            light01 = math.max(light01, SampleSpecialMeshLight01(x + 1, y, z, voxelSizeX, voxelSizeZ, light));
+            light01 = math.max(light01, SampleSpecialMeshLight01(x - 1, y, z, voxelSizeX, voxelSizeZ, light));
+            light01 = math.max(light01, SampleSpecialMeshLight01(x, y, z + 1, voxelSizeX, voxelSizeZ, light));
+            light01 = math.max(light01, SampleSpecialMeshLight01(x, y, z - 1, voxelSizeX, voxelSizeZ, light));
             return light01;
+        }
+
+        private float SampleSpecialMeshLight01(
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            NativeArray<byte> light)
+        {
+            if ((uint)x >= (uint)voxelSizeX ||
+                (uint)y >= (uint)SizeY ||
+                (uint)z >= (uint)voxelSizeZ)
+            {
+                return 0f;
+            }
+
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if ((uint)idx >= (uint)light.Length)
+                return 0f;
+
+            return GetResolvedLight01(light[idx]);
         }
 
         private static float GetResolvedLight01(byte packed)
@@ -3307,6 +3599,12 @@ public static class MeshGenerator
                                 }
 
                                 BlockTextureMapping currentMapping = blockMappings[(int)current];
+                                if (enableUltraLeafBillboards && current == BlockType.Leaves)
+                                {
+                                    mask[maskIndex] = default;
+                                    continue;
+                                }
+
                                 if (currentMapping.renderShape != BlockRenderShape.Cube)
                                 {
                                     mask[maskIndex] = default;
