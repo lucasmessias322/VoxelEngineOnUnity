@@ -229,7 +229,8 @@ public partial class World
                 uv1.Add(atlasUv);
 
                 float tint = GetTintForFace(mapping, f, placementAxis) ? 1f : 0f;
-                Vector4 extra = new Vector4(1f, tint, 1f, 0f);
+                bool useGrassSideOverlay = blockType == BlockType.Grass && Mathf.Abs(face.normal.y) < 0.5f;
+                Vector4 extra = new Vector4(1f, tint, 1f, useGrassSideOverlay ? 0.25f : 0f);
                 uv2.Add(extra);
                 uv2.Add(extra);
                 uv2.Add(extra);

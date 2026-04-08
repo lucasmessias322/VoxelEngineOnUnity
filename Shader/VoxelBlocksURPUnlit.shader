@@ -3,6 +3,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
     Properties
     {
         [MainTexture][NoScaleOffset] _Atlas("Atlas", 2D) = "white" {}
+        [NoScaleOffset] _GrassSideOverlay("Grass Side Overlay", 2D) = "black" {}
         [MainColor] _BaseColor("Base Color", Color) = (1, 1, 1, 1)
         _GrassTint("Grass Tint", Color) = (0.38, 0.52, 0.25, 1)
         [HideInInspector] _BiomeTintBlendEnabled("Biome Tint Blend Enabled", Float) = 0
@@ -135,6 +136,8 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
 
         TEXTURE2D(_Atlas);
         SAMPLER(sampler_Atlas);
+        TEXTURE2D(_GrassSideOverlay);
+        SAMPLER(sampler_GrassSideOverlay);
 
         struct PulledOpaqueFace
         {
@@ -195,7 +198,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             half3 normalWS : TEXCOORD1;
             float2 localUV : TEXCOORD2;
             float2 atlasOrigin : TEXCOORD3;
-            half3 extra : TEXCOORD4;
+            half4 extra : TEXCOORD4;
             half3 tintColor : TEXCOORD5;
             half subchunkIndex : TEXCOORD6;
             UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -251,6 +254,12 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             surface.color = SAMPLE_TEXTURE2D(_Atlas, sampler_Atlas, atlasUV) * _BaseColor;
             surface.alpha = surface.color.a;
             return surface;
+        }
+
+        half4 SampleGrassSideOverlay(float2 localUV)
+        {
+            float2 repeatedUV = RepeatTileUV(localUV);
+            return SAMPLE_TEXTURE2D(_GrassSideOverlay, sampler_GrassSideOverlay, repeatedUV);
         }
 
         void ApplyVoxelAlphaClip(half alpha)
@@ -450,7 +459,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             out half3 normalWS,
             out float2 localUV,
             out float2 atlasOrigin,
-            out half3 extra,
+            out half4 extra,
             out half subchunkIndex)
         {
             CompactOpaqueFace face = _CompactOpaqueFaces[faceIndex];
@@ -525,10 +534,11 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 ? float2(cornerUV01.y * safeSpanV, cornerUV01.x * safeSpanU)
                 : float2(cornerUV01.x * safeSpanU, cornerUV01.y * safeSpanV);
             atlasOrigin = atlas0;
-            extra = half3(
+            extra = half4(
                 (half)ResolvePackedByte01(face.packed2, corner),
                 (half)tint0,
-                (half)ResolvePackedByte01(face.packed3, corner));
+                (half)ResolvePackedByte01(face.packed3, corner),
+                0.0h);
             subchunkIndex = (half)(localY / 16u);
         }
 
@@ -545,13 +555,13 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             return lerp(_GrassTint.rgb, blended, (half)blendStrength);
         }
 
-        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out half3 extra, out half3 tintColor, out half subchunkIndex)
+        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out half4 extra, out half3 tintColor, out half subchunkIndex)
         {
             positionWS = 0.0.xxx;
             normalWS = half3(0.0h, 1.0h, 0.0h);
             localUV = 0.0.xx;
             atlasOrigin = 0.0.xx;
-            extra = half3(1.0h, 0.0h, 1.0h);
+            extra = half4(1.0h, 0.0h, 1.0h, 0.0h);
             tintColor = half3(1.0h, 1.0h, 1.0h);
             subchunkIndex = 0.0h;
 
@@ -602,11 +612,12 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 normalWS = normalize(face.normalWS.xyz);
                 localUV = face.uvBounds.xy + face.uvBounds.zw * cornerUV01.x + face.atlasAndFlags.xy * cornerUV01.y;
                 atlasOrigin = face.atlasAndFlags.zw;
-                extra = half3(
-                    (half)ResolveProceduralCornerValue(face.cornerLight01, corner),
-                    1.0h,
-                    (half)ResolveProceduralCornerValue(face.cornerAo01, corner));
                 half tintMask = saturate((half)face.edgeU.w);
+                extra = half4(
+                    (half)ResolveProceduralCornerValue(face.cornerLight01, corner),
+                    tintMask,
+                    (half)ResolveProceduralCornerValue(face.cornerAo01, corner),
+                    0.0h);
                 half3 grassTint = ResolveGrassTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), grassTint, tintMask);
                 return;
@@ -619,10 +630,13 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             localUV = input.uv0;
             atlasOrigin = input.uv1;
-            extra = saturate(input.uv2.xyz);
+            float packedExtraW = max(0.0, input.uv2.w);
+            float decodedSubchunk = floor(packedExtraW + 0.0001);
+            float decodedOverlayMask = saturate((packedExtraW - decodedSubchunk) * 4.0);
+            extra = half4(saturate(input.uv2.xyz), (half)decodedOverlayMask);
             half3 grassTint = ResolveGrassTintByWorldPosition(positionWS);
             tintColor = lerp(half3(1.0h, 1.0h, 1.0h), grassTint, saturate(input.uv2.y));
-            subchunkIndex = (half)input.uv2.w;
+            subchunkIndex = (half)decodedSubchunk;
         }
 
         Varyings ForwardVertex(Attributes input)
@@ -654,7 +668,19 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             half environmentLight = saturate(voxelLight);
             half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
 
-            half3 albedo = surface.color.rgb * input.tintColor;
+            half tintMask = saturate(input.extra.y);
+            half grassSideOverlayMask = saturate(input.extra.w);
+            half3 baseAlbedo = surface.color.rgb;
+            half3 albedo = baseAlbedo * input.tintColor;
+
+            // Apply side overlay tint only on faces explicitly flagged as grass-block sides.
+            if (abs(normalWS.y) < 0.5h && tintMask > 0.0001h && grassSideOverlayMask > 0.0001h)
+            {
+                half4 sideOverlay = SampleGrassSideOverlay(input.localUV);
+                half overlayAlpha = saturate(sideOverlay.a) * tintMask * grassSideOverlayMask;
+                half3 tintedOverlay = sideOverlay.rgb * input.tintColor;
+                albedo = baseAlbedo * (1.0h - overlayAlpha) + tintedOverlay * overlayAlpha;
+            }
 
             half3 lighting = voxelLight.xxx * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;
@@ -675,7 +701,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
 
             float3 positionWS;
             half3 normalWS;
-            half3 extra;
+            half4 extra;
             half3 tintColor;
             ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, extra, tintColor, output.subchunkIndex);
 
@@ -730,7 +756,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
 
                 float3 positionWS;
                 half3 normalWS;
-                half3 extra;
+                half4 extra;
                 half3 tintColor;
                 ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, extra, tintColor, output.subchunkIndex);
 

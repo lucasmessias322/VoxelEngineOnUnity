@@ -218,7 +218,8 @@ public class BlockDrop : MonoBehaviour
                     uv1.Add(atlasUv);
 
                     float tint = GetTintForFace(mapping, f) ? 1f : 0f;
-                    Vector4 extra = new Vector4(1f, tint, 1f, 0f);
+                    bool useGrassSideOverlay = blockType == BlockType.Grass && face.normal3.y == 0f;
+                    Vector4 extra = new Vector4(1f, tint, 1f, useGrassSideOverlay ? 0.25f : 0f);
                     uv2.Add(extra);
                     uv2.Add(extra);
                     uv2.Add(extra);
