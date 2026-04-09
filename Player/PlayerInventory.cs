@@ -6,6 +6,7 @@ public class PlayerInventory : MonoBehaviour
 {
     public event Action ContentsChanged;
     private const string DefaultBlockItemMappingResourcePath = "BlockItemMappingSO";
+    private const string DefaultItemAtlasDataResourcePath = "ItemAtlasDataSO";
 
     public static PlayerInventory Instance { get; private set; }
 
@@ -533,6 +534,7 @@ public class PlayerInventory : MonoBehaviour
 
     public bool TryGetItemAtlasData(out ItemAtlasDataSO atlasData)
     {
+        InitializeItemAtlasLookup();
         atlasData = itemAtlasData;
         return atlasData != null;
     }
@@ -662,8 +664,13 @@ public class PlayerInventory : MonoBehaviour
 
     private void InitializeItemAtlasLookup()
     {
-        if (itemAtlasData != null)
-            itemAtlasData.InitializeLookup();
+        if (itemAtlasData == null)
+            itemAtlasData = Resources.Load<ItemAtlasDataSO>(DefaultItemAtlasDataResourcePath);
+
+        if (itemAtlasData == null)
+            return;
+
+        itemAtlasData.InitializeLookup();
     }
 
     private void EndContentChangeBatch()

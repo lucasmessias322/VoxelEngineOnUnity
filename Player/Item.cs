@@ -12,8 +12,7 @@ public class Item : ScriptableObject
 {
     [Header("Info")]
     public string itemName;
-    public Sprite icon;
-    [Tooltip("Auto usa bloco isometrico para itens mapeados como bloco. ItemIconOnly sempre usa o icone/atlas do item.")]
+    [Tooltip("Auto usa bloco isometrico para itens mapeados como bloco. ItemIconOnly sempre usa o atlas do item.")]
     public InventoryIconMode inventoryIconMode = InventoryIconMode.Auto;
 
     [Header("Stack")]
@@ -76,6 +75,6 @@ public static class ItemIconResolver
         if (ItemAtlasIconCache.TryGetIcon(item, out Sprite atlasIcon) && atlasIcon != null)
             return atlasIcon;
 
-        return item.icon;
+        return null;
     }
 }

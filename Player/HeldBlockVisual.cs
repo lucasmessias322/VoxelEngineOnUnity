@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
-using UnityEngine.Sprites;
 
 [DisallowMultipleComponent]
 public class HeldBlockVisual : MonoBehaviour
@@ -53,7 +52,6 @@ public class HeldBlockVisual : MonoBehaviour
 
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
-    private readonly Dictionary<Sprite, Mesh> spriteFlatItemMeshCache = new Dictionary<Sprite, Mesh>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
 
     private GameObject followRoot;
@@ -117,7 +115,6 @@ public class HeldBlockVisual : MonoBehaviour
         UpdateArmMeshVisibility(false);
         DestroyCachedMeshes(blockMeshCache);
         blockMaterialIndexCache.Clear();
-        DestroyCachedMeshes(spriteFlatItemMeshCache);
         DestroyCachedMeshes(atlasFlatItemMeshCache);
 
         ClearHeldPrefabInstance();
@@ -488,7 +485,7 @@ public class HeldBlockVisual : MonoBehaviour
 
     private bool HasFlatItemVisual(Item selectedItem)
     {
-        return selectedItem != null && (selectedItem.icon != null || HasAtlasFlatItem(selectedItem));
+        return selectedItem != null && HasAtlasFlatItem(selectedItem);
     }
 
     private bool ShowBlock(BlockType blockType)
@@ -702,15 +699,7 @@ public class HeldBlockVisual : MonoBehaviour
             }
         }
 
-        if (item.icon == null)
-            return null;
-
-        Mesh spriteMesh = GetOrCreateSpriteFlatItemMesh(item.icon);
-        if (spriteMesh == null)
-            return null;
-
-        renderTexture = item.icon.texture;
-        return spriteMesh;
+        return null;
     }
 
     private Material ResolveFlatItemMaterial(Item item)
@@ -729,23 +718,6 @@ public class HeldBlockVisual : MonoBehaviour
         return null;
     }
 
-    private Mesh GetOrCreateSpriteFlatItemMesh(Sprite sprite)
-    {
-        if (sprite == null)
-            return null;
-
-        if (spriteFlatItemMeshCache.TryGetValue(sprite, out Mesh cachedMesh) && cachedMesh != null)
-            return cachedMesh;
-
-        Mesh mesh = BuildFlatItemMesh(sprite);
-        if (mesh == null)
-            return null;
-
-        mesh.name = $"HeldFlatItem_{sprite.name}";
-        spriteFlatItemMeshCache[sprite] = mesh;
-        return mesh;
-    }
-
     private Mesh GetOrCreateAtlasFlatItemMesh(Item item, Rect uvRect, float aspect)
     {
         if (item == null)
@@ -761,18 +733,6 @@ public class HeldBlockVisual : MonoBehaviour
         mesh.name = $"HeldFlatItemAtlas_{item.name}";
         atlasFlatItemMeshCache[item] = mesh;
         return mesh;
-    }
-
-    private static Mesh BuildFlatItemMesh(Sprite sprite)
-    {
-        if (sprite == null)
-            return null;
-
-        float safeHeight = Mathf.Max(1f, sprite.rect.height);
-        float aspect = Mathf.Max(0.01f, sprite.rect.width / safeHeight);
-        Vector4 outerUv = DataUtility.GetOuterUV(sprite);
-        Rect uvRect = Rect.MinMaxRect(outerUv.x, outerUv.y, outerUv.z, outerUv.w);
-        return BuildFlatItemMesh(aspect, uvRect);
     }
 
     private static Mesh BuildFlatItemMesh(float aspect, Rect uvRect)

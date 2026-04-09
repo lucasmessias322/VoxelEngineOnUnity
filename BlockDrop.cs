@@ -1194,8 +1194,6 @@ public class InventoryItemDrop : MonoBehaviour
             return;
 
         Sprite icon = ItemIconResolver.ResolveForUI(item);
-        if (icon == null && item != null)
-            icon = item.icon;
 
         spriteRenderer.sprite = icon;
         spriteRenderer.enabled = icon != null;
