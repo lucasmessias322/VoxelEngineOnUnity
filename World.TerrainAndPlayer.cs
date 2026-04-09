@@ -100,7 +100,25 @@ public partial class World : MonoBehaviour
             return;
         }
 
-        if (current == type) return;
+        if (type == BlockType.wire && current == BlockType.wire)
+        {
+            byte existingRawValue = blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis existingAxis)
+                ? (byte)existingAxis
+                : (byte)BlockPlacementAxis.Y;
+            existingRawValue = ResolveStoredWirePlacementRaw(worldPos, existingRawValue);
+
+            if (!WirePlacementUtility.TryMerge(existingRawValue, (byte)placementAxis, out byte mergedRawValue))
+                return;
+
+            if (mergedRawValue == existingRawValue)
+                return;
+
+            placementAxis = (BlockPlacementAxis)mergedRawValue;
+        }
+        else if (current == type)
+        {
+            return;
+        }
 
         // If this position gets occupied, it cannot host a billboard anymore.
         if (type != BlockType.Air)
@@ -204,6 +222,37 @@ public partial class World : MonoBehaviour
             if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
             if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
         }
+    }
+
+    public bool CanPlaceWireStateAt(Vector3Int worldPos, BlockPlacementAxis placementAxis)
+    {
+        BlockType current = GetBlockAt(worldPos);
+        if (current != BlockType.Air &&
+            !FluidBlockUtility.IsWater(current) &&
+            current != BlockType.wire)
+        {
+            return false;
+        }
+
+        if (current != BlockType.wire)
+            return true;
+
+        byte existingRawValue = blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis existingAxis)
+            ? (byte)existingAxis
+            : (byte)BlockPlacementAxis.Y;
+        existingRawValue = ResolveStoredWirePlacementRaw(worldPos, existingRawValue);
+
+        return WirePlacementUtility.TryMerge(existingRawValue, (byte)placementAxis, out byte mergedRawValue) &&
+               mergedRawValue != existingRawValue;
+    }
+
+    public bool TryPlaceWireStateAt(Vector3Int worldPos, BlockPlacementAxis placementAxis, bool placedByPlayer = false)
+    {
+        if (!CanPlaceWireStateAt(worldPos, placementAxis))
+            return false;
+
+        SetBlockAt(worldPos, BlockType.wire, placedByPlayer, placementAxis);
+        return true;
     }
 
     private static void AddUniqueChunkCoordToBuffer(Vector2Int coord, Vector2Int[] buffer, ref int count)

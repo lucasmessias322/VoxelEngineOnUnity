@@ -2278,7 +2278,7 @@ public static class MeshGenerator
             if ((uint)voxelIndex >= (uint)blockPlacementAxes.Length)
                 return (byte)BlockPlacementAxis.Y;
 
-            return BlockPlacementRotationUtility.SanitizeStoredAxisByte(blockPlacementAxes[voxelIndex]);
+            return blockPlacementAxes[voxelIndex];
         }
 
         private static bool HasFace(in GreedyFaceData face)
@@ -2795,7 +2795,11 @@ public static class MeshGenerator
                             {
                                 float specialLight01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
                                 Vector3 origin = new Vector3(x - border, y, z - border);
-                                BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeAxis(GetBlockPlacementAxisValue(idx));
+                                byte rawPlacementData = GetBlockPlacementAxisValue(idx);
+                                BlockPlacementAxis placementAxis = blockType == BlockType.wire &&
+                                                                   WirePlacementUtility.TryGetWall(rawPlacementData, out BlockPlacementAxis explicitWireAxis, out _)
+                                    ? explicitWireAxis
+                                    : BlockPlacementRotationUtility.SanitizeStoredAxis((BlockPlacementAxis)rawPlacementData);
 
                                 switch (effectiveShape)
                                 {
@@ -2813,6 +2817,7 @@ public static class MeshGenerator
                                             mapping,
                                             blockType,
                                             placementAxis,
+                                            rawPlacementData,
                                             x,
                                             y,
                                             z,
@@ -3174,6 +3179,7 @@ public static class MeshGenerator
             BlockTextureMapping mapping,
             BlockType blockType,
             BlockPlacementAxis placementAxis,
+            byte rawPlacementData,
             int voxelX,
             int voxelY,
             int voxelZ,
@@ -3217,6 +3223,109 @@ public static class MeshGenerator
                 ? waterTriangles
                 : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
 
+            if (blockType == BlockType.wire)
+            {
+                bool wireHasTopOnCurrentCell = WirePlacementUtility.HasTop(rawPlacementData);
+                bool wireHasWallOnCurrentCell = WirePlacementUtility.TryGetWall(rawPlacementData, out BlockPlacementAxis wireSurfaceAxis, out int wireAttachmentSide);
+                if (!wireHasWallOnCurrentCell)
+                {
+                    BlockPlacementAxis resolvedSurfaceAxis = ResolveWireSurfaceAxis(placementAxis, hasNegativeSupport, hasPositiveSupport);
+                    if (resolvedSurfaceAxis == BlockPlacementAxis.Y)
+                    {
+                        wireHasTopOnCurrentCell = true;
+                    }
+                    else
+                    {
+                        wireHasWallOnCurrentCell = true;
+                        wireSurfaceAxis = resolvedSurfaceAxis;
+                        wireAttachmentSide = ResolveWireAttachmentSide(resolvedSurfaceAxis, hasNegativeSupport, hasPositiveSupport);
+                    }
+                }
+
+                Vector2Int lineTile = mapping.GetTileCoord(BlockFace.Front);
+                Vector2 lineAtlasUv = new Vector2(lineTile.x * invAtlasTilesX + 0.001f, lineTile.y * invAtlasTilesY + 0.001f);
+                Vector2Int dotTile = ResolveWireDotTile(mapping, lineTile);
+                Vector2 dotAtlasUv = new Vector2(dotTile.x * invAtlasTilesX + 0.001f, dotTile.y * invAtlasTilesY + 0.001f);
+
+                if (wireHasTopOnCurrentCell)
+                {
+                    BlockShapeUtility.ResolvePlaneQuad(
+                        mapping,
+                        BlockPlacementAxis.Y,
+                        false,
+                        false,
+                        out Vector3 topP0,
+                        out Vector3 topP1,
+                        out Vector3 topP2,
+                        out Vector3 topP3,
+                        out _,
+                        out _);
+
+                    RenderWireTopSurface(
+                        origin,
+                        topP0,
+                        topP1,
+                        topP2,
+                        topP3,
+                        wireHasWallOnCurrentCell ? wireSurfaceAxis : BlockPlacementAxis.Y,
+                        wireHasWallOnCurrentCell ? wireAttachmentSide : 0,
+                        lineAtlasUv,
+                        dotAtlasUv,
+                        light01,
+                        tint,
+                        tris,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        blockTypes,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize);
+                }
+
+                if (wireHasWallOnCurrentCell)
+                {
+                    bool wallHasNegativeSupport = wireAttachmentSide < 0;
+                    bool wallHasPositiveSupport = wireAttachmentSide > 0;
+
+                    BlockShapeUtility.ResolvePlaneQuad(
+                        mapping,
+                        wireSurfaceAxis,
+                        wallHasNegativeSupport,
+                        wallHasPositiveSupport,
+                        out Vector3 wallP0,
+                        out Vector3 wallP1,
+                        out Vector3 wallP2,
+                        out Vector3 wallP3,
+                        out _,
+                        out _);
+
+                    RenderWireWallSurface(
+                        origin,
+                        wallP0,
+                        wallP1,
+                        wallP2,
+                        wallP3,
+                        wireSurfaceAxis,
+                        wireAttachmentSide,
+                        wireHasTopOnCurrentCell,
+                        lineAtlasUv,
+                        dotAtlasUv,
+                        light01,
+                        tint,
+                        tris,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        blockTypes,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize);
+                }
+
+                return;
+            }
+
             AddDoubleSidedShapeQuad(
                 origin + p0,
                 origin + p1,
@@ -3226,6 +3335,886 @@ public static class MeshGenerator
                 light01,
                 tint,
                 tris);
+        }
+
+        private void RenderWireTopSurface(
+            Vector3 origin,
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            BlockPlacementAxis wallSurfaceAxis,
+            int wallAttachmentSide,
+            Vector2 lineAtlasUv,
+            Vector2 dotAtlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            const float armHalfWidth = 0.12f;
+            const float centerHalfSize = 0.18f;
+
+            bool connectEast = IsTopSurfaceWireAt(voxelX + 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool connectWest = IsTopSurfaceWireAt(voxelX - 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool connectNorth = IsTopSurfaceWireAt(voxelX, voxelY, voxelZ + 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool connectSouth = IsTopSurfaceWireAt(voxelX, voxelY, voxelZ - 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            if (wallSurfaceAxis == BlockPlacementAxis.X)
+            {
+                if (wallAttachmentSide > 0)
+                    connectEast = true;
+                else if (wallAttachmentSide < 0)
+                    connectWest = true;
+            }
+            else if (wallSurfaceAxis == BlockPlacementAxis.Z)
+            {
+                if (wallAttachmentSide > 0)
+                    connectNorth = true;
+                else if (wallAttachmentSide < 0)
+                    connectSouth = true;
+            }
+
+            bool straightX = connectEast && connectWest && !connectNorth && !connectSouth;
+            bool straightZ = connectNorth && connectSouth && !connectEast && !connectWest;
+
+            if (straightX)
+            {
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                return;
+            }
+
+            if (straightZ)
+            {
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                return;
+            }
+
+            AddWireSurfaceQuad(
+                origin,
+                p0,
+                p1,
+                p2,
+                p3,
+                0.5f - centerHalfSize,
+                0.5f + centerHalfSize,
+                0.5f - centerHalfSize,
+                0.5f + centerHalfSize,
+                dotAtlasUv,
+                light01,
+                tint,
+                tris,
+                0);
+
+            if (connectEast)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+
+            if (connectWest)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+
+            if (connectNorth)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, lineAtlasUv, light01, tint, tris, 1);
+
+            if (connectSouth)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, lineAtlasUv, light01, tint, tris, 1);
+        }
+
+        private void RenderWireWallSurface(
+            Vector3 origin,
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            BlockPlacementAxis wireSurfaceAxis,
+            int wireAttachmentSide,
+            bool hasTopOnCurrentCell,
+            Vector2 lineAtlasUv,
+            Vector2 dotAtlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            const float armHalfWidth = 0.12f;
+            const float centerHalfSize = 0.18f;
+
+            ResolveWireConnectionOffsets(
+                wireSurfaceAxis,
+                out Vector3Int negSOffset,
+                out Vector3Int posSOffset,
+                out Vector3Int negTOffset,
+                out Vector3Int posTOffset);
+
+            bool connectNegS = IsWireConnectedAlongSurface(
+                voxelX + negSOffset.x,
+                voxelY + negSOffset.y,
+                voxelZ + negSOffset.z,
+                wireSurfaceAxis,
+                wireAttachmentSide,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            bool connectPosS = IsWireConnectedAlongSurface(
+                voxelX + posSOffset.x,
+                voxelY + posSOffset.y,
+                voxelZ + posSOffset.z,
+                wireSurfaceAxis,
+                wireAttachmentSide,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            bool connectNegT = IsWireConnectedAlongSurface(
+                voxelX + negTOffset.x,
+                voxelY + negTOffset.y,
+                voxelZ + negTOffset.z,
+                wireSurfaceAxis,
+                wireAttachmentSide,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            bool connectPosT = IsWireConnectedAlongSurface(
+                voxelX + posTOffset.x,
+                voxelY + posTOffset.y,
+                voxelZ + posTOffset.z,
+                wireSurfaceAxis,
+                wireAttachmentSide,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            if (hasTopOnCurrentCell)
+            {
+                if (wireSurfaceAxis == BlockPlacementAxis.X)
+                    connectPosT = true;
+                else if (wireSurfaceAxis == BlockPlacementAxis.Z)
+                    connectPosS = true;
+            }
+
+            bool straightS = connectNegS && connectPosS && !connectNegT && !connectPosT;
+            bool straightT = connectNegT && connectPosT && !connectNegS && !connectPosS;
+
+            if (straightS)
+            {
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                return;
+            }
+
+            if (straightT)
+            {
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                return;
+            }
+
+            AddWireSurfaceQuad(
+                origin,
+                p0,
+                p1,
+                p2,
+                p3,
+                0.5f - centerHalfSize,
+                0.5f + centerHalfSize,
+                0.5f - centerHalfSize,
+                0.5f + centerHalfSize,
+                dotAtlasUv,
+                light01,
+                tint,
+                tris,
+                0);
+
+            if (connectPosS)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+
+            if (connectNegS)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+
+            if (connectPosT)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, lineAtlasUv, light01, tint, tris, 1);
+
+            if (connectNegT)
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, lineAtlasUv, light01, tint, tris, 1);
+        }
+
+        private enum WireTopConnectionMode : byte
+        {
+            None = 0,
+            Flat = 1,
+            Up = 2,
+            Down = 3
+        }
+
+        private WireTopConnectionMode ResolveWireTopConnectionMode(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int dirX,
+            int dirZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            int nx = voxelX + dirX;
+            int nz = voxelZ + dirZ;
+
+            if (IsTopSurfaceWireAt(nx, voxelY, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return WireTopConnectionMode.Flat;
+
+            if (HasSameLevelWallWireConnectionFromTop(
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    dirX,
+                    dirZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                return WireTopConnectionMode.Down;
+            }
+
+            bool adjacentIsSolid = IsSolidSupportBlock(nx, voxelY, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            if (adjacentIsSolid &&
+                IsTopSurfaceWireAt(nx, voxelY + 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+            {
+                return WireTopConnectionMode.Up;
+            }
+
+            if (!adjacentIsSolid &&
+                IsTopSurfaceWireAt(nx, voxelY - 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+            {
+                return WireTopConnectionMode.Down;
+            }
+
+            if (HasWallWireConnectionFromTop(
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    dirX,
+                    dirZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                return WireTopConnectionMode.Down;
+            }
+
+            return WireTopConnectionMode.None;
+        }
+
+        private bool HasSameLevelWallWireConnectionFromTop(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int dirX,
+            int dirZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            int wallX = voxelX + dirX;
+            int wallZ = voxelZ + dirZ;
+
+            if (!TryGetWireSurfaceAt(
+                    wallX,
+                    voxelY,
+                    wallZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    out BlockPlacementAxis wallSurfaceAxis,
+                    out int wallAttachmentSide))
+            {
+                return false;
+            }
+
+            if (dirX != 0)
+                return wallSurfaceAxis == BlockPlacementAxis.X && wallAttachmentSide == dirX;
+
+            return wallSurfaceAxis == BlockPlacementAxis.Z && wallAttachmentSide == dirZ;
+        }
+
+        private bool HasWallWireConnectionFromTop(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int dirX,
+            int dirZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            return MatchesWallWireForTopConnection(
+                       voxelX,
+                       voxelY - 1,
+                       voxelZ,
+                       dirX,
+                       dirZ,
+                       1,
+                       blockTypes,
+                       voxelSizeX,
+                       voxelSizeZ,
+                       voxelPlaneSize)
+                || MatchesWallWireForTopConnection(
+                       voxelX + dirX,
+                       voxelY - 1,
+                       voxelZ + dirZ,
+                       dirX,
+                       dirZ,
+                       -1,
+                       blockTypes,
+                       voxelSizeX,
+                       voxelSizeZ,
+                       voxelPlaneSize);
+        }
+
+        private bool MatchesWallWireForTopConnection(
+            int wallX,
+            int wallY,
+            int wallZ,
+            int dirX,
+            int dirZ,
+            int attachmentDirectionMultiplier,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!TryGetWireSurfaceAt(
+                    wallX,
+                    wallY,
+                    wallZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    out BlockPlacementAxis wallSurfaceAxis,
+                    out int wallAttachmentSide))
+            {
+                return false;
+            }
+
+            if (dirX != 0)
+                return wallSurfaceAxis == BlockPlacementAxis.X && wallAttachmentSide == dirX * attachmentDirectionMultiplier;
+
+            return wallSurfaceAxis == BlockPlacementAxis.Z && wallAttachmentSide == dirZ * attachmentDirectionMultiplier;
+        }
+
+        private bool IsTopSurfaceWireAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            return TryGetWireStateAt(
+                       x,
+                       y,
+                       z,
+                       blockTypes,
+                       voxelSizeX,
+                       voxelSizeZ,
+                       voxelPlaneSize,
+                       out bool hasTop,
+                       out _,
+                       out _)
+                   && hasTop;
+        }
+
+        private bool IsSolidSupportBlock(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if ((uint)idx >= (uint)blockTypes.Length)
+                return false;
+
+            BlockType type = (BlockType)blockTypes[idx];
+            if (type == BlockType.Air || FluidBlockUtility.IsWater(type))
+                return false;
+
+            int mapIndex = (int)type;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            BlockTextureMapping supportMapping = blockMappings[mapIndex];
+            return supportMapping.isSolid && !supportMapping.isEmpty && !supportMapping.isLiquid;
+        }
+
+        private bool HasTopWireConnectionForWall(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (surfaceAxis == BlockPlacementAxis.Y || attachmentSide == 0)
+                return false;
+
+            if (IsTopSurfaceWireAt(
+                    voxelX,
+                    voxelY + 1,
+                    voxelZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                return true;
+            }
+
+            int supportTopX = voxelX;
+            int supportTopZ = voxelZ;
+            if (surfaceAxis == BlockPlacementAxis.X)
+                supportTopX += attachmentSide;
+            else
+                supportTopZ += attachmentSide;
+
+            return IsTopSurfaceWireAt(
+                supportTopX,
+                voxelY + 1,
+                supportTopZ,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+        }
+
+        private bool HasGroundWireConnectionForWall(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (surfaceAxis == BlockPlacementAxis.Y || attachmentSide == 0)
+                return false;
+
+            int outwardX = voxelX;
+            int outwardZ = voxelZ;
+            if (surfaceAxis == BlockPlacementAxis.X)
+                outwardX -= attachmentSide;
+            else
+                outwardZ -= attachmentSide;
+
+            return IsTopSurfaceWireAt(
+                outwardX,
+                voxelY,
+                outwardZ,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+        }
+
+        private void AddWireWallGroundBridge(
+            Vector3 origin,
+            BlockPlacementAxis surfaceAxis,
+            Vector2 atlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris)
+        {
+            const float armHalfWidth = 0.12f;
+            const float floorInset = 0.0015f;
+
+            if (surfaceAxis == BlockPlacementAxis.X)
+            {
+                AddDoubleSidedShapeQuad(
+                    origin + new Vector3(0f, floorInset, 0.5f - armHalfWidth),
+                    origin + new Vector3(0f, floorInset, 0.5f + armHalfWidth),
+                    origin + new Vector3(1f, floorInset, 0.5f + armHalfWidth),
+                    origin + new Vector3(1f, floorInset, 0.5f - armHalfWidth),
+                    atlasUv,
+                    light01,
+                    tint,
+                    tris,
+                    0);
+                return;
+            }
+
+            AddDoubleSidedShapeQuad(
+                origin + new Vector3(0.5f - armHalfWidth, floorInset, 0f),
+                origin + new Vector3(0.5f - armHalfWidth, floorInset, 1f),
+                origin + new Vector3(0.5f + armHalfWidth, floorInset, 1f),
+                origin + new Vector3(0.5f + armHalfWidth, floorInset, 0f),
+                atlasUv,
+                light01,
+                tint,
+                tris,
+                1);
+        }
+
+        private void AddWireTopVerticalBridge(
+            Vector3 origin,
+            float baseY,
+            int dirX,
+            int dirZ,
+            bool ascend,
+            Vector2 atlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris)
+        {
+            const float armHalfWidth = 0.12f;
+            const float faceInset = 0.0015f;
+
+            float y0 = ascend ? baseY : baseY - 1f;
+            float y1 = ascend ? baseY + 1f : baseY;
+
+            Vector3 p0;
+            Vector3 p1;
+            Vector3 p2;
+            Vector3 p3;
+
+            if (dirX > 0)
+            {
+                float x = 1f - faceInset;
+                float z0 = 0.5f - armHalfWidth;
+                float z1 = 0.5f + armHalfWidth;
+                p0 = new Vector3(x, y0, z0);
+                p1 = new Vector3(x, y1, z0);
+                p2 = new Vector3(x, y1, z1);
+                p3 = new Vector3(x, y0, z1);
+            }
+            else if (dirX < 0)
+            {
+                float x = faceInset;
+                float z0 = 0.5f - armHalfWidth;
+                float z1 = 0.5f + armHalfWidth;
+                p0 = new Vector3(x, y0, z0);
+                p1 = new Vector3(x, y1, z0);
+                p2 = new Vector3(x, y1, z1);
+                p3 = new Vector3(x, y0, z1);
+            }
+            else if (dirZ > 0)
+            {
+                float z = 1f - faceInset;
+                float x0 = 0.5f - armHalfWidth;
+                float x1 = 0.5f + armHalfWidth;
+                p0 = new Vector3(x0, y0, z);
+                p1 = new Vector3(x0, y1, z);
+                p2 = new Vector3(x1, y1, z);
+                p3 = new Vector3(x1, y0, z);
+            }
+            else
+            {
+                float z = faceInset;
+                float x0 = 0.5f - armHalfWidth;
+                float x1 = 0.5f + armHalfWidth;
+                p0 = new Vector3(x0, y0, z);
+                p1 = new Vector3(x0, y1, z);
+                p2 = new Vector3(x1, y1, z);
+                p3 = new Vector3(x1, y0, z);
+            }
+
+            AddDoubleSidedShapeQuad(
+                origin + p0,
+                origin + p1,
+                origin + p2,
+                origin + p3,
+                atlasUv,
+                light01,
+                tint,
+                tris,
+                0);
+        }
+
+        private static BlockPlacementAxis ResolveWireSurfaceAxis(
+            BlockPlacementAxis placementAxis,
+            bool hasNegativeSupport,
+            bool hasPositiveSupport)
+        {
+            placementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+            return placementAxis switch
+            {
+                BlockPlacementAxis.X => hasNegativeSupport || hasPositiveSupport ? BlockPlacementAxis.X : BlockPlacementAxis.Y,
+                BlockPlacementAxis.Z => hasNegativeSupport || hasPositiveSupport ? BlockPlacementAxis.Z : BlockPlacementAxis.Y,
+                _ => BlockPlacementAxis.Y
+            };
+        }
+
+        private static int ResolveWireAttachmentSide(
+            BlockPlacementAxis surfaceAxis,
+            bool hasNegativeSupport,
+            bool hasPositiveSupport)
+        {
+            if (surfaceAxis == BlockPlacementAxis.Y)
+                return 0;
+
+            if (hasNegativeSupport == hasPositiveSupport)
+                return 0;
+
+            return hasNegativeSupport ? -1 : 1;
+        }
+
+        private static void ResolveWireConnectionOffsets(
+            BlockPlacementAxis surfaceAxis,
+            out Vector3Int negSOffset,
+            out Vector3Int posSOffset,
+            out Vector3Int negTOffset,
+            out Vector3Int posTOffset)
+        {
+            switch (surfaceAxis)
+            {
+                case BlockPlacementAxis.X:
+                    negSOffset = new Vector3Int(0, 0, -1);
+                    posSOffset = new Vector3Int(0, 0, 1);
+                    negTOffset = new Vector3Int(0, -1, 0);
+                    posTOffset = new Vector3Int(0, 1, 0);
+                    return;
+
+                case BlockPlacementAxis.Z:
+                    negSOffset = new Vector3Int(0, -1, 0);
+                    posSOffset = new Vector3Int(0, 1, 0);
+                    negTOffset = new Vector3Int(-1, 0, 0);
+                    posTOffset = new Vector3Int(1, 0, 0);
+                    return;
+
+                default:
+                    negSOffset = new Vector3Int(-1, 0, 0);
+                    posSOffset = new Vector3Int(1, 0, 0);
+                    negTOffset = new Vector3Int(0, 0, -1);
+                    posTOffset = new Vector3Int(0, 0, 1);
+                    return;
+            }
+        }
+
+        private bool IsWireConnectedAlongSurface(
+            int neighborX,
+            int neighborY,
+            int neighborZ,
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!TryGetWireSurfaceAt(
+                    neighborX,
+                    neighborY,
+                    neighborZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    out BlockPlacementAxis neighborSurfaceAxis,
+                    out int neighborAttachmentSide))
+            {
+                return false;
+            }
+
+            return AreWireSurfacesCompatible(
+                surfaceAxis,
+                attachmentSide,
+                neighborSurfaceAxis,
+                neighborAttachmentSide);
+        }
+
+        private bool TryGetWireStateAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out bool hasTop,
+            out BlockPlacementAxis wallSurfaceAxis,
+            out int wallAttachmentSide)
+        {
+            hasTop = false;
+            wallSurfaceAxis = BlockPlacementAxis.Y;
+            wallAttachmentSide = 0;
+
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if ((uint)idx >= (uint)blockTypes.Length)
+                return false;
+
+            if ((BlockType)blockTypes[idx] != BlockType.wire)
+                return false;
+
+            byte rawPlacementData = GetBlockPlacementAxisValue(idx);
+            hasTop = WirePlacementUtility.HasTop(rawPlacementData);
+            if (WirePlacementUtility.TryGetWall(rawPlacementData, out wallSurfaceAxis, out wallAttachmentSide))
+                return true;
+
+            BlockPlacementAxis neighborPlacementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis((BlockPlacementAxis)rawPlacementData);
+            ResolvePlaneSupportFlags(
+                x,
+                y,
+                z,
+                neighborPlacementAxis,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out bool hasNegativeSupport,
+                out bool hasPositiveSupport);
+
+            BlockPlacementAxis resolvedSurfaceAxis = ResolveWireSurfaceAxis(neighborPlacementAxis, hasNegativeSupport, hasPositiveSupport);
+            if (resolvedSurfaceAxis == BlockPlacementAxis.Y)
+            {
+                hasTop = true;
+                return true;
+            }
+
+            wallSurfaceAxis = resolvedSurfaceAxis;
+            wallAttachmentSide = ResolveWireAttachmentSide(resolvedSurfaceAxis, hasNegativeSupport, hasPositiveSupport);
+            return true;
+        }
+
+        private bool TryGetWireSurfaceAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out BlockPlacementAxis surfaceAxis,
+            out int attachmentSide)
+        {
+            surfaceAxis = BlockPlacementAxis.Y;
+            attachmentSide = 0;
+
+            if (!TryGetWireStateAt(
+                    x,
+                    y,
+                    z,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    out bool hasTop,
+                    out BlockPlacementAxis wallSurfaceAxis,
+                    out int wallAttachmentSide))
+            {
+                return false;
+            }
+
+            if (wallSurfaceAxis != BlockPlacementAxis.Y)
+            {
+                surfaceAxis = wallSurfaceAxis;
+                attachmentSide = wallAttachmentSide;
+                return true;
+            }
+
+            if (!hasTop)
+                return false;
+
+            surfaceAxis = BlockPlacementAxis.Y;
+            return true;
+        }
+
+        private static bool AreWireSurfacesCompatible(
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide,
+            BlockPlacementAxis neighborSurfaceAxis,
+            int neighborAttachmentSide)
+        {
+            if (surfaceAxis != neighborSurfaceAxis)
+                return false;
+
+            if (surfaceAxis == BlockPlacementAxis.Y)
+                return true;
+
+            if (attachmentSide == 0 || neighborAttachmentSide == 0)
+                return true;
+
+            return attachmentSide == neighborAttachmentSide;
+        }
+
+        private static Vector2Int ResolveWireDotTile(BlockTextureMapping mapping, Vector2Int lineTile)
+        {
+            Vector2Int configuredDotTile = mapping.GetTileCoord(BlockFace.Top);
+            if (configuredDotTile != lineTile)
+                return configuredDotTile;
+
+            if (lineTile.x > 0)
+                return new Vector2Int(lineTile.x - 1, lineTile.y);
+
+            return lineTile;
+        }
+
+        private void AddWireSurfaceQuad(
+            Vector3 origin,
+            Vector3 planeP0,
+            Vector3 planeP1,
+            Vector3 planeP2,
+            Vector3 planeP3,
+            float minS,
+            float maxS,
+            float minT,
+            float maxT,
+            Vector2 atlasUv,
+            float light01,
+            float tint,
+            NativeList<int> tris,
+            int uvQuarterTurns)
+        {
+            Vector3 axisS = planeP3 - planeP0;
+            Vector3 axisT = planeP1 - planeP0;
+            Vector3 q0 = planeP0 + axisS * minS + axisT * minT;
+            Vector3 q1 = planeP0 + axisS * minS + axisT * maxT;
+            Vector3 q2 = planeP0 + axisS * maxS + axisT * maxT;
+            Vector3 q3 = planeP0 + axisS * maxS + axisT * minT;
+
+            AddDoubleSidedShapeQuad(
+                origin + q0,
+                origin + q1,
+                origin + q2,
+                origin + q3,
+                atlasUv,
+                light01,
+                tint,
+                tris,
+                uvQuarterTurns);
         }
 
         private void ResolvePlaneSupportFlags(
@@ -3568,6 +4557,45 @@ public static class MeshGenerator
             tris.Add(vIndex + 3);
         }
 
+        private static void ResolveShapeQuadUv(
+            int uvQuarterTurns,
+            out Vector2 uv0,
+            out Vector2 uv1,
+            out Vector2 uv2,
+            out Vector2 uv3)
+        {
+            switch (uvQuarterTurns & 3)
+            {
+                case 1:
+                    uv0 = new Vector2(0f, 1f);
+                    uv1 = new Vector2(0f, 0f);
+                    uv2 = new Vector2(1f, 0f);
+                    uv3 = new Vector2(1f, 1f);
+                    return;
+
+                case 2:
+                    uv0 = new Vector2(1f, 1f);
+                    uv1 = new Vector2(0f, 1f);
+                    uv2 = new Vector2(0f, 0f);
+                    uv3 = new Vector2(1f, 0f);
+                    return;
+
+                case 3:
+                    uv0 = new Vector2(1f, 0f);
+                    uv1 = new Vector2(1f, 1f);
+                    uv2 = new Vector2(0f, 1f);
+                    uv3 = new Vector2(0f, 0f);
+                    return;
+
+                default:
+                    uv0 = new Vector2(0f, 0f);
+                    uv1 = new Vector2(1f, 0f);
+                    uv2 = new Vector2(1f, 1f);
+                    uv3 = new Vector2(0f, 1f);
+                    return;
+            }
+        }
+
         private void AddDoubleSidedShapeQuad(
             Vector3 p0,
             Vector3 p1,
@@ -3576,16 +4604,18 @@ public static class MeshGenerator
             Vector2 atlasUv,
             float light01,
             float tint,
-            NativeList<int> tris)
+            NativeList<int> tris,
+            int uvQuarterTurns = 0)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector3 planeNormal = ComputeQuadPlaneNormal(p0, p1, p2);
+            ResolveShapeQuadUv(uvQuarterTurns, out Vector2 uv0, out Vector2 uv1, out Vector2 uv2, out Vector2 uv3);
 
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            AddPackedVertex(p0, planeNormal, new Vector2(0f, 0f), atlasUv, e);
-            AddPackedVertex(p1, planeNormal, new Vector2(1f, 0f), atlasUv, e);
-            AddPackedVertex(p2, planeNormal, new Vector2(1f, 1f), atlasUv, e);
-            AddPackedVertex(p3, planeNormal, new Vector2(0f, 1f), atlasUv, e);
+            AddPackedVertex(p0, planeNormal, uv0, atlasUv, e);
+            AddPackedVertex(p1, planeNormal, uv1, atlasUv, e);
+            AddPackedVertex(p2, planeNormal, uv2, atlasUv, e);
+            AddPackedVertex(p3, planeNormal, uv3, atlasUv, e);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);

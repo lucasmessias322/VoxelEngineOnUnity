@@ -13,6 +13,162 @@ public enum BlockPlacementAxis : byte
 }
 public enum BlockPlacementRotationAxes : byte { Vertical = 0, Horizontal = 1, Both = 2 }
 
+public static class WirePlacementUtility
+{
+    public const byte SideWest = 16;
+    public const byte SideEast = 17;
+    public const byte SideSouth = 18;
+    public const byte SideNorth = 19;
+    public const byte TopWest = 20;
+    public const byte TopEast = 21;
+    public const byte TopSouth = 22;
+    public const byte TopNorth = 23;
+
+    public static bool IsEncodedState(byte rawValue)
+    {
+        return rawValue >= SideWest && rawValue <= TopNorth;
+    }
+
+    public static byte ResolvePlacementCode(Vector3Int hitNormal)
+    {
+        if (Mathf.Abs(hitNormal.x) > 0)
+            return hitNormal.x > 0 ? SideWest : SideEast;
+
+        if (Mathf.Abs(hitNormal.z) > 0)
+            return hitNormal.z > 0 ? SideSouth : SideNorth;
+
+        return (byte)BlockPlacementAxis.Y;
+    }
+
+    public static bool HasTop(byte rawValue)
+    {
+        return rawValue == (byte)BlockPlacementAxis.Y ||
+               rawValue == (byte)BlockPlacementAxis.XNegative ||
+               rawValue == (byte)BlockPlacementAxis.ZNegative ||
+               rawValue == TopWest ||
+               rawValue == TopEast ||
+               rawValue == TopSouth ||
+               rawValue == TopNorth;
+    }
+
+    public static bool TryGetWall(byte rawValue, out BlockPlacementAxis axis, out int attachmentSide)
+    {
+        switch (rawValue)
+        {
+            case SideWest:
+            case TopWest:
+                axis = BlockPlacementAxis.X;
+                attachmentSide = -1;
+                return true;
+
+            case SideEast:
+            case TopEast:
+                axis = BlockPlacementAxis.X;
+                attachmentSide = 1;
+                return true;
+
+            case SideSouth:
+            case TopSouth:
+                axis = BlockPlacementAxis.Z;
+                attachmentSide = -1;
+                return true;
+
+            case SideNorth:
+            case TopNorth:
+                axis = BlockPlacementAxis.Z;
+                attachmentSide = 1;
+                return true;
+
+            default:
+                axis = BlockPlacementAxis.Y;
+                attachmentSide = 0;
+                return false;
+        }
+    }
+
+    public static bool TryMerge(byte existingRawValue, byte requestedRawValue, out byte mergedRawValue)
+    {
+        mergedRawValue = existingRawValue;
+
+        bool existingHasTop = HasTop(existingRawValue);
+        bool requestedHasTop = HasTop(requestedRawValue);
+        bool existingHasWall = TryGetWall(existingRawValue, out BlockPlacementAxis existingWallAxis, out int existingAttachmentSide);
+        bool requestedHasWall = TryGetWall(requestedRawValue, out BlockPlacementAxis requestedWallAxis, out int requestedAttachmentSide);
+
+        if (!requestedHasTop && !requestedHasWall)
+            return false;
+
+        if (requestedHasTop && !requestedHasWall)
+        {
+            if (existingHasTop)
+                return true;
+
+            if (!existingHasWall)
+            {
+                mergedRawValue = (byte)BlockPlacementAxis.Y;
+                return true;
+            }
+
+            mergedRawValue = Compose(existingWallAxis, existingAttachmentSide, true);
+            return true;
+        }
+
+        if (!requestedHasTop && requestedHasWall)
+        {
+            if (!existingHasWall)
+            {
+                mergedRawValue = Compose(requestedWallAxis, requestedAttachmentSide, existingHasTop);
+                return true;
+            }
+
+            if (existingWallAxis != requestedWallAxis || existingAttachmentSide != requestedAttachmentSide)
+                return false;
+
+            if (existingHasTop)
+                mergedRawValue = Compose(existingWallAxis, existingAttachmentSide, true);
+            else
+                mergedRawValue = Compose(existingWallAxis, existingAttachmentSide, false);
+
+            return true;
+        }
+
+        if (!existingHasWall && !existingHasTop)
+        {
+            mergedRawValue = requestedRawValue;
+            return true;
+        }
+
+        if (existingHasWall &&
+            requestedHasWall &&
+            (existingWallAxis != requestedWallAxis || existingAttachmentSide != requestedAttachmentSide))
+        {
+            return false;
+        }
+
+        mergedRawValue = Compose(
+            existingHasWall ? existingWallAxis : requestedWallAxis,
+            existingHasWall ? existingAttachmentSide : requestedAttachmentSide,
+            existingHasTop || requestedHasTop);
+        return true;
+    }
+
+    public static byte Compose(BlockPlacementAxis wallAxis, int attachmentSide, bool includeTop)
+    {
+        if (wallAxis == BlockPlacementAxis.X)
+        {
+            if (attachmentSide < 0)
+                return includeTop ? TopWest : SideWest;
+
+            return includeTop ? TopEast : SideEast;
+        }
+
+        if (attachmentSide < 0)
+            return includeTop ? TopSouth : SideSouth;
+
+        return includeTop ? TopNorth : SideNorth;
+    }
+}
+
 public static class BlockFaceUtility
 {
     public static BlockFace FromCubeFaceIndex(int faceIndex)
@@ -419,6 +575,12 @@ public static class BlockPlacementRotationUtility
         if (!mapping.usePlacementAxisRotation)
             return BlockPlacementAxis.Y;
 
+        if (BlockShapeUtility.IsFlatShape(mapping) &&
+            mapping.placementRotationAxes == BlockPlacementRotationAxes.Both)
+        {
+            return ResolveFlatPlanePlacementAxis(hitNormal, lookForward);
+        }
+
         return ResolvePlacementAxis(mapping.placementRotationAxes, hitNormal, lookForward);
     }
 
@@ -557,6 +719,20 @@ public static class BlockPlacementRotationUtility
             return lookForward.x >= 0f ? BlockPlacementAxis.X : BlockPlacementAxis.XNegative;
 
         return lookForward.z >= 0f ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative;
+    }
+
+    private static BlockPlacementAxis ResolveFlatPlanePlacementAxis(Vector3Int hitNormal, Vector3 lookForward)
+    {
+        if (Mathf.Abs(hitNormal.x) > 0)
+            return BlockPlacementAxis.X;
+
+        if (Mathf.Abs(hitNormal.z) > 0)
+            return BlockPlacementAxis.Z;
+
+        BlockPlacementAxis horizontalAxis = ResolveHorizontalAxisFromLookForward(lookForward);
+        return horizontalAxis == BlockPlacementAxis.Z || horizontalAxis == BlockPlacementAxis.ZNegative
+            ? BlockPlacementAxis.ZNegative
+            : BlockPlacementAxis.XNegative;
     }
 }
 
@@ -802,6 +978,18 @@ public static class BlockShapeUtility
     {
         if (!mapping.usePlacementAxisRotation)
             return BlockPlacementAxis.Y;
+
+        if (GetEffectiveRenderShape(mapping) == BlockRenderShape.Plane &&
+            mapping.placementRotationAxes == BlockPlacementRotationAxes.Both)
+        {
+            BlockPlacementAxis storedAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+            return storedAxis switch
+            {
+                BlockPlacementAxis.X => BlockPlacementAxis.X,
+                BlockPlacementAxis.Z => BlockPlacementAxis.Z,
+                _ => BlockPlacementAxis.Y
+            };
+        }
 
         return BlockPlacementRotationUtility.SanitizeAxis(placementAxis);
     }

@@ -1088,6 +1088,9 @@ public partial class World : MonoBehaviour
 
     public BlockPlacementAxis ResolvePlacementAxisForPlacement(BlockType blockType, Vector3Int hitNormal, Vector3 lookForward)
     {
+        if (blockType == BlockType.wire)
+            return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
+
         if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
             return BlockPlacementAxis.Y;
 
@@ -1099,6 +1102,20 @@ public partial class World : MonoBehaviour
         return GetStoredPlacementAxis(worldPos, blockType);
     }
 
+    private byte GetStoredPlacementAxisRawValue(Vector3Int worldPos, BlockType blockType)
+    {
+        if (!TryGetPlacementRotationMapping(blockType, out _))
+            return (byte)BlockPlacementAxis.Y;
+
+        if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
+            return (byte)BlockPlacementAxis.Y;
+
+        if (blockType == BlockType.wire)
+            return ResolveStoredWirePlacementRaw(worldPos, (byte)axis);
+
+        return BlockPlacementRotationUtility.SanitizeStoredAxisByte((byte)axis);
+    }
+
     private BlockPlacementAxis GetStoredPlacementAxis(Vector3Int worldPos, BlockType blockType)
     {
         if (!TryGetPlacementRotationMapping(blockType, out _))
@@ -1107,7 +1124,12 @@ public partial class World : MonoBehaviour
         if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
             return BlockPlacementAxis.Y;
 
-        return BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
+        if (blockType == BlockType.wire)
+            return ResolveStoredWirePlacementAxis(worldPos, (byte)axis);
+
+        BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
+
+        return sanitized;
     }
 
     private void UpdateStoredPlacementAxis(Vector3Int worldPos, BlockType blockType, BlockPlacementAxis axis)
@@ -1115,6 +1137,12 @@ public partial class World : MonoBehaviour
         if (!TryGetPlacementRotationMapping(blockType, out _))
         {
             blockPlacementAxes.Remove(worldPos);
+            return;
+        }
+
+        if (blockType == BlockType.wire)
+        {
+            UpdateStoredWirePlacementAxis(worldPos, (byte)axis);
             return;
         }
 
@@ -1140,6 +1168,134 @@ public partial class World : MonoBehaviour
 
         mapping = mappingResult.Value;
         return mapping.usePlacementAxisRotation;
+    }
+
+    private static BlockPlacementAxis ResolveWirePlacementAxis(Vector3 lookForward)
+    {
+        Vector3 horizontal = new Vector3(lookForward.x, 0f, lookForward.z);
+        if (horizontal.sqrMagnitude <= 0.0001f)
+            return BlockPlacementAxis.XNegative;
+
+        if (Mathf.Abs(horizontal.z) > Mathf.Abs(horizontal.x))
+            return BlockPlacementAxis.ZNegative;
+
+        return BlockPlacementAxis.XNegative;
+    }
+
+    private static BlockPlacementAxis ResolveWirePlacementAxis(Vector3Int hitNormal, Vector3 lookForward)
+    {
+        return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
+    }
+
+    private BlockPlacementAxis ResolveStoredWirePlacementAxis(Vector3Int worldPos, byte rawValue)
+    {
+        rawValue = ResolveStoredWirePlacementRaw(worldPos, rawValue);
+        if (WirePlacementUtility.TryGetWall(rawValue, out BlockPlacementAxis encodedWallAxis, out int encodedAttachmentSide))
+        {
+            if (HasWireSupportOnSide(worldPos, encodedWallAxis, encodedAttachmentSide))
+                return encodedWallAxis;
+
+            return WirePlacementUtility.HasTop(rawValue) ? BlockPlacementAxis.Y : encodedWallAxis;
+        }
+
+        BlockPlacementAxis axis = NormalizeWirePlacementAxis((BlockPlacementAxis)rawValue);
+        if (axis == BlockPlacementAxis.X || axis == BlockPlacementAxis.Z)
+        {
+            if (HasWireSupportOnAxis(worldPos, axis))
+                return axis;
+
+            return BlockPlacementAxis.Y;
+        }
+
+        return BlockPlacementAxis.Y;
+    }
+
+    private byte ResolveStoredWirePlacementRaw(Vector3Int worldPos, byte rawValue)
+    {
+        if (WirePlacementUtility.IsEncodedState(rawValue))
+            return rawValue;
+
+        BlockPlacementAxis axis = NormalizeWirePlacementAxis((BlockPlacementAxis)rawValue);
+        return axis switch
+        {
+            BlockPlacementAxis.X when HasWireSupportOnSide(worldPos, BlockPlacementAxis.X, -1) => WirePlacementUtility.SideWest,
+            BlockPlacementAxis.X when HasWireSupportOnSide(worldPos, BlockPlacementAxis.X, 1) => WirePlacementUtility.SideEast,
+            BlockPlacementAxis.Z when HasWireSupportOnSide(worldPos, BlockPlacementAxis.Z, -1) => WirePlacementUtility.SideSouth,
+            BlockPlacementAxis.Z when HasWireSupportOnSide(worldPos, BlockPlacementAxis.Z, 1) => WirePlacementUtility.SideNorth,
+            _ => (byte)BlockPlacementAxis.Y
+        };
+    }
+
+    private bool HasWireSupportOnAxis(Vector3Int worldPos, BlockPlacementAxis axis)
+    {
+        axis = BlockPlacementRotationUtility.SanitizeAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => IsWireSupportBlock(worldPos + Vector3Int.left) || IsWireSupportBlock(worldPos + Vector3Int.right),
+            BlockPlacementAxis.Z => IsWireSupportBlock(worldPos + new Vector3Int(0, 0, -1)) || IsWireSupportBlock(worldPos + new Vector3Int(0, 0, 1)),
+            _ => false
+        };
+    }
+
+    private bool HasWireSupportOnSide(Vector3Int worldPos, BlockPlacementAxis axis, int attachmentSide)
+    {
+        return axis switch
+        {
+            BlockPlacementAxis.X => IsWireSupportBlock(worldPos + (attachmentSide < 0 ? Vector3Int.left : Vector3Int.right)),
+            BlockPlacementAxis.Z => IsWireSupportBlock(worldPos + (attachmentSide < 0 ? new Vector3Int(0, 0, -1) : new Vector3Int(0, 0, 1))),
+            _ => false
+        };
+    }
+
+    private bool IsWireSupportBlock(Vector3Int worldPos)
+    {
+        BlockType supportType = GetBlockAt(worldPos);
+        if (supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType) || blockData == null)
+            return false;
+
+        BlockTextureMapping? mapping = blockData.GetMapping(supportType);
+        if (mapping == null)
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isEmpty && !value.isLiquid;
+    }
+
+    private static BlockPlacementAxis NormalizeWirePlacementAxis(BlockPlacementAxis axis)
+    {
+        byte rawValue = (byte)axis;
+        if (WirePlacementUtility.IsEncodedState(rawValue))
+            return (BlockPlacementAxis)rawValue;
+
+        axis = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => BlockPlacementAxis.X,
+            BlockPlacementAxis.XNegative => BlockPlacementAxis.XNegative,
+            BlockPlacementAxis.Z => BlockPlacementAxis.Z,
+            BlockPlacementAxis.ZNegative => BlockPlacementAxis.ZNegative,
+            _ => BlockPlacementAxis.Y
+        };
+    }
+
+    private void UpdateStoredWirePlacementAxis(Vector3Int worldPos, byte rawValue)
+    {
+        rawValue = NormalizeStoredWirePlacementRaw(rawValue);
+        if (rawValue == (byte)BlockPlacementAxis.Y)
+        {
+            blockPlacementAxes.Remove(worldPos);
+            return;
+        }
+
+        blockPlacementAxes[worldPos] = (BlockPlacementAxis)rawValue;
+    }
+
+    private static byte NormalizeStoredWirePlacementRaw(byte rawValue)
+    {
+        if (WirePlacementUtility.IsEncodedState(rawValue))
+            return rawValue;
+
+        return (byte)NormalizeWirePlacementAxis((BlockPlacementAxis)rawValue);
     }
 
     private static NativeArray<byte> CreateDefaultPlacementAxisArray(int length)
@@ -1175,7 +1331,7 @@ public partial class World : MonoBehaviour
             if ((uint)idx >= (uint)blockPlacementAxes.Length)
                 continue;
 
-            blockPlacementAxes[idx] = BlockPlacementRotationUtility.SanitizeStoredAxisByte(edit.placementAxis);
+            blockPlacementAxes[idx] = edit.placementAxis;
         }
     }
 
@@ -1198,7 +1354,7 @@ public partial class World : MonoBehaviour
                 y = worldPos.y,
                 z = worldPos.z,
                 type = (int)overrideType,
-                placementAxis = (byte)GetStoredPlacementAxis(worldPos, overrideType)
+                placementAxis = GetStoredPlacementAxisRawValue(worldPos, overrideType)
             });
         }
     }

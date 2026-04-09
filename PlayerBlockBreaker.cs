@@ -450,17 +450,25 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-            if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos))
-                return;
-
-            if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
-                return;
 
             Vector3 lookForward = ResolvePlacementLookForward();
             BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
                 placedBlockType,
                 hitNormal,
                 lookForward);
+
+            bool canMergeWireState = placedBlockType == BlockType.wire &&
+                                     blockAtPlacePos == BlockType.wire &&
+                                     World.Instance.CanPlaceWireStateAt(placePos, placementAxis);
+
+            if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos) && !canMergeWireState)
+                return;
+
+            if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
+                return;
+
+            if (placedBlockType == BlockType.wire && !CanPlaceWireAt(placePos, hitNormal))
+                return;
 
             if (preventPlaceInsidePlayer &&
                 ShouldPreventPlacementInsidePlayer(placedBlockType) &&
@@ -472,7 +480,16 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
 
-            World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
+            if (placedBlockType == BlockType.wire)
+            {
+                if (!World.Instance.TryPlaceWireStateAt(placePos, placementAxis, true))
+                    return;
+            }
+            else
+            {
+                World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
+            }
+
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
@@ -541,6 +558,25 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         BlockTextureMapping value = mapping.Value;
         return value.isSolid && !value.isEmpty;
+    }
+
+    private bool CanPlaceWireAt(Vector3Int placePos, Vector3Int hitNormal)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        Vector3Int supportPos = placePos - hitNormal;
+        BlockType supportType = world.GetBlockAt(supportPos);
+        if (supportType == BlockType.wire || supportType == BlockType.Air || IsLiquid(supportType))
+            return false;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(supportType);
+        if (mapping == null)
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isEmpty && !value.isLiquid;
     }
 
     private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType, BlockPlacementAxis placementAxis)

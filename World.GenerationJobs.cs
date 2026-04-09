@@ -206,7 +206,7 @@ public partial class World : MonoBehaviour
                 int voxelIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
                 blockTypes[voxelIndex] = blockId;
                 if (blockPlacementAxes.IsCreated && (uint)voxelIndex < (uint)blockPlacementAxes.Length)
-                    blockPlacementAxes[voxelIndex] = BlockPlacementRotationUtility.SanitizeStoredAxisByte(edit.placementAxis);
+                    blockPlacementAxes[voxelIndex] = edit.placementAxis;
                 solids[voxelIndex] = blockMappings[blockId].isSolid;
                 dirtyColumns[ix + iz * voxelSizeX] = 1;
 
