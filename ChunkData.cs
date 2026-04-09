@@ -183,6 +183,9 @@ public static class ChunkData
                         if (spaghettiCarveMask[maskIndex] == 0)
                             continue;
 
+                        if (!solids[targetIndex])
+                            continue;
+
                         BlockType existing = (BlockType)blockTypes[targetIndex];
                         if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                             continue;
@@ -751,6 +754,26 @@ public static class ChunkData
                             int ySpan = math.max(1, voxelY1 - voxelY0);
                             int voxelYMax = cellY == gridCountY - 2 ? voxelY1 : voxelY1 - 1;
 
+                            // Early-out por celula (4x4x4): se nao ha nenhum voxel carvavel,
+                            // evitamos amostragens de densidade para esta regiao inteira.
+                            if (!HasCarveableSolidInSpaghettiCell(
+                                blockTypes,
+                                solids,
+                                voxelSizeX,
+                                voxelPlaneSize,
+                                heightStride,
+                                localX0,
+                                localXMax,
+                                localZ0,
+                                localZMax,
+                                voxelY0,
+                                voxelYMax,
+                                maxY,
+                                entranceSurfaceDepth))
+                            {
+                                continue;
+                            }
+
                             float2 d000 = densityGrid[GetSpaghettiGridIndex(cellX, cellY, cellZ, gridCountX, gridCountY)];
                             float2 d100 = densityGrid[GetSpaghettiGridIndex(cellX + 1, cellY, cellZ, gridCountX, gridCountY)];
                             float2 d010 = densityGrid[GetSpaghettiGridIndex(cellX, cellY + 1, cellZ, gridCountX, gridCountY)];
@@ -797,6 +820,9 @@ public static class ChunkData
 
                                     for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
                                     {
+                                        if (!solids[voxelIndex])
+                                            continue;
+
                                         BlockType existing = (BlockType)blockTypes[voxelIndex];
                                         if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                                             continue;
@@ -929,6 +955,9 @@ public static class ChunkData
 
             for (int voxelY = minY; voxelY <= entranceMaxY; voxelY++, voxelIndex += voxelSizeX)
             {
+                if (!solids[voxelIndex])
+                    continue;
+
                 BlockType existing = (BlockType)blockTypes[voxelIndex];
                 if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
                     continue;
@@ -942,6 +971,50 @@ public static class ChunkData
                 blockTypes[voxelIndex] = (byte)BlockType.Air;
                 solids[voxelIndex] = false;
             }
+        }
+
+        private bool HasCarveableSolidInSpaghettiCell(
+            NativeArray<byte> blockTypes,
+            NativeArray<bool> solids,
+            int voxelSizeX,
+            int voxelPlaneSize,
+            int heightStride,
+            int localX0,
+            int localXMax,
+            int localZ0,
+            int localZMax,
+            int voxelY0,
+            int voxelYMax,
+            int maxY,
+            int entranceSurfaceDepth)
+        {
+            for (int localZ = localZ0; localZ <= localZMax; localZ++)
+            {
+                for (int localX = localX0; localX <= localXMax; localX++)
+                {
+                    int columnSurfaceY = heightCache[localX + localZ * heightStride];
+                    int entranceMaxY = math.min(maxY, columnSurfaceY - entranceSurfaceDepth);
+                    if (entranceMaxY < voxelY0)
+                        continue;
+
+                    int maxVoxelYForColumn = math.min(voxelYMax, entranceMaxY);
+                    int voxelIndex = localX + voxelY0 * voxelSizeX + localZ * voxelPlaneSize;
+
+                    for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
+                    {
+                        if (!solids[voxelIndex])
+                            continue;
+
+                        BlockType existing = (BlockType)blockTypes[voxelIndex];
+                        if (existing == BlockType.Air || existing == BlockType.Water || existing == BlockType.Bedrock)
+                            continue;
+
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private static int GetSpaghettiGridPointCount(int minInclusive, int maxInclusive, int step)
