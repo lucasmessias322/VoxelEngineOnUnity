@@ -3,9 +3,6 @@ using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-[RequireComponent(typeof(BoxCollider))]
-[RequireComponent(typeof(SphereCollider))]
-[RequireComponent(typeof(Rigidbody))]
 public class BlockDrop : MonoBehaviour
 {
     [Header("Drop")]
@@ -17,6 +14,18 @@ public class BlockDrop : MonoBehaviour
     [SerializeField] private string playerTag = "Player";
     [SerializeField] private bool requirePlayerTag = false;
     [SerializeField] private bool debugPickupLogs = false;
+
+    [Header("Lightweight Physics")]
+    [SerializeField, Min(0f)] private float gravity = 24f;
+    [SerializeField, Min(0f)] private float airDrag = 2.6f;
+    [SerializeField, Min(0f)] private float groundedDrag = 14f;
+    [SerializeField, Min(0f)] private float maxFallSpeed = 28f;
+    [SerializeField, Range(0f, 1f)] private float bounceDamping = 0.22f;
+    [SerializeField, Min(0.01f)] private float simulationStepSeconds = 0.02f;
+    [SerializeField, Min(0.05f)] private float collisionHalfExtent = 0.18f;
+    [SerializeField, Min(0.1f)] private float pickupRadius = 1.7f;
+    [SerializeField, Min(0.02f)] private float pickupCheckInterval = 0.08f;
+    [SerializeField, Min(0.25f)] private float mergeGridCellSize = 1.25f;
 
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
@@ -30,10 +39,14 @@ public class BlockDrop : MonoBehaviour
 
     private float spawnTime;
     private float nextMergeCheckTime;
-    private Rigidbody rb;
+    private float nextPickupCheckTime;
+    private float simulationAccumulator;
+    private Vector3 velocity;
+    private Vector3Int mergeGridCell;
     private bool isCollected;
-    private const int MergeBufferSize = 24;
-    private static readonly Collider[] MergeBuffer = new Collider[MergeBufferSize];
+    private bool isGrounded;
+    private bool isSleeping;
+    private bool isRegisteredInMergeGrid;
 
     private struct FaceDef
     {
@@ -65,12 +78,12 @@ public class BlockDrop : MonoBehaviour
 
     private static readonly Stack<BlockDrop> Pool = new Stack<BlockDrop>(128);
     private static readonly Dictionary<BlockType, CachedDropMesh> CachedMeshes = new Dictionary<BlockType, CachedDropMesh>();
+    private static readonly Dictionary<Vector3Int, HashSet<BlockDrop>> ActiveDropsByCell = new Dictionary<Vector3Int, HashSet<BlockDrop>>();
+    private static readonly List<BlockDrop> MergeCandidates = new List<BlockDrop>(64);
     private static Transform poolContainer;
 
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
-    private BoxCollider solidCollider;
-    private SphereCollider pickupCollider;
     private bool isPooled;
 
     public static bool Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
@@ -109,6 +122,10 @@ public class BlockDrop : MonoBehaviour
         drop.transform.localScale = Vector3.one * drop.dropScale;
         drop.spawnTime = Time.time;
         drop.nextMergeCheckTime = Time.time + Random.Range(0f, drop.mergeCheckInterval);
+        drop.nextPickupCheckTime = Time.time + Random.Range(0f, drop.pickupCheckInterval);
+        drop.simulationAccumulator = 0f;
+        drop.isGrounded = false;
+        drop.isSleeping = false;
         if (!drop.BuildVisual(world, blockType))
         {
             drop.ReturnToPool();
@@ -117,6 +134,7 @@ public class BlockDrop : MonoBehaviour
 
         drop.gameObject.SetActive(true);
         drop.SetupPhysics(throwDirection);
+        drop.RegisterInMergeGrid();
         drop.UpdateDropName();
         return true;
     }
@@ -130,12 +148,6 @@ public class BlockDrop : MonoBehaviour
             return false;
 
         meshFilter.sharedMesh = mesh;
-        if (solidCollider != null)
-        {
-            Bounds bounds = mesh.bounds;
-            solidCollider.center = bounds.center;
-            solidCollider.size = Vector3.Max(bounds.size, Vector3.one * 0.05f);
-        }
 
         Material mat = ResolveMaterial(world, materialIndex);
         if (mat == null)
@@ -638,7 +650,8 @@ public class BlockDrop : MonoBehaviour
             return;
 
         isCollected = true;
-        DisableSelfColliders();
+        UnregisterFromMergeGrid();
+        ResetRuntimeState();
         transform.SetParent(GetPoolContainer(), false);
         gameObject.SetActive(false);
 
@@ -661,56 +674,33 @@ public class BlockDrop : MonoBehaviour
         meshRenderer = GetComponent<MeshRenderer>();
         if (meshRenderer == null)
             meshRenderer = gameObject.AddComponent<MeshRenderer>();
-
-        solidCollider = GetComponent<BoxCollider>();
-        if (solidCollider == null)
-            solidCollider = gameObject.AddComponent<BoxCollider>();
-
-        pickupCollider = GetComponent<SphereCollider>();
-        if (pickupCollider == null)
-            pickupCollider = gameObject.AddComponent<SphereCollider>();
-        if (pickupCollider != null)
-        {
-            pickupCollider.radius = 4f;
-            pickupCollider.isTrigger = true;
-        }
-
-        rb = GetComponent<Rigidbody>();
-        if (rb == null)
-            rb = gameObject.AddComponent<Rigidbody>();
-        if (rb != null)
-        {
-            rb.mass = 0.25f;
-            rb.linearDamping = 1.4f;
-            rb.angularDamping = 0.7f;
-            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-        }
     }
 
     private void SetupPhysics(Vector3 throwDirection)
     {
         EnsureRuntimeComponents();
 
-        if (solidCollider != null)
-            solidCollider.enabled = true;
-        if (pickupCollider != null)
-            pickupCollider.enabled = true;
-
-        if (rb == null)
-            return;
-
-        rb.linearVelocity = Vector3.zero;
-        rb.angularVelocity = Vector3.zero;
-        rb.isKinematic = false;
-        rb.detectCollisions = true;
-
+        Vector3 launchBase = throwDirection.sqrMagnitude > 0.0001f ? throwDirection.normalized : Vector3.forward;
         Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
-        Vector3 launchDir = (throwDirection.normalized + randomDir + Vector3.up * 0.4f).normalized;
-        rb.AddForce(launchDir * launchForce, ForceMode.Impulse);
+        Vector3 launchDir = (launchBase + randomDir + Vector3.up * 0.4f).normalized;
+
+        velocity = launchDir * launchForce;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
     }
 
     private void Awake()
     {
+        gravity = Mathf.Max(0f, gravity);
+        airDrag = Mathf.Max(0f, airDrag);
+        groundedDrag = Mathf.Max(0f, groundedDrag);
+        maxFallSpeed = Mathf.Max(0f, maxFallSpeed);
+        simulationStepSeconds = Mathf.Max(0.01f, simulationStepSeconds);
+        collisionHalfExtent = Mathf.Max(0.05f, collisionHalfExtent);
+        pickupRadius = Mathf.Max(0.1f, pickupRadius);
+        pickupCheckInterval = Mathf.Max(0.02f, pickupCheckInterval);
+        mergeGridCellSize = Mathf.Max(0.25f, mergeGridCellSize);
         mergeRadius = Mathf.Max(0.01f, mergeRadius);
         mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
@@ -721,12 +711,23 @@ public class BlockDrop : MonoBehaviour
 
     private void Update()
     {
-        if (!gameObject.activeSelf)
+        if (!gameObject.activeSelf || isPooled || isCollected)
             return;
 
         transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
 
-        if (!isCollected && Time.time >= nextMergeCheckTime)
+        if (!isSleeping)
+            SimulateMotion(Time.deltaTime);
+
+        RefreshMergeGridCell();
+
+        if (Time.time >= nextPickupCheckTime)
+        {
+            nextPickupCheckTime = Time.time + pickupCheckInterval;
+            TryCollectNearbyPlayer();
+        }
+
+        if (Time.time >= nextMergeCheckTime)
         {
             nextMergeCheckTime = Time.time + mergeCheckInterval;
             TryMergeNearbyDrops();
@@ -736,36 +737,27 @@ public class BlockDrop : MonoBehaviour
             ReturnToPool();
     }
 
-    private void OnTriggerEnter(Collider other)
+    private void OnDestroy()
     {
-        TryCollect(other);
+        UnregisterFromMergeGrid();
     }
 
-    private void OnTriggerStay(Collider other)
+    private void TryCollectNearbyPlayer()
     {
-        TryCollect(other);
-    }
-    private void TryCollect(Collider other)
-    {
-        if (other == null) return;
-        if (isCollected) return;
-        if (Time.time - spawnTime < pickupDelaySeconds) return;
-
-        PlayerInventory inventory = ResolveInventory(other);
-        if (inventory == null)
-        {
-            if (debugPickupLogs)
-                Debug.LogWarning($"[BlockDrop] Colisao com {other.name} sem PlayerInventory para coletar {blockType}.");
+        if (Time.time - spawnTime < pickupDelaySeconds)
             return;
-        }
 
-        if (requirePlayerTag && !string.IsNullOrEmpty(playerTag))
-        {
-            bool isPlayer = other.CompareTag(playerTag) ||
-                            (other.transform.root != null && other.transform.root.CompareTag(playerTag)) ||
-                            inventory.CompareTag(playerTag);
-            if (!isPlayer) return;
-        }
+        PlayerInventory inventory = PlayerInventory.Instance;
+        if (inventory == null)
+            return;
+
+        if (!IsValidPickupTarget(inventory))
+            return;
+
+        float radius = Mathf.Max(0.1f, pickupRadius);
+        Vector3 playerPos = ResolvePickupTargetPosition(inventory.transform);
+        if ((playerPos - transform.position).sqrMagnitude > radius * radius)
+            return;
 
         int collectedAmount = 0;
         while (stackAmount > 0 && inventory.TryAddBlockDrop(blockType, 1))
@@ -796,43 +788,241 @@ public class BlockDrop : MonoBehaviour
         }
     }
 
+    private bool IsValidPickupTarget(PlayerInventory inventory)
+    {
+        if (inventory == null)
+            return false;
+
+        if (!requirePlayerTag || string.IsNullOrEmpty(playerTag))
+            return true;
+
+        Transform target = inventory.transform;
+        return target.CompareTag(playerTag) ||
+               (target.root != null && target.root.CompareTag(playerTag));
+    }
+
+    private Vector3 ResolvePickupTargetPosition(Transform playerTransform)
+    {
+        if (playerTransform == null)
+            return transform.position;
+
+        CharacterController characterController = playerTransform.GetComponent<CharacterController>();
+        if (characterController != null)
+            return playerTransform.TransformPoint(characterController.center);
+
+        return playerTransform.position + Vector3.up * 0.9f;
+    }
+
+    private void SimulateMotion(float deltaTime)
+    {
+        float clampedDelta = Mathf.Clamp(deltaTime, 0f, 0.1f);
+        if (clampedDelta <= 0f)
+            return;
+
+        simulationAccumulator += clampedDelta;
+        float step = Mathf.Max(0.01f, simulationStepSeconds);
+        int maxSteps = 6;
+
+        while (simulationAccumulator >= step && maxSteps-- > 0)
+        {
+            simulationAccumulator -= step;
+            SimulateStep(step);
+        }
+    }
+
+    private void SimulateStep(float deltaTime)
+    {
+        velocity.y = Mathf.Max(velocity.y - gravity * deltaTime, -maxFallSpeed);
+
+        float drag = Mathf.Clamp01((isGrounded ? groundedDrag : airDrag) * deltaTime);
+        velocity.x = Mathf.Lerp(velocity.x, 0f, drag);
+        velocity.z = Mathf.Lerp(velocity.z, 0f, drag);
+
+        World world = World.Instance;
+        Vector3 nextPosition = transform.position;
+
+        float moveX = velocity.x * deltaTime;
+        if (Mathf.Abs(moveX) > 0.0001f)
+        {
+            Vector3 candidateX = nextPosition + new Vector3(moveX, 0f, 0f);
+            if (IntersectsSolid(world, candidateX))
+                velocity.x = 0f;
+            else
+                nextPosition = candidateX;
+        }
+
+        float moveZ = velocity.z * deltaTime;
+        if (Mathf.Abs(moveZ) > 0.0001f)
+        {
+            Vector3 candidateZ = nextPosition + new Vector3(0f, 0f, moveZ);
+            if (IntersectsSolid(world, candidateZ))
+                velocity.z = 0f;
+            else
+                nextPosition = candidateZ;
+        }
+
+        float moveY = velocity.y * deltaTime;
+        if (Mathf.Abs(moveY) > 0.0001f)
+        {
+            Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
+            if (IntersectsSolid(world, candidateY))
+            {
+                if (moveY < 0f)
+                {
+                    nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
+                    float bounceSpeed = -velocity.y * bounceDamping;
+                    velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
+                    isGrounded = true;
+                }
+                else
+                {
+                    velocity.y = 0f;
+                }
+            }
+            else
+            {
+                nextPosition = candidateY;
+                isGrounded = false;
+            }
+        }
+        else if (isGrounded && !IsSupported(world, nextPosition))
+        {
+            isGrounded = false;
+        }
+
+        transform.position = nextPosition;
+
+        if (isGrounded && velocity.sqrMagnitude < 0.0004f)
+        {
+            velocity = Vector3.zero;
+            isSleeping = true;
+        }
+    }
+
+    private bool IntersectsSolid(World world, Vector3 center)
+    {
+        if (world == null)
+            return false;
+
+        float half = Mathf.Max(0.05f, collisionHalfExtent);
+        const float inset = 0.001f;
+
+        int minX = Mathf.FloorToInt(center.x - half + inset);
+        int maxX = Mathf.FloorToInt(center.x + half - inset);
+        int minY = Mathf.FloorToInt(center.y - half + inset);
+        int maxY = Mathf.FloorToInt(center.y + half - inset);
+        int minZ = Mathf.FloorToInt(center.z - half + inset);
+        int maxZ = Mathf.FloorToInt(center.z + half - inset);
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    BlockType blockTypeAtCell = world.GetBlockAt(new Vector3Int(x, y, z));
+                    if (world.IsSolidBlock(blockTypeAtCell))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
+    {
+        if (world == null)
+            return fromY;
+
+        float lower = Mathf.Min(fromY, toY);
+        float upper = Mathf.Max(fromY, toY);
+
+        for (int i = 0; i < 6; i++)
+        {
+            float mid = (lower + upper) * 0.5f;
+            Vector3 sample = new Vector3(x, mid, z);
+            if (IntersectsSolid(world, sample))
+                lower = mid;
+            else
+                upper = mid;
+        }
+
+        return upper;
+    }
+
+    private bool IsSupported(World world, Vector3 center)
+    {
+        Vector3 supportCheck = center + Vector3.down * 0.04f;
+        return IntersectsSolid(world, supportCheck);
+    }
+
     private void TryMergeNearbyDrops()
     {
-        if (stackAmount >= maxStackAmount) return;
-        if (Time.time - spawnTime < mergeDelaySeconds) return;
+        if (stackAmount >= maxStackAmount)
+            return;
 
-        int hits = Physics.OverlapSphereNonAlloc(
-            transform.position,
-            mergeRadius,
-            MergeBuffer,
-            ~0,
-            QueryTriggerInteraction.Collide
-        );
+        if (Time.time - spawnTime < mergeDelaySeconds)
+            return;
 
-        for (int i = 0; i < hits && stackAmount < maxStackAmount; i++)
+        CollectNearbyMergeCandidates(MergeCandidates);
+        for (int i = 0; i < MergeCandidates.Count && stackAmount < maxStackAmount; i++)
         {
-            Collider col = MergeBuffer[i];
-            MergeBuffer[i] = null;
-            if (col == null) continue;
+            BlockDrop other = MergeCandidates[i];
+            if (!CanMergeWith(other))
+                continue;
 
-            BlockDrop other = col.GetComponent<BlockDrop>();
-            if (other == null)
-                other = col.GetComponentInParent<BlockDrop>();
-
-            if (!CanMergeWith(other)) continue;
-            if (GetInstanceID() > other.GetInstanceID()) continue;
+            if (GetInstanceID() > other.GetInstanceID())
+                continue;
 
             AbsorbFrom(other);
+        }
+
+        MergeCandidates.Clear();
+    }
+
+    private void CollectNearbyMergeCandidates(List<BlockDrop> targetBuffer)
+    {
+        targetBuffer.Clear();
+        if (!isRegisteredInMergeGrid)
+            return;
+
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vector3Int neighborCell = mergeGridCell + new Vector3Int(x, y, z);
+                    if (!ActiveDropsByCell.TryGetValue(neighborCell, out HashSet<BlockDrop> dropsInCell))
+                        continue;
+
+                    foreach (BlockDrop drop in dropsInCell)
+                    {
+                        if (drop != null)
+                            targetBuffer.Add(drop);
+                    }
+                }
+            }
         }
     }
 
     private bool CanMergeWith(BlockDrop other)
     {
-        if (other == null || other == this) return false;
-        if (other.isCollected) return false;
-        if (other.blockType != blockType) return false;
-        if (other.stackAmount <= 0) return false;
-        if (Time.time - other.spawnTime < other.mergeDelaySeconds) return false;
+        if (other == null || other == this)
+            return false;
+
+        if (!other.gameObject.activeSelf || other.isPooled || other.isCollected)
+            return false;
+
+        if (other.blockType != blockType)
+            return false;
+
+        if (other.stackAmount <= 0)
+            return false;
+
+        if (Time.time - other.spawnTime < other.mergeDelaySeconds)
+            return false;
 
         float mergeDistanceSqr = mergeRadius * mergeRadius;
         return (other.transform.position - transform.position).sqrMagnitude <= mergeDistanceSqr;
@@ -869,48 +1059,81 @@ public class BlockDrop : MonoBehaviour
         gameObject.name = $"Drop_{blockType}_x{stackAmount}";
     }
 
-    private static PlayerInventory ResolveInventory(Collider other)
+    private void RegisterInMergeGrid()
     {
-        if (other == null) return null;
+        if (isRegisteredInMergeGrid)
+            return;
 
-        PlayerInventory inventory = other.GetComponent<PlayerInventory>();
-        if (inventory != null) return inventory;
-
-        inventory = other.GetComponentInParent<PlayerInventory>();
-        if (inventory != null) return inventory;
-
-        if (other.attachedRigidbody != null)
-        {
-            inventory = other.attachedRigidbody.GetComponent<PlayerInventory>();
-            if (inventory != null) return inventory;
-
-            inventory = other.attachedRigidbody.GetComponentInParent<PlayerInventory>();
-            if (inventory != null) return inventory;
-        }
-
-        return null;
+        mergeGridCell = WorldToMergeCell(transform.position);
+        AddToMergeCell(mergeGridCell, this);
+        isRegisteredInMergeGrid = true;
     }
 
-    private void DisableSelfColliders()
+    private void RefreshMergeGridCell()
     {
-        if (solidCollider != null)
-            solidCollider.enabled = false;
-        if (pickupCollider != null)
-            pickupCollider.enabled = false;
-
-        if (rb != null)
+        if (!isRegisteredInMergeGrid)
         {
-            rb.linearVelocity = Vector3.zero;
-            rb.angularVelocity = Vector3.zero;
-            rb.isKinematic = true;
-            rb.detectCollisions = false;
+            RegisterInMergeGrid();
+            return;
         }
+
+        Vector3Int newCell = WorldToMergeCell(transform.position);
+        if (newCell == mergeGridCell)
+            return;
+
+        RemoveFromMergeCell(mergeGridCell, this);
+        mergeGridCell = newCell;
+        AddToMergeCell(mergeGridCell, this);
+    }
+
+    private void UnregisterFromMergeGrid()
+    {
+        if (!isRegisteredInMergeGrid)
+            return;
+
+        RemoveFromMergeCell(mergeGridCell, this);
+        isRegisteredInMergeGrid = false;
+    }
+
+    private Vector3Int WorldToMergeCell(Vector3 worldPosition)
+    {
+        float cellSize = Mathf.Max(0.25f, mergeGridCellSize);
+        return new Vector3Int(
+            Mathf.FloorToInt(worldPosition.x / cellSize),
+            Mathf.FloorToInt(worldPosition.y / cellSize),
+            Mathf.FloorToInt(worldPosition.z / cellSize));
+    }
+
+    private static void AddToMergeCell(Vector3Int cell, BlockDrop drop)
+    {
+        if (!ActiveDropsByCell.TryGetValue(cell, out HashSet<BlockDrop> cellDrops))
+        {
+            cellDrops = new HashSet<BlockDrop>();
+            ActiveDropsByCell[cell] = cellDrops;
+        }
+
+        cellDrops.Add(drop);
+    }
+
+    private static void RemoveFromMergeCell(Vector3Int cell, BlockDrop drop)
+    {
+        if (!ActiveDropsByCell.TryGetValue(cell, out HashSet<BlockDrop> cellDrops))
+            return;
+
+        cellDrops.Remove(drop);
+        if (cellDrops.Count == 0)
+            ActiveDropsByCell.Remove(cell);
+    }
+
+    private void ResetRuntimeState()
+    {
+        velocity = Vector3.zero;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
     }
 }
 
-[RequireComponent(typeof(BoxCollider))]
-[RequireComponent(typeof(SphereCollider))]
-[RequireComponent(typeof(Rigidbody))]
 public class InventoryItemDrop : MonoBehaviour
 {
     [Header("Drop")]
@@ -923,6 +1146,18 @@ public class InventoryItemDrop : MonoBehaviour
     [SerializeField] private bool requirePlayerTag = false;
     [SerializeField] private bool debugPickupLogs = false;
 
+    [Header("Lightweight Physics")]
+    [SerializeField, Min(0f)] private float gravity = 24f;
+    [SerializeField, Min(0f)] private float airDrag = 2.6f;
+    [SerializeField, Min(0f)] private float groundedDrag = 14f;
+    [SerializeField, Min(0f)] private float maxFallSpeed = 28f;
+    [SerializeField, Range(0f, 1f)] private float bounceDamping = 0.22f;
+    [SerializeField, Min(0.01f)] private float simulationStepSeconds = 0.02f;
+    [SerializeField, Min(0.05f)] private float collisionHalfExtent = 0.18f;
+    [SerializeField, Min(0.1f)] private float pickupRadius = 1.7f;
+    [SerializeField, Min(0.02f)] private float pickupCheckInterval = 0.08f;
+    [SerializeField, Min(0.25f)] private float mergeGridCellSize = 1.25f;
+
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
     [SerializeField, Min(1)] private int maxStackAmount = 64;
@@ -933,16 +1168,24 @@ public class InventoryItemDrop : MonoBehaviour
     [Header("Runtime")]
     [SerializeField] private Item item;
 
-    private const int MergeBufferSize = 24;
-    private static readonly Collider[] MergeBuffer = new Collider[MergeBufferSize];
+    private const int MaxPoolSize = 1024;
+    private static readonly Stack<InventoryItemDrop> Pool = new Stack<InventoryItemDrop>(128);
+    private static readonly Dictionary<Vector3Int, HashSet<InventoryItemDrop>> ActiveDropsByCell = new Dictionary<Vector3Int, HashSet<InventoryItemDrop>>();
+    private static readonly List<InventoryItemDrop> MergeCandidates = new List<InventoryItemDrop>(64);
+    private static Transform poolContainer;
 
     private float spawnTime;
     private float nextMergeCheckTime;
+    private float nextPickupCheckTime;
+    private float simulationAccumulator;
     private float visualSpinAngle;
+    private Vector3 velocity;
+    private Vector3Int mergeGridCell;
     private bool isCollected;
-    private Rigidbody rb;
-    private BoxCollider solidCollider;
-    private SphereCollider pickupCollider;
+    private bool isPooled;
+    private bool isGrounded;
+    private bool isSleeping;
+    private bool isRegisteredInMergeGrid;
     private Transform visualRoot;
     private SpriteRenderer spriteRenderer;
 
@@ -951,20 +1194,59 @@ public class InventoryItemDrop : MonoBehaviour
         if (item == null || amount <= 0)
             return false;
 
-        GameObject dropObject = new GameObject("ItemDrop");
-        InventoryItemDrop drop = dropObject.AddComponent<InventoryItemDrop>();
+        InventoryItemDrop drop = AcquireDrop();
         if (drop == null)
-        {
-            Object.Destroy(dropObject);
             return false;
-        }
 
+        drop.transform.SetParent(null, false);
         drop.Initialize(item, amount, worldPosition, throwDirection);
         return true;
     }
 
+    private static InventoryItemDrop AcquireDrop()
+    {
+        while (Pool.Count > 0)
+        {
+            InventoryItemDrop pooledDrop = Pool.Pop();
+            if (pooledDrop == null)
+                continue;
+
+            pooledDrop.isPooled = false;
+            return pooledDrop;
+        }
+
+        GameObject go = new GameObject("ItemDrop_Pooled");
+        go.transform.SetParent(GetPoolContainer(), false);
+        InventoryItemDrop drop = go.AddComponent<InventoryItemDrop>();
+        drop.EnsureRuntimeComponents();
+        go.SetActive(false);
+        return drop;
+    }
+
+    private static Transform GetPoolContainer()
+    {
+        if (poolContainer != null)
+            return poolContainer;
+
+        GameObject existing = GameObject.Find("InventoryItemDropPool");
+        if (existing == null)
+            existing = new GameObject("InventoryItemDropPool");
+
+        poolContainer = existing.transform;
+        return poolContainer;
+    }
+
     private void Awake()
     {
+        gravity = Mathf.Max(0f, gravity);
+        airDrag = Mathf.Max(0f, airDrag);
+        groundedDrag = Mathf.Max(0f, groundedDrag);
+        maxFallSpeed = Mathf.Max(0f, maxFallSpeed);
+        simulationStepSeconds = Mathf.Max(0.01f, simulationStepSeconds);
+        collisionHalfExtent = Mathf.Max(0.05f, collisionHalfExtent);
+        pickupRadius = Mathf.Max(0.1f, pickupRadius);
+        pickupCheckInterval = Mathf.Max(0.02f, pickupCheckInterval);
+        mergeGridCellSize = Mathf.Max(0.25f, mergeGridCellSize);
         mergeRadius = Mathf.Max(0.01f, mergeRadius);
         mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
@@ -981,44 +1263,27 @@ public class InventoryItemDrop : MonoBehaviour
         maxStackAmount = Mathf.Max(1, droppedItem.maxStack);
         stackAmount = Mathf.Clamp(amount, 1, maxStackAmount);
         isCollected = false;
+        isPooled = false;
         visualSpinAngle = Random.Range(0f, 360f);
 
         transform.position = worldPosition;
         transform.localScale = Vector3.one * dropScale;
         spawnTime = Time.time;
         nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
+        nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
 
         UpdateVisual();
         SetupPhysics(throwDirection);
+        gameObject.SetActive(true);
+        RegisterInMergeGrid();
         UpdateDropName();
     }
 
     private void EnsureRuntimeComponents()
     {
-        solidCollider = GetComponent<BoxCollider>();
-        if (solidCollider == null)
-            solidCollider = gameObject.AddComponent<BoxCollider>();
-
-        pickupCollider = GetComponent<SphereCollider>();
-        if (pickupCollider == null)
-            pickupCollider = gameObject.AddComponent<SphereCollider>();
-        if (pickupCollider != null)
-        {
-            pickupCollider.radius = 4f;
-            pickupCollider.isTrigger = true;
-        }
-
-        rb = GetComponent<Rigidbody>();
-        if (rb == null)
-            rb = gameObject.AddComponent<Rigidbody>();
-        if (rb != null)
-        {
-            rb.mass = 0.25f;
-            rb.linearDamping = 1.4f;
-            rb.angularDamping = 0.7f;
-            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
-        }
-
         if (visualRoot == null)
         {
             GameObject visual = new GameObject("Visual");
@@ -1039,43 +1304,60 @@ public class InventoryItemDrop : MonoBehaviour
     {
         EnsureRuntimeComponents();
 
-        if (solidCollider != null)
-        {
-            solidCollider.enabled = true;
-            solidCollider.center = new Vector3(0f, 0.16f, 0f);
-            solidCollider.size = new Vector3(0.28f, 0.28f, 0.28f);
-            solidCollider.isTrigger = false;
-        }
-
-        if (pickupCollider != null)
-            pickupCollider.enabled = true;
-
-        if (rb == null)
-            return;
-
-        rb.linearVelocity = Vector3.zero;
-        rb.angularVelocity = Vector3.zero;
-        rb.isKinematic = false;
-        rb.detectCollisions = true;
-
         Vector3 launchBase = throwDirection.sqrMagnitude > 0.0001f ? throwDirection.normalized : Vector3.forward;
         Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
         Vector3 launchDir = (launchBase + randomDir + Vector3.up * 0.4f).normalized;
-        rb.AddForce(launchDir * launchForce, ForceMode.Impulse);
+
+        velocity = launchDir * launchForce;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
+    }
+
+    private void ReturnToPool()
+    {
+        if (this == null || isPooled)
+            return;
+
+        isCollected = true;
+        UnregisterFromMergeGrid();
+        ResetRuntimeState();
+        transform.SetParent(GetPoolContainer(), false);
+        gameObject.SetActive(false);
+
+        if (Pool.Count < MaxPoolSize)
+        {
+            isPooled = true;
+            Pool.Push(this);
+            return;
+        }
+
+        Destroy(gameObject);
     }
 
     private void Update()
     {
-        if (isCollected || item == null)
-        {
-            if (!isCollected)
-                Destroy(gameObject);
+        if (!gameObject.activeSelf || isPooled || isCollected)
+            return;
 
+        if (item == null)
+        {
+            ReturnToPool();
             return;
         }
 
         visualSpinAngle = (visualSpinAngle + rotateSpeed * Time.deltaTime) % 360f;
+        if (!isSleeping)
+            SimulateMotion(Time.deltaTime);
+
+        RefreshMergeGridCell();
         UpdateVisualTransform();
+
+        if (Time.time >= nextPickupCheckTime)
+        {
+            nextPickupCheckTime = Time.time + pickupCheckInterval;
+            TryCollectNearbyPlayer();
+        }
 
         if (Time.time >= nextMergeCheckTime)
         {
@@ -1084,43 +1366,30 @@ public class InventoryItemDrop : MonoBehaviour
         }
 
         if (Time.time - spawnTime >= lifeTimeSeconds)
-            Destroy(gameObject);
+            ReturnToPool();
     }
 
-    private void OnTriggerEnter(Collider other)
+    private void OnDestroy()
     {
-        TryCollect(other);
+        UnregisterFromMergeGrid();
     }
 
-    private void OnTriggerStay(Collider other)
+    private void TryCollectNearbyPlayer()
     {
-        TryCollect(other);
-    }
-
-    private void TryCollect(Collider other)
-    {
-        if (other == null || isCollected || item == null)
-            return;
-
         if (Time.time - spawnTime < pickupDelaySeconds)
             return;
 
-        PlayerInventory inventory = ResolveInventory(other);
-        if (inventory == null)
-        {
-            if (debugPickupLogs)
-                Debug.LogWarning($"[InventoryItemDrop] Colisao com {other.name} sem PlayerInventory para coletar {item.name}.");
+        PlayerInventory inventory = PlayerInventory.Instance;
+        if (inventory == null || item == null)
             return;
-        }
 
-        if (requirePlayerTag && !string.IsNullOrEmpty(playerTag))
-        {
-            bool isPlayer = other.CompareTag(playerTag) ||
-                            (other.transform.root != null && other.transform.root.CompareTag(playerTag)) ||
-                            inventory.CompareTag(playerTag);
-            if (!isPlayer)
-                return;
-        }
+        if (!IsValidPickupTarget(inventory))
+            return;
+
+        float radius = Mathf.Max(0.1f, pickupRadius);
+        Vector3 playerPos = ResolvePickupTargetPosition(inventory.transform);
+        if ((playerPos - transform.position).sqrMagnitude > radius * radius)
+            return;
 
         int remaining = inventory.InsertItem(item, stackAmount);
         int collected = stackAmount - remaining;
@@ -1134,11 +1403,180 @@ public class InventoryItemDrop : MonoBehaviour
         if (stackAmount <= 0)
         {
             isCollected = true;
-            Destroy(gameObject);
+            ReturnToPool();
             return;
         }
 
         UpdateDropName();
+    }
+
+    private bool IsValidPickupTarget(PlayerInventory inventory)
+    {
+        if (inventory == null)
+            return false;
+
+        if (!requirePlayerTag || string.IsNullOrEmpty(playerTag))
+            return true;
+
+        Transform target = inventory.transform;
+        return target.CompareTag(playerTag) ||
+               (target.root != null && target.root.CompareTag(playerTag));
+    }
+
+    private Vector3 ResolvePickupTargetPosition(Transform playerTransform)
+    {
+        if (playerTransform == null)
+            return transform.position;
+
+        CharacterController characterController = playerTransform.GetComponent<CharacterController>();
+        if (characterController != null)
+            return playerTransform.TransformPoint(characterController.center);
+
+        return playerTransform.position + Vector3.up * 0.9f;
+    }
+
+    private void SimulateMotion(float deltaTime)
+    {
+        float clampedDelta = Mathf.Clamp(deltaTime, 0f, 0.1f);
+        if (clampedDelta <= 0f)
+            return;
+
+        simulationAccumulator += clampedDelta;
+        float step = Mathf.Max(0.01f, simulationStepSeconds);
+        int maxSteps = 6;
+
+        while (simulationAccumulator >= step && maxSteps-- > 0)
+        {
+            simulationAccumulator -= step;
+            SimulateStep(step);
+        }
+    }
+
+    private void SimulateStep(float deltaTime)
+    {
+        velocity.y = Mathf.Max(velocity.y - gravity * deltaTime, -maxFallSpeed);
+
+        float drag = Mathf.Clamp01((isGrounded ? groundedDrag : airDrag) * deltaTime);
+        velocity.x = Mathf.Lerp(velocity.x, 0f, drag);
+        velocity.z = Mathf.Lerp(velocity.z, 0f, drag);
+
+        World world = World.Instance;
+        Vector3 nextPosition = transform.position;
+
+        float moveX = velocity.x * deltaTime;
+        if (Mathf.Abs(moveX) > 0.0001f)
+        {
+            Vector3 candidateX = nextPosition + new Vector3(moveX, 0f, 0f);
+            if (IntersectsSolid(world, candidateX))
+                velocity.x = 0f;
+            else
+                nextPosition = candidateX;
+        }
+
+        float moveZ = velocity.z * deltaTime;
+        if (Mathf.Abs(moveZ) > 0.0001f)
+        {
+            Vector3 candidateZ = nextPosition + new Vector3(0f, 0f, moveZ);
+            if (IntersectsSolid(world, candidateZ))
+                velocity.z = 0f;
+            else
+                nextPosition = candidateZ;
+        }
+
+        float moveY = velocity.y * deltaTime;
+        if (Mathf.Abs(moveY) > 0.0001f)
+        {
+            Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
+            if (IntersectsSolid(world, candidateY))
+            {
+                if (moveY < 0f)
+                {
+                    nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
+                    float bounceSpeed = -velocity.y * bounceDamping;
+                    velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
+                    isGrounded = true;
+                }
+                else
+                {
+                    velocity.y = 0f;
+                }
+            }
+            else
+            {
+                nextPosition = candidateY;
+                isGrounded = false;
+            }
+        }
+        else if (isGrounded && !IsSupported(world, nextPosition))
+        {
+            isGrounded = false;
+        }
+
+        transform.position = nextPosition;
+
+        if (isGrounded && velocity.sqrMagnitude < 0.0004f)
+        {
+            velocity = Vector3.zero;
+            isSleeping = true;
+        }
+    }
+
+    private bool IntersectsSolid(World world, Vector3 center)
+    {
+        if (world == null)
+            return false;
+
+        float half = Mathf.Max(0.05f, collisionHalfExtent);
+        const float inset = 0.001f;
+
+        int minX = Mathf.FloorToInt(center.x - half + inset);
+        int maxX = Mathf.FloorToInt(center.x + half - inset);
+        int minY = Mathf.FloorToInt(center.y - half + inset);
+        int maxY = Mathf.FloorToInt(center.y + half - inset);
+        int minZ = Mathf.FloorToInt(center.z - half + inset);
+        int maxZ = Mathf.FloorToInt(center.z + half - inset);
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    BlockType blockTypeAtCell = world.GetBlockAt(new Vector3Int(x, y, z));
+                    if (world.IsSolidBlock(blockTypeAtCell))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
+    {
+        if (world == null)
+            return fromY;
+
+        float lower = Mathf.Min(fromY, toY);
+        float upper = Mathf.Max(fromY, toY);
+
+        for (int i = 0; i < 6; i++)
+        {
+            float mid = (lower + upper) * 0.5f;
+            Vector3 sample = new Vector3(x, mid, z);
+            if (IntersectsSolid(world, sample))
+                lower = mid;
+            else
+                upper = mid;
+        }
+
+        return upper;
+    }
+
+    private bool IsSupported(World world, Vector3 center)
+    {
+        Vector3 supportCheck = center + Vector3.down * 0.04f;
+        return IntersectsSolid(world, supportCheck);
     }
 
     private void TryMergeNearbyDrops()
@@ -1149,23 +1587,10 @@ public class InventoryItemDrop : MonoBehaviour
         if (Time.time - spawnTime < mergeDelaySeconds)
             return;
 
-        int hits = Physics.OverlapSphereNonAlloc(
-            transform.position,
-            mergeRadius,
-            MergeBuffer,
-            ~0,
-            QueryTriggerInteraction.Collide);
-
-        for (int i = 0; i < hits && stackAmount < maxStackAmount; i++)
+        CollectNearbyMergeCandidates(MergeCandidates);
+        for (int i = 0; i < MergeCandidates.Count && stackAmount < maxStackAmount; i++)
         {
-            Collider col = MergeBuffer[i];
-            MergeBuffer[i] = null;
-            if (col == null)
-                continue;
-
-            InventoryItemDrop other = col.GetComponent<InventoryItemDrop>();
-            if (other == null)
-                other = col.GetComponentInParent<InventoryItemDrop>();
+            InventoryItemDrop other = MergeCandidates[i];
 
             if (!CanMergeWith(other))
                 continue;
@@ -1175,6 +1600,34 @@ public class InventoryItemDrop : MonoBehaviour
 
             AbsorbFrom(other);
         }
+
+        MergeCandidates.Clear();
+    }
+
+    private void CollectNearbyMergeCandidates(List<InventoryItemDrop> targetBuffer)
+    {
+        targetBuffer.Clear();
+        if (!isRegisteredInMergeGrid)
+            return;
+
+        for (int x = -1; x <= 1; x++)
+        {
+            for (int y = -1; y <= 1; y++)
+            {
+                for (int z = -1; z <= 1; z++)
+                {
+                    Vector3Int neighborCell = mergeGridCell + new Vector3Int(x, y, z);
+                    if (!ActiveDropsByCell.TryGetValue(neighborCell, out HashSet<InventoryItemDrop> dropsInCell))
+                        continue;
+
+                    foreach (InventoryItemDrop drop in dropsInCell)
+                    {
+                        if (drop != null)
+                            targetBuffer.Add(drop);
+                    }
+                }
+            }
+        }
     }
 
     private bool CanMergeWith(InventoryItemDrop other)
@@ -1182,7 +1635,7 @@ public class InventoryItemDrop : MonoBehaviour
         if (other == null || other == this)
             return false;
 
-        if (other.isCollected || other.item == null)
+        if (!other.gameObject.activeSelf || other.isPooled || other.isCollected || other.item == null)
             return false;
 
         if (other.item != item)
@@ -1218,7 +1671,7 @@ public class InventoryItemDrop : MonoBehaviour
         if (other.stackAmount <= 0)
         {
             other.isCollected = true;
-            Destroy(other.gameObject);
+            other.ReturnToPool();
         }
         else
         {
@@ -1275,30 +1728,84 @@ public class InventoryItemDrop : MonoBehaviour
         gameObject.name = $"Drop_{itemName}_x{stackAmount}";
     }
 
-    private static PlayerInventory ResolveInventory(Collider other)
+    private void RegisterInMergeGrid()
     {
-        if (other == null)
-            return null;
+        if (isRegisteredInMergeGrid)
+            return;
 
-        PlayerInventory inventory = other.GetComponent<PlayerInventory>();
-        if (inventory != null)
-            return inventory;
+        mergeGridCell = WorldToMergeCell(transform.position);
+        AddToMergeCell(mergeGridCell, this);
+        isRegisteredInMergeGrid = true;
+    }
 
-        inventory = other.GetComponentInParent<PlayerInventory>();
-        if (inventory != null)
-            return inventory;
-
-        if (other.attachedRigidbody != null)
+    private void RefreshMergeGridCell()
+    {
+        if (!isRegisteredInMergeGrid)
         {
-            inventory = other.attachedRigidbody.GetComponent<PlayerInventory>();
-            if (inventory != null)
-                return inventory;
-
-            inventory = other.attachedRigidbody.GetComponentInParent<PlayerInventory>();
-            if (inventory != null)
-                return inventory;
+            RegisterInMergeGrid();
+            return;
         }
 
-        return null;
+        Vector3Int newCell = WorldToMergeCell(transform.position);
+        if (newCell == mergeGridCell)
+            return;
+
+        RemoveFromMergeCell(mergeGridCell, this);
+        mergeGridCell = newCell;
+        AddToMergeCell(mergeGridCell, this);
+    }
+
+    private void UnregisterFromMergeGrid()
+    {
+        if (!isRegisteredInMergeGrid)
+            return;
+
+        RemoveFromMergeCell(mergeGridCell, this);
+        isRegisteredInMergeGrid = false;
+    }
+
+    private Vector3Int WorldToMergeCell(Vector3 worldPosition)
+    {
+        float cellSize = Mathf.Max(0.25f, mergeGridCellSize);
+        return new Vector3Int(
+            Mathf.FloorToInt(worldPosition.x / cellSize),
+            Mathf.FloorToInt(worldPosition.y / cellSize),
+            Mathf.FloorToInt(worldPosition.z / cellSize));
+    }
+
+    private static void AddToMergeCell(Vector3Int cell, InventoryItemDrop drop)
+    {
+        if (!ActiveDropsByCell.TryGetValue(cell, out HashSet<InventoryItemDrop> cellDrops))
+        {
+            cellDrops = new HashSet<InventoryItemDrop>();
+            ActiveDropsByCell[cell] = cellDrops;
+        }
+
+        cellDrops.Add(drop);
+    }
+
+    private static void RemoveFromMergeCell(Vector3Int cell, InventoryItemDrop drop)
+    {
+        if (!ActiveDropsByCell.TryGetValue(cell, out HashSet<InventoryItemDrop> cellDrops))
+            return;
+
+        cellDrops.Remove(drop);
+        if (cellDrops.Count == 0)
+            ActiveDropsByCell.Remove(cell);
+    }
+
+    private void ResetRuntimeState()
+    {
+        velocity = Vector3.zero;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
+        item = null;
+
+        if (spriteRenderer != null)
+        {
+            spriteRenderer.sprite = null;
+            spriteRenderer.enabled = false;
+        }
     }
 }
