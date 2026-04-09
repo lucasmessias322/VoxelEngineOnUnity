@@ -128,10 +128,14 @@ public partial class World : MonoBehaviour
             return;
         }
         Instance = this;
+        pendingChunkDistanceComparison = ComparePendingChunkByDistance;
+        pendingDataDistanceComparison = ComparePendingDataByDistance;
+        pendingMeshDistanceComparison = ComparePendingMeshByDistance;
 
         if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
             caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
+        EnsureShaderFallbackBuffersBound();
         EnsureLoadingBootstrapExists();
     }
 
@@ -462,6 +466,23 @@ public partial class World : MonoBehaviour
     private bool nativeGenerationConfigDirty = true;
     private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
 
+    // Vulkan requires every declared StructuredBuffer to be bound, even when that code path is disabled at runtime.
+    private static readonly int PulledOpaqueFacesBufferPropertyId = Shader.PropertyToID("_PulledOpaqueFaces");
+    private static readonly int CompactOpaqueFacesBufferPropertyId = Shader.PropertyToID("_CompactOpaqueFaces");
+    private static readonly int OpaqueGpuSectionsBufferPropertyId = Shader.PropertyToID("_OpaqueGpuSections");
+    private static readonly int OpaqueBlockMappingsBufferPropertyId = Shader.PropertyToID("_OpaqueBlockMappings");
+    private static readonly int UnityIndirectDrawArgsBufferPropertyId = Shader.PropertyToID("unity_IndirectDrawArgs");
+    private const int PulledOpaqueFaceStrideBytes = 112;   // 7 * float4
+    private const int CompactOpaqueFaceStrideBytes = 16;   // 4 * uint
+    private const int OpaqueGpuSectionStrideBytes = 32;    // 2 * float4
+    private const int OpaqueBlockMappingStrideBytes = 32;  // 2 * float4
+    private const int UnityIndirectDrawArgsWordCount = 4;  // IndirectDrawArgs = 4 uint (16 bytes)
+    private ComputeBuffer fallbackPulledOpaqueFacesBuffer;
+    private ComputeBuffer fallbackCompactOpaqueFacesBuffer;
+    private ComputeBuffer fallbackOpaqueGpuSectionsBuffer;
+    private ComputeBuffer fallbackOpaqueBlockMappingsBuffer;
+    private ComputeBuffer fallbackUnityIndirectDrawArgsBuffer;
+
 
     // Optimization temporaries
     private Vector2Int _lastChunkCoord = new Vector2Int(-99999, -99999);
@@ -471,10 +492,86 @@ public partial class World : MonoBehaviour
     private bool pendingJobPrioritiesDirty = true;
     private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
+    private Comparison<(Vector2Int coord, float distSq)> pendingChunkDistanceComparison;
+    private Comparison<PendingData> pendingDataDistanceComparison;
+    private Comparison<PendingMesh> pendingMeshDistanceComparison;
+    private readonly List<Vector2Int> loadedChunkCoordsBuffer = new List<Vector2Int>(256);
+    private readonly List<int3> suppressedGrassBillboardInt3Buffer = new List<int3>(128);
+    private readonly List<BlockEdit> requestChunkEditsBuffer = new List<BlockEdit>(128);
+    private readonly List<BlockEdit> rebuildChunkEditsBuffer = new List<BlockEdit>(128);
+    private readonly List<BlockEdit> fastRebuildOverrideEditsBuffer = new List<BlockEdit>(64);
+    private readonly List<TreeSpawnRuleData> treeSpawnRuleBuildBuffer = new List<TreeSpawnRuleData>(12);
+    private readonly List<VegetationBillboardRuleData> vegetationBillboardRuleBuildBuffer = new List<VegetationBillboardRuleData>(16);
+    private readonly Queue<Vector3Int> propagateLightQueueBuffer = new Queue<Vector3Int>(256);
+    private readonly Dictionary<Vector2Int, int> propagateDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
+    private readonly Queue<(Vector3Int pos, byte lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, byte)>(256);
+    private readonly Queue<Vector3Int> removeLightRefillQueueBuffer = new Queue<Vector3Int>(256);
+    private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
+    private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(256);
+    private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>();
+    private readonly Dictionary<Vector2Int, int> refillLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
+    private readonly List<Vector2Int> cleanupLightColumnsRemoveBuffer = new List<Vector2Int>(128);
 
     private TerrainDensitySettings GetTerrainDensitySettings()
     {
         return terrainDensity.Sanitized();
+    }
+
+    private void EnsureShaderFallbackBuffersBound()
+    {
+        if (fallbackPulledOpaqueFacesBuffer == null)
+        {
+            fallbackPulledOpaqueFacesBuffer = new ComputeBuffer(1, PulledOpaqueFaceStrideBytes, ComputeBufferType.Structured);
+            fallbackPulledOpaqueFacesBuffer.SetData(new float[28]);
+        }
+
+        if (fallbackCompactOpaqueFacesBuffer == null)
+        {
+            fallbackCompactOpaqueFacesBuffer = new ComputeBuffer(1, CompactOpaqueFaceStrideBytes, ComputeBufferType.Structured);
+            fallbackCompactOpaqueFacesBuffer.SetData(new uint[4]);
+        }
+
+        if (fallbackOpaqueGpuSectionsBuffer == null)
+        {
+            fallbackOpaqueGpuSectionsBuffer = new ComputeBuffer(1, OpaqueGpuSectionStrideBytes, ComputeBufferType.Structured);
+            fallbackOpaqueGpuSectionsBuffer.SetData(new float[8]);
+        }
+
+        if (fallbackOpaqueBlockMappingsBuffer == null)
+        {
+            fallbackOpaqueBlockMappingsBuffer = new ComputeBuffer(1, OpaqueBlockMappingStrideBytes, ComputeBufferType.Structured);
+            fallbackOpaqueBlockMappingsBuffer.SetData(new float[8]);
+        }
+
+        if (fallbackUnityIndirectDrawArgsBuffer == null)
+        {
+            fallbackUnityIndirectDrawArgsBuffer = new ComputeBuffer(UnityIndirectDrawArgsWordCount, sizeof(uint), ComputeBufferType.Raw);
+            fallbackUnityIndirectDrawArgsBuffer.SetData(new uint[UnityIndirectDrawArgsWordCount]);
+        }
+
+        Shader.SetGlobalBuffer(PulledOpaqueFacesBufferPropertyId, fallbackPulledOpaqueFacesBuffer);
+        Shader.SetGlobalBuffer(CompactOpaqueFacesBufferPropertyId, fallbackCompactOpaqueFacesBuffer);
+        Shader.SetGlobalBuffer(OpaqueGpuSectionsBufferPropertyId, fallbackOpaqueGpuSectionsBuffer);
+        Shader.SetGlobalBuffer(OpaqueBlockMappingsBufferPropertyId, fallbackOpaqueBlockMappingsBuffer);
+        Shader.SetGlobalBuffer(UnityIndirectDrawArgsBufferPropertyId, fallbackUnityIndirectDrawArgsBuffer);
+    }
+
+    private void ReleaseShaderFallbackBuffers()
+    {
+        ReleaseComputeBuffer(ref fallbackPulledOpaqueFacesBuffer);
+        ReleaseComputeBuffer(ref fallbackCompactOpaqueFacesBuffer);
+        ReleaseComputeBuffer(ref fallbackOpaqueGpuSectionsBuffer);
+        ReleaseComputeBuffer(ref fallbackOpaqueBlockMappingsBuffer);
+        ReleaseComputeBuffer(ref fallbackUnityIndirectDrawArgsBuffer);
+    }
+
+    private static void ReleaseComputeBuffer(ref ComputeBuffer buffer)
+    {
+        if (buffer == null)
+            return;
+
+        buffer.Release();
+        buffer = null;
     }
 
     private BlockType ResolveWaterStateForDebug(BlockType blockType)
@@ -696,7 +793,10 @@ public partial class World : MonoBehaviour
             pendingChunks[i] = (item.coord, GetChunkDistanceSqToPlayer(item.coord));
         }
 
-        pendingChunks.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+        if (pendingChunkDistanceComparison == null)
+            pendingChunkDistanceComparison = ComparePendingChunkByDistance;
+
+        pendingChunks.Sort(pendingChunkDistanceComparison);
     }
 
     private void PrioritizePendingJobsByDistance()
@@ -710,19 +810,38 @@ public partial class World : MonoBehaviour
 
         if (pendingDataJobs.Count > 1)
         {
-            pendingDataJobs.Sort((a, b) =>
-                GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord)));
+            if (pendingDataDistanceComparison == null)
+                pendingDataDistanceComparison = ComparePendingDataByDistance;
+
+            pendingDataJobs.Sort(pendingDataDistanceComparison);
         }
 
         if (pendingMeshes.Count > 1)
         {
-            pendingMeshes.Sort((a, b) =>
-            {
-                int distCmp = GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
-                if (distCmp != 0) return distCmp;
-                return a.visualSliceIndex.CompareTo(b.visualSliceIndex);
-            });
+            if (pendingMeshDistanceComparison == null)
+                pendingMeshDistanceComparison = ComparePendingMeshByDistance;
+
+            pendingMeshes.Sort(pendingMeshDistanceComparison);
         }
+    }
+
+    private static int ComparePendingChunkByDistance((Vector2Int coord, float distSq) a, (Vector2Int coord, float distSq) b)
+    {
+        return a.distSq.CompareTo(b.distSq);
+    }
+
+    private int ComparePendingDataByDistance(PendingData a, PendingData b)
+    {
+        return GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
+    }
+
+    private int ComparePendingMeshByDistance(PendingMesh a, PendingMesh b)
+    {
+        int distCmp = GetChunkDistanceSqToPlayer(a.coord).CompareTo(GetChunkDistanceSqToPlayer(b.coord));
+        if (distCmp != 0)
+            return distCmp;
+
+        return a.visualSliceIndex.CompareTo(b.visualSliceIndex);
     }
 
     private bool HasOtherPendingMeshJobs(Vector2Int coord, int expectedGen, int excludeIndex)
@@ -1174,7 +1293,8 @@ public partial class World : MonoBehaviour
         treeSpawnRulesDirty = false;
 
         // As regras de spawn sao derivadas dos biomas para centralizar a configuracao.
-        List<TreeSpawnRuleData> rules = new List<TreeSpawnRuleData>(12);
+        List<TreeSpawnRuleData> rules = treeSpawnRuleBuildBuffer;
+        rules.Clear();
         AddTreeRulesFromBiomeDefinitions(rules);
         SortTreeSpawnRules(rules);
 
@@ -1185,7 +1305,8 @@ public partial class World : MonoBehaviour
     {
         vegetationBillboardRulesDirty = false;
 
-        List<VegetationBillboardRuleData> rules = new List<VegetationBillboardRuleData>(16);
+        List<VegetationBillboardRuleData> rules = vegetationBillboardRuleBuildBuffer;
+        rules.Clear();
         AddVegetationRulesFromBiomeDefinitions(rules);
 
         if (rules.Count > 1)
@@ -1375,9 +1496,12 @@ public partial class World : MonoBehaviour
         if (!Application.isPlaying || isShuttingDown || activeChunks == null || activeChunks.Count == 0)
             return;
 
-        List<Vector2Int> loadedCoords = new List<Vector2Int>(activeChunks.Keys);
-        for (int i = 0; i < loadedCoords.Count; i++)
-            RequestChunkRebuild(loadedCoords[i]);
+        loadedChunkCoordsBuffer.Clear();
+        foreach (var kv in activeChunks)
+            loadedChunkCoordsBuffer.Add(kv.Key);
+
+        for (int i = 0; i < loadedChunkCoordsBuffer.Count; i++)
+            RequestChunkRebuild(loadedChunkCoordsBuffer[i]);
     }
 
     private void Start()
@@ -1445,6 +1569,7 @@ public partial class World : MonoBehaviour
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
         MeshGenerator.ClearDataJobTempBufferPool();
         DisposeNativeGenerationCaches();
+        ReleaseShaderFallbackBuffers();
 
         if (Instance == this)
             Instance = null;
@@ -2093,10 +2218,11 @@ public partial class World : MonoBehaviour
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
         activeChunk.UpdateSubchunkColliderOccupancy(pd.subchunkColliderOccupancy, dirtySubchunkMask);
         SafeDisposeNativeArray(ref pd.subchunkColliderOccupancy);
-        List<int3> suppressedBillboardsForChunk = GetSuppressedGrassBillboardsForChunk(pd.coord);
-        NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedBillboardsForChunk.Count, Allocator.Persistent);
-        for (int s = 0; s < suppressedBillboardsForChunk.Count; s++)
-            nativeSuppressedBillboards[s] = suppressedBillboardsForChunk[s];
+        suppressedGrassBillboardInt3Buffer.Clear();
+        CollectSuppressedGrassBillboardsForChunk(pd.coord, suppressedGrassBillboardInt3Buffer);
+        NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedGrassBillboardInt3Buffer.Count, Allocator.Persistent);
+        for (int s = 0; s < suppressedGrassBillboardInt3Buffer.Count; s++)
+            nativeSuppressedBillboards[s] = suppressedGrassBillboardInt3Buffer[s];
 
         int nonEmptySubchunkMask = 0;
         int affectedVisualSliceMask = 0;
@@ -2244,19 +2370,20 @@ public partial class World : MonoBehaviour
         activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, dataDisposeHandle, suppressedDisposeHandle);
     }
 
-    private List<int3> GetSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord)
+    private void CollectSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord, List<int3> output)
     {
-        if (!suppressedGrassBillboardsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> positions) || positions.Count == 0)
-            return new List<int3>(0);
+        if (output == null)
+            return;
 
-        List<int3> result = new List<int3>(positions.Count);
+        output.Clear();
+        if (!suppressedGrassBillboardsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> positions) || positions.Count == 0)
+            return;
+
         foreach (Vector3Int pos in positions)
         {
             if (pos.y >= 0 && pos.y < Chunk.SizeY)
-                result.Add(new int3(pos.x, pos.y, pos.z));
+                output.Add(new int3(pos.x, pos.y, pos.z));
         }
-
-        return result;
     }
 
     private static Vector2Int GetChunkCoordFromWorldXZ(int worldX, int worldZ)
@@ -2500,17 +2627,18 @@ public partial class World : MonoBehaviour
         RequestHighBuildMeshRebuild(coord);
 
         // Coleta overrides do jogador antes da geracao para que o chunk ja nasca consistente.
-        var editsList = new List<BlockEdit>();
+        requestChunkEditsBuffer.Clear();
         int dataBorderSize = GetDetailedGenerationBorderSize();
         int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
         int overrideBorderSize = Mathf.Max(dataBorderSize, lightBorderSize);
-        AppendRelevantBlockEdits(coord, overrideBorderSize, editsList);
+        AppendRelevantBlockEdits(coord, overrideBorderSize, requestChunkEditsBuffer);
 
         NativeArray<BlockEdit> nativeEdits;
-        if (editsList.Count > 0)
+        if (requestChunkEditsBuffer.Count > 0)
         {
-            nativeEdits = new NativeArray<BlockEdit>(editsList.Count, Allocator.Persistent);
-            for (int i = 0; i < editsList.Count; i++) nativeEdits[i] = editsList[i];
+            nativeEdits = new NativeArray<BlockEdit>(requestChunkEditsBuffer.Count, Allocator.Persistent);
+            for (int i = 0; i < requestChunkEditsBuffer.Count; i++)
+                nativeEdits[i] = requestChunkEditsBuffer[i];
         }
         else
         {
@@ -2872,11 +3000,11 @@ public partial class World : MonoBehaviour
         if (blockOverrides.Count == 0)
             return new NativeArray<BlockEdit>(0, Allocator.Persistent);
 
-        List<BlockEdit> editsList = new List<BlockEdit>(32);
-        AppendRelevantBlockEdits(coord, borderSize, editsList);
-        NativeArray<BlockEdit> nativeOverrides = new NativeArray<BlockEdit>(editsList.Count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        for (int i = 0; i < editsList.Count; i++)
-            nativeOverrides[i] = editsList[i];
+        fastRebuildOverrideEditsBuffer.Clear();
+        AppendRelevantBlockEdits(coord, borderSize, fastRebuildOverrideEditsBuffer);
+        NativeArray<BlockEdit> nativeOverrides = new NativeArray<BlockEdit>(fastRebuildOverrideEditsBuffer.Count, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        for (int i = 0; i < fastRebuildOverrideEditsBuffer.Count; i++)
+            nativeOverrides[i] = fastRebuildOverrideEditsBuffer[i];
 
         return nativeOverrides;
     }

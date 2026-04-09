@@ -25,6 +25,7 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>();
     private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>();
     private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>();
+    private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
 
     private static readonly Vector3Int[] TreeCapitatorNeighborOffsets = CreateTreeCapitatorNeighborOffsets();
 
@@ -127,20 +128,20 @@ public partial class World : MonoBehaviour
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
 
         int terrainDirtySubchunkMask = GetDirtySubchunkMaskForWorldY(worldPos.y);
-        HashSet<Vector2Int> chunksToRebuild = new HashSet<Vector2Int>();
-        chunksToRebuild.Add(chunkCoord);
+        int chunksToRebuildCount = 0;
+        AddUniqueChunkCoordToBuffer(chunkCoord, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
 
         int localX = worldPos.x - (chunkCoord.x * Chunk.SizeX);
         int localZ = worldPos.z - (chunkCoord.y * Chunk.SizeZ);
 
-        if (localX == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.left);
-        if (localX == Chunk.SizeX - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right);
-        if (localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.down);
-        if (localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.up);
-        if (localX == 0 && localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.left + Vector2Int.down);
-        if (localX == 0 && localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.left + Vector2Int.up);
-        if (localX == Chunk.SizeX - 1 && localZ == 0) chunksToRebuild.Add(chunkCoord + Vector2Int.right + Vector2Int.down);
-        if (localX == Chunk.SizeX - 1 && localZ == Chunk.SizeZ - 1) chunksToRebuild.Add(chunkCoord + Vector2Int.right + Vector2Int.up);
+        if (localX == 0) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.left, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localX == Chunk.SizeX - 1) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.right, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localZ == 0) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.down, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localZ == Chunk.SizeZ - 1) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.up, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localX == 0 && localZ == 0) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.left + Vector2Int.down, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localX == 0 && localZ == Chunk.SizeZ - 1) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.left + Vector2Int.up, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localX == Chunk.SizeX - 1 && localZ == 0) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.right + Vector2Int.down, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
+        if (localX == Chunk.SizeX - 1 && localZ == Chunk.SizeZ - 1) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.right + Vector2Int.up, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
 
         // Fora da altura simulada por chunk, mantemos apenas override:
         // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.
@@ -157,8 +158,8 @@ public partial class World : MonoBehaviour
             if (worldPos.y == Chunk.SizeY || worldPos.y == Chunk.SizeY + 1)
             {
                 int topTerrainSubchunkMask = GetDirtySubchunkMaskForWorldY(Chunk.SizeY - 1);
-                foreach (Vector2Int coord in chunksToRebuild)
-                    RequestChunkRebuild(coord, topTerrainSubchunkMask);
+                for (int i = 0; i < chunksToRebuildCount; i++)
+                    RequestChunkRebuild(blockChangeChunksToRebuildBuffer[i], topTerrainSubchunkMask);
             }
             return;
         }
@@ -191,10 +192,8 @@ public partial class World : MonoBehaviour
             }
         }
 
-        foreach (Vector2Int coord in chunksToRebuild)
-        {
-            RequestChunkRebuild(coord, terrainDirtySubchunkMask);
-        }
+        for (int i = 0; i < chunksToRebuildCount; i++)
+            RequestChunkRebuild(blockChangeChunksToRebuildBuffer[i], terrainDirtySubchunkMask);
 
         // Mudanca no topo do chunk pode expor/ocultar a face inferior de construcoes altas.
         if (worldPos.y >= Chunk.SizeY - 1)
@@ -205,6 +204,18 @@ public partial class World : MonoBehaviour
             if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
             if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
         }
+    }
+
+    private static void AddUniqueChunkCoordToBuffer(Vector2Int coord, Vector2Int[] buffer, ref int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            if (buffer[i] == coord)
+                return;
+        }
+
+        if (count < buffer.Length)
+            buffer[count++] = coord;
     }
 
     public bool TryQueueTreeCapitatorBreak(

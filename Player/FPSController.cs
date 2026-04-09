@@ -3,6 +3,8 @@ using UnityEngine;
 [RequireComponent(typeof(CharacterController))]
 public class FPSController : MonoBehaviour
 {
+    private const int ThirdPersonHitBufferSize = 16;
+
     private enum CameraViewMode
     {
         FirstPerson,
@@ -58,6 +60,7 @@ public class FPSController : MonoBehaviour
     private CharacterController characterController;
     private Vector3 velocity = Vector3.zero; // inclui vertical
     private float xRotation = 0f;
+    private readonly RaycastHit[] groundAheadRaycastBuffer = new RaycastHit[1];
 
     // sprint double-tap
     private float lastForwardTapTime = -1f;
@@ -85,6 +88,7 @@ public class FPSController : MonoBehaviour
     private HeldBlockVisual cachedHeldBlockVisual;
     private bool firstPersonVisualsVisible = true;
     [SerializeField] private LayerMask playerMeshLayer;
+    private readonly RaycastHit[] thirdPersonHitBuffer = new RaycastHit[ThirdPersonHitBufferSize];
     void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
@@ -213,10 +217,11 @@ public class FPSController : MonoBehaviour
         Vector3 pivotWorld = transform.TransformPoint(thirdPersonPivotLocal);
         Vector3 desiredWorld = transform.TransformPoint(desiredLocalPosition);
         Vector3 direction = (desiredWorld - pivotWorld).normalized;
-        RaycastHit[] hits = Physics.SphereCastAll(
+        int hitCount = Physics.SphereCastNonAlloc(
             pivotWorld,
             thirdPersonCollisionRadius,
             direction,
+            thirdPersonHitBuffer,
             castDistance,
             thirdPersonCollisionMask,
             QueryTriggerInteraction.Ignore);
@@ -224,9 +229,9 @@ public class FPSController : MonoBehaviour
         float nearestHitDistance = castDistance;
         bool hasBlockingHit = false;
 
-        for (int i = 0; i < hits.Length; i++)
+        for (int i = 0; i < hitCount; i++)
         {
-            RaycastHit hit = hits[i];
+            RaycastHit hit = thirdPersonHitBuffer[i];
             if (hit.collider == null)
                 continue;
 
@@ -491,14 +496,15 @@ public class FPSController : MonoBehaviour
         // ponto de checagem a partir do centro do jogador (um pouco acima do solo)
         Vector3 origin = futurePos + Vector3.up * 0.1f;
         float maxDown = 1.5f + 0.01f; // quão longe abaixo procuramos ground (suficiente para um bloco)
-        if (Physics.Raycast(origin, Vector3.down, out RaycastHit hit, maxDown, ~0, QueryTriggerInteraction.Ignore))
-        {
-            // se o chão está dentro do alcance, podemos andar
-            return true;
-        }
+        int hits = Physics.RaycastNonAlloc(
+            origin,
+            Vector3.down,
+            groundAheadRaycastBuffer,
+            maxDown,
+            ~0,
+            QueryTriggerInteraction.Ignore);
 
-        // sem chão detectado -> não permitir movimento (sneak behaviour)
-        return false;
+        return hits > 0;
     }
 
     private void SmoothCrouchTransition()

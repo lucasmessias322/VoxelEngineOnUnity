@@ -15,6 +15,7 @@ public class BlockSelector : MonoBehaviour
     private LineRenderer line;
     private Vector3Int currentBlock;
     private bool hasBlock;
+    private readonly Vector3[] selectionLinePoints = new Vector3[18];
 
     void Awake()
     {
@@ -102,17 +103,26 @@ public class BlockSelector : MonoBehaviour
         Vector3 v011 = p + new Vector3(0f, size.y, size.z);
         Vector3 v111 = p + size;
 
-        Vector3[] lines = new Vector3[]
-        {
-            v000, v100, v110, v010, v000,
-            v001, v101, v111, v011, v001,
-            v000, v001,
-            v100, v101,
-            v110, v111,
-            v010, v011
-        };
+        selectionLinePoints[0] = v000;
+        selectionLinePoints[1] = v100;
+        selectionLinePoints[2] = v110;
+        selectionLinePoints[3] = v010;
+        selectionLinePoints[4] = v000;
+        selectionLinePoints[5] = v001;
+        selectionLinePoints[6] = v101;
+        selectionLinePoints[7] = v111;
+        selectionLinePoints[8] = v011;
+        selectionLinePoints[9] = v001;
+        selectionLinePoints[10] = v000;
+        selectionLinePoints[11] = v001;
+        selectionLinePoints[12] = v100;
+        selectionLinePoints[13] = v101;
+        selectionLinePoints[14] = v110;
+        selectionLinePoints[15] = v111;
+        selectionLinePoints[16] = v010;
+        selectionLinePoints[17] = v011;
 
-        line.SetPositions(lines);
+        line.SetPositions(selectionLinePoints);
     }
 
     private bool TryGetCustomBounds(Vector3Int pos, BlockType blockType, out Bounds bounds)

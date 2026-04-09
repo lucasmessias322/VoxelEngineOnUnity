@@ -85,19 +85,23 @@ public class HotbarMirror : MonoBehaviour
 
             if (source == null || source.IsEmpty)
             {
-                target.Clear();
+                if (!target.IsEmpty)
+                    target.Clear();
                 continue;
             }
 
-            target.item = source.item;
-            target.amount = source.amount;
-            target.RefreshUI();
+            if (target.item != source.item || target.amount != source.amount)
+            {
+                target.item = source.item;
+                target.amount = source.amount;
+                target.RefreshUI();
+            }
         }
 
         for (int i = mirrorCount; i < (hotbarSlots != null ? hotbarSlots.Length : 0); i++)
         {
             Slot extra = hotbarSlots[i];
-            if (extra != null)
+            if (extra != null && !extra.IsEmpty)
                 extra.Clear();
         }
 

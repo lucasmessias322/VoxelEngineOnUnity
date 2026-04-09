@@ -1,6 +1,11 @@
 ﻿using System.Collections.Generic;
 using UnityEngine;
 
+[RequireComponent(typeof(MeshFilter))]
+[RequireComponent(typeof(MeshRenderer))]
+[RequireComponent(typeof(BoxCollider))]
+[RequireComponent(typeof(SphereCollider))]
+[RequireComponent(typeof(Rigidbody))]
 public class BlockDrop : MonoBehaviour
 {
     [Header("Drop")]
@@ -50,6 +55,23 @@ public class BlockDrop : MonoBehaviour
     };
 
     private static Material fallbackDropMaterial;
+    private const int MaxPoolSize = 512;
+
+    private struct CachedDropMesh
+    {
+        public Mesh mesh;
+        public int materialIndex;
+    }
+
+    private static readonly Stack<BlockDrop> Pool = new Stack<BlockDrop>(128);
+    private static readonly Dictionary<BlockType, CachedDropMesh> CachedMeshes = new Dictionary<BlockType, CachedDropMesh>();
+    private static Transform poolContainer;
+
+    private MeshFilter meshFilter;
+    private MeshRenderer meshRenderer;
+    private BoxCollider solidCollider;
+    private SphereCollider pickupCollider;
+    private bool isPooled;
 
     public static bool Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
     {
@@ -67,43 +89,78 @@ public class BlockDrop : MonoBehaviour
         if (world.blockData != null && (world.blockData.mappings == null || world.blockData.mappings.Length == 0))
             world.blockData.InitializeDictionary();
 
-        GameObject go = new GameObject($"Drop_{blockType}");
-        go.transform.position = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
+        BlockDrop drop = AcquireDrop();
+        if (drop == null)
+            return false;
 
-        BlockDrop drop = go.AddComponent<BlockDrop>();
+        drop.transform.SetParent(null, false);
+        drop.transform.position = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
         drop.blockType = blockType;
         drop.stackAmount = 1;
-        go.transform.localScale = Vector3.one * drop.dropScale;
+        drop.maxStackAmount = Mathf.Max(1, drop.maxStackAmount);
+        drop.isCollected = false;
+        drop.isPooled = false;
+        drop.transform.localScale = Vector3.one * drop.dropScale;
+        drop.spawnTime = Time.time;
+        drop.nextMergeCheckTime = Time.time + Random.Range(0f, drop.mergeCheckInterval);
         if (!drop.BuildVisual(world, blockType))
         {
-            Destroy(go);
+            drop.ReturnToPool();
             return false;
         }
 
+        drop.gameObject.SetActive(true);
         drop.SetupPhysics(throwDirection);
+        drop.UpdateDropName();
         return true;
     }
 
     private bool BuildVisual(World world, BlockType blockType)
     {
-        MeshFilter mf = gameObject.AddComponent<MeshFilter>();
-        MeshRenderer mr = gameObject.AddComponent<MeshRenderer>();
+        EnsureRuntimeComponents();
 
-        Mesh mesh = BuildBlockMesh(world, blockType, out int materialIndex);
+        Mesh mesh = GetOrCreateSharedMesh(world, blockType, out int materialIndex);
         if (mesh == null)
             return false;
 
-        mf.sharedMesh = mesh;
-        CollapseToSingleSubmesh(mesh, materialIndex);
+        meshFilter.sharedMesh = mesh;
+        if (solidCollider != null)
+        {
+            Bounds bounds = mesh.bounds;
+            solidCollider.center = bounds.center;
+            solidCollider.size = Vector3.Max(bounds.size, Vector3.one * 0.05f);
+        }
 
         Material mat = ResolveMaterial(world, materialIndex);
         if (mat == null)
             return false;
 
-        mr.sharedMaterial = mat;
-        mr.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
-        mr.receiveShadows = true;
+        meshRenderer.sharedMaterial = mat;
+        meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+        meshRenderer.receiveShadows = true;
         return true;
+    }
+
+    private static Mesh GetOrCreateSharedMesh(World world, BlockType blockType, out int materialIndex)
+    {
+        materialIndex = 0;
+        if (CachedMeshes.TryGetValue(blockType, out CachedDropMesh cached) && cached.mesh != null)
+        {
+            materialIndex = cached.materialIndex;
+            return cached.mesh;
+        }
+
+        Mesh mesh = BuildBlockMesh(world, blockType, out materialIndex);
+        if (mesh == null)
+            return null;
+
+        CollapseToSingleSubmesh(mesh, materialIndex);
+        CachedMeshes[blockType] = new CachedDropMesh
+        {
+            mesh = mesh,
+            materialIndex = materialIndex
+        };
+        return mesh;
     }
 
     private static void CollapseToSingleSubmesh(Mesh mesh, int submeshIndex)
@@ -498,30 +555,110 @@ public class BlockDrop : MonoBehaviour
         return mapping.GetTint(BlockFaceUtility.FromCubeFaceIndex(faceIndex));
     }
 
+    private static BlockDrop AcquireDrop()
+    {
+        while (Pool.Count > 0)
+        {
+            BlockDrop pooledDrop = Pool.Pop();
+            if (pooledDrop == null)
+                continue;
+
+            pooledDrop.isPooled = false;
+            return pooledDrop;
+        }
+
+        GameObject go = new GameObject("Drop_Pooled");
+        go.transform.SetParent(GetPoolContainer(), false);
+        BlockDrop drop = go.AddComponent<BlockDrop>();
+        drop.EnsureRuntimeComponents();
+        go.SetActive(false);
+        return drop;
+    }
+
+    private static Transform GetPoolContainer()
+    {
+        if (poolContainer != null)
+            return poolContainer;
+
+        GameObject existing = GameObject.Find("BlockDropPool");
+        if (existing == null)
+            existing = new GameObject("BlockDropPool");
+
+        poolContainer = existing.transform;
+        return poolContainer;
+    }
+
+    private void ReturnToPool()
+    {
+        if (this == null || isPooled)
+            return;
+
+        isCollected = true;
+        DisableSelfColliders();
+        transform.SetParent(GetPoolContainer(), false);
+        gameObject.SetActive(false);
+
+        if (Pool.Count < MaxPoolSize)
+        {
+            isPooled = true;
+            Pool.Push(this);
+            return;
+        }
+
+        Destroy(gameObject);
+    }
+
+    private void EnsureRuntimeComponents()
+    {
+        meshFilter = GetComponent<MeshFilter>();
+        if (meshFilter == null)
+            meshFilter = gameObject.AddComponent<MeshFilter>();
+
+        meshRenderer = GetComponent<MeshRenderer>();
+        if (meshRenderer == null)
+            meshRenderer = gameObject.AddComponent<MeshRenderer>();
+
+        solidCollider = GetComponent<BoxCollider>();
+        if (solidCollider == null)
+            solidCollider = gameObject.AddComponent<BoxCollider>();
+
+        pickupCollider = GetComponent<SphereCollider>();
+        if (pickupCollider == null)
+            pickupCollider = gameObject.AddComponent<SphereCollider>();
+        if (pickupCollider != null)
+        {
+            pickupCollider.radius = 4f;
+            pickupCollider.isTrigger = true;
+        }
+
+        rb = GetComponent<Rigidbody>();
+        if (rb == null)
+            rb = gameObject.AddComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.mass = 0.25f;
+            rb.linearDamping = 1.4f;
+            rb.angularDamping = 0.7f;
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        }
+    }
+
     private void SetupPhysics(Vector3 throwDirection)
     {
-        BoxCollider box = gameObject.AddComponent<BoxCollider>();
-        MeshFilter meshFilter = GetComponent<MeshFilter>();
-        if (meshFilter != null && meshFilter.sharedMesh != null)
-        {
-            Bounds bounds = meshFilter.sharedMesh.bounds;
-            box.center = bounds.center;
-            box.size = Vector3.Max(bounds.size, Vector3.one * 0.05f);
-        }
-        else
-        {
-            box.size = Vector3.one;
-        }
+        EnsureRuntimeComponents();
 
-        SphereCollider pickup = gameObject.AddComponent<SphereCollider>();
-        pickup.radius = 4f;
-        pickup.isTrigger = true;
+        if (solidCollider != null)
+            solidCollider.enabled = true;
+        if (pickupCollider != null)
+            pickupCollider.enabled = true;
 
-        rb = gameObject.AddComponent<Rigidbody>();
-        rb.mass = 0.25f;
-        rb.linearDamping = 1.4f;
-        rb.angularDamping = 0.7f;
-        rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        if (rb == null)
+            return;
+
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.isKinematic = false;
+        rb.detectCollisions = true;
 
         Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
         Vector3 launchDir = (throwDirection.normalized + randomDir + Vector3.up * 0.4f).normalized;
@@ -535,13 +672,14 @@ public class BlockDrop : MonoBehaviour
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
         maxStackAmount = Mathf.Max(1, maxStackAmount);
         stackAmount = Mathf.Clamp(stackAmount, 1, maxStackAmount);
-        spawnTime = Time.time;
-        nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
-        UpdateDropName();
+        EnsureRuntimeComponents();
     }
 
     private void Update()
     {
+        if (!gameObject.activeSelf)
+            return;
+
         transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
 
         if (!isCollected && Time.time >= nextMergeCheckTime)
@@ -551,7 +689,7 @@ public class BlockDrop : MonoBehaviour
         }
 
         if (Time.time - spawnTime >= lifeTimeSeconds)
-            Destroy(gameObject);
+            ReturnToPool();
     }
 
     private void OnTriggerEnter(Collider other)
@@ -600,8 +738,7 @@ public class BlockDrop : MonoBehaviour
             if (stackAmount <= 0)
             {
                 isCollected = true;
-                DisableSelfColliders();
-                Destroy(gameObject);
+                ReturnToPool();
                 return;
             }
 
@@ -675,8 +812,7 @@ public class BlockDrop : MonoBehaviour
         if (other.stackAmount <= 0)
         {
             other.isCollected = true;
-            other.DisableSelfColliders();
-            Destroy(other.gameObject);
+            other.ReturnToPool();
         }
         else
         {
@@ -713,15 +849,17 @@ public class BlockDrop : MonoBehaviour
 
     private void DisableSelfColliders()
     {
-        Collider[] allColliders = GetComponents<Collider>();
-        for (int i = 0; i < allColliders.Length; i++)
-            allColliders[i].enabled = false;
+        if (solidCollider != null)
+            solidCollider.enabled = false;
+        if (pickupCollider != null)
+            pickupCollider.enabled = false;
 
         if (rb != null)
         {
             rb.linearVelocity = Vector3.zero;
             rb.angularVelocity = Vector3.zero;
             rb.isKinematic = true;
+            rb.detectCollisions = false;
         }
     }
 }

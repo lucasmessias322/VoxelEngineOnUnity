@@ -33,6 +33,9 @@ public class WorldLoadingBootstrap : MonoBehaviour
     private bool runtimeLoadingScreenCreated;
     private float initialLoadProgress01 = 1f;
     private bool bootstrapInitialized;
+    private int lastShownReadyChunks = int.MinValue;
+    private int lastShownTotalChunks = int.MinValue;
+    private int lastShownProgressPercent = int.MinValue;
 
     public bool IsInitialWorldReady => !runInitialWorldBootstrap || initialWorldReady;
     public bool IsInitialWorldLoading => initialBootstrapActive;
@@ -569,7 +572,12 @@ public class WorldLoadingBootstrap : MonoBehaviour
 
         int clampedTotal = Mathf.Max(0, totalChunks);
         int clampedReady = Mathf.Clamp(readyChunks, 0, clampedTotal);
-        loadingStatusText.text = $"Chunks carregados: {clampedReady}/{clampedTotal}";
+        if (clampedReady == lastShownReadyChunks && clampedTotal == lastShownTotalChunks)
+            return;
+
+        lastShownReadyChunks = clampedReady;
+        lastShownTotalChunks = clampedTotal;
+        loadingStatusText.SetText("Chunks carregados: {0:0}/{1:0}", clampedReady, clampedTotal);
     }
 
     private void SetLoadingPhaseText(string status)
@@ -595,7 +603,14 @@ public class WorldLoadingBootstrap : MonoBehaviour
             loadingProgressFill.fillAmount = clampedProgress;
 
         if (loadingProgressPercentText != null)
-            loadingProgressPercentText.text = $"{Mathf.RoundToInt(clampedProgress * 100f)}%";
+        {
+            int percent = Mathf.RoundToInt(clampedProgress * 100f);
+            if (percent != lastShownProgressPercent)
+            {
+                lastShownProgressPercent = percent;
+                loadingProgressPercentText.SetText("{0:0}%", percent);
+            }
+        }
     }
 
     private void SetLoadingScreenVisible(bool isVisible)

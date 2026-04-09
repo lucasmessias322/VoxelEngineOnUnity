@@ -140,18 +140,18 @@ public partial class World
 
         chunk.hasVoxelData = false;
 
-        var editsList = new List<BlockEdit>();
+        rebuildChunkEditsBuffer.Clear();
         int dataBorderSize = GetDetailedGenerationBorderSize();
         int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
         int overrideBorderSize = Mathf.Max(dataBorderSize, lightBorderSize);
-        AppendRelevantBlockEdits(coord, overrideBorderSize, editsList);
+        AppendRelevantBlockEdits(coord, overrideBorderSize, rebuildChunkEditsBuffer);
 
         NativeArray<BlockEdit> nativeEdits;
-        if (editsList.Count > 0)
+        if (rebuildChunkEditsBuffer.Count > 0)
         {
-            nativeEdits = new NativeArray<BlockEdit>(editsList.Count, Allocator.Persistent);
-            for (int i = 0; i < editsList.Count; i++)
-                nativeEdits[i] = editsList[i];
+            nativeEdits = new NativeArray<BlockEdit>(rebuildChunkEditsBuffer.Count, Allocator.Persistent);
+            for (int i = 0; i < rebuildChunkEditsBuffer.Count; i++)
+                nativeEdits[i] = rebuildChunkEditsBuffer[i];
         }
         else
         {

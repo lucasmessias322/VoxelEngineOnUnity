@@ -1,11 +1,18 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 public class CraftingStationUIController : MonoBehaviour
 {
     private static readonly Vector3Int InvalidBlock = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
     private const string RuntimeControllerName = "__RuntimeCraftingStationUIController";
+    private static readonly List<GameObject> SceneRootSearchBuffer = new List<GameObject>(64);
+    private static readonly List<Transform> TransformSearchBuffer = new List<Transform>(256);
+    private static readonly List<Slot> SlotComponentBufferA = new List<Slot>(16);
+    private static readonly List<Slot> SlotComponentBufferB = new List<Slot>(16);
+    private static readonly List<Slot> OrderedSlotBuffer = new List<Slot>(16);
+    private static readonly System.Comparison<Slot> SlotSiblingIndexComparer = CompareSlotSiblingIndex;
 
     public static CraftingStationUIController Instance { get; private set; }
 
@@ -459,20 +466,71 @@ public class CraftingStationUIController : MonoBehaviour
 
     private static RectTransform FindRectTransformByName(string objectName)
     {
-        RectTransform[] rectTransforms = Resources.FindObjectsOfTypeAll<RectTransform>();
-        for (int i = 0; i < rectTransforms.Length; i++)
+        if (string.IsNullOrEmpty(objectName))
+            return null;
+
+        int loadedSceneCount = SceneManager.sceneCount;
+        for (int sceneIndex = 0; sceneIndex < loadedSceneCount; sceneIndex++)
         {
-            RectTransform rectTransform = rectTransforms[i];
-            if (rectTransform == null || rectTransform.name != objectName)
+            Scene scene = SceneManager.GetSceneAt(sceneIndex);
+            if (!scene.IsValid() || !scene.isLoaded)
                 continue;
 
-            if (!rectTransform.gameObject.scene.IsValid())
-                continue;
+            SceneRootSearchBuffer.Clear();
+            scene.GetRootGameObjects(SceneRootSearchBuffer);
 
-            return rectTransform;
+            for (int i = 0; i < SceneRootSearchBuffer.Count; i++)
+            {
+                GameObject root = SceneRootSearchBuffer[i];
+                if (root == null)
+                    continue;
+
+                RectTransform match = FindRectTransformInHierarchy(root.transform, objectName);
+                if (match != null)
+                    return match;
+            }
         }
 
         return null;
+    }
+
+    private static RectTransform FindRectTransformInHierarchy(Transform root, string objectName)
+    {
+        if (root == null)
+            return null;
+
+        TransformSearchBuffer.Clear();
+        TransformSearchBuffer.Add(root);
+
+        while (TransformSearchBuffer.Count > 0)
+        {
+            int lastIndex = TransformSearchBuffer.Count - 1;
+            Transform current = TransformSearchBuffer[lastIndex];
+            TransformSearchBuffer.RemoveAt(lastIndex);
+
+            if (current == null)
+                continue;
+
+            if (current.name == objectName && current is RectTransform rectTransform)
+                return rectTransform;
+
+            for (int i = 0; i < current.childCount; i++)
+                TransformSearchBuffer.Add(current.GetChild(i));
+        }
+
+        return null;
+    }
+
+    private static int CompareSlotSiblingIndex(Slot a, Slot b)
+    {
+        if (ReferenceEquals(a, b))
+            return 0;
+        if (a == null)
+            return 1;
+        if (b == null)
+            return -1;
+
+        return a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex());
     }
 
     private static RectTransform FindChildRectTransformByName(Transform parent, string childName)
@@ -574,11 +632,12 @@ public class CraftingStationUIController : MonoBehaviour
         if (slotsAndResult == null || slotsContainer == null)
             return;
 
-        Slot[] currentSlots = slotsContainer.GetComponentsInChildren<Slot>(true);
-        if (currentSlots.Length == 0)
+        SlotComponentBufferA.Clear();
+        slotsContainer.GetComponentsInChildren(true, SlotComponentBufferA);
+        if (SlotComponentBufferA.Count == 0)
             return;
 
-        Slot inputTemplate = currentSlots[0];
+        Slot inputTemplate = SlotComponentBufferA[0];
         while (slotsContainer.childCount < 9)
         {
             GameObject clone = Object.Instantiate(inputTemplate.gameObject, slotsContainer, false);
@@ -626,13 +685,25 @@ public class CraftingStationUIController : MonoBehaviour
         if (slotsContainer == null)
             return false;
 
-        Slot[] containerSlots = slotsContainer.GetComponentsInChildren<Slot>(true);
-        if (containerSlots == null || containerSlots.Length == 0)
+        SlotComponentBufferA.Clear();
+        slotsContainer.GetComponentsInChildren(true, SlotComponentBufferA);
+        if (SlotComponentBufferA.Count == 0)
             return false;
 
-        List<Slot> orderedSlots = new List<Slot>(containerSlots);
-        orderedSlots.Sort((a, b) => a.transform.GetSiblingIndex().CompareTo(b.transform.GetSiblingIndex()));
-        inputSlots = orderedSlots.ToArray();
+        OrderedSlotBuffer.Clear();
+        for (int i = 0; i < SlotComponentBufferA.Count; i++)
+        {
+            Slot slot = SlotComponentBufferA[i];
+            if (slot != null)
+                OrderedSlotBuffer.Add(slot);
+        }
+
+        if (OrderedSlotBuffer.Count == 0)
+            return false;
+
+        OrderedSlotBuffer.Sort(SlotSiblingIndexComparer);
+        inputSlots = new Slot[OrderedSlotBuffer.Count];
+        OrderedSlotBuffer.CopyTo(inputSlots);
 
         if (outputSlot == null)
             outputSlot = ResolveOutputSlot(panel, slotsContainer);
@@ -645,10 +716,11 @@ public class CraftingStationUIController : MonoBehaviour
         if (slotsAndResult == null)
             return null;
 
-        Slot[] allSlots = slotsAndResult.GetComponentsInChildren<Slot>(true);
-        for (int i = 0; i < allSlots.Length; i++)
+        SlotComponentBufferB.Clear();
+        slotsAndResult.GetComponentsInChildren(true, SlotComponentBufferB);
+        for (int i = 0; i < SlotComponentBufferB.Count; i++)
         {
-            Slot slot = allSlots[i];
+            Slot slot = SlotComponentBufferB[i];
             if (slot == null)
                 continue;
 

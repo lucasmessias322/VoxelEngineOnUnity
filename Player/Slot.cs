@@ -42,6 +42,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     private static RectTransform dragVisualRoot;
     private static Image dragVisualIcon;
     private static TMP_Text dragVisualAmountText;
+    private static int dragVisualDisplayedAmount = int.MinValue;
     private static Slot hoveredSlot;
     private static Slot pendingDropTarget;
     private static bool pendingDropResolution;
@@ -563,20 +564,44 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         bool canShow = HasCarriedStack && inventory != null && inventory.IsInventoryOpen;
         dragVisualRoot.gameObject.SetActive(canShow);
         if (!canShow)
+        {
+            dragVisualDisplayedAmount = int.MinValue;
             return;
+        }
 
         dragVisualIcon.sprite = ResolveItemIcon(carriedItem);
         dragVisualIcon.enabled = dragVisualIcon.sprite != null;
 
         bool showAmount = carriedAmount > 1;
-        dragVisualAmountText.text = showAmount ? carriedAmount.ToString() : string.Empty;
-        dragVisualAmountText.enabled = showAmount;
+        if (showAmount)
+        {
+            if (!dragVisualAmountText.enabled || dragVisualDisplayedAmount != carriedAmount)
+            {
+                dragVisualAmountText.SetText("{0:0}", carriedAmount);
+                dragVisualDisplayedAmount = carriedAmount;
+            }
+
+            dragVisualAmountText.enabled = true;
+        }
+        else
+        {
+            if (dragVisualAmountText.enabled)
+                dragVisualAmountText.enabled = false;
+
+            if (dragVisualDisplayedAmount != 0)
+            {
+                dragVisualAmountText.text = string.Empty;
+                dragVisualDisplayedAmount = 0;
+            }
+        }
     }
 
     private static void HideDragVisual()
     {
         if (dragVisualRoot != null && dragVisualRoot.gameObject.activeSelf)
             dragVisualRoot.gameObject.SetActive(false);
+
+        dragVisualDisplayedAmount = int.MinValue;
     }
 
     private void TryResolvePendingDragDrop()

@@ -72,13 +72,15 @@ public partial class World
     {
         if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
 
-        Queue<Vector3Int> lightQueue = new Queue<Vector3Int>();
+        Queue<Vector3Int> lightQueue = propagateLightQueueBuffer;
+        lightQueue.Clear();
         lightQueue.Enqueue(startWorldPos);
 
         // Define a luz inicial usando o novo sistema de colunas
         SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, lightEmission);
 
-        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
+        Dictionary<Vector2Int, int> dirtiedChunks = propagateDirtyChunksBuffer;
+        dirtiedChunks.Clear();
 
         while (lightQueue.Count > 0)
         {
@@ -143,9 +145,12 @@ public partial class World
         byte oldLight = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
         if (oldLight == 0) return;
 
-        Queue<(Vector3Int pos, byte lightLevel)> darkQueue = new Queue<(Vector3Int, byte)>();
-        Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
-        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
+        Queue<(Vector3Int pos, byte lightLevel)> darkQueue = removeLightDarkQueueBuffer;
+        darkQueue.Clear();
+        Queue<Vector3Int> refillQueue = removeLightRefillQueueBuffer;
+        refillQueue.Clear();
+        Dictionary<Vector2Int, int> dirtiedChunks = removeLightDirtyChunksBuffer;
+        dirtiedChunks.Clear();
 
         darkQueue.Enqueue((startWorldPos, oldLight));
         SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, 0);
@@ -231,9 +236,12 @@ public partial class World
     {
         if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
 
-        Dictionary<Vector2Int, int> dirtiedChunks = new Dictionary<Vector2Int, int>();
-        Queue<Vector3Int> refillQueue = new Queue<Vector3Int>();
-        HashSet<Vector3Int> enqueued = new HashSet<Vector3Int>();
+        Dictionary<Vector2Int, int> dirtiedChunks = refillLightDirtyChunksBuffer;
+        dirtiedChunks.Clear();
+        Queue<Vector3Int> refillQueue = refillLightQueueBuffer;
+        refillQueue.Clear();
+        HashSet<Vector3Int> enqueued = refillLightEnqueuedBuffer;
+        enqueued.Clear();
 
         // Try to relight the changed voxel from the brightest lit neighbor.
         BlockType startBlock = GetBlockAt(startWorldPos);
@@ -339,7 +347,8 @@ public partial class World
 
     private void CleanupEmptyLightColumns()
     {
-        var toRemove = new List<Vector2Int>();
+        List<Vector2Int> toRemove = cleanupLightColumnsRemoveBuffer;
+        toRemove.Clear();
         foreach (var kv in globalLightColumns)
         {
             bool allZero = true;

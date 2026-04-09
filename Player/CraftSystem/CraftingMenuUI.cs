@@ -6,6 +6,63 @@ using UnityEngine.UI;
 
 public class CraftingMenuUI : MonoBehaviour
 {
+    private static readonly List<Recipe> EmptyRecipeList = new List<Recipe>(0);
+
+    private sealed class RecipeButtonView : MonoBehaviour
+    {
+        private Button cachedButton;
+        private Image iconImage;
+        private CraftingMenuUI owner;
+        private Recipe boundRecipe;
+
+        public Button Button => cachedButton;
+
+        public void Initialize(CraftingMenuUI ownerMenu)
+        {
+            owner = ownerMenu;
+
+            if (cachedButton == null)
+                cachedButton = GetComponent<Button>();
+
+            if (iconImage == null)
+                iconImage = transform.Find("ItemIcon")?.GetComponent<Image>();
+
+            if (cachedButton != null)
+            {
+                cachedButton.onClick.RemoveListener(HandleClick);
+                cachedButton.onClick.AddListener(HandleClick);
+            }
+        }
+
+        public void Bind(Recipe recipe)
+        {
+            boundRecipe = recipe;
+            if (iconImage != null)
+                iconImage.sprite = ResolveItemIcon(recipe != null ? recipe.resultItem : null);
+        }
+
+        public void Unbind()
+        {
+            boundRecipe = null;
+            if (iconImage != null)
+                iconImage.sprite = null;
+        }
+
+        private void HandleClick()
+        {
+            if (owner != null && boundRecipe != null)
+                owner.OnRecipeSelected(boundRecipe);
+        }
+
+        private void OnDestroy()
+        {
+            if (cachedButton != null)
+                cachedButton.onClick.RemoveListener(HandleClick);
+        }
+    }
+
+    private const int MaxRecipeButtonPoolSize = 128;
+
     public static CraftingMenuUI Instance { get; private set; }
 
     [Header("UI References")]
@@ -22,6 +79,9 @@ public class CraftingMenuUI : MonoBehaviour
     private bool? lastKnownInventoryOpen;
     private bool lastKnownCrafterOpen;
     private bool externalPanelBlocked;
+    private bool recipeButtonPoolPrimed;
+    private readonly List<RecipeButtonView> activeRecipeButtons = new List<RecipeButtonView>(32);
+    private readonly Stack<RecipeButtonView> pooledRecipeButtons = new Stack<RecipeButtonView>(32);
 
     private void Awake()
     {
@@ -38,6 +98,7 @@ public class CraftingMenuUI : MonoBehaviour
     {
         SyncInventorySubscription();
         lastKnownCrafterOpen = IsCrafterOpen();
+        PrimeRecipeButtonPoolFromExistingChildren();
         RefreshAvailableRecipes();
         SyncPanelWithInventory(force: true);
     }
@@ -46,6 +107,7 @@ public class CraftingMenuUI : MonoBehaviour
     {
         SyncInventorySubscription();
         lastKnownCrafterOpen = IsCrafterOpen();
+        PrimeRecipeButtonPoolFromExistingChildren();
         RefreshAvailableRecipes();
         SyncPanelWithInventory(force: true);
         UpdateRecipeDetails();
@@ -69,6 +131,7 @@ public class CraftingMenuUI : MonoBehaviour
     private void OnDisable()
     {
         UnsubscribeFromInventory();
+        ReleaseAllRecipeButtons();
     }
 
     private void OnDestroy()
@@ -77,6 +140,7 @@ public class CraftingMenuUI : MonoBehaviour
             Instance = null;
 
         UnsubscribeFromInventory();
+        ReleaseAllRecipeButtons();
     }
 
     public void RefreshAvailableRecipes()
@@ -92,8 +156,8 @@ public class CraftingMenuUI : MonoBehaviour
         if (recipeListParent == null || recipeButtonPrefab == null)
             return;
 
-        foreach (Transform child in recipeListParent)
-            Destroy(child.gameObject);
+        PrimeRecipeButtonPoolFromExistingChildren();
+        ReleaseAllRecipeButtons();
 
         if (visibleRecipes == null || visibleRecipes.Count == 0)
             return;
@@ -104,20 +168,89 @@ public class CraftingMenuUI : MonoBehaviour
             if (recipe == null || recipe.resultItem == null)
                 continue;
 
-            GameObject buttonObject = Instantiate(recipeButtonPrefab, recipeListParent);
-            Button button = buttonObject.GetComponent<Button>();
-            // Text buttonText = buttonObject.GetComponentInChildren<Text>();
+            RecipeButtonView buttonView = AcquireRecipeButton();
+            if (buttonView == null || buttonView.Button == null)
+                continue;
 
-            // if (buttonText != null)
-            //     buttonText.text = GetRecipeDisplayName(recipe);
-
-            Image iconImage = buttonObject.transform.Find("ItemIcon")?.GetComponent<Image>();
-            if (iconImage != null)
-                iconImage.sprite = ResolveItemIcon(recipe.resultItem);
-
-            if (button != null)
-                button.onClick.AddListener(() => OnRecipeSelected(recipe));
+            buttonView.gameObject.name = $"Recipe_{GetRecipeDisplayName(recipe)}";
+            buttonView.Bind(recipe);
+            activeRecipeButtons.Add(buttonView);
         }
+    }
+
+    private void PrimeRecipeButtonPoolFromExistingChildren()
+    {
+        if (recipeButtonPoolPrimed || recipeListParent == null)
+            return;
+
+        recipeButtonPoolPrimed = true;
+
+        for (int i = recipeListParent.childCount - 1; i >= 0; i--)
+        {
+            Transform child = recipeListParent.GetChild(i);
+            if (child == null)
+                continue;
+
+            RecipeButtonView view = child.GetComponent<RecipeButtonView>();
+            if (view == null)
+            {
+                if (child.GetComponent<Button>() == null)
+                    continue;
+
+                view = child.gameObject.AddComponent<RecipeButtonView>();
+            }
+
+            view.Initialize(this);
+            ReturnRecipeButtonToPool(view);
+        }
+    }
+
+    private RecipeButtonView AcquireRecipeButton()
+    {
+        while (pooledRecipeButtons.Count > 0)
+        {
+            RecipeButtonView pooledView = pooledRecipeButtons.Pop();
+            if (pooledView == null)
+                continue;
+
+            pooledView.transform.SetParent(recipeListParent, false);
+            pooledView.gameObject.SetActive(true);
+            pooledView.Initialize(this);
+            return pooledView;
+        }
+
+        GameObject buttonObject = Instantiate(recipeButtonPrefab, recipeListParent);
+        RecipeButtonView view = buttonObject.GetComponent<RecipeButtonView>();
+        if (view == null)
+            view = buttonObject.AddComponent<RecipeButtonView>();
+        view.Initialize(this);
+        return view;
+    }
+
+    private void ReleaseAllRecipeButtons()
+    {
+        for (int i = activeRecipeButtons.Count - 1; i >= 0; i--)
+            ReturnRecipeButtonToPool(activeRecipeButtons[i]);
+
+        activeRecipeButtons.Clear();
+    }
+
+    private void ReturnRecipeButtonToPool(RecipeButtonView view)
+    {
+        if (view == null)
+            return;
+
+        view.Unbind();
+
+        if (pooledRecipeButtons.Count >= MaxRecipeButtonPoolSize)
+        {
+            Destroy(view.gameObject);
+            return;
+        }
+
+        view.transform.SetParent(recipeListParent, false);
+        view.gameObject.SetActive(false);
+        pooledRecipeButtons.Push(view);
     }
 
     private void EnsureRecipeSelection(List<Recipe> visibleRecipes)
@@ -373,7 +506,7 @@ public class CraftingMenuUI : MonoBehaviour
     {
         CraftingSystem craftingSystem = CraftingSystem.Instance;
         if (craftingSystem == null)
-            return new List<Recipe>();
+            return EmptyRecipeList;
 
         return craftingSystem.GetRecipesForCurrentContext();
     }
