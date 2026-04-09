@@ -20,6 +20,9 @@ public partial class World : MonoBehaviour
     [Min(32)]
     [Tooltip("Limita quantas secoes o BFS de oclusao processa por frame para evitar picos de CPU durante streaming de chunks.")]
     public int sectionOcclusionPropagationBudgetPerFrame = 512;
+    [Min(0f)]
+    [Tooltip("Orcamento de tempo (ms) para o BFS de oclusao por frame. Use 0 para sem limite.")]
+    public float sectionOcclusionTimeBudgetMS = 0.8f;
 
     private bool sectionOcclusionGraphDirty = true;
     private bool sectionOcclusionRebuildInProgress;
@@ -198,9 +201,14 @@ public partial class World : MonoBehaviour
 
     private void ProcessSectionOcclusionVisibilityRebuild()
     {
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = sectionOcclusionTimeBudgetMS > 0f ? sectionOcclusionTimeBudgetMS / 1000f : 0f;
         int budget = Mathf.Max(32, sectionOcclusionPropagationBudgetPerFrame);
         while (budget-- > 0 && sectionOcclusionQueue.Count > 0)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             SectionOcclusionNode node = sectionOcclusionQueue.Dequeue();
             ProcessSectionOcclusionNode(node, sectionOcclusionBuildCameraPosition, sectionOcclusionBuildCameraSection, sectionOcclusionBuildCameraSectionCenter);
         }

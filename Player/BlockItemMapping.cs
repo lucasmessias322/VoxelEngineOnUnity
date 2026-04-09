@@ -49,6 +49,13 @@ public class BlockItemMappingSO : ScriptableObject
             return true;
         }
 
+        if (!string.IsNullOrWhiteSpace(item.itemName) &&
+            item.itemName.Equals("wire", StringComparison.OrdinalIgnoreCase))
+        {
+            blockType = BlockType.wire;
+            return true;
+        }
+
         return false;
     }
 

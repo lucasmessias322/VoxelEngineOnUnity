@@ -289,10 +289,16 @@ public partial class World : MonoBehaviour
     [Tooltip("Quantidade maxima de subchunks que podem reconstruir collider por frame.")]
     [Min(1)]
     public int maxColliderBuildsPerFrame = 1;
+    [Tooltip("Orcamento de tempo (ms) para reconstruir colliders por frame. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float colliderBuildTimeBudgetMS = 0.75f;
     [Tooltip("Quantidade maxima de jobs de dados concluidos e processados por frame.")]
     [Min(1)]
     public int maxDataCompletionsPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
+    [Tooltip("Orcamento total (ms) para os processos do Update. Use 0 para desativar o limite.")]
+    [Min(0f)]
+    public float updateWorkBudgetMS = 6f;
     [Tooltip("Limite de jobs de geraÃ§Ã£o de dados (inclui iluminaÃ§Ã£o) simultÃ¢neos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
@@ -948,6 +954,8 @@ public partial class World : MonoBehaviour
         if (!enableBlockColliders || queuedColliderBuilds.Count == 0)
             return;
 
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = colliderBuildTimeBudgetMS > 0f ? colliderBuildTimeBudgetMS / 1000f : 0f;
         int perFrameLimit = Mathf.Max(1, maxColliderBuildsPerFrame);
         int processed = 0;
         int attempts = queuedColliderBuilds.Count;
@@ -956,6 +964,9 @@ public partial class World : MonoBehaviour
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedColliderBuilds.Count > 0)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             Vector3Int key = queuedColliderBuilds.Dequeue();
             if (!queuedColliderBuildsByKey.TryGetValue(key, out PendingColliderBuild request))
                 continue;
@@ -1083,6 +1094,11 @@ public partial class World : MonoBehaviour
         return BlockPlacementRotationUtility.ResolvePlacementAxis(mapping, hitNormal, lookForward);
     }
 
+    public BlockPlacementAxis GetPlacementAxisAt(Vector3Int worldPos, BlockType blockType)
+    {
+        return GetStoredPlacementAxis(worldPos, blockType);
+    }
+
     private BlockPlacementAxis GetStoredPlacementAxis(Vector3Int worldPos, BlockType blockType)
     {
         if (!TryGetPlacementRotationMapping(blockType, out _))
@@ -1091,7 +1107,7 @@ public partial class World : MonoBehaviour
         if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
             return BlockPlacementAxis.Y;
 
-        return BlockPlacementRotationUtility.SanitizeAxis(axis);
+        return BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
     }
 
     private void UpdateStoredPlacementAxis(Vector3Int worldPos, BlockType blockType, BlockPlacementAxis axis)
@@ -1102,7 +1118,7 @@ public partial class World : MonoBehaviour
             return;
         }
 
-        BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeAxis(axis);
+        BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
         if (sanitized == BlockPlacementAxis.Y)
         {
             blockPlacementAxes.Remove(worldPos);
@@ -1159,7 +1175,7 @@ public partial class World : MonoBehaviour
             if ((uint)idx >= (uint)blockPlacementAxes.Length)
                 continue;
 
-            blockPlacementAxes[idx] = BlockPlacementRotationUtility.SanitizeAxisByte(edit.placementAxis);
+            blockPlacementAxes[idx] = BlockPlacementRotationUtility.SanitizeStoredAxisByte(edit.placementAxis);
         }
     }
 
@@ -1578,20 +1594,59 @@ public partial class World : MonoBehaviour
 
     private void Update()
     {
+        float updateFrameStartTime = Time.realtimeSinceStartup;
+        float updateBudgetSeconds = updateWorkBudgetMS > 0f ? updateWorkBudgetMS / 1000f : 0f;
+
         HandleBlockColliderToggle();
         HandleVisualFeatureToggle();
         ApplyResolvedVisualSubchunkRendererLayout();
         meshesAppliedThisFrame = 0;
-        ProcessQueuedWaterUpdates();
-        ProcessQueuedTreeCapitatorBreaks();
-        ProcessQueuedChunkRebuilds();
-        ProcessQueuedHighBuildMeshRebuilds();
-        ProcessQueuedLeafDecay();
-        UpdateChunks();
-        RefreshSimulationDistanceStateIfNeeded();
-        ProcessPendingColliderBuilds();
-        ProcessChunkQueue();
-        UpdateSectionOcclusionVisibility();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedWaterUpdates();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedTreeCapitatorBreaks();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedChunkRebuilds();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedHighBuildMeshRebuilds();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedLeafDecay();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            UpdateChunks();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            RefreshSimulationDistanceStateIfNeeded();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessPendingColliderBuilds();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessChunkQueue(GetRemainingUpdateBudgetSeconds(updateFrameStartTime, updateBudgetSeconds));
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            UpdateSectionOcclusionVisibility();
+    }
+
+    private static bool HasUpdateBudgetRemaining(float frameStartTime, float budgetSeconds)
+    {
+        if (budgetSeconds <= 0f)
+            return true;
+
+        return (Time.realtimeSinceStartup - frameStartTime) <= budgetSeconds;
+    }
+
+    private static float GetRemainingUpdateBudgetSeconds(float frameStartTime, float budgetSeconds)
+    {
+        if (budgetSeconds <= 0f)
+            return float.PositiveInfinity;
+
+        return Mathf.Max(0f, budgetSeconds - (Time.realtimeSinceStartup - frameStartTime));
     }
 
     #endregion
@@ -1745,10 +1800,13 @@ public partial class World : MonoBehaviour
 
     #region Chunk Queue & Processing
 
-    private void ProcessChunkQueue()
+    private void ProcessChunkQueue(float budgetSecondsOverride = -1f)
     {
         float frameStartTime = Time.realtimeSinceStartup;
         float budgetSeconds = frameTimeBudgetMS / 1000f;
+        if (budgetSecondsOverride > 0f)
+            budgetSeconds = Mathf.Min(budgetSeconds, budgetSecondsOverride);
+        budgetSeconds = Mathf.Max(0.0001f, budgetSeconds);
         PrioritizePendingJobsByDistance();
 
         int dataProcessedThisFrame = 0;

@@ -2,8 +2,15 @@ using System.Collections.Generic;
 using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
-public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2 }
-public enum BlockPlacementAxis : byte { Y = 0, X = 1, Z = 2 }
+public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3 }
+public enum BlockPlacementAxis : byte
+{
+    Y = 0,
+    X = 1,
+    Z = 2,
+    XNegative = 3,
+    ZNegative = 4
+}
 public enum BlockPlacementRotationAxes : byte { Vertical = 0, Horizontal = 1, Both = 2 }
 
 public static class BlockFaceUtility
@@ -247,11 +254,13 @@ public struct BlockTextureMapping
     [SerializeField, HideInInspector] private bool directionalSideDataInitialized;
 
     [Header("Rendering")]
-    [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes).")]
+    [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes), Plane = quad dupla face (redstone/quadros/vinhas).")]
     public BlockRenderShape renderShape;
-    [Tooltip("Canto minimo local do formato dentro do voxel (0..1). Usado em Cross e Cuboid.")]
+    [Tooltip("Quando ativo, o bloco usa malha plana (quad dupla face), similar a redstone/quadro/vinhas.")]
+    public bool isFlat;
+    [Tooltip("Canto minimo local do formato dentro do voxel (0..1). Usado em Cross, Cuboid e Plane.")]
     public Vector3 shapeMin;
-    [Tooltip("Canto maximo local do formato dentro do voxel (0..1). Usado em Cross e Cuboid.")]
+    [Tooltip("Canto maximo local do formato dentro do voxel (0..1). Usado em Cross, Cuboid e Plane.")]
     public Vector3 shapeMax;
 
     [Header("Behavior (use to control face culling / water handling)")]
@@ -363,7 +372,9 @@ public static class BlockPlacementRotationUtility
         return axis switch
         {
             BlockPlacementAxis.X => BlockPlacementAxis.X,
+            BlockPlacementAxis.XNegative => BlockPlacementAxis.X,
             BlockPlacementAxis.Z => BlockPlacementAxis.Z,
+            BlockPlacementAxis.ZNegative => BlockPlacementAxis.Z,
             _ => BlockPlacementAxis.Y
         };
     }
@@ -376,6 +387,28 @@ public static class BlockPlacementRotationUtility
     public static byte SanitizeAxisByte(byte axis)
     {
         return (byte)SanitizeAxis(axis);
+    }
+
+    public static BlockPlacementAxis SanitizeStoredAxis(BlockPlacementAxis axis)
+    {
+        return axis switch
+        {
+            BlockPlacementAxis.X => BlockPlacementAxis.X,
+            BlockPlacementAxis.XNegative => BlockPlacementAxis.XNegative,
+            BlockPlacementAxis.Z => BlockPlacementAxis.Z,
+            BlockPlacementAxis.ZNegative => BlockPlacementAxis.ZNegative,
+            _ => BlockPlacementAxis.Y
+        };
+    }
+
+    public static BlockPlacementAxis SanitizeStoredAxis(byte axis)
+    {
+        return SanitizeStoredAxis((BlockPlacementAxis)axis);
+    }
+
+    public static byte SanitizeStoredAxisByte(byte axis)
+    {
+        return (byte)SanitizeStoredAxis(axis);
     }
 
     public static BlockPlacementAxis ResolvePlacementAxis(
@@ -397,7 +430,7 @@ public static class BlockPlacementRotationUtility
         return allowedAxes switch
         {
             BlockPlacementRotationAxes.Vertical => BlockPlacementAxis.Y,
-            BlockPlacementRotationAxes.Horizontal => ResolveHorizontalAxis(hitNormal, lookForward),
+            BlockPlacementRotationAxes.Horizontal => ResolveHorizontalAxisFromLookForward(lookForward),
             BlockPlacementRotationAxes.Both => ResolveAxisFromHitNormalOrFallback(hitNormal, lookForward),
             _ => BlockPlacementAxis.Y
         };
@@ -407,6 +440,12 @@ public static class BlockPlacementRotationUtility
     {
         if (!mapping.usePlacementAxisRotation)
             return worldFace;
+
+        if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+            BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+        {
+            return RemapHorizontalFacingFace(worldFace, axis);
+        }
 
         return RemapFace(worldFace, axis);
     }
@@ -443,12 +482,54 @@ public static class BlockPlacementRotationUtility
         };
     }
 
+    private static BlockFace RemapHorizontalFacingFace(BlockFace worldFace, BlockPlacementAxis axis)
+    {
+        axis = SanitizeStoredAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Front,
+                BlockFace.Left => BlockFace.Back,
+                BlockFace.Front => BlockFace.Left,
+                BlockFace.Back => BlockFace.Right,
+                _ => worldFace
+            },
+
+            BlockPlacementAxis.XNegative => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Back,
+                BlockFace.Left => BlockFace.Front,
+                BlockFace.Front => BlockFace.Right,
+                BlockFace.Back => BlockFace.Left,
+                _ => worldFace
+            },
+
+            BlockPlacementAxis.ZNegative => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Left,
+                BlockFace.Left => BlockFace.Right,
+                BlockFace.Front => BlockFace.Back,
+                BlockFace.Back => BlockFace.Front,
+                _ => worldFace
+            },
+
+            _ => worldFace
+        };
+    }
+
     private static BlockPlacementAxis ResolveAxisFromHitNormalOrFallback(Vector3Int hitNormal, Vector3 lookForward)
     {
-        if (Mathf.Abs(hitNormal.x) > 0)
+        if (hitNormal.x > 0)
+            return BlockPlacementAxis.XNegative;
+
+        if (hitNormal.x < 0)
             return BlockPlacementAxis.X;
 
-        if (Mathf.Abs(hitNormal.z) > 0)
+        if (hitNormal.z > 0)
+            return BlockPlacementAxis.ZNegative;
+
+        if (hitNormal.z < 0)
             return BlockPlacementAxis.Z;
 
         if (Mathf.Abs(hitNormal.y) > 0)
@@ -472,7 +553,10 @@ public static class BlockPlacementRotationUtility
     {
         float absX = Mathf.Abs(lookForward.x);
         float absZ = Mathf.Abs(lookForward.z);
-        return absX >= absZ ? BlockPlacementAxis.X : BlockPlacementAxis.Z;
+        if (absX >= absZ)
+            return lookForward.x >= 0f ? BlockPlacementAxis.X : BlockPlacementAxis.XNegative;
+
+        return lookForward.z >= 0f ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative;
     }
 }
 
@@ -482,16 +566,30 @@ public static class BlockShapeUtility
     private static readonly Vector3 DefaultCrossMax = new Vector3(0.85f, 1f, 0.85f);
     private static readonly Vector3 DefaultCuboidMin = new Vector3(0.375f, 0f, 0.375f);
     private static readonly Vector3 DefaultCuboidMax = new Vector3(0.625f, 0.75f, 0.625f);
+    private static readonly Vector3 DefaultPlaneMin = new Vector3(0f, 0f, 0f);
+    private static readonly Vector3 DefaultPlaneMax = new Vector3(1f, 0.0625f, 1f);
+    private const float PlaneBoundsHalfThickness = 0.01f;
+    private const float PlaneAttachmentInset01 = 0.001f;
     private const float BoundsEpsilon = 0.0001f;
+
+    public static BlockRenderShape GetEffectiveRenderShape(BlockTextureMapping mapping)
+    {
+        return mapping.isFlat ? BlockRenderShape.Plane : mapping.renderShape;
+    }
+
+    public static bool IsFlatShape(BlockTextureMapping mapping)
+    {
+        return GetEffectiveRenderShape(mapping) == BlockRenderShape.Plane;
+    }
 
     public static bool UsesCustomMesh(BlockTextureMapping mapping)
     {
-        return mapping.renderShape != BlockRenderShape.Cube;
+        return GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube;
     }
 
     public static byte GetEffectiveLightOpacity(BlockTextureMapping mapping)
     {
-        if (mapping.renderShape != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
+        if (GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
             return 0;
 
         return mapping.lightOpacity;
@@ -514,7 +612,7 @@ public static class BlockShapeUtility
             return;
         }
 
-        switch (mapping.renderShape)
+        switch (GetEffectiveRenderShape(mapping))
         {
             case BlockRenderShape.Cross:
                 min = DefaultCrossMin;
@@ -526,6 +624,11 @@ public static class BlockShapeUtility
                 max = DefaultCuboidMax;
                 return;
 
+            case BlockRenderShape.Plane:
+                min = DefaultPlaneMin;
+                max = DefaultPlaneMax;
+                return;
+
             default:
                 min = Vector3.zero;
                 max = Vector3.one;
@@ -535,21 +638,180 @@ public static class BlockShapeUtility
 
     public static Bounds GetWorldBounds(Vector3Int blockPos, BlockTextureMapping mapping)
     {
-        return GetWorldBounds(blockPos, BlockType.Air, mapping);
+        return GetWorldBounds(blockPos, BlockType.Air, mapping, BlockPlacementAxis.Y);
     }
 
     public static Bounds GetWorldBounds(Vector3Int blockPos, BlockType blockType, BlockTextureMapping mapping)
     {
+        return GetWorldBounds(blockPos, blockType, mapping, BlockPlacementAxis.Y);
+    }
+
+    public static Bounds GetWorldBounds(
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        return GetWorldBounds(blockPos, blockType, mapping, placementAxis, false, false);
+    }
+
+    public static Bounds GetWorldBounds(
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        bool hasNegativeSupport,
+        bool hasPositiveSupport)
+    {
         if (TorchPlacementUtility.IsWallTorch(blockType))
             return TorchPlacementUtility.GetWorldBounds(blockPos, blockType, mapping);
 
+        if (IsFlatShape(mapping))
+        {
+            ResolvePlaneQuad(
+                mapping,
+                placementAxis,
+                hasNegativeSupport,
+                hasPositiveSupport,
+                out Vector3 p0,
+                out Vector3 p1,
+                out Vector3 p2,
+                out Vector3 p3,
+                out _,
+                out _);
+
+            Vector3 worldP0 = blockPos + p0;
+            Vector3 worldP1 = blockPos + p1;
+            Vector3 worldP2 = blockPos + p2;
+            Vector3 worldP3 = blockPos + p3;
+
+            Vector3 planeWorldMin = Vector3.Min(Vector3.Min(worldP0, worldP1), Vector3.Min(worldP2, worldP3));
+            Vector3 planeWorldMax = Vector3.Max(Vector3.Max(worldP0, worldP1), Vector3.Max(worldP2, worldP3));
+
+            BlockPlacementAxis axis = ResolvePlaneAxis(mapping, placementAxis);
+            switch (axis)
+            {
+                case BlockPlacementAxis.X:
+                    planeWorldMin.x -= PlaneBoundsHalfThickness;
+                    planeWorldMax.x += PlaneBoundsHalfThickness;
+                    break;
+
+                case BlockPlacementAxis.Z:
+                    planeWorldMin.z -= PlaneBoundsHalfThickness;
+                    planeWorldMax.z += PlaneBoundsHalfThickness;
+                    break;
+
+                default:
+                    planeWorldMin.y -= PlaneBoundsHalfThickness;
+                    planeWorldMax.y += PlaneBoundsHalfThickness;
+                    break;
+            }
+
+            Vector3 planeSize = planeWorldMax - planeWorldMin;
+            return new Bounds(planeWorldMin + planeSize * 0.5f, planeSize);
+        }
+
         ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-        Vector3 worldMin = blockPos + min;
-        Vector3 worldMax = blockPos + max;
-        Vector3 size = worldMax - worldMin;
-        Vector3 center = worldMin + size * 0.5f;
+        Vector3 boundsMin = blockPos + min;
+        Vector3 boundsMax = blockPos + max;
+        Vector3 size = boundsMax - boundsMin;
+        Vector3 center = boundsMin + size * 0.5f;
         return new Bounds(center, size);
+    }
+
+    public static void ResolvePlaneQuad(
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2,
+        out Vector3 p3,
+        out BlockFace sampledFace,
+        out Vector3 normal)
+    {
+        ResolvePlaneQuad(
+            mapping,
+            placementAxis,
+            false,
+            false,
+            out p0,
+            out p1,
+            out p2,
+            out p3,
+            out sampledFace,
+            out normal);
+    }
+
+    public static void ResolvePlaneQuad(
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        bool hasNegativeSupport,
+        bool hasPositiveSupport,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2,
+        out Vector3 p3,
+        out BlockFace sampledFace,
+        out Vector3 normal)
+    {
+        ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+        BlockPlacementAxis axis = ResolvePlaneAxis(mapping, placementAxis);
+
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+            {
+                float x = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
+                p0 = new Vector3(x, min.x, min.z);
+                p1 = new Vector3(x, max.x, min.z);
+                p2 = new Vector3(x, max.x, max.z);
+                p3 = new Vector3(x, min.x, max.z);
+                sampledFace = BlockFace.Right;
+                normal = Vector3.right;
+                return;
+            }
+
+            case BlockPlacementAxis.Z:
+            {
+                float z = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
+                p0 = new Vector3(min.x, min.z, z);
+                p1 = new Vector3(max.x, min.z, z);
+                p2 = new Vector3(max.x, max.z, z);
+                p3 = new Vector3(min.x, max.z, z);
+                sampledFace = BlockFace.Front;
+                normal = Vector3.forward;
+                return;
+            }
+
+            default:
+            {
+                float y = (min.y + max.y) * 0.5f;
+                p0 = new Vector3(min.x, y, min.z);
+                p1 = new Vector3(min.x, y, max.z);
+                p2 = new Vector3(max.x, y, max.z);
+                p3 = new Vector3(max.x, y, min.z);
+                sampledFace = BlockFace.Top;
+                normal = Vector3.up;
+                return;
+            }
+        }
+    }
+
+    private static BlockPlacementAxis ResolvePlaneAxis(BlockTextureMapping mapping, BlockPlacementAxis placementAxis)
+    {
+        if (!mapping.usePlacementAxisRotation)
+            return BlockPlacementAxis.Y;
+
+        return BlockPlacementRotationUtility.SanitizeAxis(placementAxis);
+    }
+
+    private static float ResolveSidePlaneCoordinate(bool hasNegativeSupport, bool hasPositiveSupport)
+    {
+        if (hasNegativeSupport == hasPositiveSupport)
+            return 0.5f;
+
+        return hasNegativeSupport ? PlaneAttachmentInset01 : 1f - PlaneAttachmentInset01;
     }
 
     private static Vector3 Clamp01(Vector3 value)

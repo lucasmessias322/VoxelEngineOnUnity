@@ -332,9 +332,6 @@ public static class ChunkLighting
 
     public static byte GetEffectiveOpacity(BlockTextureMapping mapping)
     {
-        if (mapping.renderShape != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
-            return 0;
-
-        return mapping.lightOpacity;
+        return BlockShapeUtility.GetEffectiveLightOpacity(mapping);
     }
 }

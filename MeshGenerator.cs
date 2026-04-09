@@ -2267,7 +2267,7 @@ public static class MeshGenerator
             if (mapping.isEmpty || mapping.isTransparent || mapping.isLiquid)
                 return false;
 
-            return mapping.isSolid && mapping.renderShape == BlockRenderShape.Cube;
+            return mapping.isSolid && BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube;
         }
 
         private byte GetBlockPlacementAxisValue(int voxelIndex)
@@ -2278,7 +2278,7 @@ public static class MeshGenerator
             if ((uint)voxelIndex >= (uint)blockPlacementAxes.Length)
                 return (byte)BlockPlacementAxis.Y;
 
-            return BlockPlacementRotationUtility.SanitizeAxisByte(blockPlacementAxes[voxelIndex]);
+            return BlockPlacementRotationUtility.SanitizeStoredAxisByte(blockPlacementAxes[voxelIndex]);
         }
 
         private static bool HasFace(in GreedyFaceData face)
@@ -2340,6 +2340,41 @@ public static class MeshGenerator
                 BlockFace.Back => new Vector2(canonicalCoords.x, canonicalCoords.y),
                 _ => new Vector2(canonicalCoords.x, canonicalCoords.y)
             };
+        }
+
+        private static BlockPlacementAxis ResolveUvPlacementAxis(BlockTextureMapping mapping, BlockPlacementAxis placementAxis)
+        {
+            if (!mapping.usePlacementAxisRotation)
+                return BlockPlacementAxis.Y;
+
+            if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+                BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+            {
+                // Furnace/crafter style: rotate which face uses each texture,
+                // but keep UV orientation in the default cube space.
+                return BlockPlacementAxis.Y;
+            }
+
+            return placementAxis;
+        }
+
+        private static BlockFace ResolveUvSamplingFace(
+            BlockTextureMapping mapping,
+            BlockFace worldFace,
+            BlockFace sampledFace)
+        {
+            if (!mapping.usePlacementAxisRotation)
+                return worldFace;
+
+            if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+                BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+            {
+                // Horizontal-facing cubes (furnace/crafter): rotate face-to-texture mapping,
+                // but keep UV orientation anchored to the actual world face plane.
+                return worldFace;
+            }
+
+            return sampledFace;
         }
 
         private static Vector3 ToCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)
@@ -2755,12 +2790,14 @@ public static class MeshGenerator
                         if (y >= startY && blockType != BlockType.Air)
                         {
                             BlockTextureMapping mapping = blockMappings[(int)blockType];
-                            if (!mapping.isEmpty && mapping.renderShape != BlockRenderShape.Cube)
+                            BlockRenderShape effectiveShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+                            if (!mapping.isEmpty && effectiveShape != BlockRenderShape.Cube)
                             {
                                 float specialLight01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
                                 Vector3 origin = new Vector3(x - border, y, z - border);
+                                BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeAxis(GetBlockPlacementAxisValue(idx));
 
-                                switch (mapping.renderShape)
+                                switch (effectiveShape)
                                 {
                                     case BlockRenderShape.Cross:
                                         AddCrossShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, specialLight01);
@@ -2768,6 +2805,24 @@ public static class MeshGenerator
 
                                     case BlockRenderShape.Cuboid:
                                         AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Plane:
+                                        AddPlaneShape(
+                                            origin,
+                                            mapping,
+                                            blockType,
+                                            placementAxis,
+                                            x,
+                                            y,
+                                            z,
+                                            blockTypes,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
                                         break;
                                 }
                             }
@@ -3112,6 +3167,119 @@ public static class MeshGenerator
             Vector3 b2 = origin + new Vector3(max.x, max.y, min.z);
             Vector3 b3 = origin + new Vector3(min.x, max.y, max.z);
             AddDoubleSidedShapeQuad(b0, b1, b2, b3, atlasUv, light01, tint, tris);
+        }
+
+        private void AddPlaneShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            ResolvePlaneSupportFlags(
+                voxelX,
+                voxelY,
+                voxelZ,
+                placementAxis,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out bool hasNegativeSupport,
+                out bool hasPositiveSupport);
+
+            BlockShapeUtility.ResolvePlaneQuad(
+                mapping,
+                placementAxis,
+                hasNegativeSupport,
+                hasPositiveSupport,
+                out Vector3 p0,
+                out Vector3 p1,
+                out Vector3 p2,
+                out Vector3 p3,
+                out BlockFace sampledFace,
+                out _);
+
+            Vector2Int tile = mapping.GetTileCoord(sampledFace);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            float tint = mapping.GetTint(sampledFace) ? 1f : 0f;
+
+            NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
+                ? waterTriangles
+                : (mapping.isTransparent ? transparentTriangles : opaqueTriangles);
+
+            AddDoubleSidedShapeQuad(
+                origin + p0,
+                origin + p1,
+                origin + p2,
+                origin + p3,
+                atlasUv,
+                light01,
+                tint,
+                tris);
+        }
+
+        private void ResolvePlaneSupportFlags(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            BlockPlacementAxis placementAxis,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out bool hasNegativeSupport,
+            out bool hasPositiveSupport)
+        {
+            hasNegativeSupport = false;
+            hasPositiveSupport = false;
+
+            switch (BlockPlacementRotationUtility.SanitizeAxis(placementAxis))
+            {
+                case BlockPlacementAxis.X:
+                    hasNegativeSupport = IsPlaneSupportBlock(voxelX - 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    hasPositiveSupport = IsPlaneSupportBlock(voxelX + 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    break;
+
+                case BlockPlacementAxis.Z:
+                    hasNegativeSupport = IsPlaneSupportBlock(voxelX, voxelY, voxelZ - 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    hasPositiveSupport = IsPlaneSupportBlock(voxelX, voxelY, voxelZ + 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    break;
+            }
+        }
+
+        private bool IsPlaneSupportBlock(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            BlockType type = (BlockType)blockTypes[idx];
+            if (type == BlockType.Air || FluidBlockUtility.IsWater(type))
+                return false;
+
+            int mapIndex = (int)type;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[mapIndex];
+            return mapping.isSolid && !mapping.isEmpty && !mapping.isLiquid;
         }
 
         private void AddCuboidShape(
@@ -3505,7 +3673,7 @@ public static class MeshGenerator
                 return;
             }
 
-            switch (mapping.renderShape)
+            switch (BlockShapeUtility.GetEffectiveRenderShape(mapping))
             {
                 case BlockRenderShape.Cross:
                     min = new Vector3(0.15f, 0f, 0.15f);
@@ -3515,6 +3683,11 @@ public static class MeshGenerator
                 case BlockRenderShape.Cuboid:
                     min = new Vector3(0.375f, 0f, 0.375f);
                     max = new Vector3(0.625f, 0.75f, 0.625f);
+                    return;
+
+                case BlockRenderShape.Plane:
+                    min = new Vector3(0f, 0f, 0f);
+                    max = new Vector3(1f, 0.0625f, 1f);
                     return;
 
                 default:
@@ -3535,7 +3708,7 @@ public static class MeshGenerator
             if (blockMappings[(int)neighbor].isEmpty)
                 return true;
 
-            bool neighborOpaque = blockMappings[(int)neighbor].renderShape == BlockRenderShape.Cube &&
+            bool neighborOpaque = BlockShapeUtility.GetEffectiveRenderShape(blockMappings[(int)neighbor]) == BlockRenderShape.Cube &&
                                   blockMappings[(int)neighbor].isSolid &&
                                   !blockMappings[(int)neighbor].isTransparent;
             return !neighborOpaque;
@@ -3605,7 +3778,7 @@ public static class MeshGenerator
                                     continue;
                                 }
 
-                                if (currentMapping.renderShape != BlockRenderShape.Cube)
+                                if (BlockShapeUtility.GetEffectiveRenderShape(currentMapping) != BlockRenderShape.Cube)
                                 {
                                     mask[maskIndex] = default;
                                     continue;
@@ -3810,8 +3983,10 @@ public static class MeshGenerator
 
                                 int vIndex = GetCurrentSubchunkLocalVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
-                                BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeAxis(bottomLeftFace.placementAxis);
+                                BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(bottomLeftFace.placementAxis);
                                 BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(m, faceType, placementAxis);
+                                BlockPlacementAxis uvPlacementAxis = ResolveUvPlacementAxis(m, placementAxis);
+                                BlockFace uvSamplingFace = ResolveUvSamplingFace(m, faceType, sampledFace);
                                 bool tint = m.GetTint(sampledFace);
                                 bool useGrassSideOverlay =
                                     bt == BlockType.Grass &&
@@ -3847,8 +4022,8 @@ public static class MeshGenerator
                                         rawU,
                                         rawV,
                                         posD,
-                                        sampledFace,
-                                        placementAxis);
+                                        uvSamplingFace,
+                                        uvPlacementAxis);
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
                                     byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
@@ -3968,7 +4143,7 @@ public static class MeshGenerator
         {
             // AO deve vir de cubos cheios que realmente fecham a iluminaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o ambiente.
             // Folhas sÃƒÆ’Ã‚Â£o a exceÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o: mesmo transparentes, devem sombrear como no Minecraft.
-            if (mapping.renderShape != BlockRenderShape.Cube ||
+            if (BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube ||
                 mapping.isEmpty ||
                 mapping.isLiquid ||
                 mapping.lightOpacity == 0)

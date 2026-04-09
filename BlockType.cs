@@ -50,6 +50,7 @@ public enum BlockType
     StoneFurnance = 45,
     dead_bush = 46,
     Copper_ore = 47,
+    wire = 48,
 }
 
 public static class FluidBlockUtility

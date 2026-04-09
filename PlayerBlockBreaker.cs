@@ -456,22 +456,47 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
                 return;
 
-            if (preventPlaceInsidePlayer && IsBlockIntersectingPlayer(placePos, placedBlockType))
-                return;
-
-            if (hotbar != null && !hotbar.TryConsumeSelected(1))
-                return;
-
-            Vector3 lookForward = cam != null ? cam.transform.forward : transform.forward;
+            Vector3 lookForward = ResolvePlacementLookForward();
             BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
                 placedBlockType,
                 hitNormal,
                 lookForward);
 
+            if (preventPlaceInsidePlayer &&
+                ShouldPreventPlacementInsidePlayer(placedBlockType) &&
+                IsBlockIntersectingPlayer(placePos, placedBlockType, placementAxis))
+            {
+                return;
+            }
+
+            if (hotbar != null && !hotbar.TryConsumeSelected(1))
+                return;
+
             World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
+    }
+
+    private Vector3 ResolvePlacementLookForward()
+    {
+        // Use player body yaw as the primary facing source.
+        // This keeps placement rotation stable when camera pitch is near vertical.
+        Vector3 bodyForward = transform.forward;
+        Vector3 horizontalLook = new Vector3(bodyForward.x, 0f, bodyForward.z);
+        if (horizontalLook.sqrMagnitude >= 0.0001f)
+            return horizontalLook.normalized;
+
+        // Fallback for unusual rigs where player root forward is degenerate.
+        if (cam != null)
+        {
+            Vector3 cameraForward = cam.transform.forward;
+            Vector3 cameraHorizontal = new Vector3(cameraForward.x, 0f, cameraForward.z);
+            if (cameraHorizontal.sqrMagnitude >= 0.0001f)
+                return cameraHorizontal.normalized;
+        }
+
+        return Vector3.forward;
     }
 
     private bool CanPlaceTorchAt(Vector3Int placePos, BlockType placedBlockType)
@@ -501,9 +526,26 @@ public class PlayerBlockBreaker : MonoBehaviour
         return value.isSolid && !value.isEmpty;
     }
 
-    private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType)
+    private bool ShouldPreventPlacementInsidePlayer(BlockType blockType)
     {
-        Bounds blockBounds = ResolveBlockBounds(placePos, blockType);
+        if (blockType == BlockType.Air || IsLiquid(blockType))
+            return false;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return true;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+        if (mapping == null)
+            return true;
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isEmpty;
+    }
+
+    private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType, BlockPlacementAxis placementAxis)
+    {
+        Bounds blockBounds = ResolveBlockBounds(placePos, blockType, placementAxis);
 
         CharacterController characterController = GetComponent<CharacterController>();
         if (characterController != null)
@@ -525,6 +567,15 @@ public class PlayerBlockBreaker : MonoBehaviour
     private Bounds ResolveBlockBounds(Vector3Int blockPos, BlockType blockType)
     {
         World world = World.Instance;
+        BlockPlacementAxis placementAxis = world != null
+            ? world.GetPlacementAxisAt(blockPos, blockType)
+            : BlockPlacementAxis.Y;
+        return ResolveBlockBounds(blockPos, blockType, placementAxis);
+    }
+
+    private Bounds ResolveBlockBounds(Vector3Int blockPos, BlockType blockType, BlockPlacementAxis placementAxis)
+    {
+        World world = World.Instance;
         if (world == null || world.blockData == null)
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
 
@@ -536,6 +587,6 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
 
-        return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value);
+        return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value, placementAxis);
     }
 }

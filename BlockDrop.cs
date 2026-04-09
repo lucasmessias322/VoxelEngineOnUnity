@@ -241,8 +241,9 @@ public class BlockDrop : MonoBehaviour
         float invAtlasTilesX = 1f / Mathf.Max(1, world.atlasTilesX);
         float invAtlasTilesY = 1f / Mathf.Max(1, world.atlasTilesY);
         Vector3 origin = -Vector3.one * 0.5f;
+        BlockRenderShape effectiveShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
 
-        switch (mapping.renderShape)
+        switch (effectiveShape)
         {
             case BlockRenderShape.Cross:
                 AppendCrossMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
@@ -250,6 +251,10 @@ public class BlockDrop : MonoBehaviour
 
             case BlockRenderShape.Cuboid:
                 AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
+
+            case BlockRenderShape.Plane:
+                AppendPlaneMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             default:
@@ -345,6 +350,39 @@ public class BlockDrop : MonoBehaviour
         Vector3 b2 = origin + new Vector3(max.x, max.y, min.z);
         Vector3 b3 = origin + new Vector3(min.x, max.y, max.z);
         AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, tris, b0, b1, b2, b3, atlasUv, tint);
+    }
+
+    private static void AppendPlaneMesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        BlockShapeUtility.ResolvePlaneQuad(mapping, BlockPlacementAxis.Y, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace, out _);
+
+        Vector2Int tile = mapping.GetTileCoord(sampledFace);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        float tint = mapping.GetTint(sampledFace) ? 1f : 0f;
+
+        AppendDoubleSidedQuad(
+            vertices,
+            normals,
+            uv0,
+            uv1,
+            uv2,
+            tris,
+            origin + p0,
+            origin + p1,
+            origin + p2,
+            origin + p3,
+            atlasUv,
+            tint);
     }
 
     private static void AppendCuboidMesh(

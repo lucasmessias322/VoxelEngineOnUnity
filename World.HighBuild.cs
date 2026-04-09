@@ -32,6 +32,7 @@ public partial class World
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> highOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     private readonly Queue<Vector2Int> queuedHighBuildRebuilds = new Queue<Vector2Int>();
     private readonly HashSet<Vector2Int> queuedHighBuildRebuildsSet = new HashSet<Vector2Int>();
+    [SerializeField, Min(0f)] private float highBuildRebuildTimeBudgetMS = 0.75f;
 
     private void IndexHighOverride(Vector3Int worldPos, Vector2Int coord, BlockType type)
     {
@@ -91,12 +92,17 @@ public partial class World
         if (queuedHighBuildRebuilds.Count == 0) return;
 
         // High-build meshes are lightweight compared to full chunk jobs; allow a higher budget.
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = highBuildRebuildTimeBudgetMS > 0f ? highBuildRebuildTimeBudgetMS / 1000f : 0f;
         int perFrameLimit = Mathf.Max(2, maxChunkRebuildsPerFrame * 4);
         int processed = 0;
         int attempts = queuedHighBuildRebuilds.Count;
 
         while (processed < perFrameLimit && attempts-- > 0)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             Vector2Int coord = queuedHighBuildRebuilds.Dequeue();
             queuedHighBuildRebuildsSet.Remove(coord);
 

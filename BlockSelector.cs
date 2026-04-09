@@ -141,7 +141,21 @@ public class BlockSelector : MonoBehaviour
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return false;
 
-        bounds = BlockShapeUtility.GetWorldBounds(pos, blockType, value);
+        BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(pos, blockType);
+        if (BlockShapeUtility.IsFlatShape(value))
+        {
+            ResolvePlaneSupportFlags(pos, placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport);
+            bounds = BlockShapeUtility.GetWorldBounds(
+                pos,
+                blockType,
+                value,
+                placementAxis,
+                hasNegativeSupport,
+                hasPositiveSupport);
+            return true;
+        }
+
+        bounds = BlockShapeUtility.GetWorldBounds(pos, blockType, value, placementAxis);
         return true;
     }
 
@@ -318,13 +332,17 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         BlockTextureMapping value = mapping.Value;
-        switch (value.renderShape)
+        BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(voxel, blockType);
+        switch (BlockShapeUtility.GetEffectiveRenderShape(value))
         {
             case BlockRenderShape.Cuboid:
-                return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, lastNormal, out hitNormal);
+                return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, placementAxis, lastNormal, out hitNormal);
 
             case BlockRenderShape.Cross:
                 return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
+
+            case BlockRenderShape.Plane:
+                return TryHitPlaneBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal);
 
             default:
                 return false;
@@ -337,10 +355,11 @@ public class BlockSelector : MonoBehaviour
         Vector3Int voxel,
         BlockType blockType,
         BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
         Vector3Int lastNormal,
         out Vector3Int hitNormal)
     {
-        Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, blockType, mapping);
+        Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, blockType, mapping, placementAxis);
         if (!bounds.IntersectRay(ray, out float distance) || distance > maxDistance)
         {
             hitNormal = Vector3Int.zero;
@@ -350,6 +369,81 @@ public class BlockSelector : MonoBehaviour
         Vector3 point = ray.GetPoint(Mathf.Max(0f, distance));
         hitNormal = ResolveBoundsHitNormal(bounds, point, lastNormal, ray.direction);
         return true;
+    }
+
+    private bool TryHitPlaneBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal)
+    {
+        ResolvePlaneSupportFlags(voxel, placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport);
+        BlockShapeUtility.ResolvePlaneQuad(
+            mapping,
+            placementAxis,
+            hasNegativeSupport,
+            hasPositiveSupport,
+            out Vector3 p0,
+            out Vector3 p1,
+            out Vector3 p2,
+            out Vector3 p3,
+            out _,
+            out _);
+        Vector3 origin = voxel;
+
+        return TryHitQuad(
+            ray,
+            origin + p0,
+            origin + p1,
+            origin + p2,
+            origin + p3,
+            maxDistance,
+            lastNormal,
+            out hitNormal);
+    }
+
+    private void ResolvePlaneSupportFlags(Vector3Int voxel, BlockPlacementAxis placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport)
+    {
+        hasNegativeSupport = false;
+        hasPositiveSupport = false;
+
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                hasNegativeSupport = IsPlaneSupportBlock(voxel + Vector3Int.left);
+                hasPositiveSupport = IsPlaneSupportBlock(voxel + Vector3Int.right);
+                break;
+
+            case BlockPlacementAxis.Z:
+                hasNegativeSupport = IsPlaneSupportBlock(voxel + Vector3Int.back);
+                hasPositiveSupport = IsPlaneSupportBlock(voxel + Vector3Int.forward);
+                break;
+        }
+    }
+
+    private bool IsPlaneSupportBlock(Vector3Int voxel)
+    {
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        BlockType supportType = world.GetBlockAt(voxel);
+        if (supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType))
+            return false;
+
+        if (world.blockData == null)
+            return true;
+
+        BlockTextureMapping? mapping = world.blockData.GetMapping(supportType);
+        if (mapping == null)
+            return false;
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isEmpty && !value.isLiquid;
     }
 
     private bool TryHitCrossBlock(
