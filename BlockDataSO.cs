@@ -73,19 +73,34 @@ public class BlockDataSO : ScriptableObject
     {
         SyncDirectionalSideMappings();
 
-        int enumCount = System.Enum.GetValues(typeof(BlockType)).Length;
-        mappings = new BlockTextureMapping[enumCount];
+        int maxBlockTypeValue = GetMaxBlockTypeValue();
+        int mappingCount = maxBlockTypeValue + 1;
+        mappings = new BlockTextureMapping[mappingCount];
 
         for (int i = 0; i < blockTextures.Count; i++)
         {
             BlockTextureMapping mapping = blockTextures[i];
             int index = (int)mapping.blockType;
-            if (index >= 0 && index < enumCount)
+            if (index >= 0 && index < mappingCount)
                 mappings[index] = mapping;
         }
 
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
+    }
+
+    private static int GetMaxBlockTypeValue()
+    {
+        int maxValue = 0;
+        System.Array values = System.Enum.GetValues(typeof(BlockType));
+        for (int i = 0; i < values.Length; i++)
+        {
+            int value = (int)values.GetValue(i);
+            if (value > maxValue)
+                maxValue = value;
+        }
+
+        return maxValue;
     }
 
     /// <summary>

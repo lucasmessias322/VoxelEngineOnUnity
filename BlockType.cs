@@ -22,7 +22,7 @@ public enum BlockType
     CoalOre = 17,
     IronOre = 18,
     GoldOre = 19,
-    RedstoneOre = 20,
+
     DiamondOre = 21,
     EmeraldOre = 22,
     Cactus = 23,
@@ -49,6 +49,7 @@ public enum BlockType
     WaterFall7 = 44,
     StoneFurnance = 45,
     dead_bush = 46,
+    Copper_ore = 47,
 }
 
 public static class FluidBlockUtility

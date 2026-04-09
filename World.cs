@@ -238,16 +238,17 @@ public partial class World : MonoBehaviour
             replaceStone = true,
             replaceDeepslate = true
         },
+       
         new OreSpawnSettings
         {
             enabled = true,
-            blockType = BlockType.RedstoneOre,
-            minY = 4,
-            maxY = 24,
-            veinsPerChunk = 7,
-            minVeinSize = 3,
-            maxVeinSize = 8,
-            minSurfaceDepth = 7,
+            blockType = BlockType.Copper_ore,
+            minY = 8,
+            maxY = 64,
+            veinsPerChunk = 12,
+            minVeinSize = 4,
+            maxVeinSize = 11,
+            minSurfaceDepth = 5,
             replaceStone = true,
             replaceDeepslate = true
         },

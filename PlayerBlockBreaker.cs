@@ -265,7 +265,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             case BlockType.CoalOre:
             case BlockType.IronOre:
             case BlockType.GoldOre:
-            case BlockType.RedstoneOre:
+            case BlockType.Copper_ore:
             case BlockType.DiamondOre:
             case BlockType.EmeraldOre:
             case BlockType.glass:
@@ -306,7 +306,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             case BlockType.CoalOre:
             case BlockType.IronOre:
             case BlockType.GoldOre:
-            case BlockType.RedstoneOre:
+            case BlockType.Copper_ore:
             case BlockType.DiamondOre:
             case BlockType.EmeraldOre:
                 return 1.5f;
