@@ -17,6 +17,13 @@ public class PlayerArmSwing : MonoBehaviour
     [SerializeField] private CharacterController characterController;
     [Tooltip("Used only as a fallback to detect movement when no CharacterController is assigned.")]
     [SerializeField] private Transform movementReference;
+    [Tooltip("Optional: used to detect whether the player is in third-person view.")]
+    [SerializeField] private FPSController fpsController;
+
+    [Header("Head References")]
+    [SerializeField] private Transform head;
+    [Tooltip("Usually the player camera transform.")]
+    [SerializeField] private Transform headLookReference;
 
     [Header("Arm Animation Settings")]
     [SerializeField] private float swingAngle = 30f;
@@ -35,17 +42,28 @@ public class PlayerArmSwing : MonoBehaviour
     [SerializeField] private float blendSpeed = 12f;
     [SerializeField] private float movementThreshold = 0.05f;
 
+    [Header("Head Look Settings")]
+    [SerializeField] private bool enableHeadLook = true;
+    [SerializeField] private bool onlyLookInThirdPerson = true;
+    [SerializeField] private float maxHeadPitch = 75f;
+    [Tooltip("Use -1 to invert head pitch direction for your rig.")]
+    [SerializeField] private float headPitchMultiplier = -1f;
+    [SerializeField] private Vector3 headPitchAxis = Vector3.right;
+    [SerializeField] private float headBlendSpeed = 16f;
+
     private Quaternion leftIdleLocalRotation = Quaternion.identity;
     private Quaternion rightIdleLocalRotation = Quaternion.identity;
     private Quaternion leftLegIdleLocalRotation = Quaternion.identity;
     private Quaternion rightLegIdleLocalRotation = Quaternion.identity;
+    private Quaternion headIdleLocalRotation = Quaternion.identity;
     private Vector3 lastReferencePosition;
     private Vector3 cachedArmSwingAxis = Vector3.right;
     private Vector3 cachedLegSwingAxis = Vector3.right;
+    private Vector3 cachedHeadPitchAxis = Vector3.right;
     private float swingTimer;
     private float nextReferenceResolveTime;
     private bool idlePoseCaptured;
-    private bool hasAnyLimbReference;
+    private bool hasAnyAnimatedReference;
 
     private void Awake()
     {
@@ -75,7 +93,7 @@ public class PlayerArmSwing : MonoBehaviour
         if (!idlePoseCaptured)
             CaptureIdlePose();
 
-        if (!hasAnyLimbReference)
+        if (!hasAnyAnimatedReference)
             return;
 
         float horizontalSpeed = GetHorizontalSpeed();
@@ -99,6 +117,7 @@ public class PlayerArmSwing : MonoBehaviour
         ApplyLimbRotation(rightArm, rightIdleLocalRotation, -armSwingAmount, cachedArmSwingAxis, blendFactor);
         ApplyLimbRotation(leftLeg, leftLegIdleLocalRotation, -legSwingAmount, cachedLegSwingAxis, blendFactor);
         ApplyLimbRotation(rightLeg, rightLegIdleLocalRotation, legSwingAmount, cachedLegSwingAxis, blendFactor);
+        ApplyHeadLookRotation(blendFactor);
         CacheReferencePosition();
     }
 
@@ -110,7 +129,8 @@ public class PlayerArmSwing : MonoBehaviour
         rightIdleLocalRotation = rightArm != null ? rightArm.localRotation : Quaternion.identity;
         leftLegIdleLocalRotation = leftLeg != null ? leftLeg.localRotation : Quaternion.identity;
         rightLegIdleLocalRotation = rightLeg != null ? rightLeg.localRotation : Quaternion.identity;
-        idlePoseCaptured = hasAnyLimbReference;
+        headIdleLocalRotation = head != null ? head.localRotation : Quaternion.identity;
+        idlePoseCaptured = hasAnyAnimatedReference;
     }
 
     [ContextMenu("Restore Idle Pose")]
@@ -127,11 +147,18 @@ public class PlayerArmSwing : MonoBehaviour
 
         if (rightLeg != null)
             rightLeg.localRotation = rightLegIdleLocalRotation;
+
+        if (head != null)
+            head.localRotation = headIdleLocalRotation;
     }
 
     private void ResolveReferences(bool force = false)
     {
-        if (!force && characterController != null && movementReference != null)
+        bool movementResolved = characterController != null && movementReference != null;
+        bool headLookReferenceResolved = !enableHeadLook || headLookReference != null;
+        bool thirdPersonReferenceResolved = !enableHeadLook || !onlyLookInThirdPerson || fpsController != null;
+
+        if (!force && movementResolved && headLookReferenceResolved && thirdPersonReferenceResolved)
             return;
 
         if (!force && Time.unscaledTime < nextReferenceResolveTime)
@@ -145,6 +172,18 @@ public class PlayerArmSwing : MonoBehaviour
 
         if (movementReference == null)
             movementReference = characterController != null ? characterController.transform : transform;
+
+        if (fpsController == null)
+            fpsController = GetComponent<FPSController>();
+
+        if (fpsController == null)
+            fpsController = GetComponentInParent<FPSController>();
+
+        if (headLookReference == null && fpsController != null)
+            headLookReference = fpsController.CameraTransform;
+
+        if (headLookReference == null && Camera.main != null)
+            headLookReference = Camera.main.transform;
 
         nextReferenceResolveTime = Time.unscaledTime + ReferenceRetryInterval;
     }
@@ -175,6 +214,43 @@ public class PlayerArmSwing : MonoBehaviour
             : Quaternion.Lerp(limb.localRotation, targetRotation, blendFactor);
     }
 
+    private void ApplyHeadLookRotation(float defaultBlendFactor)
+    {
+        if (head == null)
+            return;
+
+        bool shouldApplyHeadLook = enableHeadLook && headLookReference != null;
+        if (shouldApplyHeadLook && onlyLookInThirdPerson)
+            shouldApplyHeadLook = fpsController != null && fpsController.IsThirdPerson();
+
+        Quaternion targetRotation = headIdleLocalRotation;
+        if (shouldApplyHeadLook)
+        {
+            float relativePitch = GetRelativePitchDegrees(headLookReference.forward);
+            float clampedPitch = Mathf.Clamp(relativePitch, -maxHeadPitch, maxHeadPitch);
+            float headPitch = clampedPitch * headPitchMultiplier;
+            targetRotation = headIdleLocalRotation * Quaternion.AngleAxis(headPitch, cachedHeadPitchAxis);
+        }
+
+        float headLookBlendFactor = headBlendSpeed <= 0f
+            ? defaultBlendFactor
+            : 1f - Mathf.Exp(-headBlendSpeed * Time.deltaTime);
+
+        head.localRotation = headLookBlendFactor >= 1f
+            ? targetRotation
+            : Quaternion.Lerp(head.localRotation, targetRotation, headLookBlendFactor);
+    }
+
+    private float GetRelativePitchDegrees(Vector3 worldDirection)
+    {
+        Vector3 localDirection = transform.InverseTransformDirection(worldDirection);
+        float horizontalMagnitude = Mathf.Sqrt((localDirection.x * localDirection.x) + (localDirection.z * localDirection.z));
+        if (horizontalMagnitude <= 0.0001f)
+            return localDirection.y >= 0f ? 90f : -90f;
+
+        return Mathf.Atan2(localDirection.y, horizontalMagnitude) * Mathf.Rad2Deg;
+    }
+
     private void CacheReferencePosition()
     {
         if (movementReference == null)
@@ -191,13 +267,16 @@ public class PlayerArmSwing : MonoBehaviour
         maxSpeedForFullSwing = Mathf.Max(0.01f, maxSpeedForFullSwing);
         blendSpeed = Mathf.Max(0f, blendSpeed);
         movementThreshold = Mathf.Max(0f, movementThreshold);
+        maxHeadPitch = Mathf.Clamp(maxHeadPitch, 0f, 89f);
+        headBlendSpeed = Mathf.Max(0f, headBlendSpeed);
         RefreshCachedState();
     }
 
     private void RefreshCachedState()
     {
-        hasAnyLimbReference = leftArm != null || rightArm != null || leftLeg != null || rightLeg != null;
+        hasAnyAnimatedReference = leftArm != null || rightArm != null || leftLeg != null || rightLeg != null || head != null;
         cachedArmSwingAxis = localSwingAxis.sqrMagnitude > 0.0001f ? localSwingAxis.normalized : Vector3.right;
         cachedLegSwingAxis = legSwingAxis.sqrMagnitude > 0.0001f ? legSwingAxis.normalized : Vector3.right;
+        cachedHeadPitchAxis = headPitchAxis.sqrMagnitude > 0.0001f ? headPitchAxis.normalized : Vector3.right;
     }
 }

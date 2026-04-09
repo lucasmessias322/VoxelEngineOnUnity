@@ -531,6 +531,7 @@ public class FPSController : MonoBehaviour
     public bool IsSprinting() => sprintToggled || Input.GetKey(KeyCode.LeftShift);
     public bool IsFlying() => isFlying;
     public bool IsThirdPerson() => currentViewMode == CameraViewMode.ThirdPerson;
+    public Transform CameraTransform => cameraTransform;
 
     public void SetWorldLoadingState(bool isLoading)
     {

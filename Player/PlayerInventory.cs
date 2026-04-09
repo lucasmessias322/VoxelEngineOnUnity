@@ -22,6 +22,15 @@ public class PlayerInventory : MonoBehaviour
     [Header("Quick Move")]
     [Min(0)] [SerializeField] private int hotbarSlotCount = 7;
 
+    [Header("Drop Controls")]
+    [SerializeField] private KeyCode dropItemKey = KeyCode.Q;
+    [SerializeField] private bool allowHotbarDropWhenInventoryClosed = true;
+    [SerializeField] private bool allowInventoryDropWhenInventoryOpen = true;
+    [SerializeField] private Transform dropOrigin;
+    [Min(0f)] [SerializeField] private float dropForwardOffset = 0.8f;
+    [SerializeField] private float dropVerticalOffset = -0.15f;
+    [SerializeField] private HotbarMirror hotbarMirror;
+
     [Header("Audio")]
     [SerializeField] private AudioSource audioSource;
     [SerializeField] private AudioClip addItemClip;
@@ -77,6 +86,8 @@ public class PlayerInventory : MonoBehaviour
     {
         if (Input.GetKeyDown(toggleInventoryKey))
             ToggleInventoryUI();
+
+        HandleDropInput();
     }
 
     private void OnValidate()
@@ -298,6 +309,27 @@ public class PlayerInventory : MonoBehaviour
         return AddItem(mappedItem, amount);
     }
 
+    public bool TryDropItemStackToWorld(Item itemToDrop, int amount)
+    {
+        if (itemToDrop == null || amount <= 0)
+            return false;
+
+        Vector3 dropDirection = ResolveDropDirection();
+        Vector3 dropPosition = ResolveDropPosition(dropDirection);
+
+        if (TryGetBlockForItem(itemToDrop, out BlockType mappedBlockType))
+        {
+            World world = World.Instance;
+            if (world == null)
+                return false;
+
+            int clampedAmount = Mathf.Clamp(amount, 1, Mathf.Max(1, itemToDrop.maxStack));
+            return BlockDrop.Spawn(world, dropPosition, mappedBlockType, clampedAmount, dropDirection);
+        }
+
+        return InventoryItemDrop.Spawn(itemToDrop, amount, dropPosition, dropDirection);
+    }
+
     public void ToggleInventoryUI()
     {
         if (inventoryUI == null) return;
@@ -329,6 +361,118 @@ public class PlayerInventory : MonoBehaviour
 
         Cursor.visible = inventoryOpen;
         Cursor.lockState = inventoryOpen ? CursorLockMode.None : CursorLockMode.Locked;
+    }
+
+    private void HandleDropInput()
+    {
+        if (!Input.GetKeyDown(dropItemKey))
+            return;
+
+        bool dropFullStack = IsFullStackDropModifierHeld();
+        if (IsInventoryOpen)
+        {
+            if (!allowInventoryDropWhenInventoryOpen)
+                return;
+
+            if (TryDropHoveredInventorySlot(dropFullStack))
+                return;
+
+            Slot.TryDropCarriedStack(this, dropFullStack);
+            return;
+        }
+
+        if (!allowHotbarDropWhenInventoryClosed)
+            return;
+
+        TryDropSelectedHotbarSlot(dropFullStack);
+    }
+
+    private bool TryDropHoveredInventorySlot(bool dropFullStack)
+    {
+        if (!Slot.TryGetHoveredSlot(out Slot hovered))
+            return false;
+
+        if (hovered == null || hovered.IsEmpty || !ContainsSlot(hovered))
+            return false;
+
+        int amountToDrop = dropFullStack ? hovered.amount : 1;
+        return TryDropFromSlot(hovered, amountToDrop);
+    }
+
+    private bool TryDropSelectedHotbarSlot(bool dropFullStack)
+    {
+        EnsureSlotsMappedIfNeeded();
+        if (slots == null || slots.Length == 0)
+            return false;
+
+        int selectedSlotIndex = ResolveSelectedHotbarSlotIndex();
+        if (selectedSlotIndex < 0 || selectedSlotIndex >= slots.Length)
+            return false;
+
+        Slot selectedSlot = slots[selectedSlotIndex];
+        if (selectedSlot == null || selectedSlot.IsEmpty)
+            return false;
+
+        int amountToDrop = dropFullStack ? selectedSlot.amount : 1;
+        return TryDropFromSlot(selectedSlot, amountToDrop);
+    }
+
+    private bool TryDropFromSlot(Slot sourceSlot, int amountToDrop)
+    {
+        if (sourceSlot == null || sourceSlot.IsEmpty || amountToDrop <= 0)
+            return false;
+
+        Item sourceItem = sourceSlot.item;
+        int clampedAmount = Mathf.Clamp(amountToDrop, 1, sourceSlot.amount);
+        int removedAmount = sourceSlot.Remove(clampedAmount);
+        if (removedAmount <= 0)
+            return false;
+
+        if (TryDropItemStackToWorld(sourceItem, removedAmount))
+            return true;
+
+        sourceSlot.Add(sourceItem, removedAmount);
+        return false;
+    }
+
+    private int ResolveSelectedHotbarSlotIndex()
+    {
+        if (slots == null || slots.Length == 0)
+            return -1;
+
+        int maxHotbarIndex = Mathf.Min(slots.Length, Mathf.Max(0, hotbarSlotCount)) - 1;
+        if (maxHotbarIndex < 0)
+            return -1;
+
+        if (hotbarMirror == null)
+            hotbarMirror = FindAnyObjectByType<HotbarMirror>();
+
+        if (hotbarMirror == null)
+            return 0;
+
+        return Mathf.Clamp(hotbarMirror.SelectedSlotIndex, 0, maxHotbarIndex);
+    }
+
+    private Vector3 ResolveDropDirection()
+    {
+        Transform source = dropOrigin != null ? dropOrigin : (Camera.main != null ? Camera.main.transform : transform);
+        Vector3 direction = source != null ? source.forward : transform.forward;
+        if (direction.sqrMagnitude < 0.0001f)
+            direction = Vector3.forward;
+
+        return direction.normalized;
+    }
+
+    private Vector3 ResolveDropPosition(Vector3 direction)
+    {
+        Transform source = dropOrigin != null ? dropOrigin : (Camera.main != null ? Camera.main.transform : transform);
+        Vector3 basePosition = source != null ? source.position : transform.position;
+        return basePosition + direction * dropForwardOffset + Vector3.up * dropVerticalOffset;
+    }
+
+    private static bool IsFullStackDropModifierHeld()
+    {
+        return Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
     }
 
     private void CollectSlotsRecursive(Transform current, List<Slot> output)

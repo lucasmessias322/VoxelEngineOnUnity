@@ -27,8 +27,15 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private ItemAtlasDataSO itemAtlasData;
 
     [Header("Default View")]
+    [Tooltip("Fallback/shared local position (used by prefab and when separate positions are disabled).")]
     [SerializeField] private Vector3 localPosition = new Vector3(0.35f, -0.3f, 0.55f);
+    [SerializeField] private bool useSeparateLocalPositions = true;
+    [SerializeField] private Vector3 blockLocalPosition = new Vector3(0.35f, -0.3f, 0.55f);
+    [SerializeField] private Vector3 flatItemLocalPosition = new Vector3(0.35f, -0.3f, 0.55f);
+    [SerializeField] private bool useSeparateLocalRotations = true;
     [SerializeField] private Vector3 localEulerAngles = new Vector3(20f, -25f, -8f);
+    [SerializeField] private Vector3 blockLocalEulerAngles = new Vector3(20f, -25f, -8f);
+    [SerializeField] private Vector3 flatItemLocalEulerAngles = new Vector3(20f, -25f, -8f);
     [SerializeField] private float heldScale = 0.28f;
     [SerializeField] private float flatItemScale = 0.85f;
     [SerializeField] private bool hideWhenInventoryOpen = true;
@@ -38,6 +45,11 @@ public class HeldBlockVisual : MonoBehaviour
     [Header("Flat Item Rendering")]
     [Tooltip("Material usado para renderizar itens planos na mao. A textura do item sera aplicada por renderer em runtime.")]
     [SerializeField] private Material flatItemMaterial;
+
+    [Header("Player Arm")]
+    [Tooltip("Renderer da malha do braco do player. Apenas a mesh sera ativada/desativada.")]
+    [SerializeField] private Renderer playerArmRenderer;
+    [SerializeField] private bool hideArmMeshWhenHolding = true;
 
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
@@ -96,11 +108,13 @@ public class HeldBlockVisual : MonoBehaviour
         ApplyViewTransform(shownItem, shownVisualKind);
         UpdateFollowRootTransform();
         ApplyRendererSettings();
+        UpdateArmMeshVisibility(isVisible);
         RefreshHeldBlock(forceRefresh: true);
     }
 
     private void OnDestroy()
     {
+        UpdateArmMeshVisibility(false);
         DestroyCachedMeshes(blockMeshCache);
         blockMaterialIndexCache.Clear();
         DestroyCachedMeshes(spriteFlatItemMeshCache);
@@ -122,12 +136,16 @@ public class HeldBlockVisual : MonoBehaviour
     {
         if (followRoot != null)
             followRoot.SetActive(false);
+
+        UpdateArmMeshVisibility(false);
     }
 
     private void OnEnable()
     {
         if (followRoot != null)
             followRoot.SetActive(true);
+
+        UpdateArmMeshVisibility(isVisible);
     }
 
     private void ResolveReferences()
@@ -242,8 +260,9 @@ public class HeldBlockVisual : MonoBehaviour
         if (followRoot.transform.parent != stableParent)
             followRoot.transform.SetParent(stableParent, false);
 
-        // followRoot.transform.localPosition = Vector3.zero;
-        // followRoot.transform.localRotation = Quaternion.identity;
+        // Keep a clean transform baseline so per-item overrides are applied consistently.
+        followRoot.transform.localPosition = Vector3.zero;
+        followRoot.transform.localRotation = Quaternion.identity;
         followRoot.transform.localScale = GetNeutralizedLocalScale();
     }
 
@@ -265,22 +284,73 @@ public class HeldBlockVisual : MonoBehaviour
         if (visualRoot == null)
             return;
 
-        Vector3 targetPosition = localPosition;
-        Vector3 targetEulerAngles = localEulerAngles;
+        Vector3 targetPosition = GetDefaultLocalPositionFor(visualKind);
+        Vector3 targetEulerAngles = GetDefaultLocalEulerAnglesFor(visualKind);
         Vector3 targetScale = GetDefaultRootScaleFor(visualKind);
 
-        if (selectedItem != null && selectedItem.overrideHeldTransform)
+        if (selectedItem != null)
         {
-            targetPosition = selectedItem.heldLocalPosition;
-            targetEulerAngles = selectedItem.heldLocalEulerAngles;
+            // Legacy behavior has absolute priority.
+            if (selectedItem.overrideHeldTransform)
+            {
+                targetPosition = selectedItem.heldLocalPosition;
+                targetEulerAngles = selectedItem.heldLocalEulerAngles;
 
-            if (visualKind != HeldVisualKind.Prefab)
-                targetScale = SanitizeScale(selectedItem.heldLocalScale);
+                if (visualKind != HeldVisualKind.Prefab)
+                    targetScale = SanitizeScale(selectedItem.heldLocalScale);
+            }
+            else
+            {
+                if (selectedItem.overrideHeldPosition)
+                    targetPosition = selectedItem.heldLocalPosition;
+
+                if (selectedItem.overrideHeldRotation)
+                    targetEulerAngles = selectedItem.heldLocalEulerAngles;
+
+                if (visualKind != HeldVisualKind.Prefab && selectedItem.overrideHeldScale)
+                    targetScale = SanitizeScale(selectedItem.heldLocalScale);
+            }
         }
 
         visualRoot.transform.localPosition = targetPosition;
         visualRoot.transform.localRotation = Quaternion.Euler(targetEulerAngles);
         visualRoot.transform.localScale = targetScale;
+    }
+
+    private Vector3 GetDefaultLocalPositionFor(HeldVisualKind visualKind)
+    {
+        if (!useSeparateLocalPositions)
+            return localPosition;
+
+        switch (visualKind)
+        {
+            case HeldVisualKind.Block:
+                return blockLocalPosition;
+            case HeldVisualKind.FlatItem:
+                return flatItemLocalPosition;
+            case HeldVisualKind.Prefab:
+            case HeldVisualKind.None:
+            default:
+                return localPosition;
+        }
+    }
+
+    private Vector3 GetDefaultLocalEulerAnglesFor(HeldVisualKind visualKind)
+    {
+        if (!useSeparateLocalRotations)
+            return localEulerAngles;
+
+        switch (visualKind)
+        {
+            case HeldVisualKind.Block:
+                return blockLocalEulerAngles;
+            case HeldVisualKind.FlatItem:
+                return flatItemLocalEulerAngles;
+            case HeldVisualKind.Prefab:
+            case HeldVisualKind.None:
+            default:
+                return localEulerAngles;
+        }
     }
 
     private Vector3 GetDefaultRootScaleFor(HeldVisualKind visualKind)
@@ -320,6 +390,7 @@ public class HeldBlockVisual : MonoBehaviour
 
         if (hideWhenInventoryOpen && PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
         {
+            UpdateArmMeshVisibility(false);
             ClearShownState();
             SetVisible(false);
             return;
@@ -327,6 +398,7 @@ public class HeldBlockVisual : MonoBehaviour
 
         if (hotbar == null || !hotbar.TryGetSelectedItem(out Item selectedItem) || selectedItem == null)
         {
+            UpdateArmMeshVisibility(false);
             ClearShownState();
             SetVisible(false);
             return;
@@ -336,11 +408,13 @@ public class HeldBlockVisual : MonoBehaviour
         HeldVisualKind desiredKind = GetDesiredVisualKind(selectedItem, hasBlockSelection);
         if (desiredKind == HeldVisualKind.None)
         {
+            UpdateArmMeshVisibility(false);
             ClearShownState();
             SetVisible(false);
             return;
         }
 
+        UpdateArmMeshVisibility(true);
         ApplyViewTransform(selectedItem, desiredKind);
 
         if (!forceRefresh &&
@@ -498,7 +572,7 @@ public class HeldBlockVisual : MonoBehaviour
             return;
 
         Vector3 sourceScale = SanitizeScale(selectedItem.heldPrefab.transform.localScale);
-        if (!selectedItem.overrideHeldTransform)
+        if (!ShouldOverrideHeldScale(selectedItem))
         {
             prefabTransform.localScale = Vector3.one;
             heldPrefabVisualObject.transform.localScale = sourceScale;
@@ -511,6 +585,11 @@ public class HeldBlockVisual : MonoBehaviour
             sourceScale.x * scaleMultiplier.x,
             sourceScale.y * scaleMultiplier.y,
             sourceScale.z * scaleMultiplier.z);
+    }
+
+    private static bool ShouldOverrideHeldScale(Item item)
+    {
+        return item != null && (item.overrideHeldTransform || item.overrideHeldScale);
     }
 
     private void ClearHeldPrefabInstance()
@@ -775,6 +854,16 @@ public class HeldBlockVisual : MonoBehaviour
             visualRoot.SetActive(visible);
 
         isVisible = visible;
+    }
+
+    private void UpdateArmMeshVisibility(bool isHoldingSomething)
+    {
+        if (playerArmRenderer == null)
+            return;
+
+        bool shouldShowArmMesh = !hideArmMeshWhenHolding || !isHoldingSomething;
+        if (playerArmRenderer.enabled != shouldShowArmMesh)
+            playerArmRenderer.enabled = shouldShowArmMesh;
     }
 
     private void ClearShownState()

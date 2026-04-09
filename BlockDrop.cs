@@ -75,6 +75,12 @@ public class BlockDrop : MonoBehaviour
 
     public static bool Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
     {
+        Vector3 spawnPosition = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
+        return Spawn(world, spawnPosition, blockType, 1, throwDirection);
+    }
+
+    public static bool Spawn(World world, Vector3 worldPosition, BlockType blockType, int amount, Vector3 throwDirection)
+    {
         if (world == null)
         {
             Debug.LogWarning("[BlockDrop] Spawn cancelado: World.Instance nulo.");
@@ -94,10 +100,10 @@ public class BlockDrop : MonoBehaviour
             return false;
 
         drop.transform.SetParent(null, false);
-        drop.transform.position = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
+        drop.transform.position = worldPosition;
         drop.blockType = blockType;
-        drop.stackAmount = 1;
         drop.maxStackAmount = Mathf.Max(1, drop.maxStackAmount);
+        drop.stackAmount = Mathf.Clamp(amount, 1, drop.maxStackAmount);
         drop.isCollected = false;
         drop.isPooled = false;
         drop.transform.localScale = Vector3.one * drop.dropScale;
@@ -861,5 +867,402 @@ public class BlockDrop : MonoBehaviour
             rb.isKinematic = true;
             rb.detectCollisions = false;
         }
+    }
+}
+
+[RequireComponent(typeof(BoxCollider))]
+[RequireComponent(typeof(SphereCollider))]
+[RequireComponent(typeof(Rigidbody))]
+public class InventoryItemDrop : MonoBehaviour
+{
+    [Header("Drop")]
+    [SerializeField] private float lifeTimeSeconds = 30f;
+    [SerializeField] private float rotateSpeed = 110f;
+    [SerializeField] private float dropScale = 0.35f;
+    [SerializeField] private float launchForce = 2.2f;
+    [SerializeField] private float pickupDelaySeconds = 0.25f;
+    [SerializeField] private string playerTag = "Player";
+    [SerializeField] private bool requirePlayerTag = false;
+    [SerializeField] private bool debugPickupLogs = false;
+
+    [Header("Stacking")]
+    [SerializeField, Min(1)] private int stackAmount = 1;
+    [SerializeField, Min(1)] private int maxStackAmount = 64;
+    [SerializeField, Min(0f)] private float mergeRadius = 1.15f;
+    [SerializeField, Min(0.02f)] private float mergeCheckInterval = 0.2f;
+    [SerializeField, Min(0f)] private float mergeDelaySeconds = 0.15f;
+
+    [Header("Runtime")]
+    [SerializeField] private Item item;
+
+    private const int MergeBufferSize = 24;
+    private static readonly Collider[] MergeBuffer = new Collider[MergeBufferSize];
+
+    private float spawnTime;
+    private float nextMergeCheckTime;
+    private float visualSpinAngle;
+    private bool isCollected;
+    private Rigidbody rb;
+    private BoxCollider solidCollider;
+    private SphereCollider pickupCollider;
+    private Transform visualRoot;
+    private SpriteRenderer spriteRenderer;
+
+    public static bool Spawn(Item item, int amount, Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (item == null || amount <= 0)
+            return false;
+
+        GameObject dropObject = new GameObject("ItemDrop");
+        InventoryItemDrop drop = dropObject.AddComponent<InventoryItemDrop>();
+        if (drop == null)
+        {
+            Object.Destroy(dropObject);
+            return false;
+        }
+
+        drop.Initialize(item, amount, worldPosition, throwDirection);
+        return true;
+    }
+
+    private void Awake()
+    {
+        mergeRadius = Mathf.Max(0.01f, mergeRadius);
+        mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
+        mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
+        maxStackAmount = Mathf.Max(1, maxStackAmount);
+        stackAmount = Mathf.Clamp(stackAmount, 1, maxStackAmount);
+        EnsureRuntimeComponents();
+    }
+
+    private void Initialize(Item droppedItem, int amount, Vector3 worldPosition, Vector3 throwDirection)
+    {
+        EnsureRuntimeComponents();
+
+        item = droppedItem;
+        maxStackAmount = Mathf.Max(1, droppedItem.maxStack);
+        stackAmount = Mathf.Clamp(amount, 1, maxStackAmount);
+        isCollected = false;
+        visualSpinAngle = Random.Range(0f, 360f);
+
+        transform.position = worldPosition;
+        transform.localScale = Vector3.one * dropScale;
+        spawnTime = Time.time;
+        nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
+
+        UpdateVisual();
+        SetupPhysics(throwDirection);
+        UpdateDropName();
+    }
+
+    private void EnsureRuntimeComponents()
+    {
+        solidCollider = GetComponent<BoxCollider>();
+        if (solidCollider == null)
+            solidCollider = gameObject.AddComponent<BoxCollider>();
+
+        pickupCollider = GetComponent<SphereCollider>();
+        if (pickupCollider == null)
+            pickupCollider = gameObject.AddComponent<SphereCollider>();
+        if (pickupCollider != null)
+        {
+            pickupCollider.radius = 4f;
+            pickupCollider.isTrigger = true;
+        }
+
+        rb = GetComponent<Rigidbody>();
+        if (rb == null)
+            rb = gameObject.AddComponent<Rigidbody>();
+        if (rb != null)
+        {
+            rb.mass = 0.25f;
+            rb.linearDamping = 1.4f;
+            rb.angularDamping = 0.7f;
+            rb.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        }
+
+        if (visualRoot == null)
+        {
+            GameObject visual = new GameObject("Visual");
+            visualRoot = visual.transform;
+            visualRoot.SetParent(transform, false);
+            visualRoot.localPosition = Vector3.up * 0.18f;
+            spriteRenderer = visual.AddComponent<SpriteRenderer>();
+        }
+        else if (spriteRenderer == null)
+        {
+            spriteRenderer = visualRoot.GetComponent<SpriteRenderer>();
+            if (spriteRenderer == null)
+                spriteRenderer = visualRoot.gameObject.AddComponent<SpriteRenderer>();
+        }
+    }
+
+    private void SetupPhysics(Vector3 throwDirection)
+    {
+        EnsureRuntimeComponents();
+
+        if (solidCollider != null)
+        {
+            solidCollider.enabled = true;
+            solidCollider.center = new Vector3(0f, 0.16f, 0f);
+            solidCollider.size = new Vector3(0.28f, 0.28f, 0.28f);
+            solidCollider.isTrigger = false;
+        }
+
+        if (pickupCollider != null)
+            pickupCollider.enabled = true;
+
+        if (rb == null)
+            return;
+
+        rb.linearVelocity = Vector3.zero;
+        rb.angularVelocity = Vector3.zero;
+        rb.isKinematic = false;
+        rb.detectCollisions = true;
+
+        Vector3 launchBase = throwDirection.sqrMagnitude > 0.0001f ? throwDirection.normalized : Vector3.forward;
+        Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
+        Vector3 launchDir = (launchBase + randomDir + Vector3.up * 0.4f).normalized;
+        rb.AddForce(launchDir * launchForce, ForceMode.Impulse);
+    }
+
+    private void Update()
+    {
+        if (isCollected || item == null)
+        {
+            if (!isCollected)
+                Destroy(gameObject);
+
+            return;
+        }
+
+        visualSpinAngle = (visualSpinAngle + rotateSpeed * Time.deltaTime) % 360f;
+        UpdateVisualTransform();
+
+        if (Time.time >= nextMergeCheckTime)
+        {
+            nextMergeCheckTime = Time.time + mergeCheckInterval;
+            TryMergeNearbyDrops();
+        }
+
+        if (Time.time - spawnTime >= lifeTimeSeconds)
+            Destroy(gameObject);
+    }
+
+    private void OnTriggerEnter(Collider other)
+    {
+        TryCollect(other);
+    }
+
+    private void OnTriggerStay(Collider other)
+    {
+        TryCollect(other);
+    }
+
+    private void TryCollect(Collider other)
+    {
+        if (other == null || isCollected || item == null)
+            return;
+
+        if (Time.time - spawnTime < pickupDelaySeconds)
+            return;
+
+        PlayerInventory inventory = ResolveInventory(other);
+        if (inventory == null)
+        {
+            if (debugPickupLogs)
+                Debug.LogWarning($"[InventoryItemDrop] Colisao com {other.name} sem PlayerInventory para coletar {item.name}.");
+            return;
+        }
+
+        if (requirePlayerTag && !string.IsNullOrEmpty(playerTag))
+        {
+            bool isPlayer = other.CompareTag(playerTag) ||
+                            (other.transform.root != null && other.transform.root.CompareTag(playerTag)) ||
+                            inventory.CompareTag(playerTag);
+            if (!isPlayer)
+                return;
+        }
+
+        int remaining = inventory.InsertItem(item, stackAmount);
+        int collected = stackAmount - remaining;
+        if (collected <= 0)
+            return;
+
+        stackAmount = remaining;
+        if (debugPickupLogs)
+            Debug.Log($"[InventoryItemDrop] Coletado: {item.name} x{collected} -> inventario {inventory.name}");
+
+        if (stackAmount <= 0)
+        {
+            isCollected = true;
+            Destroy(gameObject);
+            return;
+        }
+
+        UpdateDropName();
+    }
+
+    private void TryMergeNearbyDrops()
+    {
+        if (stackAmount >= maxStackAmount)
+            return;
+
+        if (Time.time - spawnTime < mergeDelaySeconds)
+            return;
+
+        int hits = Physics.OverlapSphereNonAlloc(
+            transform.position,
+            mergeRadius,
+            MergeBuffer,
+            ~0,
+            QueryTriggerInteraction.Collide);
+
+        for (int i = 0; i < hits && stackAmount < maxStackAmount; i++)
+        {
+            Collider col = MergeBuffer[i];
+            MergeBuffer[i] = null;
+            if (col == null)
+                continue;
+
+            InventoryItemDrop other = col.GetComponent<InventoryItemDrop>();
+            if (other == null)
+                other = col.GetComponentInParent<InventoryItemDrop>();
+
+            if (!CanMergeWith(other))
+                continue;
+
+            if (GetInstanceID() > other.GetInstanceID())
+                continue;
+
+            AbsorbFrom(other);
+        }
+    }
+
+    private bool CanMergeWith(InventoryItemDrop other)
+    {
+        if (other == null || other == this)
+            return false;
+
+        if (other.isCollected || other.item == null)
+            return false;
+
+        if (other.item != item)
+            return false;
+
+        if (other.stackAmount <= 0)
+            return false;
+
+        if (Time.time - other.spawnTime < other.mergeDelaySeconds)
+            return false;
+
+        float mergeDistanceSqr = mergeRadius * mergeRadius;
+        return (other.transform.position - transform.position).sqrMagnitude <= mergeDistanceSqr;
+    }
+
+    private void AbsorbFrom(InventoryItemDrop other)
+    {
+        int stackLimit = Mathf.Max(1, Mathf.Min(maxStackAmount, other.maxStackAmount));
+        int freeSpace = Mathf.Max(0, stackLimit - stackAmount);
+        if (freeSpace <= 0)
+            return;
+
+        int moved = Mathf.Min(freeSpace, other.stackAmount);
+        if (moved <= 0)
+            return;
+
+        stackAmount += moved;
+        other.stackAmount -= moved;
+        spawnTime = Mathf.Max(spawnTime, other.spawnTime);
+
+        UpdateDropName();
+
+        if (other.stackAmount <= 0)
+        {
+            other.isCollected = true;
+            Destroy(other.gameObject);
+        }
+        else
+        {
+            other.UpdateDropName();
+        }
+    }
+
+    private void UpdateVisual()
+    {
+        if (spriteRenderer == null)
+            return;
+
+        Sprite icon = ItemIconResolver.ResolveForUI(item);
+        if (icon == null && item != null)
+            icon = item.icon;
+
+        spriteRenderer.sprite = icon;
+        spriteRenderer.enabled = icon != null;
+
+        if (visualRoot == null)
+            return;
+
+        if (icon != null)
+        {
+            float height = Mathf.Max(1f, icon.rect.height);
+            float aspect = icon.rect.width / height;
+            visualRoot.localScale = new Vector3(0.45f * aspect, 0.45f, 0.45f);
+        }
+        else
+        {
+            visualRoot.localScale = Vector3.one * 0.45f;
+        }
+    }
+
+    private void UpdateVisualTransform()
+    {
+        if (visualRoot == null)
+            return;
+
+        float bob = Mathf.Sin((Time.time - spawnTime) * 5f) * 0.05f;
+        visualRoot.localPosition = new Vector3(0f, 0.18f + bob, 0f);
+
+        Camera cameraRef = Camera.main;
+        if (cameraRef != null)
+        {
+            visualRoot.rotation = cameraRef.transform.rotation * Quaternion.Euler(0f, 0f, visualSpinAngle);
+            return;
+        }
+
+        visualRoot.rotation = Quaternion.Euler(0f, visualSpinAngle, 0f);
+    }
+
+    private void UpdateDropName()
+    {
+        string itemName = item != null ? item.name : "Unknown";
+        gameObject.name = $"Drop_{itemName}_x{stackAmount}";
+    }
+
+    private static PlayerInventory ResolveInventory(Collider other)
+    {
+        if (other == null)
+            return null;
+
+        PlayerInventory inventory = other.GetComponent<PlayerInventory>();
+        if (inventory != null)
+            return inventory;
+
+        inventory = other.GetComponentInParent<PlayerInventory>();
+        if (inventory != null)
+            return inventory;
+
+        if (other.attachedRigidbody != null)
+        {
+            inventory = other.attachedRigidbody.GetComponent<PlayerInventory>();
+            if (inventory != null)
+                return inventory;
+
+            inventory = other.attachedRigidbody.GetComponentInParent<PlayerInventory>();
+            if (inventory != null)
+                return inventory;
+        }
+
+        return null;
     }
 }

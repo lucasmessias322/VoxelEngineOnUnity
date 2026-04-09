@@ -26,8 +26,14 @@ public class Item : ScriptableObject
     [Header("Held Visual")]
     [Tooltip("Optional prefab shown in the player's hand when this item is selected.")]
     public GameObject heldPrefab;
-    [Tooltip("Use these values instead of the default held-item transform.")]
+    [Tooltip("Legacy toggle: overrides held position, rotation and scale together.")]
     public bool overrideHeldTransform;
+    [Tooltip("Overrides only held local position when selected.")]
+    public bool overrideHeldPosition;
+    [Tooltip("Overrides only held local rotation when selected.")]
+    public bool overrideHeldRotation;
+    [Tooltip("Overrides only held local scale when selected.")]
+    public bool overrideHeldScale;
     public Vector3 heldLocalPosition = new Vector3(0.35f, -0.3f, 0.55f);
     public Vector3 heldLocalEulerAngles = new Vector3(20f, -25f, -8f);
     public Vector3 heldLocalScale = Vector3.one;

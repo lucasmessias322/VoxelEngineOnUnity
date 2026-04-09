@@ -109,6 +109,32 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         allowRightClickInteraction = canUseRightClick;
     }
 
+    public static bool TryGetHoveredSlot(out Slot slot)
+    {
+        slot = hoveredSlot;
+        return slot != null;
+    }
+
+    public static bool TryDropCarriedStack(PlayerInventory inventory, bool dropFullStack)
+    {
+        if (inventory == null || !HasCarriedStack)
+            return false;
+
+        int amountToDrop = dropFullStack ? carriedAmount : 1;
+        amountToDrop = Mathf.Clamp(amountToDrop, 1, carriedAmount);
+
+        if (!inventory.TryDropItemStackToWorld(carriedItem, amountToDrop))
+            return false;
+
+        carriedAmount -= amountToDrop;
+        if (carriedAmount <= 0)
+            ClearCarriedStack();
+        else
+            UpdateDragVisual();
+
+        return true;
+    }
+
     public void SetContents(Item newItem, int newAmount)
     {
         if (newItem == null || newAmount <= 0)
@@ -620,7 +646,15 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         Slot target = pendingDropTarget != null ? pendingDropTarget : hoveredSlot;
         pendingDropTarget = null;
 
-        if (target == null || !target.CanInteractWithInventory() || !target.allowManualInsert)
+        if (target == null)
+        {
+            PlayerInventory inventory = PlayerInventory.Instance;
+            if (inventory != null && inventory.IsInventoryOpen)
+                TryDropCarriedStack(inventory, true);
+            return;
+        }
+
+        if (!target.CanInteractWithInventory() || !target.allowManualInsert)
             return;
 
         target.PlaceCarriedStackWithLeftClick();
