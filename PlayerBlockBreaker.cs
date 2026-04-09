@@ -104,7 +104,14 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
         }
 
-        BlockType current = World.Instance.GetBlockAt(sel);
+        World world = World.Instance;
+        if (world == null)
+        {
+            CancelBreak();
+            return;
+        }
+
+        BlockType current = world.GetBlockAt(sel);
         if (!CanBreak(current))
         {
             CancelBreak();
@@ -128,16 +135,20 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         bool shouldDrop = ShouldDropBlock(current);
         Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
-        bool spawnedDrop = shouldDrop && BlockDrop.Spawn(World.Instance, sel, current, throwDir);
-        World.Instance.SetBlockAt(sel, BlockType.Air);
-
-        if (shouldDrop && !spawnedDrop)
+        bool treeCapitatorTriggered = world.TryQueueTreeCapitatorBreak(sel, current, shouldDrop, throwDir);
+        if (!treeCapitatorTriggered)
         {
-            bool addedToInventory = PlayerInventory.Instance != null &&
-                                    PlayerInventory.Instance.TryAddBlockDrop(current, 1);
-            if (!addedToInventory)
+            bool spawnedDrop = shouldDrop && BlockDrop.Spawn(world, sel, current, throwDir);
+            world.SetBlockAt(sel, BlockType.Air);
+
+            if (shouldDrop && !spawnedDrop)
             {
-                Debug.LogWarning($"[PlayerBlockBreaker] Falha ao gerar drop de {current} em {sel}.");
+                bool addedToInventory = PlayerInventory.Instance != null &&
+                                        PlayerInventory.Instance.TryAddBlockDrop(current, 1);
+                if (!addedToInventory)
+                {
+                    Debug.LogWarning($"[PlayerBlockBreaker] Falha ao gerar drop de {current} em {sel}.");
+                }
             }
         }
 

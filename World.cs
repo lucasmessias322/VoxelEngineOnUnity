@@ -297,6 +297,14 @@ public partial class World : MonoBehaviour
 
     [Header("Features Toggle")]
     public bool enableTrees = true;
+    [Tooltip("Quando ativo, quebrar um tronco quebra a arvore inteira de forma gradual (tipo treecapitator).")]
+    public bool enableTreeCapitator = true;
+    [Tooltip("Numero maximo de troncos quebrados por uma unica arvore para evitar cascatas gigantes.")]
+    [Min(8)]
+    public int treeCapitatorMaxLogsPerTree = 128;
+    [Tooltip("Limite de troncos processados por frame para evitar lag spike.")]
+    [Min(1)]
+    public int treeCapitatorBreaksPerFrame = 10;
 
     [Header("Tree Leaves")]
     [Tooltip("Medium = folhas voxel padrao. High = camada detalhada com sobreposicao em todas as folhas (estilo Vintage Story). Ultra = folhas 100% billboard de 4 faces (estilo Hytale).")]
@@ -1449,6 +1457,7 @@ public partial class World : MonoBehaviour
         ApplyResolvedVisualSubchunkRendererLayout();
         meshesAppliedThisFrame = 0;
         ProcessQueuedWaterUpdates();
+        ProcessQueuedTreeCapitatorBreaks();
         ProcessQueuedChunkRebuilds();
         ProcessQueuedHighBuildMeshRebuilds();
         ProcessQueuedLeafDecay();

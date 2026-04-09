@@ -12,12 +12,21 @@ public partial class World : MonoBehaviour
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
 
+    private readonly Queue<TreeCapitatorBreakCandidate> queuedTreeCapitatorBreaks = new Queue<TreeCapitatorBreakCandidate>();
+    private readonly HashSet<Vector3Int> queuedTreeCapitatorSet = new HashSet<Vector3Int>();
+    private readonly Queue<Vector3Int> treeCapitatorSearchQueue = new Queue<Vector3Int>();
+    private readonly HashSet<Vector3Int> treeCapitatorVisited = new HashSet<Vector3Int>();
+    private readonly List<Vector3Int> treeCapitatorCollectedLogs = new List<Vector3Int>(64);
+    private readonly HashSet<Vector3Int> playerPlacedLogs = new HashSet<Vector3Int>();
+
     private readonly Queue<LeafDecayCandidate> queuedLeafDecay = new Queue<LeafDecayCandidate>();
     private readonly HashSet<Vector3Int> queuedLeafDecaySet = new HashSet<Vector3Int>();
     private readonly Dictionary<Vector3Int, float> leafDecayUnsupportedSince = new Dictionary<Vector3Int, float>();
     private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>();
     private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>();
     private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>();
+
+    private static readonly Vector3Int[] TreeCapitatorNeighborOffsets = CreateTreeCapitatorNeighborOffsets();
 
     private static readonly Vector3Int[] LeafDecayNeighborOffsets =
     {
@@ -33,6 +42,14 @@ public partial class World : MonoBehaviour
     {
         public Vector3Int position;
         public float nextCheckTime;
+    }
+
+    private struct TreeCapitatorBreakCandidate
+    {
+        public Vector3Int position;
+        public BlockType expectedType;
+        public bool shouldDrop;
+        public Vector3 throwDirection;
     }
 
     private struct LeafSupportSearchNode
@@ -105,6 +122,7 @@ public partial class World : MonoBehaviour
         IndexTerrainOverride(worldPos, chunkCoord);
 
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
+        HandlePlayerPlacedLogBlockChange(worldPos, current, type, placedByPlayer);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
 
@@ -187,6 +205,145 @@ public partial class World : MonoBehaviour
             if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
             if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
         }
+    }
+
+    public bool TryQueueTreeCapitatorBreak(
+        Vector3Int origin,
+        BlockType brokenBlockType,
+        bool shouldDrop,
+        Vector3 throwDirection)
+    {
+        if (!enableTreeCapitator || !IsTreeLogBlock(brokenBlockType))
+            return false;
+        if (playerPlacedLogs.Contains(origin))
+            return false;
+
+        int connectedLogs = CollectTreeCapitatorLogs(origin, brokenBlockType);
+        if (connectedLogs <= 1)
+            return false;
+
+        Vector3 normalizedThrowDirection = throwDirection.sqrMagnitude > 0.0001f
+            ? throwDirection.normalized
+            : Vector3.up;
+
+        int queued = 0;
+        for (int i = 0; i < treeCapitatorCollectedLogs.Count; i++)
+        {
+            Vector3Int logPos = treeCapitatorCollectedLogs[i];
+            if (playerPlacedLogs.Contains(logPos))
+                continue;
+
+            if (!queuedTreeCapitatorSet.Add(logPos))
+                continue;
+
+            queuedTreeCapitatorBreaks.Enqueue(new TreeCapitatorBreakCandidate
+            {
+                position = logPos,
+                expectedType = brokenBlockType,
+                shouldDrop = shouldDrop,
+                throwDirection = normalizedThrowDirection
+            });
+            queued++;
+        }
+
+        return queued > 0;
+    }
+
+    private int CollectTreeCapitatorLogs(Vector3Int origin, BlockType targetLogType)
+    {
+        treeCapitatorSearchQueue.Clear();
+        treeCapitatorVisited.Clear();
+        treeCapitatorCollectedLogs.Clear();
+
+        int maxLogs = Mathf.Max(1, treeCapitatorMaxLogsPerTree);
+        treeCapitatorSearchQueue.Enqueue(origin);
+        treeCapitatorVisited.Add(origin);
+
+        while (treeCapitatorSearchQueue.Count > 0 && treeCapitatorCollectedLogs.Count < maxLogs)
+        {
+            Vector3Int current = treeCapitatorSearchQueue.Dequeue();
+            if (GetBlockAt(current) != targetLogType)
+                continue;
+            if (playerPlacedLogs.Contains(current))
+                continue;
+
+            treeCapitatorCollectedLogs.Add(current);
+
+            for (int i = 0; i < TreeCapitatorNeighborOffsets.Length; i++)
+            {
+                Vector3Int neighborPos = current + TreeCapitatorNeighborOffsets[i];
+                if (neighborPos.y <= 2 || neighborPos.y >= Chunk.SizeY)
+                    continue;
+
+                if (!treeCapitatorVisited.Add(neighborPos))
+                    continue;
+
+                if (GetBlockAt(neighborPos) != targetLogType)
+                    continue;
+                if (playerPlacedLogs.Contains(neighborPos))
+                    continue;
+
+                treeCapitatorSearchQueue.Enqueue(neighborPos);
+            }
+        }
+
+        return treeCapitatorCollectedLogs.Count;
+    }
+
+    private void ProcessQueuedTreeCapitatorBreaks()
+    {
+        if (!enableTreeCapitator)
+        {
+            ClearQueuedTreeCapitatorBreaks();
+            return;
+        }
+
+        if (queuedTreeCapitatorBreaks.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, treeCapitatorBreaksPerFrame);
+        for (int i = 0; i < perFrameLimit && queuedTreeCapitatorBreaks.Count > 0; i++)
+        {
+            TreeCapitatorBreakCandidate candidate = queuedTreeCapitatorBreaks.Dequeue();
+            queuedTreeCapitatorSet.Remove(candidate.position);
+
+            BlockType currentType = GetBlockAt(candidate.position);
+            if (currentType != candidate.expectedType)
+                continue;
+
+            bool spawnedDrop = candidate.shouldDrop &&
+                               BlockDrop.Spawn(this, candidate.position, currentType, candidate.throwDirection);
+            SetBlockAt(candidate.position, BlockType.Air);
+            InvalidateLoadedSubchunkCollidersAt(candidate.position);
+
+            if (candidate.shouldDrop && !spawnedDrop)
+            {
+                bool addedToInventory = PlayerInventory.Instance != null &&
+                                        PlayerInventory.Instance.TryAddBlockDrop(currentType, 1);
+                if (!addedToInventory)
+                    Debug.LogWarning($"[World] Falha ao gerar drop de {currentType} em {candidate.position}.");
+            }
+        }
+    }
+
+    private void ClearQueuedTreeCapitatorBreaks()
+    {
+        queuedTreeCapitatorBreaks.Clear();
+        queuedTreeCapitatorSet.Clear();
+    }
+
+    private void InvalidateLoadedSubchunkCollidersAt(Vector3Int worldPos)
+    {
+        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            return;
+
+        Vector2Int coord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+            return;
+
+        int subchunkIndex = Mathf.Clamp(worldPos.y / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
+        chunk.ClearSubchunkColliderData(subchunkIndex);
+        chunk.SetSubchunkColliderSystemEnabled(subchunkIndex, false);
     }
 
     private void ApplyBlockToLoadedChunkCache(Vector3Int worldPos, Vector2Int chunkCoord, BlockType type)
@@ -393,9 +550,51 @@ public partial class World : MonoBehaviour
 
     private static bool IsLeafSupportBlock(BlockType blockType)
     {
+        return IsTreeLogBlock(blockType);
+    }
+
+    private static bool IsTreeLogBlock(BlockType blockType)
+    {
         return blockType == BlockType.Log ||
                blockType == BlockType.birch_log ||
                blockType == BlockType.acacia_log;
+    }
+
+    private void HandlePlayerPlacedLogBlockChange(
+        Vector3Int worldPos,
+        BlockType previousType,
+        BlockType newType,
+        bool placedByPlayer)
+    {
+        bool isLog = IsTreeLogBlock(newType);
+        if (!isLog)
+        {
+            playerPlacedLogs.Remove(worldPos);
+            return;
+        }
+
+        if (placedByPlayer)
+            playerPlacedLogs.Add(worldPos);
+    }
+
+    private static Vector3Int[] CreateTreeCapitatorNeighborOffsets()
+    {
+        List<Vector3Int> offsets = new List<Vector3Int>(26);
+        for (int y = -1; y <= 1; y++)
+        {
+            for (int z = -1; z <= 1; z++)
+            {
+                for (int x = -1; x <= 1; x++)
+                {
+                    if (x == 0 && y == 0 && z == 0)
+                        continue;
+
+                    offsets.Add(new Vector3Int(x, y, z));
+                }
+            }
+        }
+
+        return offsets.ToArray();
     }
 
     [Header("Fluid Simulation")]
