@@ -31,6 +31,7 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public bool hasVoxelSnapshot = false;
     [NonSerialized] private byte[] lightSnapshot;
     [NonSerialized] private bool hasLightSnapshot = false;
+    [NonSerialized] public bool pendingRecycle = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
@@ -73,6 +74,7 @@ public class Chunk : MonoBehaviour
         int total = Chunk.SizeX * Chunk.SizeY * Chunk.SizeZ;
 
         voxelData = new NativeArray<byte>(total, Allocator.Persistent);
+        pendingRecycle = false;
 
         hasVoxelData = false; // ainda útil para saber se já tem dados válidos
     }
@@ -288,6 +290,7 @@ public class Chunk : MonoBehaviour
     {
         coord = c;
         gameObject.name = $"Chunk_{c.x}_{c.y}";
+        pendingRecycle = false;
     }
 
     public void UpdateLightSnapshot(NativeArray<byte> sourceLightData, int borderSize)
@@ -337,6 +340,7 @@ public class Chunk : MonoBehaviour
     {
         CompleteTrackedJob();
 
+        pendingRecycle = false;
         jobScheduled = false;
         currentJob = default;
         state = ChunkState.Inactive;

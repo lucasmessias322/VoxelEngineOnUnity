@@ -430,6 +430,7 @@ public partial class World : MonoBehaviour
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
     private List<PendingData> pendingDataJobs = new List<PendingData>();
+    private readonly List<Chunk> retiredChunksAwaitingRecycle = new List<Chunk>(64);
     private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>();
     private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
@@ -1749,6 +1750,8 @@ public partial class World : MonoBehaviour
 
     private void Update()
     {
+        ProcessRetiredChunksAwaitingRecycle();
+
         float updateFrameStartTime = Time.realtimeSinceStartup;
         float updateBudgetSeconds = updateWorkBudgetMS > 0f ? updateWorkBudgetMS / 1000f : 0f;
 
@@ -2703,6 +2706,94 @@ public partial class World : MonoBehaviour
 
     #region Requesting Chunks & Rebuilds
 
+    private void ProcessRetiredChunksAwaitingRecycle()
+    {
+        for (int i = retiredChunksAwaitingRecycle.Count - 1; i >= 0; i--)
+        {
+            Chunk chunk = retiredChunksAwaitingRecycle[i];
+            if (chunk == null)
+            {
+                retiredChunksAwaitingRecycle.RemoveAt(i);
+                continue;
+            }
+
+            if (!TryRecycleChunkWithoutBlocking(chunk))
+                continue;
+
+            retiredChunksAwaitingRecycle.RemoveAt(i);
+        }
+    }
+
+    private void RetireChunkWithoutBlocking(Chunk chunk)
+    {
+        if (chunk == null)
+            return;
+
+        if (TryRecycleChunkWithoutBlocking(chunk))
+            return;
+
+        if (chunk.pendingRecycle)
+            return;
+
+        chunk.pendingRecycle = true;
+        chunk.state = Chunk.ChunkState.Inactive;
+        if (chunk.gameObject.activeSelf)
+            chunk.gameObject.SetActive(false);
+        retiredChunksAwaitingRecycle.Add(chunk);
+    }
+
+    private bool TryRecycleChunkWithoutBlocking(Chunk chunk)
+    {
+        if (chunk == null)
+            return false;
+
+        if (HasPendingJobReferencesForChunk(chunk))
+            return false;
+
+        if (chunk.jobScheduled && !IsChunkJobCompletedWithoutBlocking(chunk))
+            return false;
+
+        chunk.ResetChunk();
+        chunkPool.Enqueue(chunk);
+        return true;
+    }
+
+    private bool HasPendingJobReferencesForChunk(Chunk chunk)
+    {
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            if (ReferenceEquals(pendingMeshes[i].parentChunk, chunk))
+                return true;
+        }
+
+        for (int i = 0; i < pendingDataJobs.Count; i++)
+        {
+            if (ReferenceEquals(pendingDataJobs[i].chunk, chunk))
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsChunkJobCompletedWithoutBlocking(Chunk chunk)
+    {
+        if (chunk == null || !chunk.jobScheduled)
+            return true;
+
+        try
+        {
+            return chunk.currentJob.IsCompleted;
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+    }
+
     private void UpdateChunks()
     {
         if (player == null) return;
@@ -2741,9 +2832,8 @@ public partial class World : MonoBehaviour
                 if (activeChunks.TryGetValue(coord, out Chunk chunk))
                 {
                     InvalidateChunkBiomeTintCache(coord);
-                    chunk.ResetChunk();
-                    chunkPool.Enqueue(chunk);
                     activeChunks.Remove(coord);
+                    RetireChunkWithoutBlocking(chunk);
                     activeSectionSetChanged = true;
 
                     RemoveHighBuildMesh(coord);
@@ -2808,12 +2898,16 @@ public partial class World : MonoBehaviour
 
     private void RequestChunk(Vector2Int coord)
     {
+        if (chunkPool.Count == 0)
+            ProcessRetiredChunksAwaitingRecycle();
+
         // Reuse or create chunk
         Chunk chunk;
         if (chunkPool.Count > 0)
         {
             chunk = chunkPool.Dequeue();
             try { chunk.ResetChunk(); } catch { }
+            chunk.pendingRecycle = false;
             chunk.jobScheduled = false;
             chunk.hasVoxelData = false;
             chunk.currentJob = default;

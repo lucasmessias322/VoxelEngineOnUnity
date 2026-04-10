@@ -7,6 +7,14 @@ using UnityEngine.Rendering;
 [RequireComponent(typeof(AudioSource))]
 public class PlayerBlockBreaker : MonoBehaviour
 {
+    private enum BreakCrackStyle
+    {
+        Generic = 0,
+        Dirt = 1,
+        Stone = 2,
+        Wood = 3
+    }
+
     private const float BreakVisualDefaultAOCurveExponent = 1.12f;
     private static readonly Vector3Int[] BreakVisualHorizontalLightDirections =
     {
@@ -36,6 +44,12 @@ public class PlayerBlockBreaker : MonoBehaviour
     public Material breakCrackMaterial;
     [Tooltip("Texturas em ordem de dano (0..N-1). Ex.: crack_0 ate crack_9.")]
     public Texture2D[] breakCrackStages;
+    [Tooltip("Opcional: stages de terra/grama/areia/neve no estilo Hytale. Se vazio, usa Break Crack Stages.")]
+    public Texture2D[] dirtBreakCrackStages;
+    [Tooltip("Opcional: stages de pedra/minerios/vidro no estilo Hytale. Se vazio, usa Break Crack Stages.")]
+    public Texture2D[] stoneBreakCrackStages;
+    [Tooltip("Opcional: stages de madeira/troncos/tabuas no estilo Hytale. Se vazio, usa Break Crack Stages.")]
+    public Texture2D[] woodBreakCrackStages;
     [Range(1.001f, 1.1f)] public float crackOverlayScale = 1.01f;
 
     [Header("Break shader shake")]
@@ -369,6 +383,49 @@ public class PlayerBlockBreaker : MonoBehaviour
         }
     }
 
+    static bool HasBreakCrackStages(Texture2D[] stages)
+    {
+        return stages != null && stages.Length > 0;
+    }
+
+    Texture2D[] ResolveBreakCrackStages(BlockType blockType)
+    {
+        Texture2D[] fallbackStages = breakCrackStages;
+        Texture2D[] preferredStages = ResolveBreakCrackStyle(blockType) switch
+        {
+            BreakCrackStyle.Dirt => dirtBreakCrackStages,
+            BreakCrackStyle.Stone => stoneBreakCrackStages,
+            BreakCrackStyle.Wood => woodBreakCrackStages,
+            _ => breakCrackStages
+        };
+
+        return HasBreakCrackStages(preferredStages) ? preferredStages : fallbackStages;
+    }
+
+    BreakCrackStyle ResolveBreakCrackStyle(BlockType blockType)
+    {
+        World world = World.Instance;
+        ToolType preferredTool = ToolType.None;
+
+        if (world != null && world.blockData != null)
+        {
+            BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+            if (mapping != null)
+                preferredTool = ResolvePreferredTool(blockType, mapping.Value);
+        }
+
+        if (preferredTool == ToolType.None)
+            preferredTool = GetDefaultPreferredTool(blockType);
+
+        return preferredTool switch
+        {
+            ToolType.Shovel => BreakCrackStyle.Dirt,
+            ToolType.Pickaxe => BreakCrackStyle.Stone,
+            ToolType.Axe => BreakCrackStyle.Wood,
+            _ => BreakCrackStyle.Generic
+        };
+    }
+
     void CreateCrackOverlay()
     {
         if (breakCrackMaterial == null)
@@ -436,15 +493,29 @@ public class PlayerBlockBreaker : MonoBehaviour
         crackOverlayObject.transform.position = overlayBounds.center + shakeOffset;
         crackOverlayObject.transform.localScale = overlayBounds.size * crackOverlayScale * shakeScale;
 
-        if (breakCrackStages == null || breakCrackStages.Length == 0)
+        Texture2D[] activeStages = ResolveBreakCrackStages(overlayType);
+        if (!HasBreakCrackStages(activeStages))
             return;
 
-        int stageCount = breakCrackStages.Length;
-        int stage = Mathf.Clamp(Mathf.FloorToInt(progress01 * stageCount), 0, stageCount - 1);
+        float clampedProgress = Mathf.Clamp01(progress01);
+        int stageCount = activeStages.Length;
+        int stage = Mathf.Clamp(Mathf.FloorToInt(clampedProgress * stageCount), 0, stageCount - 1);
         if (stage == lastCrackStage)
             return;
 
-        Texture2D tex = breakCrackStages[stage];
+        Texture2D tex = activeStages[stage];
+        if (tex == null && activeStages != breakCrackStages && HasBreakCrackStages(breakCrackStages))
+        {
+            int fallbackStage = Mathf.Clamp(
+                Mathf.FloorToInt(clampedProgress * breakCrackStages.Length),
+                0,
+                breakCrackStages.Length - 1);
+            tex = breakCrackStages[fallbackStage];
+        }
+
+        if (tex == null)
+            return;
+
         crackOverlayRuntimeMaterial.SetTexture("_CrackTex", tex);
         lastCrackStage = stage;
     }
