@@ -23,8 +23,8 @@ public class BlockSelector : MonoBehaviour
         line.useWorldSpace = true;
         line.loop = false;
 
-        line.startWidth = 0.05f;
-        line.endWidth = 0.05f;
+        line.startWidth = 0.025f;
+        line.endWidth = 0.025f;
 
         line.positionCount = 18;
         line.enabled = false;
@@ -66,7 +66,7 @@ public class BlockSelector : MonoBehaviour
             CurrentBlock = hitType;
             IsBillboardHit = isBillboard;
             BillboardGroundBlockPos = billboardGroundPos;
-            DrawSelection(blockPos, hitType, isBillboard);
+           // DrawSelection(blockPos, hitType, isBillboard);
             hasBlock = true;
         }
         else

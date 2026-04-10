@@ -1,4 +1,5 @@
 // PlayerBlockBreaker.cs
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -60,6 +61,12 @@ public class PlayerBlockBreaker : MonoBehaviour
     private BlockPlacementAxis breakVisualPlacementAxis = BlockPlacementAxis.Y;
     private int breakVisualSubchunkIndex = -1;
     private Vector3Int breakVisualBlockPosition = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+    private Vector3Int breakVisualHitNormal = Vector3Int.zero;
+    private readonly Dictionary<Vector3Int, int> breakVisualLightSampleCache = new Dictionary<Vector3Int, int>();
+    private readonly Dictionary<Vector3Int, bool> breakVisualDirectSkyAccessCache = new Dictionary<Vector3Int, bool>();
+    private readonly Dictionary<Vector3Int, int> breakVisualSkyLightEstimateCache = new Dictionary<Vector3Int, int>();
+    private readonly Dictionary<Vector3Int, int> breakVisualSkyPropagationLight = new Dictionary<Vector3Int, int>();
+    private readonly Queue<Vector3Int> breakVisualSkyPropagationQueue = new Queue<Vector3Int>();
     private Vector3Int breakingBlock = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
     private bool breakingIsBillboard;
     private float breakProgress01;
@@ -103,7 +110,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
         }
 
-        if (!selector.TryGetSelectedBlock(out Vector3Int sel, out _))
+        if (!selector.TryGetSelectedBlock(out Vector3Int sel, out Vector3Int hitNormal))
         {
             CancelBreak();
             return;
@@ -160,7 +167,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         float currentBreakDuration = GetBreakDurationSeconds(current);
         breakProgress01 += Time.deltaTime / currentBreakDuration;
-        UpdateBreakShaderEffect(sel, current, breakProgress01);
+        UpdateBreakShaderEffect(sel, current, hitNormal, breakProgress01);
         UpdateCrackOverlay(sel, breakProgress01);
 
         if (breakProgress01 < 1f)
@@ -442,7 +449,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         lastCrackStage = stage;
     }
 
-    void UpdateBreakShaderEffect(Vector3Int blockPos, BlockType blockType, float progress01)
+    void UpdateBreakShaderEffect(Vector3Int blockPos, BlockType blockType, Vector3Int hitNormal, float progress01)
     {
         if (!enableBreakShaderShake)
         {
@@ -457,7 +464,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector3 shakeOffset = ComputeBreakShakeOffset(center, progress01);
         float shakeScale = ComputeBreakShakeScale(center, progress01);
 
-        UpdateBreakVisualOverlay(blockPos, blockType, bounds, shakeOffset, shakeScale);
+        UpdateBreakVisualOverlay(blockPos, blockType, bounds, hitNormal, shakeOffset, shakeScale);
 
         Shader.SetGlobalVector(
             VoxelBreakBlockCenterId,
@@ -486,6 +493,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector3Int blockPos,
         BlockType blockType,
         Bounds bounds,
+        Vector3Int hitNormal,
         Vector3 shakeOffset,
         float shakeScale)
     {
@@ -526,17 +534,21 @@ public class PlayerBlockBreaker : MonoBehaviour
             breakVisualPlacementAxis != placementAxis ||
             breakVisualSubchunkIndex != subchunkIndex ||
             breakVisualBlockPosition != blockPos ||
+            breakVisualHitNormal != NormalizeBreakVisualHitNormal(hitNormal) ||
             breakVisualMesh.vertexCount == 0)
         {
-            BuildBreakVisualCubeMesh(blockPos, blockType, mapping, placementAxis, bounds.size);
+            BuildBreakVisualCubeMesh(blockPos, blockType, mapping, placementAxis, hitNormal, bounds.size);
             breakVisualBlockType = blockType;
             breakVisualPlacementAxis = placementAxis;
             breakVisualSubchunkIndex = subchunkIndex;
             breakVisualBlockPosition = blockPos;
+            breakVisualHitNormal = NormalizeBreakVisualHitNormal(hitNormal);
         }
 
         if (breakVisualRenderer.sharedMaterial != overlayMaterial)
             breakVisualRenderer.sharedMaterial = overlayMaterial;
+
+        world.ApplyBiomeTintToRendererAt(breakVisualRenderer, blockPos);
 
         breakVisualObject.transform.position = bounds.center + shakeOffset;
         breakVisualObject.transform.rotation = Quaternion.identity;
@@ -563,15 +575,128 @@ public class PlayerBlockBreaker : MonoBehaviour
         return material != null ? material : world.Material[0];
     }
 
+    private struct BreakVisualFaceLighting
+    {
+        public float light0;
+        public float light1;
+        public float light2;
+        public float light3;
+        public float ao0;
+        public float ao1;
+        public float ao2;
+        public float ao3;
+        public bool flipTriangle;
+
+        public float GetLight(int corner)
+        {
+            return corner switch
+            {
+                1 => light1,
+                2 => light2,
+                3 => light3,
+                _ => light0
+            };
+        }
+
+        public float GetAO(int corner)
+        {
+            return corner switch
+            {
+                1 => ao1,
+                2 => ao2,
+                3 => ao3,
+                _ => ao0
+            };
+        }
+    }
+
+    BreakVisualFaceLighting ResolveBreakVisualFaceLighting(
+        World world,
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockFace worldFace)
+    {
+        BreakVisualFaceLighting result = new BreakVisualFaceLighting
+        {
+            light0 = 1f,
+            light1 = 1f,
+            light2 = 1f,
+            light3 = 1f,
+            ao0 = 1f,
+            ao1 = 1f,
+            ao2 = 1f,
+            ao3 = 1f
+        };
+
+        if (!TryGetBreakVisualFaceAxes(
+                worldFace,
+                out _,
+                out _,
+                out Vector3Int normalOffset,
+                out Vector3Int stepU,
+                out Vector3Int stepV))
+        {
+            return result;
+        }
+
+        Vector3Int faceSamplePos = blockPos + normalOffset;
+        int faceLight = SampleBreakVisualLightValue(world, faceSamplePos);
+        bool disableAO =
+            world == null ||
+            !world.enableAmbientOcclusion ||
+            world.aoStrength <= 0f ||
+            IsBreakVisualEmissive(mapping);
+
+        int rawAO0 = 3;
+        int rawAO1 = 3;
+        int rawAO2 = 3;
+        int rawAO3 = 3;
+        if (!disableAO)
+        {
+            rawAO0 = ResolveBreakVisualVertexAO(world, faceSamplePos, -stepU, -stepV);
+            rawAO1 = ResolveBreakVisualVertexAO(world, faceSamplePos, stepU, -stepV);
+            rawAO2 = ResolveBreakVisualVertexAO(world, faceSamplePos, stepU, stepV);
+            rawAO3 = ResolveBreakVisualVertexAO(world, faceSamplePos, -stepU, stepV);
+        }
+
+        int light0 = ResolveBreakVisualVertexLight(world, faceSamplePos, -stepU, -stepV);
+        int light1 = ResolveBreakVisualVertexLight(world, faceSamplePos, stepU, -stepV);
+        int light2 = ResolveBreakVisualVertexLight(world, faceSamplePos, stepU, stepV);
+        int light3 = ResolveBreakVisualVertexLight(world, faceSamplePos, -stepU, stepV);
+        int emission = world != null ? world.GetBlockEmission(blockType) : mapping.lightEmission;
+
+        light0 = Mathf.Max(light0, faceLight, emission);
+        light1 = Mathf.Max(light1, faceLight, emission);
+        light2 = Mathf.Max(light2, faceLight, emission);
+        light3 = Mathf.Max(light3, faceLight, emission);
+
+        result.light0 = Mathf.Clamp01(light0 / 15f);
+        result.light1 = Mathf.Clamp01(light1 / 15f);
+        result.light2 = Mathf.Clamp01(light2 / 15f);
+        result.light3 = Mathf.Clamp01(light3 / 15f);
+        result.ao0 = ResolveBreakVisualAO01(world, rawAO0);
+        result.ao1 = ResolveBreakVisualAO01(world, rawAO1);
+        result.ao2 = ResolveBreakVisualAO01(world, rawAO2);
+        result.ao3 = ResolveBreakVisualAO01(world, rawAO3);
+        result.flipTriangle = (rawAO0 + rawAO2) > (rawAO1 + rawAO3);
+        return result;
+    }
+
     void BuildBreakVisualCubeMesh(
         Vector3Int blockPos,
         BlockType blockType,
         BlockTextureMapping mapping,
         BlockPlacementAxis placementAxis,
+        Vector3Int hitNormal,
         Vector3 size)
     {
         if (breakVisualMesh == null)
             return;
+
+        breakVisualLightSampleCache.Clear();
+        breakVisualDirectSkyAccessCache.Clear();
+        breakVisualSkyLightEstimateCache.Clear();
 
         World world = World.Instance;
         Vector2 atlasSize = world != null && world.blockData != null
@@ -598,12 +723,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(max.x, min.y, min.z),
-            new Vector3(max.x, max.y, min.z),
-            new Vector3(max.x, max.y, max.z),
-            new Vector3(max.x, min.y, max.z),
-            Vector3.right,
-            Vector3Int.right,
+            min,
+            max,
             BlockFace.Right,
             blockType,
             mapping,
@@ -615,12 +736,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(min.x, min.y, max.z),
-            new Vector3(min.x, max.y, max.z),
-            new Vector3(min.x, max.y, min.z),
-            new Vector3(min.x, min.y, min.z),
-            Vector3.left,
-            Vector3Int.left,
+            min,
+            max,
             BlockFace.Left,
             blockType,
             mapping,
@@ -632,12 +749,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(min.x, max.y, min.z),
-            new Vector3(min.x, max.y, max.z),
-            new Vector3(max.x, max.y, max.z),
-            new Vector3(max.x, max.y, min.z),
-            Vector3.up,
-            Vector3Int.up,
+            min,
+            max,
             BlockFace.Top,
             blockType,
             mapping,
@@ -649,12 +762,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(min.x, min.y, max.z),
-            new Vector3(min.x, min.y, min.z),
-            new Vector3(max.x, min.y, min.z),
-            new Vector3(max.x, min.y, max.z),
-            Vector3.down,
-            Vector3Int.down,
+            min,
+            max,
             BlockFace.Bottom,
             blockType,
             mapping,
@@ -666,12 +775,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(max.x, min.y, max.z),
-            new Vector3(max.x, max.y, max.z),
-            new Vector3(min.x, max.y, max.z),
-            new Vector3(min.x, min.y, max.z),
-            Vector3.forward,
-            Vector3Int.forward,
+            min,
+            max,
             BlockFace.Front,
             blockType,
             mapping,
@@ -683,12 +788,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             vertices, normals, uv0, uv1, uv2, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
-            new Vector3(min.x, min.y, min.z),
-            new Vector3(min.x, max.y, min.z),
-            new Vector3(max.x, max.y, min.z),
-            new Vector3(max.x, min.y, min.z),
-            Vector3.back,
-            Vector3Int.back,
+            min,
+            max,
             BlockFace.Back,
             blockType,
             mapping,
@@ -717,12 +818,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         ref int vertexStart,
         ref int triangleStart,
         Vector3Int blockPos,
-        Vector3 p0,
-        Vector3 p1,
-        Vector3 p2,
-        Vector3 p3,
-        Vector3 normal,
-        Vector3Int normalOffset,
+        Vector3 min,
+        Vector3 max,
         BlockFace worldFace,
         BlockType blockType,
         BlockTextureMapping mapping,
@@ -731,7 +828,20 @@ public class PlayerBlockBreaker : MonoBehaviour
         float invAtlasTilesY,
         int faceSubchunkIndex)
     {
+        if (!TryGetBreakVisualFaceAxes(
+                worldFace,
+                out int axis,
+                out int normalSign,
+                out Vector3Int normalOffset,
+                out _,
+                out _))
+        {
+            return;
+        }
+
         BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, placementAxis);
+        BlockPlacementAxis uvPlacementAxis = ResolveBreakVisualUvPlacementAxis(mapping, placementAxis);
+        BlockFace uvSamplingFace = ResolveBreakVisualUvSamplingFace(mapping, worldFace, sampledFace);
         Vector2Int tile = mapping.GetTileCoord(sampledFace);
         Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
         float tintMask = mapping.GetTint(sampledFace) ? 1f : 0f;
@@ -739,193 +849,246 @@ public class PlayerBlockBreaker : MonoBehaviour
                                 sampledFace != BlockFace.Top &&
                                 sampledFace != BlockFace.Bottom;
         float packedSubchunkAndOverlay = faceSubchunkIndex + (grassSideOverlay ? 0.25f : 0f);
-        World world = World.Instance;
-        float faceLight01 = ResolveBreakVisualFaceLight01(world, blockPos, blockType, normalOffset);
-        float ao0 = ResolveBreakVisualVertexAO01(world, blockPos, mapping, normalOffset, p0);
-        float ao1 = ResolveBreakVisualVertexAO01(world, blockPos, mapping, normalOffset, p1);
-        float ao2 = ResolveBreakVisualVertexAO01(world, blockPos, mapping, normalOffset, p2);
-        float ao3 = ResolveBreakVisualVertexAO01(world, blockPos, mapping, normalOffset, p3);
-        Vector4 extra0 = new Vector4(faceLight01, tintMask, ao0, packedSubchunkAndOverlay);
-        Vector4 extra1 = new Vector4(faceLight01, tintMask, ao1, packedSubchunkAndOverlay);
-        Vector4 extra2 = new Vector4(faceLight01, tintMask, ao2, packedSubchunkAndOverlay);
-        Vector4 extra3 = new Vector4(faceLight01, tintMask, ao3, packedSubchunkAndOverlay);
+        BreakVisualFaceLighting faceLighting =
+            ResolveBreakVisualFaceLighting(World.Instance, blockPos, blockType, mapping, worldFace);
+        Vector3 normal = new Vector3(normalOffset.x, normalOffset.y, normalOffset.z);
 
-        vertices[vertexStart + 0] = p0;
-        vertices[vertexStart + 1] = p1;
-        vertices[vertexStart + 2] = p2;
-        vertices[vertexStart + 3] = p3;
+        for (int corner = 0; corner < 4; corner++)
+        {
+            Vector3 vertex = GetBreakVisualFaceLocalVertex(axis, normalSign, corner, min, max);
+            int index = vertexStart + corner;
 
-        normals[vertexStart + 0] = normal;
-        normals[vertexStart + 1] = normal;
-        normals[vertexStart + 2] = normal;
-        normals[vertexStart + 3] = normal;
+            vertices[index] = vertex;
+            normals[index] = normal;
+            uv0[index] = ComputeBreakVisualPlacementAwareUv(blockPos, vertex, uvSamplingFace, uvPlacementAxis);
+            uv1[index] = atlasUv;
+            uv2[index] = new Vector4(
+                faceLighting.GetLight(corner),
+                tintMask,
+                faceLighting.GetAO(corner),
+                packedSubchunkAndOverlay);
+        }
 
-        uv0[vertexStart + 0] = new Vector2(0f, 0f);
-        uv0[vertexStart + 1] = new Vector2(0f, 1f);
-        uv0[vertexStart + 2] = new Vector2(1f, 1f);
-        uv0[vertexStart + 3] = new Vector2(1f, 0f);
-
-        uv1[vertexStart + 0] = atlasUv;
-        uv1[vertexStart + 1] = atlasUv;
-        uv1[vertexStart + 2] = atlasUv;
-        uv1[vertexStart + 3] = atlasUv;
-
-        uv2[vertexStart + 0] = extra0;
-        uv2[vertexStart + 1] = extra1;
-        uv2[vertexStart + 2] = extra2;
-        uv2[vertexStart + 3] = extra3;
-
-        triangles[triangleStart + 0] = vertexStart + 0;
-        triangles[triangleStart + 1] = vertexStart + 1;
-        triangles[triangleStart + 2] = vertexStart + 2;
-        triangles[triangleStart + 3] = vertexStart + 0;
-        triangles[triangleStart + 4] = vertexStart + 2;
-        triangles[triangleStart + 5] = vertexStart + 3;
+        WriteBreakVisualFaceTriangles(triangles, triangleStart, vertexStart, normalSign, faceLighting.flipTriangle);
 
         vertexStart += 4;
         triangleStart += 6;
     }
 
-    float ResolveBreakVisualFaceLight01(World world, Vector3Int blockPos, BlockType blockType, Vector3Int normalOffset)
+    static Vector3 GetBreakVisualFaceLocalVertex(int axis, int normalSign, int corner, Vector3 min, Vector3 max)
     {
-        if (world == null || !world.enableVoxelLighting)
-            return 1f;
+        int u = (axis + 1) % 3;
+        int v = (axis + 2) % 3;
+        bool useMaxU = corner == 1 || corner == 2;
+        bool useMaxV = corner == 2 || corner == 3;
 
-        Vector3Int samplePos = blockPos + normalOffset;
-        int blockLight = world.GetGlobalBlockLightAt(samplePos);
-        int skyLight = EstimateBreakVisualSkyLight(world, samplePos);
-        int emission = world.GetBlockEmission(blockType);
-        int resolvedLight = Mathf.Max(blockLight, skyLight, emission);
-        return Mathf.Clamp01(resolvedLight / 15f);
+        Vector3 vertex = Vector3.zero;
+        SetBreakVisualAxisValue(ref vertex, axis, normalSign > 0 ? GetBreakVisualAxisValue(max, axis) : GetBreakVisualAxisValue(min, axis));
+        SetBreakVisualAxisValue(ref vertex, u, useMaxU ? GetBreakVisualAxisValue(max, u) : GetBreakVisualAxisValue(min, u));
+        SetBreakVisualAxisValue(ref vertex, v, useMaxV ? GetBreakVisualAxisValue(max, v) : GetBreakVisualAxisValue(min, v));
+        return vertex;
     }
 
-    int EstimateBreakVisualSkyLight(World world, Vector3Int samplePos)
+    static float GetBreakVisualAxisValue(Vector3 value, int axis)
     {
-        if (samplePos.y >= Chunk.SizeY)
-            return 15;
-        if (samplePos.y < 0)
-            return 0;
-        if (HasDirectBreakVisualSkyAccess(world, samplePos))
-            return 15;
-        if (!world.enableHorizontalSkylight)
-            return 0;
-
-        int best = 0;
-        int stepLoss = Mathf.Max(1, world.horizontalSkylightStepLoss);
-        const int maxHorizontalSearchRadius = 2;
-
-        for (int radius = 1; radius <= maxHorizontalSearchRadius; radius++)
+        return axis switch
         {
-            foreach (Vector3Int direction in BreakVisualHorizontalLightDirections)
+            0 => value.x,
+            1 => value.y,
+            _ => value.z
+        };
+    }
+
+    static void SetBreakVisualAxisValue(ref Vector3 value, int axis, float axisValue)
+    {
+        switch (axis)
+        {
+            case 0:
+                value.x = axisValue;
+                break;
+            case 1:
+                value.y = axisValue;
+                break;
+            default:
+                value.z = axisValue;
+                break;
+        }
+    }
+
+    static void WriteBreakVisualFaceTriangles(
+        int[] triangles,
+        int triangleStart,
+        int vertexStart,
+        int normalSign,
+        bool flipTriangle)
+    {
+        if (normalSign > 0)
+        {
+            if (flipTriangle)
             {
-                Vector3Int candidate = samplePos + direction * radius;
-                if (!HasTransparentBreakVisualPath(world, samplePos, direction, radius) ||
-                    !HasDirectBreakVisualSkyAccess(world, candidate))
-                {
-                    continue;
-                }
-
-                best = Mathf.Max(best, Mathf.Max(0, 15 - stepLoss * radius));
+                triangles[triangleStart + 0] = vertexStart + 0;
+                triangles[triangleStart + 1] = vertexStart + 1;
+                triangles[triangleStart + 2] = vertexStart + 3;
+                triangles[triangleStart + 3] = vertexStart + 1;
+                triangles[triangleStart + 4] = vertexStart + 2;
+                triangles[triangleStart + 5] = vertexStart + 3;
             }
+            else
+            {
+                triangles[triangleStart + 0] = vertexStart + 0;
+                triangles[triangleStart + 1] = vertexStart + 1;
+                triangles[triangleStart + 2] = vertexStart + 2;
+                triangles[triangleStart + 3] = vertexStart + 0;
+                triangles[triangleStart + 4] = vertexStart + 2;
+                triangles[triangleStart + 5] = vertexStart + 3;
+            }
+
+            return;
         }
 
-        return best;
-    }
-
-    bool HasDirectBreakVisualSkyAccess(World world, Vector3Int samplePos)
-    {
-        if (samplePos.y >= Chunk.SizeY)
-            return true;
-        if (samplePos.y < 0)
-            return false;
-
-        for (int y = samplePos.y; y < Chunk.SizeY; y++)
+        if (flipTriangle)
         {
-            if (!IsBreakVisualLightTransparent(world, new Vector3Int(samplePos.x, y, samplePos.z)))
-                return false;
+            triangles[triangleStart + 0] = vertexStart + 0;
+            triangles[triangleStart + 1] = vertexStart + 3;
+            triangles[triangleStart + 2] = vertexStart + 1;
+            triangles[triangleStart + 3] = vertexStart + 1;
+            triangles[triangleStart + 4] = vertexStart + 3;
+            triangles[triangleStart + 5] = vertexStart + 2;
         }
-
-        return true;
-    }
-
-    bool HasTransparentBreakVisualPath(World world, Vector3Int origin, Vector3Int direction, int distance)
-    {
-        for (int step = 0; step <= distance; step++)
+        else
         {
-            if (!IsBreakVisualLightTransparent(world, origin + direction * step))
-                return false;
+            triangles[triangleStart + 0] = vertexStart + 0;
+            triangles[triangleStart + 1] = vertexStart + 3;
+            triangles[triangleStart + 2] = vertexStart + 2;
+            triangles[triangleStart + 3] = vertexStart + 0;
+            triangles[triangleStart + 4] = vertexStart + 2;
+            triangles[triangleStart + 5] = vertexStart + 1;
+        }
+    }
+
+    static BlockPlacementAxis ResolveBreakVisualUvPlacementAxis(BlockTextureMapping mapping, BlockPlacementAxis placementAxis)
+    {
+        if (!mapping.usePlacementAxisRotation)
+            return BlockPlacementAxis.Y;
+
+        if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+            BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+        {
+            return BlockPlacementAxis.Y;
         }
 
-        return true;
+        return placementAxis;
     }
 
-    bool IsBreakVisualLightTransparent(World world, Vector3Int pos)
-    {
-        if (pos.y < 0 || pos.y >= Chunk.SizeY)
-            return true;
-
-        BlockType blockType = world.GetBlockAt(pos);
-        return world.GetBlockOpacity(blockType) < 15;
-    }
-
-    float ResolveBreakVisualVertexAO01(
-        World world,
-        Vector3Int blockPos,
+    static BlockFace ResolveBreakVisualUvSamplingFace(
         BlockTextureMapping mapping,
-        Vector3Int normalOffset,
-        Vector3 localVertex)
+        BlockFace worldFace,
+        BlockFace sampledFace)
     {
-        if (world == null ||
-            !world.enableAmbientOcclusion ||
-            world.aoStrength <= 0f ||
-            IsBreakVisualEmissive(mapping))
+        if (!mapping.usePlacementAxisRotation)
+            return worldFace;
+
+        if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+            BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
         {
-            return 1f;
+            return worldFace;
         }
 
-        ResolveBreakVisualCornerDirections(normalOffset, localVertex, out Vector3Int d1, out Vector3Int d2);
-        int rawAO = ResolveBreakVisualVertexAO(world, blockPos + normalOffset, d1, d2);
-        float aoBase = Mathf.Clamp01(rawAO / 3f);
-        float aoCurve = world.aoCurveExponent > 0f ? world.aoCurveExponent : BreakVisualDefaultAOCurveExponent;
-        float aoCurved = Mathf.Pow(aoBase, aoCurve);
-        float aoDarkened = 1f - (1f - aoCurved) * Mathf.Max(0f, world.aoStrength);
-        return Mathf.Max(Mathf.Clamp01(world.aoMinLight), Mathf.Clamp01(aoDarkened));
+        return sampledFace;
+    }
+
+    static Vector2 ComputeBreakVisualPlacementAwareUv(
+        Vector3Int blockPos,
+        Vector3 localVertex,
+        BlockFace sampledFace,
+        BlockPlacementAxis placementAxis)
+    {
+        Vector3 worldCoords = (Vector3)blockPos + Vector3.one * 0.5f + localVertex;
+        Vector3 canonicalCoords = ToBreakVisualCanonicalCoords(worldCoords, placementAxis);
+        return sampledFace switch
+        {
+            BlockFace.Top => new Vector2(canonicalCoords.x, canonicalCoords.z),
+            BlockFace.Bottom => new Vector2(canonicalCoords.x, canonicalCoords.z),
+            BlockFace.Right => new Vector2(canonicalCoords.z, canonicalCoords.y),
+            BlockFace.Left => new Vector2(canonicalCoords.z, canonicalCoords.y),
+            BlockFace.Front => new Vector2(canonicalCoords.x, canonicalCoords.y),
+            BlockFace.Back => new Vector2(canonicalCoords.x, canonicalCoords.y),
+            _ => new Vector2(canonicalCoords.x, canonicalCoords.y)
+        };
+    }
+
+    static Vector3 ToBreakVisualCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)
+    {
+        return BlockPlacementRotationUtility.SanitizeAxis(placementAxis) switch
+        {
+            BlockPlacementAxis.X => new Vector3(-worldCoords.y, worldCoords.x, worldCoords.z),
+            BlockPlacementAxis.Z => new Vector3(worldCoords.x, worldCoords.z, -worldCoords.y),
+            _ => worldCoords
+        };
+    }
+
+    int SampleBreakVisualLightValue(World world, Vector3Int samplePos)
+    {
+        if (breakVisualLightSampleCache.TryGetValue(samplePos, out int cachedLight))
+            return cachedLight;
+
+        if (world == null || !world.enableVoxelLighting)
+            return 15;
+        if (samplePos.y < 0)
+            return 0;
+        if (samplePos.y >= Chunk.SizeY)
+            return 15;
+
+        if (world.TryGetRenderedBlockLightAt(samplePos, out byte renderedPackedLight))
+        {
+            int renderedLight = Mathf.Max(
+                LightUtils.GetBlockLight(renderedPackedLight),
+                LightUtils.GetSkyLight(renderedPackedLight));
+            breakVisualLightSampleCache[samplePos] = renderedLight;
+            return renderedLight;
+        }
+
+        byte packedLight = world.GetGlobalBlockLightAt(samplePos);
+        int blockLight = LightUtils.GetBlockLight(packedLight);
+        int columnSkyLight = LightUtils.GetSkyLight(packedLight);
+        int estimatedSkyLight = EstimateBreakVisualSkyLight(world, samplePos);
+        int resolvedLight = Mathf.Max(blockLight, columnSkyLight, estimatedSkyLight);
+        breakVisualLightSampleCache[samplePos] = resolvedLight;
+        return resolvedLight;
+    }
+
+    int ResolveBreakVisualVertexLight(World world, Vector3Int pos, Vector3Int d1, Vector3Int d2)
+    {
+        int l0 = SampleBreakVisualLightValue(world, pos);
+        int l1 = SampleBreakVisualLightValue(world, pos + d1);
+        int l2 = SampleBreakVisualLightValue(world, pos + d2);
+        int l3 = SampleBreakVisualLightValue(world, pos + d1 + d2);
+        return (l0 + l1 + l2 + l3 + 2) / 4;
     }
 
     int ResolveBreakVisualVertexAO(World world, Vector3Int pos, Vector3Int d1, Vector3Int d2)
     {
-        bool s1 = IsBreakVisualAOOccluder(world, pos + d1);
-        bool s2 = IsBreakVisualAOOccluder(world, pos + d2);
+        bool side1 = IsBreakVisualAOOccluder(world, pos + d1);
+        bool side2 = IsBreakVisualAOOccluder(world, pos + d2);
         bool corner = IsBreakVisualAOOccluder(world, pos + d1 + d2);
 
-        if (s1 && s2)
+        if (side1 && side2)
             return 0;
 
-        return 3 - (s1 ? 1 : 0) - (s2 ? 1 : 0) - (corner ? 1 : 0);
+        return 3 - (side1 ? 1 : 0) - (side2 ? 1 : 0) - (corner ? 1 : 0);
     }
 
-    void ResolveBreakVisualCornerDirections(
-        Vector3Int normalOffset,
-        Vector3 localVertex,
-        out Vector3Int d1,
-        out Vector3Int d2)
+    float ResolveBreakVisualAO01(World world, int rawAO)
     {
-        if (normalOffset.x != 0)
-        {
-            d1 = localVertex.y >= 0f ? Vector3Int.up : Vector3Int.down;
-            d2 = localVertex.z >= 0f ? Vector3Int.forward : Vector3Int.back;
-            return;
-        }
-
-        if (normalOffset.y != 0)
-        {
-            d1 = localVertex.x >= 0f ? Vector3Int.right : Vector3Int.left;
-            d2 = localVertex.z >= 0f ? Vector3Int.forward : Vector3Int.back;
-            return;
-        }
-
-        d1 = localVertex.x >= 0f ? Vector3Int.right : Vector3Int.left;
-        d2 = localVertex.y >= 0f ? Vector3Int.up : Vector3Int.down;
+        float aoBase = Mathf.Clamp01(rawAO / 3f);
+        float aoCurve = world != null && world.aoCurveExponent > 0f
+            ? world.aoCurveExponent
+            : BreakVisualDefaultAOCurveExponent;
+        float aoStrength = world != null && world.enableAmbientOcclusion ? Mathf.Max(0f, world.aoStrength) : 0f;
+        float aoCurved = Mathf.Pow(aoBase, aoCurve);
+        float aoDarkened = 1f - (1f - aoCurved) * aoStrength;
+        float aoMinLight = world != null ? Mathf.Clamp01(world.aoMinLight) : 0f;
+        return Mathf.Max(aoMinLight, Mathf.Clamp01(aoDarkened));
     }
 
     bool IsBreakVisualAOOccluder(World world, Vector3Int pos)
@@ -938,8 +1101,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (mappingResult == null)
             return world.GetBlockOpacity(blockType) >= 15;
 
-        BlockTextureMapping mapping = mappingResult.Value;
-        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube ||
+        return CastsBreakVisualAmbientOcclusion(blockType, mappingResult.Value);
+    }
+
+    static bool CastsBreakVisualAmbientOcclusion(BlockType blockType, BlockTextureMapping mapping)
+    {
+        if (!mapping.isSolid ||
+            BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube ||
             mapping.isEmpty ||
             mapping.isLiquid ||
             mapping.lightOpacity == 0)
@@ -955,12 +1123,241 @@ public class PlayerBlockBreaker : MonoBehaviour
         return mapping.isLightSource || mapping.lightEmission > 0;
     }
 
+    static bool TryGetBreakVisualFaceAxes(
+        BlockFace worldFace,
+        out int axis,
+        out int normalSign,
+        out Vector3Int normalOffset,
+        out Vector3Int stepU,
+        out Vector3Int stepV)
+    {
+        switch (worldFace)
+        {
+            case BlockFace.Right:
+                axis = 0;
+                normalSign = 1;
+                break;
+            case BlockFace.Left:
+                axis = 0;
+                normalSign = -1;
+                break;
+            case BlockFace.Top:
+                axis = 1;
+                normalSign = 1;
+                break;
+            case BlockFace.Bottom:
+                axis = 1;
+                normalSign = -1;
+                break;
+            case BlockFace.Front:
+                axis = 2;
+                normalSign = 1;
+                break;
+            case BlockFace.Back:
+                axis = 2;
+                normalSign = -1;
+                break;
+            default:
+                axis = 0;
+                normalSign = 0;
+                normalOffset = Vector3Int.zero;
+                stepU = Vector3Int.zero;
+                stepV = Vector3Int.zero;
+                return false;
+        }
+
+        int u = (axis + 1) % 3;
+        int v = (axis + 2) % 3;
+        normalOffset = GetBreakVisualAxisStep(axis) * normalSign;
+        stepU = GetBreakVisualAxisStep(u);
+        stepV = GetBreakVisualAxisStep(v);
+        return true;
+    }
+
+    static Vector3Int GetBreakVisualAxisStep(int axis)
+    {
+        return axis switch
+        {
+            0 => Vector3Int.right,
+            1 => Vector3Int.up,
+            _ => Vector3Int.forward
+        };
+    }
+
+    int EstimateBreakVisualSkyLight(World world, Vector3Int samplePos)
+    {
+        if (breakVisualSkyLightEstimateCache.TryGetValue(samplePos, out int cachedSkyLight))
+            return cachedSkyLight;
+
+        if (world == null || !world.enableVoxelLighting)
+            return 15;
+        if (samplePos.y >= Chunk.SizeY)
+            return 15;
+        if (samplePos.y < 0)
+            return 0;
+        if (HasDirectBreakVisualSkyAccess(world, samplePos))
+            return 15;
+        if (!world.enableHorizontalSkylight)
+            return 0;
+
+        int stepLoss = Mathf.Max(1, world.horizontalSkylightStepLoss);
+        int maxSearchRadius = Mathf.Clamp(world.sunlightSmoothingPadding, 2, 32);
+        int minX = samplePos.x - maxSearchRadius;
+        int maxX = samplePos.x + maxSearchRadius;
+        int minZ = samplePos.z - maxSearchRadius;
+        int maxZ = samplePos.z + maxSearchRadius;
+        int minY = samplePos.y;
+        int maxY = Mathf.Min(Chunk.SizeY - 1, samplePos.y + maxSearchRadius);
+
+        breakVisualSkyPropagationLight.Clear();
+        breakVisualSkyPropagationQueue.Clear();
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int z = minZ; z <= maxZ; z++)
+            {
+                int horizontalDistance = Mathf.Abs(x - samplePos.x) + Mathf.Abs(z - samplePos.z);
+                if (horizontalDistance > maxSearchRadius)
+                    continue;
+
+                for (int y = minY; y <= maxY; y++)
+                {
+                    Vector3Int candidate = new Vector3Int(x, y, z);
+                    if (!HasDirectBreakVisualSkyAccess(world, candidate))
+                        continue;
+
+                    breakVisualSkyPropagationLight[candidate] = 15;
+                    breakVisualSkyPropagationQueue.Enqueue(candidate);
+                }
+            }
+        }
+
+        while (breakVisualSkyPropagationQueue.Count > 0)
+        {
+            Vector3Int current = breakVisualSkyPropagationQueue.Dequeue();
+            int currentLight = breakVisualSkyPropagationLight[current];
+            if (current == samplePos)
+                break;
+            if (currentLight <= 1)
+                continue;
+
+            for (int i = 0; i < BreakVisualHorizontalLightDirections.Length; i++)
+                TryPropagateBreakVisualSkyLight(current, BreakVisualHorizontalLightDirections[i], stepLoss, minX, maxX, minY, maxY, minZ, maxZ, world);
+
+            TryPropagateBreakVisualSkyLight(current, Vector3Int.down, 1, minX, maxX, minY, maxY, minZ, maxZ, world);
+        }
+
+        int estimated = breakVisualSkyPropagationLight.TryGetValue(samplePos, out int propagatedSkyLight)
+            ? Mathf.Clamp(propagatedSkyLight, 0, 15)
+            : 0;
+        breakVisualSkyLightEstimateCache[samplePos] = estimated;
+        return estimated;
+    }
+
+    void TryPropagateBreakVisualSkyLight(
+        Vector3Int current,
+        Vector3Int direction,
+        int baseLoss,
+        int minX,
+        int maxX,
+        int minY,
+        int maxY,
+        int minZ,
+        int maxZ,
+        World world)
+    {
+        Vector3Int next = current + direction;
+        if (next.x < minX || next.x > maxX ||
+            next.y < minY || next.y > maxY ||
+            next.z < minZ || next.z > maxZ)
+        {
+            return;
+        }
+
+        int currentLight = breakVisualSkyPropagationLight[current];
+        int opacity = GetBreakVisualLightOpacity(world, next);
+        int propagatedLight = Mathf.Max(0, currentLight - baseLoss - opacity);
+        if (propagatedLight <= 0)
+            return;
+
+        if (breakVisualSkyPropagationLight.TryGetValue(next, out int existingLight) &&
+            existingLight >= propagatedLight)
+        {
+            return;
+        }
+
+        breakVisualSkyPropagationLight[next] = propagatedLight;
+        breakVisualSkyPropagationQueue.Enqueue(next);
+    }
+
+    int GetBreakVisualLightOpacity(World world, Vector3Int pos)
+    {
+        if (world == null || pos.y < 0 || pos.y >= Chunk.SizeY)
+            return 0;
+
+        return world.GetBlockOpacity(world.GetBlockAt(pos));
+    }
+
+    bool HasDirectBreakVisualSkyAccess(World world, Vector3Int samplePos)
+    {
+        if (breakVisualDirectSkyAccessCache.TryGetValue(samplePos, out bool cached))
+            return cached;
+
+        if (samplePos.y >= Chunk.SizeY)
+            return true;
+        if (samplePos.y < 0)
+            return false;
+
+        for (int y = samplePos.y; y < Chunk.SizeY; y++)
+        {
+            if (!IsBreakVisualLightTransparent(world, new Vector3Int(samplePos.x, y, samplePos.z)))
+            {
+                breakVisualDirectSkyAccessCache[samplePos] = false;
+                return false;
+            }
+        }
+
+        breakVisualDirectSkyAccessCache[samplePos] = true;
+        return true;
+    }
+
+    bool IsBreakVisualLightTransparent(World world, Vector3Int pos)
+    {
+        if (world == null || pos.y < 0 || pos.y >= Chunk.SizeY)
+            return true;
+
+        BlockType blockType = world.GetBlockAt(pos);
+        return world.GetBlockOpacity(blockType) < 15;
+    }
+
+    static Vector3Int NormalizeBreakVisualHitNormal(Vector3Int hitNormal)
+    {
+        int absX = Mathf.Abs(hitNormal.x);
+        int absY = Mathf.Abs(hitNormal.y);
+        int absZ = Mathf.Abs(hitNormal.z);
+
+        if (absX >= absY && absX >= absZ && absX > 0)
+            return new Vector3Int(hitNormal.x > 0 ? 1 : -1, 0, 0);
+
+        if (absY >= absX && absY >= absZ && absY > 0)
+            return new Vector3Int(0, hitNormal.y > 0 ? 1 : -1, 0);
+
+        if (absZ > 0)
+            return new Vector3Int(0, 0, hitNormal.z > 0 ? 1 : -1);
+
+        return Vector3Int.zero;
+    }
+
     void HideBreakVisualOverlay()
     {
         if (breakVisualObject != null && breakVisualObject.activeSelf)
             breakVisualObject.SetActive(false);
 
+        if (breakVisualRenderer != null)
+            breakVisualRenderer.SetPropertyBlock(null);
+
         breakVisualBlockPosition = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+        breakVisualHitNormal = Vector3Int.zero;
     }
 
     Vector3 ComputeBreakShakeOffset(Vector3 center, float progress01)

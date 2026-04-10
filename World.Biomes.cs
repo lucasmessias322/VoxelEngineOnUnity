@@ -503,6 +503,14 @@ public partial class World : MonoBehaviour
         ApplyBiomeTintToRenderer(renderer, EvaluateChunkBiomeTints(coord));
     }
 
+    public void ApplyBiomeTintToRendererAt(Renderer renderer, Vector3Int worldPos)
+    {
+        if (renderer == null)
+            return;
+
+        ApplyBiomeTintToRenderer(renderer, GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z));
+    }
+
     private void ApplyBiomeTintToRenderer(Renderer renderer, ChunkBiomeTints tints)
     {
         if (renderer == null)

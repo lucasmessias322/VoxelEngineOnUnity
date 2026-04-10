@@ -17,6 +17,7 @@ public class Chunk : MonoBehaviour
     public const int SizeX = 16;
     public const int SizeY = 384;
     public const int SizeZ = 16;
+    public const int LightSnapshotLength = SizeX * SizeY * SizeZ;
     public NativeArray<byte> voxelData;
     public const int SubchunkHeight = 16;
     public const int SubchunksPerColumn = (SizeY + SubchunkHeight - 1) / SubchunkHeight; // 384 -> 24
@@ -28,6 +29,8 @@ public class Chunk : MonoBehaviour
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     [NonSerialized] public bool hasVoxelSnapshot = false;
+    [NonSerialized] private byte[] lightSnapshot;
+    [NonSerialized] private bool hasLightSnapshot = false;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
@@ -286,6 +289,50 @@ public class Chunk : MonoBehaviour
         coord = c;
         gameObject.name = $"Chunk_{c.x}_{c.y}";
     }
+
+    public void UpdateLightSnapshot(NativeArray<byte> sourceLightData, int borderSize)
+    {
+        hasLightSnapshot = false;
+        if (!sourceLightData.IsCreated || borderSize < 0)
+            return;
+
+        int voxelSizeX = SizeX + 2 * borderSize;
+        int voxelSizeZ = SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * SizeY;
+        int expectedLength = voxelPlaneSize * voxelSizeZ;
+        if (voxelSizeX <= 0 || voxelSizeZ <= 0 || sourceLightData.Length < expectedLength)
+            return;
+
+        if (lightSnapshot == null || lightSnapshot.Length != LightSnapshotLength)
+            lightSnapshot = new byte[LightSnapshotLength];
+
+        for (int z = 0; z < SizeZ; z++)
+        {
+            int sourceZ = z + borderSize;
+            for (int y = 0; y < SizeY; y++)
+            {
+                int sourceIndex = borderSize + y * voxelSizeX + sourceZ * voxelPlaneSize;
+                int targetIndex = y * SizeX * SizeZ + z * SizeX;
+                for (int x = 0; x < SizeX; x++)
+                    lightSnapshot[targetIndex + x] = sourceLightData[sourceIndex + x];
+            }
+        }
+
+        hasLightSnapshot = true;
+    }
+
+    public bool TryGetLightSnapshot(int localX, int y, int localZ, out byte packedLight)
+    {
+        packedLight = 0;
+        if (!hasLightSnapshot || lightSnapshot == null || lightSnapshot.Length != LightSnapshotLength)
+            return false;
+        if ((uint)localX >= SizeX || (uint)y >= SizeY || (uint)localZ >= SizeZ)
+            return false;
+
+        packedLight = lightSnapshot[localX + localZ * SizeX + y * SizeX * SizeZ];
+        return true;
+    }
+
     public void ResetChunk()
     {
         CompleteTrackedJob();
@@ -296,6 +343,7 @@ public class Chunk : MonoBehaviour
         generation = -1;
         hasVoxelData = false;
         hasVoxelSnapshot = false;
+        hasLightSnapshot = false;
         ClearAllSubchunkVisibilityData();
         lightingContextHashValid = false;
         lastLightingContextHash = 0;
@@ -489,6 +537,15 @@ public class Chunk : MonoBehaviour
 
         subchunks[subchunkIndex].hasColliderData = false;
         colliderBuilder.Clear();
+    }
+
+    public void MarkSubchunkColliderDataDirty(int subchunkIndex)
+    {
+        if (!IsSubchunkIndexValid(subchunkIndex))
+            return;
+
+        // Keep the previous colliders enabled until the queued rebuild swaps in the new layout.
+        subchunks[subchunkIndex].hasColliderData = false;
     }
 
     public void RebuildSubchunkColliders(

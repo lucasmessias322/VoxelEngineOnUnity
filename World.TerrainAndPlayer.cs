@@ -408,8 +408,7 @@ public partial class World : MonoBehaviour
             return;
 
         int subchunkIndex = Mathf.Clamp(worldPos.y / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
-        chunk.ClearSubchunkColliderData(subchunkIndex);
-        chunk.SetSubchunkColliderSystemEnabled(subchunkIndex, false);
+        chunk.MarkSubchunkColliderDataDirty(subchunkIndex);
     }
 
     private void ApplyBlockToLoadedChunkCache(Vector3Int worldPos, Vector2Int chunkCoord, BlockType type)

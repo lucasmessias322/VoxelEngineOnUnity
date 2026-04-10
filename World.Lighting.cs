@@ -52,6 +52,21 @@ public partial class World
         return GetColumnLight(worldPos.x, worldPos.z, worldPos.y);
     }
 
+    public bool TryGetRenderedBlockLightAt(Vector3Int worldPos, out byte packedLight)
+    {
+        packedLight = 0;
+        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            return false;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (!activeChunks.TryGetValue(chunkCoord, out Chunk chunk) || chunk == null)
+            return false;
+
+        int localX = worldPos.x - chunkCoord.x * Chunk.SizeX;
+        int localZ = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+        return chunk.TryGetLightSnapshot(localX, worldPos.y, localZ, out packedLight);
+    }
+
     private void SetColumnLight(int worldX, int worldZ, int y, byte value)
     {
         if (y < 0 || y >= Chunk.SizeY) return;

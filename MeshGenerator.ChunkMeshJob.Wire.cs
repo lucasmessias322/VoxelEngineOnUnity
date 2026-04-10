@@ -11,6 +11,8 @@ public static partial class MeshGenerator
 {
     private partial struct ChunkMeshJob
     {
+        private const float WireConnectionOverlap = 0.01f;
+
         private static void OffsetWireTopQuad(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, ref Vector3 p3)
         {
             p0.y = WireSurfaceBlockOffset;
@@ -139,27 +141,27 @@ public static partial class MeshGenerator
 
             if (straightX)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
                 return;
             }
 
             if (straightZ)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, light01, tint, tris, 1);
                 return;
             }
 
             if (connectEast)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep);
 
             if (connectWest)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep * 2f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep * 2f);
 
             if (connectNorth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 3f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 3f);
 
             if (connectSouth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 4f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 4f);
         }
 
         private void RenderWireWallSurface(
@@ -309,27 +311,27 @@ public static partial class MeshGenerator
 
             if (straightS)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
                 return;
             }
 
             if (straightT)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, light01, tint, tris, 1);
                 return;
             }
 
             if (connectPosS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectNegS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectPosT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1);
 
             if (connectNegT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1);
         }
 
         private enum WireTopConnectionMode : byte

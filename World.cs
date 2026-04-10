@@ -2029,6 +2029,7 @@ public partial class World : MonoBehaviour
                     if (completedPostOverrideRefresh)
                         SyncCurrentBlockOverridesToVoxelSnapshot(pd.coord, pd.borderSize, activeChunk.voxelData);
                     activeChunk.hasVoxelSnapshot = true;
+                    activeChunk.UpdateLightSnapshot(pd.light, pd.borderSize);
 
                     ScheduleSubchunkMeshJobs(ref pd, activeChunk);
                 }
@@ -2092,7 +2093,7 @@ public partial class World : MonoBehaviour
                                 {
                                     if (!activeChunk.TryActivateCachedSubchunkColliders(subchunkIndex))
                                     {
-                                        activeChunk.ClearSubchunkColliderData(subchunkIndex);
+                                        activeChunk.MarkSubchunkColliderDataDirty(subchunkIndex);
                                         EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
                                     }
                                     else
