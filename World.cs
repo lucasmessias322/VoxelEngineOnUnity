@@ -154,8 +154,6 @@ public partial class World : MonoBehaviour
     [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
     [Min(1)]
     public int visualSubchunksPerRenderer = 4;
-    [Tooltip("Quando a oclusao por secoes estilo Minecraft estiver ativa, usa um renderer por subchunk para impedir que um slice visivel desenhe cavernas ocultas do mesmo grupo.")]
-    public bool forceSingleSubchunkRendererForSectionOcclusion = true;
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
 
@@ -895,9 +893,6 @@ public partial class World : MonoBehaviour
 
     private int GetResolvedVisualSubchunksPerRenderer()
     {
-        if (enableMinecraftSectionOcclusion && forceSingleSubchunkRendererForSectionOcclusion)
-            return 1;
-
         return Mathf.Clamp(visualSubchunksPerRenderer, 1, Chunk.SubchunksPerColumn);
     }
 
