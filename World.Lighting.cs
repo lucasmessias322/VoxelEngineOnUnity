@@ -47,6 +47,11 @@ public partial class World
         return globalLightColumns.TryGetValue(key, out byte[] column) ? column[y] : (byte)0;
     }
 
+    public byte GetGlobalBlockLightAt(Vector3Int worldPos)
+    {
+        return GetColumnLight(worldPos.x, worldPos.z, worldPos.y);
+    }
+
     private void SetColumnLight(int worldX, int worldZ, int y, byte value)
     {
         if (y < 0 || y >= Chunk.SizeY) return;

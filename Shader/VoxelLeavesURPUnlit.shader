@@ -162,6 +162,8 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
         float _FogStart;
         float _FogEnd;
 
+        #include "Assets/Scripts/ProceduralGen/Shader/VoxelBreakInteraction.hlsl"
+
         TEXTURE2D(_Atlas);
         SAMPLER(sampler_Atlas);
 
@@ -670,6 +672,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), foliageTint, saturate(extra.y));
                 ApplyLeafWind(positionWS, normalWS, saturate(extra.y), windBendMask);
+                ApplyVoxelBreakInteraction(positionWS);
                 return;
             }
 
@@ -711,6 +714,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 float faceMask = saturate(1.0 - abs(normalWS.y));
                 half windBendMask = (half)lerp(1.0, verticalMask, faceMask);
                 ApplyLeafWind(positionWS, normalWS, tintMask, windBendMask);
+                ApplyVoxelBreakInteraction(positionWS);
                 return;
             }
 

@@ -119,6 +119,7 @@ public static class MeshGenerator
     private const int SizeY = Chunk.SizeY;
     private const int SizeZ = Chunk.SizeZ;
     private const float DefaultAOCurveExponent = 1.12f;
+    private const float WireSurfaceBlockOffset = .5f / 16f;
     private const int SpaghettiCarveMaskCacheMaxEntries = 24;
     private const int TempGenerationPoolMaxArraysPerSize = 8;
 
@@ -3263,6 +3264,8 @@ public static class MeshGenerator
                         out _,
                         out _);
 
+                    OffsetWireTopQuad(ref topP0, ref topP1, ref topP2, ref topP3);
+
                     RenderWireTopSurface(
                         origin,
                         topP0,
@@ -3303,6 +3306,8 @@ public static class MeshGenerator
                         out _,
                         out _);
 
+                    OffsetWireWallQuad(ref wallP0, ref wallP1, ref wallP2, ref wallP3, wireSurfaceAxis, wireAttachmentSide);
+
                     RenderWireWallSurface(
                         origin,
                         wallP0,
@@ -3341,6 +3346,45 @@ public static class MeshGenerator
                 tris);
         }
 
+        private static void OffsetWireTopQuad(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, ref Vector3 p3)
+        {
+            p0.y = WireSurfaceBlockOffset;
+            p1.y = WireSurfaceBlockOffset;
+            p2.y = WireSurfaceBlockOffset;
+            p3.y = WireSurfaceBlockOffset;
+        }
+
+        private static void OffsetWireWallQuad(
+            ref Vector3 p0,
+            ref Vector3 p1,
+            ref Vector3 p2,
+            ref Vector3 p3,
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide)
+        {
+            if (attachmentSide == 0)
+                return;
+
+            if (surfaceAxis == BlockPlacementAxis.X)
+            {
+                float x = attachmentSide < 0 ? WireSurfaceBlockOffset : 1f - WireSurfaceBlockOffset;
+                p0.x = x;
+                p1.x = x;
+                p2.x = x;
+                p3.x = x;
+                return;
+            }
+
+            if (surfaceAxis == BlockPlacementAxis.Z)
+            {
+                float z = attachmentSide < 0 ? WireSurfaceBlockOffset : 1f - WireSurfaceBlockOffset;
+                p0.z = z;
+                p1.z = z;
+                p2.z = z;
+                p3.z = z;
+            }
+        }
+
         private void RenderWireTopSurface(
             Vector3 origin,
             Vector3 p0,
@@ -3365,6 +3409,7 @@ public static class MeshGenerator
         {
             const float armHalfWidth = 0.12f;
             const float centerHalfSize = 0.18f;
+            const float layerStep = 0.0006f;
 
             WireTopConnectionMode eastConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, 1, 0, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
             WireTopConnectionMode westConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, -1, 0, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
@@ -3440,16 +3485,16 @@ public static class MeshGenerator
             }
 
             if (connectEast)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep);
 
             if (connectWest)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep * 2f);
 
             if (connectNorth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 3f);
 
             if (connectSouth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 4f);
         }
 
         private void RenderWireWallSurface(
@@ -3562,7 +3607,8 @@ public static class MeshGenerator
                 else if (wireSurfaceAxis == BlockPlacementAxis.Z)
                     connectNegS = true;
 
-                AddWireWallGroundBridge(origin, wireSurfaceAxis, lineAtlasUv, light01, tint, tris);
+                if (!hasTopOnCurrentCell)
+                    AddWireWallGroundBridge(origin, wireSurfaceAxis, lineAtlasUv, light01, tint, tris);
             }
 
             if (hasTopOnCurrentCell)
@@ -3925,7 +3971,7 @@ public static class MeshGenerator
             NativeList<int> tris)
         {
             const float armHalfWidth = 0.12f;
-            const float floorInset = 0.0015f;
+            const float floorInset = WireSurfaceBlockOffset;
 
             if (surfaceAxis == BlockPlacementAxis.X)
             {
@@ -3966,7 +4012,7 @@ public static class MeshGenerator
             NativeList<int> tris)
         {
             const float armHalfWidth = 0.12f;
-            const float faceInset = 0.0015f;
+            const float faceInset = WireSurfaceBlockOffset;
 
             float y0 = ascend ? baseY : baseY - 1f;
             float y1 = ascend ? baseY + 1f : baseY;
@@ -4264,7 +4310,8 @@ public static class MeshGenerator
             float light01,
             float tint,
             NativeList<int> tris,
-            int uvQuarterTurns)
+            int uvQuarterTurns,
+            float normalOffset = 0f)
         {
             Vector3 axisS = planeP3 - planeP0;
             Vector3 axisT = planeP1 - planeP0;
@@ -4272,6 +4319,15 @@ public static class MeshGenerator
             Vector3 q1 = planeP0 + axisS * minS + axisT * maxT;
             Vector3 q2 = planeP0 + axisS * maxS + axisT * maxT;
             Vector3 q3 = planeP0 + axisS * maxS + axisT * minT;
+
+            if (normalOffset > 0f)
+            {
+                Vector3 normal = ComputeQuadPlaneNormal(q0, q1, q2) * normalOffset;
+                q0 += normal;
+                q1 += normal;
+                q2 += normal;
+                q3 += normal;
+            }
 
             AddDoubleSidedShapeQuad(
                 origin + q0,

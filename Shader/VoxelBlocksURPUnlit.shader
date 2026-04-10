@@ -134,6 +134,8 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         float _FogStart;
         float _FogEnd;
 
+        #include "Assets/Scripts/ProceduralGen/Shader/VoxelBreakInteraction.hlsl"
+
         TEXTURE2D(_Atlas);
         SAMPLER(sampler_Atlas);
         TEXTURE2D(_GrassSideOverlay);
@@ -589,6 +591,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 ResolveCompactOpaqueFaceData(faceIndex, vertexIndex, chunkOriginWS, positionWS, normalWS, localUV, atlasOrigin, extra, subchunkIndex);
                 half3 grassTint = ResolveGrassTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), grassTint, saturate(extra.y));
+                ApplyVoxelBreakInteraction(positionWS);
                 return;
             }
 
@@ -620,6 +623,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                     0.0h);
                 half3 grassTint = ResolveGrassTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), grassTint, tintMask);
+                ApplyVoxelBreakInteraction(positionWS);
                 return;
             }
 
