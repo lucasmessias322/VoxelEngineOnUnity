@@ -218,10 +218,13 @@ public class BlockSelector : MonoBehaviour
         float traveled = 0f;
         Vector3Int lastNormal = Vector3Int.zero;
 
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
         for (int i = 0; i < maxSteps && traveled <= maxDistance; i++)
         {
-            World world = World.Instance;
-            BlockType blockType = world.GetBlockAt(voxel);
+            bool hasLoadedBlock = world.TryGetLoadedBlockAt(voxel, out BlockType blockType);
             if (blockType != BlockType.Air)
             {
                 if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal))
@@ -261,13 +264,14 @@ public class BlockSelector : MonoBehaviour
                 }
             }
 
-            if (TryHitGrassBillboardInVoxel(
-                ray,
-                maxDistance,
-                voxel,
-                out Vector3Int billboardNormal,
-                out Vector3Int groundPos,
-                out BlockType billboardType))
+            if (hasLoadedBlock &&
+                TryHitGrassBillboardInVoxel(
+                    ray,
+                    maxDistance,
+                    voxel,
+                    out Vector3Int billboardNormal,
+                    out Vector3Int groundPos,
+                    out BlockType billboardType))
             {
                 hitBlock = voxel;
                 hitNormal = billboardNormal;
@@ -431,7 +435,9 @@ public class BlockSelector : MonoBehaviour
         if (world == null)
             return false;
 
-        BlockType supportType = world.GetBlockAt(voxel);
+        if (!world.TryGetLoadedBlockAt(voxel, out BlockType supportType))
+            return false;
+
         if (supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType))
             return false;
 

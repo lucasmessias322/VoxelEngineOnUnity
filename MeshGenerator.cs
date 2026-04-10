@@ -3244,6 +3244,8 @@ public static class MeshGenerator
 
                 Vector2Int lineTile = mapping.GetTileCoord(BlockFace.Front);
                 Vector2 lineAtlasUv = new Vector2(lineTile.x * invAtlasTilesX + 0.001f, lineTile.y * invAtlasTilesY + 0.001f);
+                Vector2Int shortLineTile = mapping.GetTileCoord(BlockFace.Back);
+                Vector2 shortLineAtlasUv = new Vector2(shortLineTile.x * invAtlasTilesX + 0.001f, shortLineTile.y * invAtlasTilesY + 0.001f);
                 Vector2Int dotTile = ResolveWireDotTile(mapping, lineTile);
                 Vector2 dotAtlasUv = new Vector2(dotTile.x * invAtlasTilesX + 0.001f, dotTile.y * invAtlasTilesY + 0.001f);
 
@@ -3270,6 +3272,7 @@ public static class MeshGenerator
                         wireHasWallOnCurrentCell ? wireSurfaceAxis : BlockPlacementAxis.Y,
                         wireHasWallOnCurrentCell ? wireAttachmentSide : 0,
                         lineAtlasUv,
+                        shortLineAtlasUv,
                         dotAtlasUv,
                         light01,
                         tint,
@@ -3310,6 +3313,7 @@ public static class MeshGenerator
                         wireAttachmentSide,
                         wireHasTopOnCurrentCell,
                         lineAtlasUv,
+                        shortLineAtlasUv,
                         dotAtlasUv,
                         light01,
                         tint,
@@ -3346,6 +3350,7 @@ public static class MeshGenerator
             BlockPlacementAxis wallSurfaceAxis,
             int wallAttachmentSide,
             Vector2 lineAtlasUv,
+            Vector2 shortLineAtlasUv,
             Vector2 dotAtlasUv,
             float light01,
             float tint,
@@ -3361,10 +3366,15 @@ public static class MeshGenerator
             const float armHalfWidth = 0.12f;
             const float centerHalfSize = 0.18f;
 
-            bool connectEast = IsTopSurfaceWireAt(voxelX + 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            bool connectWest = IsTopSurfaceWireAt(voxelX - 1, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            bool connectNorth = IsTopSurfaceWireAt(voxelX, voxelY, voxelZ + 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            bool connectSouth = IsTopSurfaceWireAt(voxelX, voxelY, voxelZ - 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            WireTopConnectionMode eastConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, 1, 0, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            WireTopConnectionMode westConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, -1, 0, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            WireTopConnectionMode northConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, 0, 1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            WireTopConnectionMode southConnection = ResolveWireTopConnectionMode(voxelX, voxelY, voxelZ, 0, -1, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            bool connectEast = eastConnection != WireTopConnectionMode.None;
+            bool connectWest = westConnection != WireTopConnectionMode.None;
+            bool connectNorth = northConnection != WireTopConnectionMode.None;
+            bool connectSouth = southConnection != WireTopConnectionMode.None;
 
             if (wallSurfaceAxis == BlockPlacementAxis.X)
             {
@@ -3379,6 +3389,39 @@ public static class MeshGenerator
                     connectNorth = true;
                 else if (wallAttachmentSide < 0)
                     connectSouth = true;
+            }
+
+            float topY = p0.y;
+            if (eastConnection == WireTopConnectionMode.Up)
+                AddWireTopVerticalBridge(origin, topY, 1, 0, true, lineAtlasUv, light01, tint, tris);
+
+            if (westConnection == WireTopConnectionMode.Up)
+                AddWireTopVerticalBridge(origin, topY, -1, 0, true, lineAtlasUv, light01, tint, tris);
+
+            if (northConnection == WireTopConnectionMode.Up)
+                AddWireTopVerticalBridge(origin, topY, 0, 1, true, lineAtlasUv, light01, tint, tris);
+
+            if (southConnection == WireTopConnectionMode.Up)
+                AddWireTopVerticalBridge(origin, topY, 0, -1, true, lineAtlasUv, light01, tint, tris);
+
+            if (!connectEast && !connectWest && !connectNorth && !connectSouth)
+            {
+                AddWireSurfaceQuad(
+                    origin,
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    dotAtlasUv,
+                    light01,
+                    tint,
+                    tris,
+                    0);
+                return;
             }
 
             bool straightX = connectEast && connectWest && !connectNorth && !connectSouth;
@@ -3396,33 +3439,17 @@ public static class MeshGenerator
                 return;
             }
 
-            AddWireSurfaceQuad(
-                origin,
-                p0,
-                p1,
-                p2,
-                p3,
-                0.5f - centerHalfSize,
-                0.5f + centerHalfSize,
-                0.5f - centerHalfSize,
-                0.5f + centerHalfSize,
-                dotAtlasUv,
-                light01,
-                tint,
-                tris,
-                0);
-
             if (connectEast)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectWest)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectNorth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1);
 
             if (connectSouth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1);
         }
 
         private void RenderWireWallSurface(
@@ -3435,6 +3462,7 @@ public static class MeshGenerator
             int wireAttachmentSide,
             bool hasTopOnCurrentCell,
             Vector2 lineAtlasUv,
+            Vector2 shortLineAtlasUv,
             Vector2 dotAtlasUv,
             float light01,
             float tint,
@@ -3501,12 +3529,68 @@ public static class MeshGenerator
                 voxelSizeZ,
                 voxelPlaneSize);
 
+            if (HasTopWireConnectionForWall(
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    wireSurfaceAxis,
+                    wireAttachmentSide,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                if (wireSurfaceAxis == BlockPlacementAxis.X)
+                    connectPosT = true;
+                else if (wireSurfaceAxis == BlockPlacementAxis.Z)
+                    connectPosS = true;
+            }
+
+            if (HasGroundWireConnectionForWall(
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    wireSurfaceAxis,
+                    wireAttachmentSide,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                if (wireSurfaceAxis == BlockPlacementAxis.X)
+                    connectNegT = true;
+                else if (wireSurfaceAxis == BlockPlacementAxis.Z)
+                    connectNegS = true;
+
+                AddWireWallGroundBridge(origin, wireSurfaceAxis, lineAtlasUv, light01, tint, tris);
+            }
+
             if (hasTopOnCurrentCell)
             {
                 if (wireSurfaceAxis == BlockPlacementAxis.X)
                     connectPosT = true;
                 else if (wireSurfaceAxis == BlockPlacementAxis.Z)
                     connectPosS = true;
+            }
+
+            if (!connectNegS && !connectPosS && !connectNegT && !connectPosT)
+            {
+                AddWireSurfaceQuad(
+                    origin,
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    dotAtlasUv,
+                    light01,
+                    tint,
+                    tris,
+                    0);
+                return;
             }
 
             bool straightS = connectNegS && connectPosS && !connectNegT && !connectPosT;
@@ -3524,33 +3608,17 @@ public static class MeshGenerator
                 return;
             }
 
-            AddWireSurfaceQuad(
-                origin,
-                p0,
-                p1,
-                p2,
-                p3,
-                0.5f - centerHalfSize,
-                0.5f + centerHalfSize,
-                0.5f - centerHalfSize,
-                0.5f + centerHalfSize,
-                dotAtlasUv,
-                light01,
-                tint,
-                tris,
-                0);
-
             if (connectPosS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f, 1f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectNegS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0f, 0.5f, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
 
             if (connectPosT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f, 1f, shortLineAtlasUv, light01, tint, tris, 1);
 
             if (connectNegT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0f, 0.5f, shortLineAtlasUv, light01, tint, tris, 1);
         }
 
         private enum WireTopConnectionMode : byte
@@ -3589,7 +3657,7 @@ public static class MeshGenerator
                     voxelSizeZ,
                     voxelPlaneSize))
             {
-                return WireTopConnectionMode.Down;
+                return WireTopConnectionMode.Flat;
             }
 
             bool adjacentIsSolid = IsSolidSupportBlock(nx, voxelY, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
@@ -3616,7 +3684,7 @@ public static class MeshGenerator
                     voxelSizeZ,
                     voxelPlaneSize))
             {
-                return WireTopConnectionMode.Down;
+                return WireTopConnectionMode.Flat;
             }
 
             return WireTopConnectionMode.None;
@@ -3958,7 +4026,7 @@ public static class MeshGenerator
                 light01,
                 tint,
                 tris,
-                0);
+                1);
         }
 
         private static BlockPlacementAxis ResolveWireSurfaceAxis(

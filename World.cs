@@ -316,6 +316,9 @@ public partial class World : MonoBehaviour
     [Tooltip("Limite de troncos processados por frame para evitar lag spike.")]
     [Min(1)]
     public int treeCapitatorBreaksPerFrame = 10;
+    [Tooltip("Orcamento de tempo (ms) para quebrar troncos do treecapitator por frame. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float treeCapitatorTimeBudgetMS = 0.75f;
 
     [Header("Tree Leaves")]
     [Tooltip("Medium = folhas voxel padrao. High = camada detalhada com sobreposicao em todas as folhas (estilo Vintage Story). Ultra = folhas 100% billboard de 4 faces (estilo Hytale).")]
@@ -517,6 +520,7 @@ public partial class World : MonoBehaviour
     private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(256);
     private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>();
     private readonly Dictionary<Vector2Int, int> refillLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
+    private readonly HashSet<Vector2Int> cleanupLightColumnKeysBuffer = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> cleanupLightColumnsRemoveBuffer = new List<Vector2Int>(128);
 
     private TerrainDensitySettings GetTerrainDensitySettings()

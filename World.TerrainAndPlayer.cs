@@ -9,6 +9,7 @@ public partial class World : MonoBehaviour
     [SerializeField] private bool enableLeafDecay = true;
     [SerializeField, Min(1)] private int leafDecaySupportDistance = 4;
     [SerializeField, Min(1)] private int leafDecayChecksPerFrame = 8;
+    [SerializeField, Min(0f)] private float leafDecayTimeBudgetMS = 0.5f;
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
 
@@ -362,8 +363,13 @@ public partial class World : MonoBehaviour
             return;
 
         int perFrameLimit = Mathf.Max(1, treeCapitatorBreaksPerFrame);
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = treeCapitatorTimeBudgetMS > 0f ? treeCapitatorTimeBudgetMS / 1000f : 0f;
         for (int i = 0; i < perFrameLimit && queuedTreeCapitatorBreaks.Count > 0; i++)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             TreeCapitatorBreakCandidate candidate = queuedTreeCapitatorBreaks.Dequeue();
             queuedTreeCapitatorSet.Remove(candidate.position);
 
@@ -429,12 +435,17 @@ public partial class World : MonoBehaviour
             return;
 
         float now = Time.time;
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = leafDecayTimeBudgetMS > 0f ? leafDecayTimeBudgetMS / 1000f : 0f;
         Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
         int processed = 0;
         int attempts = queuedLeafDecay.Count;
 
         while (processed < Mathf.Max(1, leafDecayChecksPerFrame) && attempts-- > 0)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             LeafDecayCandidate candidate = queuedLeafDecay.Dequeue();
             queuedLeafDecaySet.Remove(candidate.position);
 
@@ -660,6 +671,7 @@ public partial class World : MonoBehaviour
     [Header("Fluid Simulation")]
     [SerializeField] private bool enableWaterSimulation = true;
     [SerializeField, Min(1)] private int waterUpdatesPerFrame = 48;
+    [SerializeField, Min(0f)] private float waterUpdateTimeBudgetMS = 1f;
     [SerializeField, Min(0.01f)] private float waterTickInterval = 0.05f;
     [SerializeField, Min(1)] private int waterSlopeSearchDistance = 4;
 
@@ -699,6 +711,8 @@ public partial class World : MonoBehaviour
             return;
 
         float now = Time.time;
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = waterUpdateTimeBudgetMS > 0f ? waterUpdateTimeBudgetMS / 1000f : 0f;
         Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
         int processed = 0;
         int attempts = queuedWaterUpdates.Count;
@@ -706,6 +720,9 @@ public partial class World : MonoBehaviour
 
         while (processed < perFrameLimit && attempts-- > 0)
         {
+            if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+                break;
+
             WaterUpdateCandidate candidate = queuedWaterUpdates.Dequeue();
             queuedWaterUpdateSet.Remove(candidate.position);
 

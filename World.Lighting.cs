@@ -151,9 +151,12 @@ public partial class World
         refillQueue.Clear();
         Dictionary<Vector2Int, int> dirtiedChunks = removeLightDirtyChunksBuffer;
         dirtiedChunks.Clear();
+        HashSet<Vector2Int> columnsToCleanup = cleanupLightColumnKeysBuffer;
+        columnsToCleanup.Clear();
 
         darkQueue.Enqueue((startWorldPos, oldLight));
         SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, 0);
+        columnsToCleanup.Add(new Vector2Int(startWorldPos.x, startWorldPos.z));
 
         while (darkQueue.Count > 0)
         {
@@ -178,6 +181,7 @@ public partial class World
                     if (neighborLight < node.lightLevel)
                     {
                         SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, 0);
+                        columnsToCleanup.Add(new Vector2Int(neighborPos.x, neighborPos.z));
                         darkQueue.Enqueue((neighborPos, neighborLight));
                     }
                     else if (neighborLight >= node.lightLevel)
@@ -229,7 +233,8 @@ public partial class World
         foreach (var kv in dirtiedChunks)
             RequestChunkRebuild(kv.Key, kv.Value, false);
 
-        CleanupEmptyLightColumns();
+        CleanupEmptyLightColumns(columnsToCleanup);
+        columnsToCleanup.Clear();
     }
 
     public void RefillLightGlobal(Vector3Int startWorldPos)
@@ -359,6 +364,39 @@ public partial class World
             if (allZero) toRemove.Add(kv.Key);
         }
         foreach (var k in toRemove) globalLightColumns.Remove(k);
+    }
+
+    private void CleanupEmptyLightColumns(IEnumerable<Vector2Int> candidateColumns)
+    {
+        if (candidateColumns == null)
+        {
+            CleanupEmptyLightColumns();
+            return;
+        }
+
+        List<Vector2Int> toRemove = cleanupLightColumnsRemoveBuffer;
+        toRemove.Clear();
+        foreach (Vector2Int key in candidateColumns)
+        {
+            if (!globalLightColumns.TryGetValue(key, out byte[] column))
+                continue;
+
+            bool allZero = true;
+            for (int i = 0; i < column.Length; i++)
+            {
+                if (column[i] != 0)
+                {
+                    allZero = false;
+                    break;
+                }
+            }
+
+            if (allZero)
+                toRemove.Add(key);
+        }
+
+        for (int i = 0; i < toRemove.Count; i++)
+            globalLightColumns.Remove(toRemove[i]);
     }
     #endregion
 }

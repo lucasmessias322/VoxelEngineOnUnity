@@ -84,6 +84,45 @@ public partial class World : MonoBehaviour
         return GetProceduralBlockFast(worldPos);
     }
 
+    public bool TryGetLoadedBlockAt(Vector3Int worldPos, out BlockType blockType)
+    {
+        if (blockOverrides.TryGetValue(worldPos, out BlockType overridden))
+        {
+            blockType = ResolveWaterStateForDebug(overridden);
+            return true;
+        }
+
+        if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+        {
+            blockType = BlockType.Air;
+            return true;
+        }
+
+        if (worldPos.y <= 2)
+        {
+            blockType = BlockType.Bedrock;
+            return true;
+        }
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (activeChunks.TryGetValue(chunkCoord, out Chunk chunk) && CanChunkProvideVoxelSnapshot(chunk))
+        {
+            int lx = worldPos.x - chunkCoord.x * Chunk.SizeX;
+            int lz = worldPos.z - chunkCoord.y * Chunk.SizeZ;
+            int ly = worldPos.y;
+
+            if (lx >= 0 && lx < Chunk.SizeX && lz >= 0 && lz < Chunk.SizeZ && ly >= 0 && ly < Chunk.SizeY)
+            {
+                int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
+                blockType = ResolveWaterStateForDebug((BlockType)chunk.voxelData[idx]);
+                return true;
+            }
+        }
+
+        blockType = BlockType.Air;
+        return false;
+    }
+
     private BlockType GetProceduralBlockFast(Vector3Int worldPos)
     {
         int worldX = worldPos.x;
