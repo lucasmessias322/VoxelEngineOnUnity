@@ -281,6 +281,10 @@ public class BlockDrop : MonoBehaviour
                 AppendRampMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
+            case BlockRenderShape.VerticalRamp:
+                AppendVerticalRampMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
+
             default:
                 for (int f = 0; f < 6; f++)
                 {
@@ -585,6 +589,36 @@ public class BlockDrop : MonoBehaviour
         }
 
         AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, sampledFace, origin, p0, p1, p2, normal, invAtlasTilesX, invAtlasTilesY);
+    }
+
+    private static void AppendVerticalRampMesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        BlockPlacementAxis axis = BlockPlacementAxis.ZNegative;
+
+        VerticalRampShapeUtility.ResolveBottomTriangle(axis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Bottom, origin, bottom0, bottom1, bottom2, Vector3.down, invAtlasTilesX, invAtlasTilesY);
+
+        VerticalRampShapeUtility.ResolveTopTriangle(axis, out Vector3 top0, out Vector3 top1, out Vector3 top2);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Top, origin, top0, top1, top2, Vector3.up, invAtlasTilesX, invAtlasTilesY);
+
+        VerticalRampShapeUtility.ResolveSideQuad(axis, out Vector3 side0, out Vector3 side1, out Vector3 side2, out Vector3 side3, out BlockFace sideFace);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, sideFace, origin, side0, side1, side2, side3, ResolveSpecialFaceNormal(sideFace), invAtlasTilesX, invAtlasTilesY, false);
+
+        VerticalRampShapeUtility.ResolveFrontQuad(axis, out Vector3 front0, out Vector3 front1, out Vector3 front2, out Vector3 front3, out BlockFace frontFace);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, frontFace, origin, front0, front1, front2, front3, ResolveSpecialFaceNormal(frontFace), invAtlasTilesX, invAtlasTilesY, false);
+
+        VerticalRampShapeUtility.ResolveSlopeQuad(axis, out Vector3 slope0, out Vector3 slope1, out Vector3 slope2, out Vector3 slope3, out BlockFace slopeFace, out Vector3 slopeNormal);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, slopeFace, origin, slope0, slope1, slope2, slope3, slopeNormal, invAtlasTilesX, invAtlasTilesY, false);
     }
 
     private static void AppendShapeBox(

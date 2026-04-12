@@ -53,6 +53,7 @@ public enum BlockType
     wire = 48,
     Oak_Leader = 49,
     Oak_Ramp = 50,
+    Oak_VerticalRamp = 51,
 }
 
 public static class FluidBlockUtility

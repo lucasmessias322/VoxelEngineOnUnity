@@ -1727,6 +1727,19 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return false;
             }
 
+            case BlockRenderShape.VerticalRamp:
+            {
+                BlockPlacementAxis verticalRampAxis = VerticalRampShapeUtility.SanitizeAxis(placementAxis);
+                var verticalRampBoxes = VerticalRampShapeUtility.BuildColliderBoxes(verticalRampAxis);
+                for (int i = 0; i < verticalRampBoxes.Length; i++)
+                {
+                    if (testBounds.Intersects(verticalRampBoxes[i].ToWorldBounds(blockPos)))
+                        return true;
+                }
+
+                return false;
+            }
+
             case BlockRenderShape.Fence:
             {
                 byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
@@ -1798,6 +1811,16 @@ public class PlayerBlockBreaker : MonoBehaviour
                 Bounds bounds = rampBoxes[0].ToWorldBounds(blockPos);
                 for (int i = 1; i < rampBoxes.Length; i++)
                     bounds.Encapsulate(rampBoxes[i].ToWorldBounds(blockPos));
+                return bounds;
+            }
+
+            case BlockRenderShape.VerticalRamp:
+            {
+                BlockPlacementAxis verticalRampAxis = VerticalRampShapeUtility.SanitizeAxis(placementAxis);
+                var verticalRampBoxes = VerticalRampShapeUtility.BuildColliderBoxes(verticalRampAxis);
+                Bounds bounds = verticalRampBoxes[0].ToWorldBounds(blockPos);
+                for (int i = 1; i < verticalRampBoxes.Length; i++)
+                    bounds.Encapsulate(verticalRampBoxes[i].ToWorldBounds(blockPos));
                 return bounds;
             }
 

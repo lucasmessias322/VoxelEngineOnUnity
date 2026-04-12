@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
-public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6 }
+public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7 }
 public enum BlockPlacementAxis : byte
 {
     Y = 0,
@@ -587,6 +587,9 @@ public static class BlockPlacementRotationUtility
 
         if (shape == BlockRenderShape.Ramp)
             return RampShapeUtility.ResolvePlacementAxis(lookForward);
+
+        if (shape == BlockRenderShape.VerticalRamp)
+            return VerticalRampShapeUtility.ResolvePlacementAxis(lookForward);
 
         if (!mapping.usePlacementAxisRotation)
             return BlockPlacementAxis.Y;

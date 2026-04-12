@@ -1199,7 +1199,8 @@ public partial class World : MonoBehaviour
         BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
         return mapping.usePlacementAxisRotation ||
                shape == BlockRenderShape.Stairs ||
-               shape == BlockRenderShape.Ramp;
+               shape == BlockRenderShape.Ramp ||
+               shape == BlockRenderShape.VerticalRamp;
     }
 
     private static BlockPlacementAxis ResolveWirePlacementAxis(Vector3 lookForward)

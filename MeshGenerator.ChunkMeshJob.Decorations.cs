@@ -159,6 +159,22 @@ public static partial class MeshGenerator
                                             specialLight01);
                                         break;
 
+                                    case BlockRenderShape.VerticalRamp:
+                                        AddVerticalRampShape(
+                                            origin,
+                                            mapping,
+                                            placementAxis,
+                                            x,
+                                            y,
+                                            z,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
                                     case BlockRenderShape.Fence:
                                         AddFenceShape(
                                             origin,
@@ -810,7 +826,8 @@ public static partial class MeshGenerator
                 tris,
                 BlockRenderShape.Ramp,
                 rampAxis,
-                rampVariant);
+                rampVariant,
+                true);
 
             Vector3 topNormal1 = Vector3.Normalize(Vector3.Cross(top1b - top1a, top1c - top1a));
             AddAmbientOccludedCustomTriangle(
@@ -839,7 +856,8 @@ public static partial class MeshGenerator
                 tris,
                 BlockRenderShape.Ramp,
                 rampAxis,
-                rampVariant);
+                rampVariant,
+                true);
 
             AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Left, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
             AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Right, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
@@ -1001,6 +1019,181 @@ public static partial class MeshGenerator
                 return false;
 
             return RampShapeUtility.TryGetFacing(BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx)), out facing);
+        }
+
+        private void AddVerticalRampShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            BlockPlacementAxis axis = VerticalRampShapeUtility.SanitizeAxis(placementAxis);
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+
+            VerticalRampShapeUtility.ResolveBottomTriangle(axis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2);
+            AddAmbientOccludedCustomTriangle(
+                origin,
+                mapping,
+                BlockFace.Bottom,
+                bottom0,
+                bottom1,
+                bottom2,
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom0),
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom1),
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom2),
+                Vector3.down,
+                Vector3.down,
+                (bottom1 - bottom0).normalized,
+                (bottom2 - bottom0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.VerticalRamp,
+                axis,
+                RampShapeVariant.Straight);
+
+            VerticalRampShapeUtility.ResolveTopTriangle(axis, out Vector3 top0, out Vector3 top1, out Vector3 top2);
+            AddAmbientOccludedCustomTriangle(
+                origin,
+                mapping,
+                BlockFace.Top,
+                top0,
+                top1,
+                top2,
+                ResolveShapeProjectedUv(BlockFace.Top, top0),
+                ResolveShapeProjectedUv(BlockFace.Top, top1),
+                ResolveShapeProjectedUv(BlockFace.Top, top2),
+                Vector3.up,
+                Vector3.up,
+                (top1 - top0).normalized,
+                (top2 - top0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.VerticalRamp,
+                axis,
+                RampShapeVariant.Straight);
+
+            VerticalRampShapeUtility.ResolveSideQuad(axis, out Vector3 side0, out Vector3 side1, out Vector3 side2, out Vector3 side3, out BlockFace sideFace);
+            Vector3 sideNormal = ResolveShapeFaceNormal(sideFace);
+            AddAmbientOccludedCustomQuad(
+                origin,
+                mapping,
+                sideFace,
+                side0,
+                side1,
+                side2,
+                side3,
+                ResolveShapeProjectedUv(sideFace, side0),
+                ResolveShapeProjectedUv(sideFace, side1),
+                ResolveShapeProjectedUv(sideFace, side2),
+                ResolveShapeProjectedUv(sideFace, side3),
+                sideNormal,
+                sideNormal,
+                (side1 - side0).normalized,
+                (side3 - side0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.VerticalRamp,
+                axis,
+                RampShapeVariant.Straight,
+                false);
+
+            VerticalRampShapeUtility.ResolveFrontQuad(axis, out Vector3 front0, out Vector3 front1, out Vector3 front2, out Vector3 front3, out BlockFace frontFace);
+            Vector3 frontNormal = ResolveShapeFaceNormal(frontFace);
+            AddAmbientOccludedCustomQuad(
+                origin,
+                mapping,
+                frontFace,
+                front0,
+                front1,
+                front2,
+                front3,
+                ResolveShapeProjectedUv(frontFace, front0),
+                ResolveShapeProjectedUv(frontFace, front1),
+                ResolveShapeProjectedUv(frontFace, front2),
+                ResolveShapeProjectedUv(frontFace, front3),
+                frontNormal,
+                frontNormal,
+                (front1 - front0).normalized,
+                (front3 - front0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.VerticalRamp,
+                axis,
+                RampShapeVariant.Straight,
+                false);
+
+            VerticalRampShapeUtility.ResolveSlopeQuad(axis, out Vector3 slope0, out Vector3 slope1, out Vector3 slope2, out Vector3 slope3, out BlockFace slopeFace, out Vector3 slopeNormal);
+            AddAmbientOccludedCustomQuad(
+                origin,
+                mapping,
+                slopeFace,
+                slope0,
+                slope1,
+                slope2,
+                slope3,
+                ResolveShapeProjectedUv(slopeFace, slope0),
+                ResolveShapeProjectedUv(slopeFace, slope1),
+                ResolveShapeProjectedUv(slopeFace, slope2),
+                ResolveShapeProjectedUv(slopeFace, slope3),
+                slopeNormal,
+                slopeNormal,
+                (slope1 - slope0).normalized,
+                (slope3 - slope0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.VerticalRamp,
+                axis,
+                RampShapeVariant.Straight,
+                false,
+                true);
         }
 
         private StairShapeVariant ResolveStairShapeVariant(
@@ -1588,7 +1781,8 @@ public static partial class MeshGenerator
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
             RampShapeVariant currentRampVariant,
-            bool invertWinding)
+            bool invertWinding,
+            bool suppressNeighborRampAO = false)
         {
             bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
             Vector2Int tile = mapping.GetTileCoord(sampledFace);
@@ -1597,10 +1791,15 @@ public static partial class MeshGenerator
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
 
-            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(origin + p3, uv3, normal, aoNormal, -aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p0, normal, out Vector3 aoNormal0, out Vector3 stepU0, out Vector3 stepV0);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p2, normal, out Vector3 aoNormal2, out Vector3 stepU2, out Vector3 stepV2);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p3, normal, out Vector3 aoNormal3, out Vector3 stepU3, out Vector3 stepV3);
+
+            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal0, stepU0, stepV0, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal1, stepU1, stepV1, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal2, stepU2, stepV2, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+            AddAmbientOccludedShapeVertex(origin + p3, uv3, normal, aoNormal3, stepU3, stepV3, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
 
             if (invertWinding)
             {
@@ -1647,7 +1846,8 @@ public static partial class MeshGenerator
             NativeList<int> tris,
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
-            RampShapeVariant currentRampVariant)
+            RampShapeVariant currentRampVariant,
+            bool suppressNeighborRampAO = false)
         {
             bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
             Vector2Int tile = mapping.GetTileCoord(sampledFace);
@@ -1656,13 +1856,72 @@ public static partial class MeshGenerator
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
 
-            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal, aoStepV, aoStepU, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p0, normal, out Vector3 aoNormal0, out Vector3 stepU0, out Vector3 stepV0);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
+            ResolveCustomFaceVertexAOFrame(sampledFace, p2, normal, out Vector3 aoNormal2, out Vector3 stepU2, out Vector3 stepV2);
+
+            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal0, stepU0, stepV0, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal1, stepU1, stepV1, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal2, stepU2, stepV2, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
             tris.Add(vIndex + 2);
+        }
+
+        private static void ResolveCustomFaceVertexAOFrame(
+            BlockFace sampledFace,
+            Vector3 localPos,
+            Vector3 geometricNormal,
+            out Vector3 aoNormal,
+            out Vector3 stepU,
+            out Vector3 stepV)
+        {
+            switch (sampledFace)
+            {
+                case BlockFace.Top:
+                    aoNormal = Vector3.up;
+                    stepU = localPos.x >= 0.5f ? Vector3.right : Vector3.left;
+                    stepV = localPos.z >= 0.5f ? Vector3.forward : Vector3.back;
+                    return;
+
+                case BlockFace.Bottom:
+                    aoNormal = Vector3.down;
+                    stepU = localPos.x >= 0.5f ? Vector3.right : Vector3.left;
+                    stepV = localPos.z >= 0.5f ? Vector3.forward : Vector3.back;
+                    return;
+
+                case BlockFace.Right:
+                    aoNormal = Vector3.right;
+                    stepU = localPos.y >= 0.5f ? Vector3.up : Vector3.down;
+                    stepV = localPos.z >= 0.5f ? Vector3.forward : Vector3.back;
+                    return;
+
+                case BlockFace.Left:
+                    aoNormal = Vector3.left;
+                    stepU = localPos.y >= 0.5f ? Vector3.up : Vector3.down;
+                    stepV = localPos.z >= 0.5f ? Vector3.forward : Vector3.back;
+                    return;
+
+                case BlockFace.Front:
+                    aoNormal = Vector3.forward;
+                    stepU = localPos.y >= 0.5f ? Vector3.up : Vector3.down;
+                    stepV = localPos.x >= 0.5f ? Vector3.right : Vector3.left;
+                    return;
+
+                case BlockFace.Back:
+                    aoNormal = Vector3.back;
+                    stepU = localPos.y >= 0.5f ? Vector3.up : Vector3.down;
+                    stepV = localPos.x >= 0.5f ? Vector3.right : Vector3.left;
+                    return;
+
+                default:
+                    Vector3 fallbackNormal = geometricNormal.sqrMagnitude > 0.0001f ? geometricNormal.normalized : Vector3.up;
+                    aoNormal = fallbackNormal;
+                    stepU = Vector3.right;
+                    stepV = Vector3.forward;
+                    return;
+            }
         }
 
         private void AddAmbientOccludedShapeFace(
@@ -1730,7 +1989,8 @@ public static partial class MeshGenerator
             in FixedList512Bytes<ShapeBox> shapeBoxes,
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
-            RampShapeVariant currentRampVariant)
+            RampShapeVariant currentRampVariant,
+            bool suppressNeighborRampAO = false)
         {
             byte aoValue = 3;
             if (!disableAO)
@@ -1739,9 +1999,9 @@ public static partial class MeshGenerator
                 const float tangentOffset = 0.45f;
                 Vector3 sampleSpaceOffset = new Vector3(border, 0f, border);
                 Vector3 sampleOrigin = position + sampleSpaceOffset + aoNormal * normalOffset;
-                bool side1 = IsAmbientOccluderAtPoint(sampleOrigin + stepU * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-                bool side2 = IsAmbientOccluderAtPoint(sampleOrigin + stepV * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-                bool corner = IsAmbientOccluderAtPoint(sampleOrigin + (stepU + stepV) * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+                bool side1 = IsAmbientOccluderAtPoint(sampleOrigin + stepU * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+                bool side2 = IsAmbientOccluderAtPoint(sampleOrigin + stepV * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
+                bool corner = IsAmbientOccluderAtPoint(sampleOrigin + (stepU + stepV) * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
                 aoValue = ResolveShapeVertexAO(side1, side2, corner);
             }
 
@@ -1765,7 +2025,8 @@ public static partial class MeshGenerator
             in FixedList512Bytes<ShapeBox> currentShapeBoxes,
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
-            RampShapeVariant currentRampVariant)
+            RampShapeVariant currentRampVariant,
+            bool suppressNeighborRampAO)
         {
             int cellX = (int)math.floor(samplePos.x);
             int cellY = (int)math.floor(samplePos.y);
@@ -1779,10 +2040,13 @@ public static partial class MeshGenerator
                 if (currentShape == BlockRenderShape.Ramp)
                     return RampShapeUtility.ContainsLocalPoint(localPos, currentPlacementAxis, currentRampVariant);
 
+                if (currentShape == BlockRenderShape.VerticalRamp)
+                    return VerticalRampShapeUtility.ContainsLocalPoint(localPos, currentPlacementAxis);
+
                 return IsPointInsideShapeBoxes(localPos, currentShapeBoxes);
             }
 
-            return IsAmbientOcclusionVolumeAtLocalPoint(cellX, cellY, cellZ, localPos, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            return IsAmbientOcclusionVolumeAtLocalPoint(cellX, cellY, cellZ, localPos, voxelSizeX, voxelSizeZ, voxelPlaneSize, suppressNeighborRampAO);
         }
 
         private bool IsAmbientOcclusionVolumeAtLocalPoint(
@@ -1792,7 +2056,8 @@ public static partial class MeshGenerator
             Vector3 localPos,
             int voxelSizeX,
             int voxelSizeZ,
-            int voxelPlaneSize)
+            int voxelPlaneSize,
+            bool suppressNeighborRampAO)
         {
             if (!TryGetResolvedVoxelIndex(voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
                 return false;
@@ -1829,6 +2094,9 @@ public static partial class MeshGenerator
 
                 case BlockRenderShape.Ramp:
                 {
+                    if (suppressNeighborRampAO)
+                        return false;
+
                     BlockPlacementAxis rampAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
                     RampShapeVariant rampVariant = ResolveRampShapeVariant(
                         rampAxis,
@@ -1839,7 +2107,16 @@ public static partial class MeshGenerator
                         voxelSizeX,
                         voxelSizeZ,
                         voxelPlaneSize);
-                    return RampShapeUtility.ContainsLocalPoint(localPos, rampAxis, rampVariant);
+                    return RampShapeUtility.ContainsAmbientOcclusionPoint(localPos, rampAxis, rampVariant);
+                }
+
+                case BlockRenderShape.VerticalRamp:
+                {
+                    if (suppressNeighborRampAO)
+                        return false;
+
+                    BlockPlacementAxis verticalRampAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    return VerticalRampShapeUtility.ContainsAmbientOcclusionPoint(localPos, verticalRampAxis);
                 }
 
                 case BlockRenderShape.Fence:

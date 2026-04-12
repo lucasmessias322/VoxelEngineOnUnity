@@ -390,6 +390,7 @@ public static class StairShapeRuntimeUtility
 public static class RampShapeUtility
 {
     public const int ColliderSliceCount = 4;
+    private const float AmbientOcclusionSlopeInset = 0.125f;
 
     public static BlockPlacementAxis ResolvePlacementAxis(Vector3 lookForward)
     {
@@ -591,6 +592,20 @@ public static class RampShapeUtility
 
         Vector3 canonical = ToCanonical(localPos, axis);
         return canonical.y < GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant) - epsilon;
+    }
+
+    public static bool ContainsAmbientOcclusionPoint(Vector3 localPos, BlockPlacementAxis axis, RampShapeVariant variant)
+    {
+        const float epsilon = 0.0001f;
+        if (localPos.x <= epsilon || localPos.x >= 1f - epsilon ||
+            localPos.y <= epsilon || localPos.y >= 1f - epsilon ||
+            localPos.z <= epsilon || localPos.z >= 1f - epsilon)
+        {
+            return false;
+        }
+
+        Vector3 canonical = ToCanonical(localPos, axis);
+        return canonical.y < GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant) - AmbientOcclusionSlopeInset - epsilon;
     }
 
     public static FixedList512Bytes<ShapeBox> BuildColliderBoxes(BlockPlacementAxis axis, RampShapeVariant variant)
@@ -837,6 +852,272 @@ public static class RampShapeRuntimeUtility
             return false;
 
         return RampShapeUtility.TryGetFacing(world.GetPlacementAxisAt(blockPos, blockType), out facing);
+    }
+}
+
+public static class VerticalRampShapeUtility
+{
+    public const int ColliderSliceCount = 4;
+    private const float AmbientOcclusionDiagonalInset = 0.125f;
+    private static readonly Vector3 CanonicalSlopeNormal = new Vector3(1f, 0f, -1f).normalized;
+
+    public static BlockPlacementAxis ResolvePlacementAxis(Vector3 lookForward)
+    {
+        return RampShapeUtility.ResolvePlacementAxis(lookForward);
+    }
+
+    public static BlockPlacementAxis SanitizeAxis(BlockPlacementAxis axis)
+    {
+        return RampShapeUtility.SanitizeAxis(axis);
+    }
+
+    public static void ResolveTopTriangle(
+        BlockPlacementAxis axis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2)
+    {
+        axis = SanitizeAxis(axis);
+        p0 = RotateCanonicalPoint(new Vector3(0f, 1f, 0f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(0f, 1f, 1f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(1f, 1f, 1f), axis);
+        EnsureTriangleWinding(ref p0, ref p1, ref p2, Vector3.up);
+    }
+
+    public static void ResolveBottomTriangle(
+        BlockPlacementAxis axis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2)
+    {
+        axis = SanitizeAxis(axis);
+        p0 = RotateCanonicalPoint(new Vector3(0f, 0f, 0f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(1f, 0f, 1f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(0f, 0f, 1f), axis);
+        EnsureTriangleWinding(ref p0, ref p1, ref p2, Vector3.down);
+    }
+
+    public static void ResolveSideQuad(
+        BlockPlacementAxis axis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2,
+        out Vector3 p3,
+        out BlockFace sampledFace)
+    {
+        axis = SanitizeAxis(axis);
+        p0 = RotateCanonicalPoint(new Vector3(0f, 0f, 0f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(0f, 0f, 1f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(0f, 1f, 1f), axis);
+        p3 = RotateCanonicalPoint(new Vector3(0f, 1f, 0f), axis);
+        sampledFace = RotateHorizontalFace(axis, BlockFace.Left);
+        EnsureQuadWinding(ref p0, ref p1, ref p2, ref p3, ResolveCardinalFaceNormal(sampledFace));
+    }
+
+    public static void ResolveFrontQuad(
+        BlockPlacementAxis axis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2,
+        out Vector3 p3,
+        out BlockFace sampledFace)
+    {
+        axis = SanitizeAxis(axis);
+        p0 = RotateCanonicalPoint(new Vector3(0f, 0f, 1f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(1f, 0f, 1f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(1f, 1f, 1f), axis);
+        p3 = RotateCanonicalPoint(new Vector3(0f, 1f, 1f), axis);
+        sampledFace = RotateHorizontalFace(axis, BlockFace.Front);
+        EnsureQuadWinding(ref p0, ref p1, ref p2, ref p3, ResolveCardinalFaceNormal(sampledFace));
+    }
+
+    public static void ResolveSlopeQuad(
+        BlockPlacementAxis axis,
+        out Vector3 p0,
+        out Vector3 p1,
+        out Vector3 p2,
+        out Vector3 p3,
+        out BlockFace sampledFace,
+        out Vector3 normal)
+    {
+        axis = SanitizeAxis(axis);
+        p0 = RotateCanonicalPoint(new Vector3(0f, 0f, 0f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(0f, 1f, 0f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(1f, 1f, 1f), axis);
+        p3 = RotateCanonicalPoint(new Vector3(1f, 0f, 1f), axis);
+        normal = RotateCanonicalVector(CanonicalSlopeNormal, axis).normalized;
+        sampledFace = ResolveSlopeSampledFace(normal);
+        EnsureQuadWinding(ref p0, ref p1, ref p2, ref p3, normal);
+    }
+
+    public static bool ContainsLocalPoint(Vector3 localPos, BlockPlacementAxis axis)
+    {
+        const float epsilon = 0.0001f;
+        if (localPos.x <= epsilon || localPos.x >= 1f - epsilon ||
+            localPos.y <= epsilon || localPos.y >= 1f - epsilon ||
+            localPos.z <= epsilon || localPos.z >= 1f - epsilon)
+        {
+            return false;
+        }
+
+        Vector3 canonical = ToCanonical(localPos, axis);
+        return canonical.x < canonical.z - epsilon;
+    }
+
+    public static bool ContainsAmbientOcclusionPoint(Vector3 localPos, BlockPlacementAxis axis)
+    {
+        const float epsilon = 0.0001f;
+        if (localPos.x <= epsilon || localPos.x >= 1f - epsilon ||
+            localPos.y <= epsilon || localPos.y >= 1f - epsilon ||
+            localPos.z <= epsilon || localPos.z >= 1f - epsilon)
+        {
+            return false;
+        }
+
+        Vector3 canonical = ToCanonical(localPos, axis);
+        return canonical.x < canonical.z - AmbientOcclusionDiagonalInset - epsilon;
+    }
+
+    public static FixedList512Bytes<ShapeBox> BuildColliderBoxes(BlockPlacementAxis axis)
+    {
+        axis = SanitizeAxis(axis);
+        FixedList512Bytes<ShapeBox> boxes = default;
+        float step = 1f / ColliderSliceCount;
+
+        for (int zIndex = 0; zIndex < ColliderSliceCount; zIndex++)
+        {
+            float minZ = zIndex * step;
+            float maxZ = minZ + step;
+            boxes.Add(RotateCanonicalBox(
+                new ShapeBox(
+                    new Vector3(0f, 0f, minZ),
+                    new Vector3(maxZ, 1f, maxZ)),
+                axis));
+        }
+
+        return boxes;
+    }
+
+    private static BlockFace RotateHorizontalFace(BlockPlacementAxis axis, BlockFace face)
+    {
+        axis = SanitizeAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => face switch
+            {
+                BlockFace.Left => BlockFace.Front,
+                BlockFace.Front => BlockFace.Right,
+                BlockFace.Right => BlockFace.Back,
+                BlockFace.Back => BlockFace.Left,
+                _ => face
+            },
+            BlockPlacementAxis.ZNegative => face switch
+            {
+                BlockFace.Left => BlockFace.Right,
+                BlockFace.Front => BlockFace.Back,
+                BlockFace.Right => BlockFace.Left,
+                BlockFace.Back => BlockFace.Front,
+                _ => face
+            },
+            BlockPlacementAxis.XNegative => face switch
+            {
+                BlockFace.Left => BlockFace.Back,
+                BlockFace.Front => BlockFace.Left,
+                BlockFace.Right => BlockFace.Front,
+                BlockFace.Back => BlockFace.Right,
+                _ => face
+            },
+            _ => face
+        };
+    }
+
+    private static BlockFace ResolveSlopeSampledFace(Vector3 normal)
+    {
+        if (Mathf.Abs(normal.x) >= Mathf.Abs(normal.z))
+            return normal.x >= 0f ? BlockFace.Right : BlockFace.Left;
+
+        return normal.z >= 0f ? BlockFace.Front : BlockFace.Back;
+    }
+
+    private static Vector3 ResolveCardinalFaceNormal(BlockFace face)
+    {
+        return face switch
+        {
+            BlockFace.Right => Vector3.right,
+            BlockFace.Left => Vector3.left,
+            BlockFace.Top => Vector3.up,
+            BlockFace.Bottom => Vector3.down,
+            BlockFace.Front => Vector3.forward,
+            _ => Vector3.back
+        };
+    }
+
+    private static ShapeBox RotateCanonicalBox(ShapeBox box, BlockPlacementAxis axis)
+    {
+        Vector3 a = RotateCanonicalPoint(new Vector3(box.min.x, box.min.y, box.min.z), axis);
+        Vector3 b = RotateCanonicalPoint(new Vector3(box.max.x, box.min.y, box.min.z), axis);
+        Vector3 c = RotateCanonicalPoint(new Vector3(box.min.x, box.min.y, box.max.z), axis);
+        Vector3 d = RotateCanonicalPoint(new Vector3(box.max.x, box.min.y, box.max.z), axis);
+
+        float minX = Mathf.Min(Mathf.Min(a.x, b.x), Mathf.Min(c.x, d.x));
+        float maxX = Mathf.Max(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x));
+        float minZ = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
+        float maxZ = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
+        return new ShapeBox(
+            new Vector3(minX, box.min.y, minZ),
+            new Vector3(maxX, box.max.y, maxZ));
+    }
+
+    private static Vector3 RotateCanonicalPoint(Vector3 point, BlockPlacementAxis axis)
+    {
+        axis = SanitizeAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => new Vector3(point.z, point.y, 1f - point.x),
+            BlockPlacementAxis.ZNegative => new Vector3(1f - point.x, point.y, 1f - point.z),
+            BlockPlacementAxis.XNegative => new Vector3(1f - point.z, point.y, point.x),
+            _ => point
+        };
+    }
+
+    private static Vector3 RotateCanonicalVector(Vector3 vector, BlockPlacementAxis axis)
+    {
+        axis = SanitizeAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => new Vector3(vector.z, vector.y, -vector.x),
+            BlockPlacementAxis.ZNegative => new Vector3(-vector.x, vector.y, -vector.z),
+            BlockPlacementAxis.XNegative => new Vector3(-vector.z, vector.y, vector.x),
+            _ => vector
+        };
+    }
+
+    private static Vector3 ToCanonical(Vector3 point, BlockPlacementAxis axis)
+    {
+        axis = SanitizeAxis(axis);
+        return axis switch
+        {
+            BlockPlacementAxis.X => new Vector3(1f - point.z, point.y, point.x),
+            BlockPlacementAxis.ZNegative => new Vector3(1f - point.x, point.y, 1f - point.z),
+            BlockPlacementAxis.XNegative => new Vector3(point.z, point.y, 1f - point.x),
+            _ => point
+        };
+    }
+
+    private static void EnsureTriangleWinding(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, Vector3 expectedNormal)
+    {
+        if (Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p0), expectedNormal) >= 0f)
+            return;
+
+        (p1, p2) = (p2, p1);
+    }
+
+    private static void EnsureQuadWinding(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, ref Vector3 p3, Vector3 expectedNormal)
+    {
+        if (Vector3.Dot(Vector3.Cross(p1 - p0, p2 - p0), expectedNormal) >= 0f)
+            return;
+
+        (p1, p3) = (p3, p1);
     }
 }
 

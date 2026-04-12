@@ -502,6 +502,15 @@ internal sealed class SubchunkColliderBuilder
                             break;
                         }
 
+                        case BlockRenderShape.VerticalRamp:
+                        {
+                            BlockPlacementAxis verticalRampAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Z;
+                            FixedList512Bytes<ShapeBox> verticalRampBoxes = VerticalRampShapeUtility.BuildColliderBoxes(verticalRampAxis);
+                            for (int i = 0; i < verticalRampBoxes.Length; i++)
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, verticalRampBoxes[i]);
+                            break;
+                        }
+
                         case BlockRenderShape.Fence:
                         {
                             byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, worldPos);

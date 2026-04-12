@@ -468,6 +468,10 @@ public static class BlockItemIconCache
                 AppendRampFaces(faces);
                 break;
 
+            case BlockRenderShape.VerticalRamp:
+                AppendVerticalRampFaces(faces);
+                break;
+
             case BlockRenderShape.Fence:
                 AppendFenceFaces(faces);
                 break;
@@ -624,6 +628,38 @@ public static class BlockItemIconCache
                 MakeVertex(p1, ResolveFaceUv(sampledFace, p1)),
                 MakeVertex(p2, ResolveFaceUv(sampledFace, p2)));
         }
+    }
+
+    private static void AppendVerticalRampFaces(List<IconFace3D> faces)
+    {
+        const BlockPlacementAxis axis = BlockPlacementAxis.ZNegative;
+
+        VerticalRampShapeUtility.ResolveTopTriangle(axis, out Vector3 top0, out Vector3 top1, out Vector3 top2);
+        AddFace(faces, IconTextureSlot.Top, TopShade,
+            MakeVertex(top0, ResolveFaceUv(BlockFace.Top, top0)),
+            MakeVertex(top1, ResolveFaceUv(BlockFace.Top, top1)),
+            MakeVertex(top2, ResolveFaceUv(BlockFace.Top, top2)));
+
+        VerticalRampShapeUtility.ResolveSideQuad(axis, out Vector3 side0, out Vector3 side1, out Vector3 side2, out Vector3 side3, out BlockFace sideFace);
+        AppendVerticalRampQuadFace(faces, sideFace, side0, side1, side2, side3);
+
+        VerticalRampShapeUtility.ResolveFrontQuad(axis, out Vector3 front0, out Vector3 front1, out Vector3 front2, out Vector3 front3, out BlockFace frontFace);
+        AppendVerticalRampQuadFace(faces, frontFace, front0, front1, front2, front3);
+
+        VerticalRampShapeUtility.ResolveSlopeQuad(axis, out Vector3 slope0, out Vector3 slope1, out Vector3 slope2, out Vector3 slope3, out BlockFace slopeFace, out _);
+        AppendVerticalRampQuadFace(faces, slopeFace, slope0, slope1, slope2, slope3);
+    }
+
+    private static void AppendVerticalRampQuadFace(List<IconFace3D> faces, BlockFace sampledFace, Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3)
+    {
+        if (!TryResolveTextureSlot(sampledFace, out IconTextureSlot textureSlot, out float shade))
+            return;
+
+        AddFace(faces, textureSlot, shade,
+            MakeVertex(p0, ResolveFaceUv(sampledFace, p0)),
+            MakeVertex(p1, ResolveFaceUv(sampledFace, p1)),
+            MakeVertex(p2, ResolveFaceUv(sampledFace, p2)),
+            MakeVertex(p3, ResolveFaceUv(sampledFace, p3)));
     }
 
     private static void AppendFenceFaces(List<IconFace3D> faces)

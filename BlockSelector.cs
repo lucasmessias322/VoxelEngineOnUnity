@@ -404,6 +404,9 @@ public class BlockSelector : MonoBehaviour
             case BlockRenderShape.Ramp:
                 return TryHitRampBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
+            case BlockRenderShape.VerticalRamp:
+                return TryHitVerticalRampBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
             case BlockRenderShape.Fence:
                 return TryHitFenceBlock(ray, maxDistance, voxel, lastNormal, out hitNormal, out hitPoint);
 
@@ -597,6 +600,40 @@ public class BlockSelector : MonoBehaviour
         hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Right, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
         hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Front, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
         hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Back, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        return hit;
+    }
+
+    private bool TryHitVerticalRampBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+        Vector3 origin = voxel;
+        BlockPlacementAxis axis = VerticalRampShapeUtility.SanitizeAxis(placementAxis);
+
+        VerticalRampShapeUtility.ResolveBottomTriangle(axis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + bottom0, origin + bottom1, origin + bottom2, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        VerticalRampShapeUtility.ResolveTopTriangle(axis, out Vector3 top0, out Vector3 top1, out Vector3 top2);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + top0, origin + top1, origin + top2, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        VerticalRampShapeUtility.ResolveSideQuad(axis, out Vector3 side0, out Vector3 side1, out Vector3 side2, out Vector3 side3, out _);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + side0, origin + side1, origin + side2, origin + side3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        VerticalRampShapeUtility.ResolveFrontQuad(axis, out Vector3 front0, out Vector3 front1, out Vector3 front2, out Vector3 front3, out _);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + front0, origin + front1, origin + front2, origin + front3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        VerticalRampShapeUtility.ResolveSlopeQuad(axis, out Vector3 slope0, out Vector3 slope1, out Vector3 slope2, out Vector3 slope3, out _, out _);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + slope0, origin + slope1, origin + slope2, origin + slope3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
 
         return hit;
     }
