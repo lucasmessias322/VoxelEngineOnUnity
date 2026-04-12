@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 
 [CreateAssetMenu(fileName = "BlockItemMappingSO", menuName = "ScriptableObjects/Block Item Mapping SO", order = 2)]
@@ -57,6 +58,25 @@ public class BlockItemMappingSO : ScriptableObject
         }
 
         return false;
+    }
+
+    public void AppendMappedItems(List<Item> output, bool includeDuplicates = false)
+    {
+        if (output == null || blockItemMappings == null)
+            return;
+
+        HashSet<Item> seen = includeDuplicates ? null : new HashSet<Item>(output);
+        for (int i = 0; i < blockItemMappings.Length; i++)
+        {
+            Item item = blockItemMappings[i].item;
+            if (item == null)
+                continue;
+
+            if (seen != null && !seen.Add(item))
+                continue;
+
+            output.Add(item);
+        }
     }
 
     private bool TryGetExplicitItemForBlock(BlockType blockType, out Item item)

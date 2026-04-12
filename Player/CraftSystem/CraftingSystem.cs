@@ -1,3 +1,4 @@
+using System;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
@@ -28,6 +29,8 @@ public class Recipe
 
 public class CraftingSystem : MonoBehaviour
 {
+    private const string DefaultBlockItemMappingResourcePath = "BlockItemMappingSO";
+
     public static CraftingSystem Instance { get; private set; }
 
     public CraftRecipesSO craftRecipesSO;
@@ -38,6 +41,22 @@ public class CraftingSystem : MonoBehaviour
     public bool isCrafting;
 
     public PlayerInventory playerInventory;
+
+    [Header("Creative Mode")]
+    [SerializeField] private bool creativeModeEnabled;
+    [SerializeField] private bool enableCreativeModeHotkey = true;
+    [SerializeField] private KeyCode toggleCreativeModeKey = KeyCode.F3;
+    [SerializeField] private bool includeCraftRecipesInCreativePanel = true;
+    [SerializeField] private bool includeMappedBlocksInCreativePanel = true;
+    [SerializeField] private bool includeBlockItemsFromResources = true;
+    [SerializeField] private string blockItemsResourcePath = "Itens/Blocks";
+
+    private readonly List<Recipe> creativeRecipesCache = new List<Recipe>(64);
+    private bool creativeRecipesDirty = true;
+
+    public event Action<bool> CreativeModeChanged;
+    public bool CreativeModeEnabled => creativeModeEnabled;
+    public KeyCode ToggleCreativeModeKey => toggleCreativeModeKey;
 
     private void Awake()
     {
@@ -50,6 +69,31 @@ public class CraftingSystem : MonoBehaviour
         Instance = this;
     }
 
+    private void Update()
+    {
+        if (enableCreativeModeHotkey && Input.GetKeyDown(toggleCreativeModeKey))
+            ToggleCreativeMode();
+    }
+
+    private void OnValidate()
+    {
+        creativeRecipesDirty = true;
+    }
+
+    public void ToggleCreativeMode()
+    {
+        SetCreativeMode(!creativeModeEnabled);
+    }
+
+    public void SetCreativeMode(bool enabled)
+    {
+        if (creativeModeEnabled == enabled)
+            return;
+
+        creativeModeEnabled = enabled;
+        CreativeModeChanged?.Invoke(creativeModeEnabled);
+    }
+
     public bool CanCraft(Recipe recipe)
     {
         return GetMaxCraftAmount(recipe) > 0;
@@ -57,11 +101,17 @@ public class CraftingSystem : MonoBehaviour
 
     public bool IsRecipeAvailableInCurrentContext(Recipe recipe)
     {
+        if (creativeModeEnabled)
+            return IsRecipeValid(recipe);
+
         return IsRecipeAvailableForCurrentContext(recipe);
     }
 
     public List<Recipe> GetRecipesForCurrentContext()
     {
+        if (creativeModeEnabled)
+            return GetCreativeRecipes();
+
         List<Recipe> availableRecipes = new List<Recipe>();
         if (craftRecipesSO == null || craftRecipesSO.recipes == null)
             return availableRecipes;
@@ -83,6 +133,9 @@ public class CraftingSystem : MonoBehaviour
 
         if (!IsRecipeValid(recipe))
             return 0;
+
+        if (creativeModeEnabled)
+            return GetMaxCreativeCraftAmount(inventory, recipe);
 
         if (!IsRecipeAvailableForCurrentContext(recipe))
             return 0;
@@ -131,6 +184,14 @@ public class CraftingSystem : MonoBehaviour
             return;
         }
 
+        if (creativeModeEnabled)
+        {
+            if (!TryGrantCreativeRecipe(recipe, craftCount))
+                Debug.Log("No inventory space for this creative item.");
+
+            return;
+        }
+
         int maxCraftAmount = GetMaxCraftAmount(recipe);
         if (maxCraftAmount <= 0)
         {
@@ -145,6 +206,12 @@ public class CraftingSystem : MonoBehaviour
     public IEnumerator ProcessCraft(Recipe recipe)
     {
         yield return ProcessCraft(recipe, 1);
+    }
+
+    public List<Recipe> GetCreativeRecipes()
+    {
+        RebuildCreativeRecipeCacheIfNeeded();
+        return new List<Recipe>(creativeRecipesCache);
     }
 
     private IEnumerator ProcessCraft(Recipe recipe, int craftCount)
@@ -187,6 +254,123 @@ public class CraftingSystem : MonoBehaviour
 
         yield return new WaitForSeconds(Mathf.Max(0f, craftDelay));
         isCrafting = false;
+    }
+
+    private bool TryGrantCreativeRecipe(Recipe recipe, int craftCount)
+    {
+        if (!TryResolveInventory(out PlayerInventory inventory))
+            return false;
+
+        if (!IsRecipeValid(recipe))
+            return false;
+
+        int maxCraftAmount = GetMaxCreativeCraftAmount(inventory, recipe);
+        if (maxCraftAmount <= 0)
+            return false;
+
+        int resolvedCraftCount = Mathf.Clamp(craftCount, 1, maxCraftAmount);
+        int totalResultAmount = Mathf.Max(1, recipe.resultQuantity) * resolvedCraftCount;
+        return inventory.InsertItem(recipe.resultItem, totalResultAmount) == 0;
+    }
+
+    private static int GetMaxCreativeCraftAmount(PlayerInventory inventory, Recipe recipe)
+    {
+        if (inventory == null || !IsRecipeValid(recipe))
+            return 0;
+
+        int resultQuantity = Mathf.Max(1, recipe.resultQuantity);
+        int availableCapacity = inventory.GetAvailableCapacityFor(recipe.resultItem);
+        return availableCapacity / resultQuantity;
+    }
+
+    private void RebuildCreativeRecipeCacheIfNeeded()
+    {
+        if (!creativeRecipesDirty)
+            return;
+
+        creativeRecipesDirty = false;
+        creativeRecipesCache.Clear();
+
+        HashSet<Item> includedItems = new HashSet<Item>();
+        if (includeCraftRecipesInCreativePanel && craftRecipesSO != null && craftRecipesSO.recipes != null)
+        {
+            for (int i = 0; i < craftRecipesSO.recipes.Count; i++)
+            {
+                Recipe recipe = craftRecipesSO.recipes[i];
+                if (!IsRecipeValid(recipe))
+                    continue;
+
+                creativeRecipesCache.Add(recipe);
+                includedItems.Add(recipe.resultItem);
+            }
+        }
+
+        List<Item> creativeBlockItems = new List<Item>(64);
+        if (includeMappedBlocksInCreativePanel)
+            AppendMappedCreativeBlockItems(creativeBlockItems);
+
+        if (includeBlockItemsFromResources && !string.IsNullOrWhiteSpace(blockItemsResourcePath))
+            AppendResourceCreativeBlockItems(creativeBlockItems);
+
+        for (int i = 0; i < creativeBlockItems.Count; i++)
+        {
+            Item item = creativeBlockItems[i];
+            if (item == null || !includedItems.Add(item))
+                continue;
+
+            creativeRecipesCache.Add(CreateCreativeRecipe(item));
+        }
+
+        creativeRecipesCache.Sort(CompareRecipesByDisplayName);
+    }
+
+    private static void AppendMappedCreativeBlockItems(List<Item> output)
+    {
+        if (output == null)
+            return;
+
+        BlockItemMappingSO blockItemMapping = Resources.Load<BlockItemMappingSO>(DefaultBlockItemMappingResourcePath);
+        if (blockItemMapping != null)
+            blockItemMapping.AppendMappedItems(output);
+    }
+
+    private void AppendResourceCreativeBlockItems(List<Item> output)
+    {
+        if (output == null)
+            return;
+
+        Item[] items = Resources.LoadAll<Item>(blockItemsResourcePath);
+        if (items == null || items.Length == 0)
+            return;
+
+        HashSet<Item> seen = new HashSet<Item>(output);
+        for (int i = 0; i < items.Length; i++)
+        {
+            Item item = items[i];
+            if (item == null || !seen.Add(item))
+                continue;
+
+            output.Add(item);
+        }
+    }
+
+    private static Recipe CreateCreativeRecipe(Item item)
+    {
+        return new Recipe
+        {
+            recipeName = GetItemDisplayName(item),
+            requiredItems = new List<RecipeItem>(0),
+            resultItem = item,
+            resultQuantity = 1,
+            craftingRequirement = CraftingRequirement.PlayerInventory
+        };
+    }
+
+    private static int CompareRecipesByDisplayName(Recipe left, Recipe right)
+    {
+        string leftName = GetRecipeDisplayName(left);
+        string rightName = GetRecipeDisplayName(right);
+        return string.Compare(leftName, rightName, StringComparison.OrdinalIgnoreCase);
     }
 
     private static int GetMaxCraftsByMaterials(PlayerInventory inventory, Dictionary<Item, int> requiredTotals)
@@ -352,5 +536,16 @@ public class CraftingSystem : MonoBehaviour
             return "item";
 
         return string.IsNullOrWhiteSpace(item.itemName) ? item.name : item.itemName;
+    }
+
+    private static string GetRecipeDisplayName(Recipe recipe)
+    {
+        if (recipe == null)
+            return string.Empty;
+
+        if (!string.IsNullOrWhiteSpace(recipe.recipeName))
+            return recipe.recipeName;
+
+        return GetItemDisplayName(recipe.resultItem);
     }
 }

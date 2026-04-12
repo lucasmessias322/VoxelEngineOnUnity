@@ -2038,10 +2038,20 @@ public static partial class MeshGenerator
                 cellZ == currentVoxelZ)
             {
                 if (currentShape == BlockRenderShape.Ramp)
+                {
+                    if (suppressNeighborRampAO)
+                        return false;
+
                     return RampShapeUtility.ContainsLocalPoint(localPos, currentPlacementAxis, currentRampVariant);
+                }
 
                 if (currentShape == BlockRenderShape.VerticalRamp)
+                {
+                    if (suppressNeighborRampAO)
+                        return false;
+
                     return VerticalRampShapeUtility.ContainsLocalPoint(localPos, currentPlacementAxis);
+                }
 
                 return IsPointInsideShapeBoxes(localPos, currentShapeBoxes);
             }

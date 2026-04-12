@@ -1081,6 +1081,8 @@ public class BlockDrop : MonoBehaviour
 
         transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
 
+        WakeIfSupportWasRemoved();
+
         if (!isSleeping)
             SimulateMotion(Time.deltaTime);
 
@@ -1320,6 +1322,20 @@ public class BlockDrop : MonoBehaviour
     {
         Vector3 supportCheck = center + Vector3.down * 0.04f;
         return IntersectsSolid(world, supportCheck);
+    }
+
+    private void WakeIfSupportWasRemoved()
+    {
+        if (!isSleeping)
+            return;
+
+        World world = World.Instance;
+        if (world != null && IsSupported(world, transform.position))
+            return;
+
+        isGrounded = false;
+        isSleeping = false;
+        simulationAccumulator = 0f;
     }
 
     private void TryMergeNearbyDrops()
@@ -1712,6 +1728,9 @@ public class InventoryItemDrop : MonoBehaviour
         }
 
         visualSpinAngle = (visualSpinAngle + rotateSpeed * Time.deltaTime) % 360f;
+
+        WakeIfSupportWasRemoved();
+
         if (!isSleeping)
             SimulateMotion(Time.deltaTime);
 
@@ -1942,6 +1961,20 @@ public class InventoryItemDrop : MonoBehaviour
     {
         Vector3 supportCheck = center + Vector3.down * 0.04f;
         return IntersectsSolid(world, supportCheck);
+    }
+
+    private void WakeIfSupportWasRemoved()
+    {
+        if (!isSleeping)
+            return;
+
+        World world = World.Instance;
+        if (world != null && IsSupported(world, transform.position))
+            return;
+
+        isGrounded = false;
+        isSleeping = false;
+        simulationAccumulator = 0f;
     }
 
     private void TryMergeNearbyDrops()

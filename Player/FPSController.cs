@@ -131,6 +131,7 @@ public class FPSController : MonoBehaviour
         HandleViewModeInput();
         HandleRotation();
         // HandleCrouchInput(); // descoment se quiser ativar toggle crouch
+        EnforceCreativeFlightPermission();
         HandleFlightToggle();
         HandleMovement();
         SmoothCrouchTransition();
@@ -335,7 +336,7 @@ public class FPSController : MonoBehaviour
     private void HandleFlightToggle()
     {
         // Double tap space para alternar voo (quando canFly ativado)
-        if (!canFly) return;
+        if (!CanUseCreativeFlight()) return;
 
         if (Input.GetKeyDown(KeyCode.Space))
         {
@@ -361,13 +362,43 @@ public class FPSController : MonoBehaviour
                 }
                 else
                 {
-                    isFlying = false;
-                    characterController.stepOffset = originalStepOffset;
+                    StopFlying();
                     // manter vertical velocity conforme estava (grávidade resolverá)
                 }
             }
             lastSpaceTapTime = Time.time;
         }
+    }
+
+    private bool CanUseCreativeFlight()
+    {
+        return canFly &&
+               CraftingSystem.Instance != null &&
+               CraftingSystem.Instance.CreativeModeEnabled;
+    }
+
+    private void EnforceCreativeFlightPermission()
+    {
+        if (CanUseCreativeFlight())
+            return;
+
+        lastSpaceTapTime = -1f;
+        flightToggled = false;
+
+        if (isFlying)
+            StopFlying(resetVerticalVelocity: true);
+    }
+
+    private void StopFlying(bool resetVerticalVelocity = false)
+    {
+        isFlying = false;
+        flightToggled = false;
+        currentFlyHorizontal = Vector3.zero;
+        flySmoothVelocity = Vector3.zero;
+        characterController.stepOffset = originalStepOffset;
+
+        if (resetVerticalVelocity)
+            velocity.y = 0f;
     }
 
     private void HandleMovement()

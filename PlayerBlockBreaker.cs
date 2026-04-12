@@ -130,6 +130,8 @@ public class PlayerBlockBreaker : MonoBehaviour
             return;
         }
 
+        bool creativeMode = IsCreativeModeActive();
+
         if (selector.IsBillboardHit)
         {
             // Billboard de grama nao existe como voxel real, mas usa o mesmo fluxo de "minerar".
@@ -141,7 +143,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 lastCrackStage = -1;
             }
 
-            float breakDuration = GetBreakDurationSeconds(GetBillboardBreakType(sel));
+            float breakDuration = creativeMode ? 0.05f : GetBreakDurationSeconds(GetBillboardBreakType(sel));
             breakProgress01 += Time.deltaTime / breakDuration;
             ClearBreakShaderEffect();
             UpdateCrackOverlay(sel, breakProgress01);
@@ -179,7 +181,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             lastCrackStage = -1;
         }
 
-        float currentBreakDuration = GetBreakDurationSeconds(current);
+        float currentBreakDuration = creativeMode ? 0.05f : GetBreakDurationSeconds(current);
         breakProgress01 += Time.deltaTime / currentBreakDuration;
         UpdateBreakShaderEffect(sel, current, hitNormal, breakProgress01);
         UpdateCrackOverlay(sel, breakProgress01);
@@ -187,7 +189,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (breakProgress01 < 1f)
             return;
 
-        bool shouldDrop = ShouldDropBlock(current);
+        bool shouldDrop = !creativeMode && ShouldDropBlock(current);
         Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
         bool treeCapitatorTriggered = world.TryQueueTreeCapitatorBreak(sel, current, shouldDrop, throwDir);
         if (!treeCapitatorTriggered)
@@ -1562,7 +1564,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return;
             }
 
-            if (hotbar != null && !hotbar.TryConsumeSelected(1))
+            if (!IsCreativeModeActive() && hotbar != null && !hotbar.TryConsumeSelected(1))
                 return;
 
             if (placedBlockType == BlockType.wire)
@@ -1578,6 +1580,11 @@ public class PlayerBlockBreaker : MonoBehaviour
             if (placeBlockClip != null)
                 audioSource.PlayOneShot(placeBlockClip);
         }
+    }
+
+    private static bool IsCreativeModeActive()
+    {
+        return CraftingSystem.Instance != null && CraftingSystem.Instance.CreativeModeEnabled;
     }
 
     private Vector3 ResolvePlacementLookForward()
