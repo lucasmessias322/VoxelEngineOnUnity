@@ -26,6 +26,56 @@ public static class BlockItemIconCache
         }
     }
 
+    private enum IconTextureSlot : byte
+    {
+        Top = 0,
+        Front = 1,
+        Right = 2
+    }
+
+    private struct IconVertex3D
+    {
+        public Vector3 position;
+        public Vector2 uv;
+
+        public IconVertex3D(Vector3 position, Vector2 uv)
+        {
+            this.position = position;
+            this.uv = uv;
+        }
+    }
+
+    private struct IconFace3D
+    {
+        public IconTextureSlot textureSlot;
+        public float shade;
+        public IconVertex3D[] vertices;
+        public float sortKey;
+
+        public IconFace3D(IconTextureSlot textureSlot, float shade, IconVertex3D[] vertices)
+        {
+            this.textureSlot = textureSlot;
+            this.shade = shade;
+            this.vertices = vertices;
+
+            float accumulatedDepth = 0f;
+            for (int i = 0; i < vertices.Length; i++)
+                accumulatedDepth += vertices[i].position.x + vertices[i].position.y + vertices[i].position.z;
+
+            sortKey = vertices.Length > 0 ? accumulatedDepth / vertices.Length : 0f;
+        }
+    }
+
+    private struct ProjectedFace
+    {
+        public FaceVertex[] vertices;
+        public Color32[] sourcePixels;
+        public int sourceWidth;
+        public int sourceHeight;
+        public float shade;
+        public float sortKey;
+    }
+
     public static bool TryGetIcon(BlockType blockType, out Sprite sprite)
     {
         sprite = null;
@@ -56,6 +106,11 @@ public static class BlockItemIconCache
             return null;
 
         blockData.InitializeDictionary();
+        BlockTextureMapping? mappingResult = blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return null;
+
+        BlockTextureMapping mapping = mappingResult.Value;
         bool atlasCoordinatesStartTopLeft = blockData.atlasCoordinatesStartTopLeft;
 
         Vector2Int topCoord = blockData.GetTileCoord(blockType, BlockFace.Top);
@@ -98,7 +153,7 @@ public static class BlockItemIconCache
         int iconSize = Mathf.Clamp(faceSize * 4, 48, 128);
         Color32[] iconPixels = new Color32[iconSize * iconSize];
 
-        BuildCubeIconPixels(
+        BuildShapeIconPixels(
             iconPixels,
             iconSize,
             topPixels,
@@ -110,7 +165,7 @@ public static class BlockItemIconCache
             rightPixels,
             rightWidth,
             rightHeight,
-            faceSize);
+            mapping);
 
         Texture2D iconTexture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false, false);
         iconTexture.name = $"BlockIcon_{blockType}";
@@ -362,7 +417,7 @@ public static class BlockItemIconCache
         }
     }
 
-    private static void BuildCubeIconPixels(
+    private static void BuildShapeIconPixels(
         Color32[] destination,
         int iconSize,
         Color32[] topPixels,
@@ -374,35 +429,90 @@ public static class BlockItemIconCache
         Color32[] rightPixels,
         int rightWidth,
         int rightHeight,
-        int faceSize)
+        BlockTextureMapping mapping)
     {
-        float cubeSize = faceSize;
+        List<IconFace3D> faces = BuildFacesForShape(mapping);
+        if (faces.Count == 0)
+            AddVisibleBoxFaces(faces, Vector3.zero, Vector3.one);
 
-        Vector3 p100 = new Vector3(cubeSize, 0f, 0f);
-        Vector3 p101 = new Vector3(cubeSize, 0f, cubeSize);
-        Vector3 p001 = new Vector3(0f, 0f, cubeSize);
-        Vector3 p110 = new Vector3(cubeSize, cubeSize, 0f);
-        Vector3 p111 = new Vector3(cubeSize, cubeSize, cubeSize);
-        Vector3 p011 = new Vector3(0f, cubeSize, cubeSize);
-        Vector3 p010 = new Vector3(0f, cubeSize, 0f);
+        RenderFaces(
+            destination,
+            iconSize,
+            topPixels,
+            topWidth,
+            topHeight,
+            frontPixels,
+            frontWidth,
+            frontHeight,
+            rightPixels,
+            rightWidth,
+            rightHeight,
+            faces);
+    }
 
-        Vector3[] visiblePoints =
+    private static List<IconFace3D> BuildFacesForShape(BlockTextureMapping mapping)
+    {
+        List<IconFace3D> faces = new List<IconFace3D>(12);
+        switch (BlockShapeUtility.GetEffectiveRenderShape(mapping))
         {
-            p100, p101, p001, p110, p111, p011, p010
-        };
+            case BlockRenderShape.Cuboid:
+                BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 cuboidMin, out Vector3 cuboidMax);
+                AddVisibleBoxFaces(faces, cuboidMin, cuboidMax);
+                break;
+
+            case BlockRenderShape.Stairs:
+                AppendStairFaces(faces);
+                break;
+
+            case BlockRenderShape.Ramp:
+                AppendRampFaces(faces);
+                break;
+
+            case BlockRenderShape.Fence:
+                AppendFenceFaces(faces);
+                break;
+
+            default:
+                AddVisibleBoxFaces(faces, Vector3.zero, Vector3.one);
+                break;
+        }
+
+        return faces;
+    }
+
+    private static void RenderFaces(
+        Color32[] destination,
+        int iconSize,
+        Color32[] topPixels,
+        int topWidth,
+        int topHeight,
+        Color32[] frontPixels,
+        int frontWidth,
+        int frontHeight,
+        Color32[] rightPixels,
+        int rightWidth,
+        int rightHeight,
+        List<IconFace3D> faces)
+    {
+        if (faces == null || faces.Count == 0)
+            return;
 
         float minX = float.MaxValue;
         float minY = float.MaxValue;
         float maxX = float.MinValue;
         float maxY = float.MinValue;
 
-        for (int i = 0; i < visiblePoints.Length; i++)
+        for (int i = 0; i < faces.Count; i++)
         {
-            Vector2 projected = ProjectIsometric(visiblePoints[i], 1f);
-            minX = Mathf.Min(minX, projected.x);
-            minY = Mathf.Min(minY, projected.y);
-            maxX = Mathf.Max(maxX, projected.x);
-            maxY = Mathf.Max(maxY, projected.y);
+            IconFace3D face = faces[i];
+            for (int vertexIndex = 0; vertexIndex < face.vertices.Length; vertexIndex++)
+            {
+                Vector2 projected = ProjectIsometric(face.vertices[vertexIndex].position, 1f);
+                minX = Mathf.Min(minX, projected.x);
+                minY = Mathf.Min(minY, projected.y);
+                maxX = Mathf.Max(maxX, projected.x);
+                maxY = Mathf.Max(maxY, projected.y);
+            }
         }
 
         float margin = Mathf.Max(2f, iconSize * 0.08f);
@@ -410,38 +520,262 @@ public static class BlockItemIconCache
         float spanY = Mathf.Max(0.001f, maxY - minY);
         float scale = Mathf.Min((iconSize - margin * 2f) / spanX, (iconSize - margin * 2f) / spanY);
 
-        FaceVertex[] top = BuildFace(
-            p010, p110, p111, p011,
-            new Vector2(0f, 0f), new Vector2(1f, 0f), new Vector2(1f, 1f), new Vector2(0f, 1f),
-            minX, maxY, scale, margin);
+        List<ProjectedFace> projectedFaces = new List<ProjectedFace>(faces.Count);
+        for (int i = 0; i < faces.Count; i++)
+        {
+            IconFace3D face = faces[i];
+            if (!TryResolveFaceTexture(
+                    face.textureSlot,
+                    topPixels,
+                    topWidth,
+                    topHeight,
+                    frontPixels,
+                    frontWidth,
+                    frontHeight,
+                    rightPixels,
+                    rightWidth,
+                    rightHeight,
+                    out Color32[] sourcePixels,
+                    out int sourceWidth,
+                    out int sourceHeight))
+            {
+                continue;
+            }
 
-        FaceVertex[] left = BuildFace(
-            p011, p111, p101, p001,
-            new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f),
-            minX, maxY, scale, margin);
+            FaceVertex[] projectedVertices = new FaceVertex[face.vertices.Length];
+            for (int vertexIndex = 0; vertexIndex < face.vertices.Length; vertexIndex++)
+            {
+                IconVertex3D vertex = face.vertices[vertexIndex];
+                projectedVertices[vertexIndex] = new FaceVertex(
+                    ToIconSpace(ProjectIsometric(vertex.position, 1f), minX, maxY, scale, margin),
+                    vertex.uv);
+            }
 
-        FaceVertex[] right = BuildFace(
-            p110, p111, p101, p100,
-            new Vector2(0f, 1f), new Vector2(1f, 1f), new Vector2(1f, 0f), new Vector2(0f, 0f),
-            minX, maxY, scale, margin);
+            projectedFaces.Add(new ProjectedFace
+            {
+                vertices = projectedVertices,
+                sourcePixels = sourcePixels,
+                sourceWidth = sourceWidth,
+                sourceHeight = sourceHeight,
+                shade = face.shade,
+                sortKey = face.sortKey
+            });
+        }
 
-        DrawFaceQuad(destination, iconSize, rightPixels, rightWidth, rightHeight, right, RightShade);
-        DrawFaceQuad(destination, iconSize, frontPixels, frontWidth, frontHeight, left, LeftShade);
-        DrawFaceQuad(destination, iconSize, topPixels, topWidth, topHeight, top, TopShade);
+        projectedFaces.Sort((a, b) => a.sortKey.CompareTo(b.sortKey));
+
+        for (int i = 0; i < projectedFaces.Count; i++)
+            DrawFacePolygon(destination, iconSize, projectedFaces[i]);
     }
 
-    private static FaceVertex[] BuildFace(
-        Vector3 p0, Vector3 p1, Vector3 p2, Vector3 p3,
-        Vector2 uv0, Vector2 uv1, Vector2 uv2, Vector2 uv3,
-        float minX, float maxY, float scale, float margin)
+    private static void AppendStairFaces(List<IconFace3D> faces)
     {
-        return new[]
+        byte rawState = (byte)StairPlacementUtility.Encode(StairFacing.South, false);
+        StairShapeUtility.ResolveBoxes(rawState, StairShapeVariant.Straight, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+
+        if (boxCount > 0) AddVisibleBoxFaces(faces, box0.min, box0.max);
+        if (boxCount > 1) AddVisibleBoxFaces(faces, box1.min, box1.max);
+        if (boxCount > 2) AddVisibleBoxFaces(faces, box2.min, box2.max);
+        if (boxCount > 3) AddVisibleBoxFaces(faces, box3.min, box3.max);
+        if (boxCount > 4) AddVisibleBoxFaces(faces, box4.min, box4.max);
+    }
+
+    private static void AppendRampFaces(List<IconFace3D> faces)
+    {
+        const BlockPlacementAxis axis = BlockPlacementAxis.ZNegative;
+        const RampShapeVariant variant = RampShapeVariant.Straight;
+
+        RampShapeUtility.ResolveTopTriangles(axis, variant, out Vector3 tri0a, out Vector3 tri0b, out Vector3 tri0c, out Vector3 tri1a, out Vector3 tri1b, out Vector3 tri1c);
+        AddFace(faces, IconTextureSlot.Top, TopShade,
+            MakeVertex(tri0a, ResolveFaceUv(BlockFace.Top, tri0a)),
+            MakeVertex(tri0b, ResolveFaceUv(BlockFace.Top, tri0b)),
+            MakeVertex(tri0c, ResolveFaceUv(BlockFace.Top, tri0c)));
+        AddFace(faces, IconTextureSlot.Top, TopShade,
+            MakeVertex(tri1a, ResolveFaceUv(BlockFace.Top, tri1a)),
+            MakeVertex(tri1b, ResolveFaceUv(BlockFace.Top, tri1b)),
+            MakeVertex(tri1c, ResolveFaceUv(BlockFace.Top, tri1c)));
+
+        AppendRampEdgeFace(faces, axis, variant, RampEdge.Left);
+        AppendRampEdgeFace(faces, axis, variant, RampEdge.Back);
+    }
+
+    private static void AppendRampEdgeFace(List<IconFace3D> faces, BlockPlacementAxis axis, RampShapeVariant variant, RampEdge edge)
+    {
+        if (!RampShapeUtility.ResolveEdgeSurface(axis, variant, edge, out int vertexCount, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace))
+            return;
+
+        if (!TryResolveTextureSlot(sampledFace, out IconTextureSlot textureSlot, out float shade))
+            return;
+
+        if (vertexCount == 4)
         {
-            new FaceVertex(ToIconSpace(ProjectIsometric(p0, 1f), minX, maxY, scale, margin), uv0),
-            new FaceVertex(ToIconSpace(ProjectIsometric(p1, 1f), minX, maxY, scale, margin), uv1),
-            new FaceVertex(ToIconSpace(ProjectIsometric(p2, 1f), minX, maxY, scale, margin), uv2),
-            new FaceVertex(ToIconSpace(ProjectIsometric(p3, 1f), minX, maxY, scale, margin), uv3),
-        };
+            AddFace(faces, textureSlot, shade,
+                MakeVertex(p0, ResolveFaceUv(sampledFace, p0)),
+                MakeVertex(p1, ResolveFaceUv(sampledFace, p1)),
+                MakeVertex(p2, ResolveFaceUv(sampledFace, p2)),
+                MakeVertex(p3, ResolveFaceUv(sampledFace, p3)));
+            return;
+        }
+
+        if (vertexCount == 3)
+        {
+            AddFace(faces, textureSlot, shade,
+                MakeVertex(p0, ResolveFaceUv(sampledFace, p0)),
+                MakeVertex(p1, ResolveFaceUv(sampledFace, p1)),
+                MakeVertex(p2, ResolveFaceUv(sampledFace, p2)));
+        }
+    }
+
+    private static void AppendFenceFaces(List<IconFace3D> faces)
+    {
+        ShapeBox centerPost = FenceShapeUtility.GetCenterPostVisualBox();
+        AddVisibleBoxFaces(faces, centerPost.min, centerPost.max);
+
+        AppendFenceRailFaces(faces, FenceShapeUtility.ConnectWest);
+        AppendFenceRailFaces(faces, FenceShapeUtility.ConnectEast);
+    }
+
+    private static void AppendFenceRailFaces(List<IconFace3D> faces, byte directionFlag)
+    {
+        ShapeBox lowerRail = FenceShapeUtility.GetRailVisualBox(directionFlag, false);
+        ShapeBox upperRail = FenceShapeUtility.GetRailVisualBox(directionFlag, true);
+        AddVisibleBoxFaces(faces, lowerRail.min, lowerRail.max);
+        AddVisibleBoxFaces(faces, upperRail.min, upperRail.max);
+    }
+
+    private static void AddVisibleBoxFaces(List<IconFace3D> faces, Vector3 min, Vector3 max)
+    {
+        Vector3 top0 = new Vector3(min.x, max.y, min.z);
+        Vector3 top1 = new Vector3(max.x, max.y, min.z);
+        Vector3 top2 = new Vector3(max.x, max.y, max.z);
+        Vector3 top3 = new Vector3(min.x, max.y, max.z);
+        AddFace(faces, IconTextureSlot.Top, TopShade,
+            MakeVertex(top0, new Vector2(0f, 0f)),
+            MakeVertex(top1, new Vector2(1f, 0f)),
+            MakeVertex(top2, new Vector2(1f, 1f)),
+            MakeVertex(top3, new Vector2(0f, 1f)));
+
+        Vector3 front0 = new Vector3(min.x, max.y, max.z);
+        Vector3 front1 = new Vector3(max.x, max.y, max.z);
+        Vector3 front2 = new Vector3(max.x, min.y, max.z);
+        Vector3 front3 = new Vector3(min.x, min.y, max.z);
+        AddFace(faces, IconTextureSlot.Front, LeftShade,
+            MakeVertex(front0, new Vector2(0f, 1f)),
+            MakeVertex(front1, new Vector2(1f, 1f)),
+            MakeVertex(front2, new Vector2(1f, 0f)),
+            MakeVertex(front3, new Vector2(0f, 0f)));
+
+        Vector3 right0 = new Vector3(max.x, max.y, min.z);
+        Vector3 right1 = new Vector3(max.x, max.y, max.z);
+        Vector3 right2 = new Vector3(max.x, min.y, max.z);
+        Vector3 right3 = new Vector3(max.x, min.y, min.z);
+        AddFace(faces, IconTextureSlot.Right, RightShade,
+            MakeVertex(right0, new Vector2(0f, 1f)),
+            MakeVertex(right1, new Vector2(1f, 1f)),
+            MakeVertex(right2, new Vector2(1f, 0f)),
+            MakeVertex(right3, new Vector2(0f, 0f)));
+    }
+
+    private static void AddFace(List<IconFace3D> faces, IconTextureSlot textureSlot, float shade, params IconVertex3D[] vertices)
+    {
+        if (faces == null || vertices == null || vertices.Length < 3)
+            return;
+
+        faces.Add(new IconFace3D(textureSlot, shade, vertices));
+    }
+
+    private static IconVertex3D MakeVertex(Vector3 position, Vector2 uv)
+    {
+        return new IconVertex3D(position, uv);
+    }
+
+    private static bool TryResolveFaceTexture(
+        IconTextureSlot slot,
+        Color32[] topPixels,
+        int topWidth,
+        int topHeight,
+        Color32[] frontPixels,
+        int frontWidth,
+        int frontHeight,
+        Color32[] rightPixels,
+        int rightWidth,
+        int rightHeight,
+        out Color32[] sourcePixels,
+        out int sourceWidth,
+        out int sourceHeight)
+    {
+        switch (slot)
+        {
+            case IconTextureSlot.Top:
+                sourcePixels = topPixels;
+                sourceWidth = topWidth;
+                sourceHeight = topHeight;
+                return sourcePixels != null;
+
+            case IconTextureSlot.Front:
+                sourcePixels = frontPixels;
+                sourceWidth = frontWidth;
+                sourceHeight = frontHeight;
+                return sourcePixels != null;
+
+            default:
+                sourcePixels = rightPixels;
+                sourceWidth = rightWidth;
+                sourceHeight = rightHeight;
+                return sourcePixels != null;
+        }
+    }
+
+    private static bool TryResolveTextureSlot(BlockFace face, out IconTextureSlot textureSlot, out float shade)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                textureSlot = IconTextureSlot.Top;
+                shade = TopShade;
+                return true;
+
+            case BlockFace.Front:
+            case BlockFace.Left:
+                textureSlot = IconTextureSlot.Front;
+                shade = LeftShade;
+                return true;
+
+            case BlockFace.Right:
+            case BlockFace.Back:
+                textureSlot = IconTextureSlot.Right;
+                shade = RightShade;
+                return true;
+
+            default:
+                textureSlot = IconTextureSlot.Front;
+                shade = LeftShade;
+                return false;
+        }
+    }
+
+    private static Vector2 ResolveFaceUv(BlockFace face, Vector3 position)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                return new Vector2(Mathf.Clamp01(position.x), Mathf.Clamp01(position.z));
+
+            case BlockFace.Front:
+                return new Vector2(Mathf.Clamp01(position.x), Mathf.Clamp01(position.y));
+
+            case BlockFace.Back:
+                return new Vector2(1f - Mathf.Clamp01(position.x), Mathf.Clamp01(position.y));
+
+            case BlockFace.Right:
+                return new Vector2(Mathf.Clamp01(position.z), Mathf.Clamp01(position.y));
+
+            case BlockFace.Left:
+                return new Vector2(1f - Mathf.Clamp01(position.z), Mathf.Clamp01(position.y));
+
+            default:
+                return new Vector2(Mathf.Clamp01(position.x), Mathf.Clamp01(position.y));
+        }
     }
 
     private static Vector2 ProjectIsometric(Vector3 position, float scale)
@@ -459,17 +793,27 @@ public static class BlockItemIconCache
         );
     }
 
-    private static void DrawFaceQuad(
+    private static void DrawFacePolygon(
         Color32[] destination,
         int destinationSize,
-        Color32[] source,
-        int sourceWidth,
-        int sourceHeight,
-        FaceVertex[] quad,
-        float shade)
+        ProjectedFace face)
     {
-        DrawFaceTriangle(destination, destinationSize, source, sourceWidth, sourceHeight, quad[0], quad[1], quad[2], shade);
-        DrawFaceTriangle(destination, destinationSize, source, sourceWidth, sourceHeight, quad[0], quad[2], quad[3], shade);
+        if (face.vertices == null || face.vertices.Length < 3)
+            return;
+
+        for (int vertexIndex = 1; vertexIndex < face.vertices.Length - 1; vertexIndex++)
+        {
+            DrawFaceTriangle(
+                destination,
+                destinationSize,
+                face.sourcePixels,
+                face.sourceWidth,
+                face.sourceHeight,
+                face.vertices[0],
+                face.vertices[vertexIndex],
+                face.vertices[vertexIndex + 1],
+                face.shade);
+        }
     }
 
     private static void DrawFaceTriangle(

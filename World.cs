@@ -1086,7 +1086,11 @@ public partial class World : MonoBehaviour
         }
     }
 
-    public BlockPlacementAxis ResolvePlacementAxisForPlacement(BlockType blockType, Vector3Int hitNormal, Vector3 lookForward)
+    public BlockPlacementAxis ResolvePlacementAxisForPlacement(
+        BlockType blockType,
+        Vector3Int hitNormal,
+        Vector3 lookForward,
+        Vector3 hitPoint)
     {
         if (blockType == BlockType.wire)
             return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
@@ -1094,7 +1098,7 @@ public partial class World : MonoBehaviour
         if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
             return BlockPlacementAxis.Y;
 
-        return BlockPlacementRotationUtility.ResolvePlacementAxis(mapping, hitNormal, lookForward);
+        return BlockPlacementRotationUtility.ResolvePlacementAxis(mapping, hitNormal, lookForward, hitPoint);
     }
 
     public BlockPlacementAxis GetPlacementAxisAt(Vector3Int worldPos, BlockType blockType)
@@ -1104,7 +1108,7 @@ public partial class World : MonoBehaviour
 
     private byte GetStoredPlacementAxisRawValue(Vector3Int worldPos, BlockType blockType)
     {
-        if (!TryGetPlacementRotationMapping(blockType, out _))
+        if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
             return (byte)BlockPlacementAxis.Y;
 
         if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
@@ -1113,12 +1117,18 @@ public partial class World : MonoBehaviour
         if (blockType == BlockType.wire)
             return ResolveStoredWirePlacementRaw(worldPos, (byte)axis);
 
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Stairs &&
+            StairPlacementUtility.IsEncodedState((byte)axis))
+        {
+            return (byte)axis;
+        }
+
         return BlockPlacementRotationUtility.SanitizeStoredAxisByte((byte)axis);
     }
 
     private BlockPlacementAxis GetStoredPlacementAxis(Vector3Int worldPos, BlockType blockType)
     {
-        if (!TryGetPlacementRotationMapping(blockType, out _))
+        if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
             return BlockPlacementAxis.Y;
 
         if (!blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis axis))
@@ -1127,6 +1137,12 @@ public partial class World : MonoBehaviour
         if (blockType == BlockType.wire)
             return ResolveStoredWirePlacementAxis(worldPos, (byte)axis);
 
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Stairs &&
+            StairPlacementUtility.IsEncodedState((byte)axis))
+        {
+            return axis;
+        }
+
         BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
 
         return sanitized;
@@ -1134,7 +1150,7 @@ public partial class World : MonoBehaviour
 
     private void UpdateStoredPlacementAxis(Vector3Int worldPos, BlockType blockType, BlockPlacementAxis axis)
     {
-        if (!TryGetPlacementRotationMapping(blockType, out _))
+        if (!TryGetPlacementRotationMapping(blockType, out BlockTextureMapping mapping))
         {
             blockPlacementAxes.Remove(worldPos);
             return;
@@ -1143,6 +1159,19 @@ public partial class World : MonoBehaviour
         if (blockType == BlockType.wire)
         {
             UpdateStoredWirePlacementAxis(worldPos, (byte)axis);
+            return;
+        }
+
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Stairs)
+        {
+            byte rawState = (byte)axis;
+            if (!StairPlacementUtility.IsEncodedState(rawState))
+            {
+                blockPlacementAxes.Remove(worldPos);
+                return;
+            }
+
+            blockPlacementAxes[worldPos] = (BlockPlacementAxis)rawState;
             return;
         }
 
@@ -1167,7 +1196,10 @@ public partial class World : MonoBehaviour
             return false;
 
         mapping = mappingResult.Value;
-        return mapping.usePlacementAxisRotation;
+        BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+        return mapping.usePlacementAxisRotation ||
+               shape == BlockRenderShape.Stairs ||
+               shape == BlockRenderShape.Ramp;
     }
 
     private static BlockPlacementAxis ResolveWirePlacementAxis(Vector3 lookForward)

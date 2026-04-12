@@ -11,6 +11,16 @@ public static partial class MeshGenerator
 {
     private partial struct ChunkMeshJob
     {
+        private struct ShapeFaceRect
+        {
+            public BlockFace face;
+            public float plane;
+            public float minA;
+            public float maxA;
+            public float minB;
+            public float maxB;
+        }
+
         private void GenerateDecorativeMeshes(
             NativeArray<byte> blockTypes,
             NativeArray<byte> light,
@@ -104,6 +114,55 @@ public static partial class MeshGenerator
                                             blockType,
                                             placementAxis,
                                             rawPlacementData,
+                                            x,
+                                            y,
+                                            z,
+                                            blockTypes,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Stairs:
+                                        AddStairShape(
+                                            origin,
+                                            mapping,
+                                            rawPlacementData,
+                                            x,
+                                            y,
+                                            z,
+                                            blockTypes,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Ramp:
+                                        AddRampShape(
+                                            origin,
+                                            mapping,
+                                            placementAxis,
+                                            x,
+                                            y,
+                                            z,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Fence:
+                                        AddFenceShape(
+                                            origin,
+                                            mapping,
                                             x,
                                             y,
                                             z,
@@ -628,6 +687,1343 @@ public static partial class MeshGenerator
                 atlasUv,
                 light01,
                 tint,
+                tris);
+        }
+
+        private void AddStairShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            byte rawPlacementData,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            StairShapeVariant variant = ResolveStairShapeVariant(rawPlacementData, voxelX, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            FixedList512Bytes<ShapeBox> shapeBoxes = BuildStairVisualBoxes(rawPlacementData, variant);
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+            AddAmbientOccludedShapeBoxes(
+                origin,
+                mapping,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                shapeBoxes);
+        }
+
+        private void AddRampShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
+            RampShapeVariant rampVariant = ResolveRampShapeVariant(
+                rampAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+
+            RampShapeUtility.ResolveBottomQuad(rampAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
+            AddAmbientOccludedCustomQuad(
+                origin,
+                mapping,
+                BlockFace.Bottom,
+                bottom0,
+                bottom1,
+                bottom2,
+                bottom3,
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom0),
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom1),
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom2),
+                ResolveShapeProjectedUv(BlockFace.Bottom, bottom3),
+                Vector3.down,
+                Vector3.down,
+                Vector3.right,
+                Vector3.forward,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.Ramp,
+                rampAxis,
+                rampVariant,
+                false);
+
+            RampShapeUtility.ResolveTopTriangles(rampAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
+            Vector3 topNormal0 = Vector3.Normalize(Vector3.Cross(top0b - top0a, top0c - top0a));
+            AddAmbientOccludedCustomTriangle(
+                origin,
+                mapping,
+                BlockFace.Top,
+                top0a,
+                top0b,
+                top0c,
+                ResolveShapeProjectedUv(BlockFace.Top, top0a),
+                ResolveShapeProjectedUv(BlockFace.Top, top0b),
+                ResolveShapeProjectedUv(BlockFace.Top, top0c),
+                topNormal0,
+                topNormal0,
+                (top0b - top0a).normalized,
+                (top0c - top0a).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.Ramp,
+                rampAxis,
+                rampVariant);
+
+            Vector3 topNormal1 = Vector3.Normalize(Vector3.Cross(top1b - top1a, top1c - top1a));
+            AddAmbientOccludedCustomTriangle(
+                origin,
+                mapping,
+                BlockFace.Top,
+                top1a,
+                top1b,
+                top1c,
+                ResolveShapeProjectedUv(BlockFace.Top, top1a),
+                ResolveShapeProjectedUv(BlockFace.Top, top1b),
+                ResolveShapeProjectedUv(BlockFace.Top, top1c),
+                topNormal1,
+                topNormal1,
+                (top1b - top1a).normalized,
+                (top1c - top1a).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.Ramp,
+                rampAxis,
+                rampVariant);
+
+            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Left, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Right, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Front, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Back, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+        }
+
+        private void AppendRampEdgeSurface(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis rampAxis,
+            RampShapeVariant rampVariant,
+            RampEdge edge,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            if (!RampShapeUtility.ResolveEdgeSurface(rampAxis, rampVariant, edge, out int vertexCount, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace))
+                return;
+
+            Vector3 normal = ResolveShapeFaceNormal(sampledFace);
+            if (vertexCount == 4)
+            {
+                AddAmbientOccludedCustomQuad(
+                    origin,
+                    mapping,
+                    sampledFace,
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                    ResolveShapeProjectedUv(sampledFace, p0),
+                    ResolveShapeProjectedUv(sampledFace, p1),
+                    ResolveShapeProjectedUv(sampledFace, p2),
+                    ResolveShapeProjectedUv(sampledFace, p3),
+                    normal,
+                    normal,
+                    (p1 - p0).normalized,
+                    (p3 - p0).normalized,
+                    light01,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris,
+                    BlockRenderShape.Ramp,
+                    rampAxis,
+                    rampVariant,
+                    false);
+                return;
+            }
+
+            AddAmbientOccludedCustomTriangle(
+                origin,
+                mapping,
+                sampledFace,
+                p0,
+                p1,
+                p2,
+                ResolveShapeProjectedUv(sampledFace, p0),
+                ResolveShapeProjectedUv(sampledFace, p1),
+                ResolveShapeProjectedUv(sampledFace, p2),
+                normal,
+                normal,
+                (p1 - p0).normalized,
+                (p2 - p0).normalized,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                BlockRenderShape.Ramp,
+                rampAxis,
+                rampVariant);
+        }
+
+        private RampShapeVariant ResolveRampShapeVariant(
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!RampShapeUtility.TryGetFacing(placementAxis, out StairFacing currentFacing))
+                return RampShapeVariant.Straight;
+
+            Vector3Int frontOffset = StairPlacementUtility.ToOffset(currentFacing);
+            Vector3Int backOffset = StairPlacementUtility.ToOffset(StairPlacementUtility.Opposite(currentFacing));
+
+            bool hasFrontNeighbor = TryGetNeighborRampFacing(
+                voxelX + frontOffset.x,
+                voxelY + frontOffset.y,
+                voxelZ + frontOffset.z,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out StairFacing frontFacing);
+
+            bool hasBackNeighbor = TryGetNeighborRampFacing(
+                voxelX + backOffset.x,
+                voxelY + backOffset.y,
+                voxelZ + backOffset.z,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out StairFacing backFacing);
+
+            return RampShapeUtility.ResolveShapeVariant(
+                currentFacing,
+                hasFrontNeighbor,
+                frontFacing,
+                hasBackNeighbor,
+                backFacing);
+        }
+
+        private bool TryGetNeighborRampFacing(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out StairFacing facing)
+        {
+            facing = StairFacing.North;
+
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            BlockType neighborType = (BlockType)blockTypes[idx];
+            int mapIndex = (int)neighborType;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            if (BlockShapeUtility.GetEffectiveRenderShape(blockMappings[mapIndex]) != BlockRenderShape.Ramp)
+                return false;
+
+            return RampShapeUtility.TryGetFacing(BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx)), out facing);
+        }
+
+        private StairShapeVariant ResolveStairShapeVariant(
+            byte rawPlacementData,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!StairPlacementUtility.TryDecode(rawPlacementData, out StairFacing currentFacing, out bool topHalf))
+                return StairShapeVariant.Straight;
+
+            Vector3Int frontOffset = StairPlacementUtility.ToOffset(currentFacing);
+            Vector3Int backOffset = StairPlacementUtility.ToOffset(StairPlacementUtility.Opposite(currentFacing));
+
+            bool hasFrontNeighbor = TryGetNeighborStairState(
+                voxelX + frontOffset.x,
+                voxelY + frontOffset.y,
+                voxelZ + frontOffset.z,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out StairFacing frontFacing,
+                out bool frontTopHalf);
+
+            bool hasBackNeighbor = TryGetNeighborStairState(
+                voxelX + backOffset.x,
+                voxelY + backOffset.y,
+                voxelZ + backOffset.z,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                out StairFacing backFacing,
+                out bool backTopHalf);
+
+            return StairShapeUtility.ResolveShapeVariant(
+                currentFacing,
+                topHalf,
+                hasFrontNeighbor,
+                frontFacing,
+                frontTopHalf,
+                hasBackNeighbor,
+                backFacing,
+                backTopHalf);
+        }
+
+        private bool TryGetNeighborStairState(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out StairFacing facing,
+            out bool topHalf)
+        {
+            facing = StairFacing.North;
+            topHalf = false;
+
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            BlockType neighborType = (BlockType)blockTypes[idx];
+            int mapIndex = (int)neighborType;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            if (BlockShapeUtility.GetEffectiveRenderShape(blockMappings[mapIndex]) != BlockRenderShape.Stairs)
+                return false;
+
+            return StairPlacementUtility.TryDecode(GetBlockPlacementAxisValue(idx), out facing, out topHalf);
+        }
+
+        private void AddFenceShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            byte connectionMask = FenceShapeUtility.ResolveConnectionMask(
+                voxelX,
+                voxelY,
+                voxelZ,
+                blockTypes,
+                blockMappings,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            FixedList512Bytes<ShapeBox> shapeBoxes = BuildFenceVisualBoxes(connectionMask);
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+            AddAmbientOccludedShapeBoxes(
+                origin,
+                mapping,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                shapeBoxes);
+        }
+
+        private FixedList512Bytes<ShapeBox> BuildStairVisualBoxes(byte rawPlacementData, StairShapeVariant variant)
+        {
+            StairShapeUtility.ResolveBoxes(
+                rawPlacementData,
+                variant,
+                out int boxCount,
+                out ShapeBox box0,
+                out ShapeBox box1,
+                out ShapeBox box2,
+                out ShapeBox box3,
+                out ShapeBox box4);
+
+            FixedList512Bytes<ShapeBox> boxes = default;
+            boxes.Add(box0);
+            if (boxCount > 1) boxes.Add(box1);
+            if (boxCount > 2) boxes.Add(box2);
+            if (boxCount > 3) boxes.Add(box3);
+            if (boxCount > 4) boxes.Add(box4);
+            return boxes;
+        }
+
+        private FixedList512Bytes<ShapeBox> BuildFenceVisualBoxes(byte connectionMask)
+        {
+            FixedList512Bytes<ShapeBox> boxes = default;
+            boxes.Add(FenceShapeUtility.GetCenterPostVisualBox());
+
+            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+            {
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false));
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true));
+            }
+
+            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+            {
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false));
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true));
+            }
+
+            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+            {
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false));
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true));
+            }
+
+            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+            {
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false));
+                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true));
+            }
+
+            return boxes;
+        }
+
+        private void AddFenceRailIfConnected(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            byte connectionMask,
+            byte directionFlag,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            if (!FenceShapeUtility.IsFenceConnectionActive(connectionMask, directionFlag))
+                return;
+
+            AddStaticLitShapeBox(origin, mapping, FenceShapeUtility.GetRailVisualBox(directionFlag, false), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeBox(origin, mapping, FenceShapeUtility.GetRailVisualBox(directionFlag, true), light01, invAtlasTilesX, invAtlasTilesY, tris);
+        }
+
+        private void AddAmbientOccludedShapeBoxes(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            in FixedList512Bytes<ShapeBox> shapeBoxes)
+        {
+            BlockRenderShape currentShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+            FixedList4096Bytes<ShapeFaceRect> faceRects = default;
+            for (int i = 0; i < shapeBoxes.Length; i++)
+                AppendShapeFaceRects(ref faceRects, shapeBoxes[i]);
+
+            MergeShapeFaceRects(ref faceRects);
+
+            for (int i = 0; i < faceRects.Length; i++)
+            {
+                AddAmbientOccludedShapeRect(
+                    origin,
+                    mapping,
+                    faceRects[i],
+                    light01,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris,
+                    shapeBoxes,
+                    currentShape,
+                    BlockPlacementAxis.Y,
+                    RampShapeVariant.Straight);
+            }
+        }
+
+        private static void AppendShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box)
+        {
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Right,
+                plane = box.max.x,
+                minA = box.min.y,
+                maxA = box.max.y,
+                minB = box.min.z,
+                maxB = box.max.z
+            });
+
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Left,
+                plane = box.min.x,
+                minA = box.min.y,
+                maxA = box.max.y,
+                minB = box.min.z,
+                maxB = box.max.z
+            });
+
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Top,
+                plane = box.max.y,
+                minA = box.min.x,
+                maxA = box.max.x,
+                minB = box.min.z,
+                maxB = box.max.z
+            });
+
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Bottom,
+                plane = box.min.y,
+                minA = box.min.x,
+                maxA = box.max.x,
+                minB = box.min.z,
+                maxB = box.max.z
+            });
+
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Front,
+                plane = box.max.z,
+                minA = box.min.x,
+                maxA = box.max.x,
+                minB = box.min.y,
+                maxB = box.max.y
+            });
+
+            faceRects.Add(new ShapeFaceRect
+            {
+                face = BlockFace.Back,
+                plane = box.min.z,
+                minA = box.min.x,
+                maxA = box.max.x,
+                minB = box.min.y,
+                maxB = box.max.y
+            });
+        }
+
+        private static void MergeShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects)
+        {
+            bool mergedAny;
+            do
+            {
+                mergedAny = false;
+                for (int i = 0; i < faceRects.Length && !mergedAny; i++)
+                {
+                    for (int j = i + 1; j < faceRects.Length; j++)
+                    {
+                        if (!TryMergeShapeFaceRects(faceRects[i], faceRects[j], out ShapeFaceRect merged))
+                            continue;
+
+                        faceRects[i] = merged;
+                        faceRects.RemoveAt(j);
+                        mergedAny = true;
+                        break;
+                    }
+                }
+            }
+            while (mergedAny);
+        }
+
+        private static bool TryMergeShapeFaceRects(ShapeFaceRect a, ShapeFaceRect b, out ShapeFaceRect merged)
+        {
+            const float epsilon = 0.0001f;
+            merged = default;
+
+            if (a.face != b.face || math.abs(a.plane - b.plane) > epsilon)
+                return false;
+
+            bool sameA = math.abs(a.minA - b.minA) <= epsilon && math.abs(a.maxA - b.maxA) <= epsilon;
+            bool sameB = math.abs(a.minB - b.minB) <= epsilon && math.abs(a.maxB - b.maxB) <= epsilon;
+
+            if (sameA && (math.abs(a.maxB - b.minB) <= epsilon || math.abs(b.maxB - a.minB) <= epsilon))
+            {
+                merged = a;
+                merged.minB = math.min(a.minB, b.minB);
+                merged.maxB = math.max(a.maxB, b.maxB);
+                return true;
+            }
+
+            if (sameB && (math.abs(a.maxA - b.minA) <= epsilon || math.abs(b.maxA - a.minA) <= epsilon))
+            {
+                merged = a;
+                merged.minA = math.min(a.minA, b.minA);
+                merged.maxA = math.max(a.maxA, b.maxA);
+                return true;
+            }
+
+            return false;
+        }
+
+        private void AddAmbientOccludedShapeRect(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            ShapeFaceRect rect,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            in FixedList512Bytes<ShapeBox> shapeBoxes,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant)
+        {
+            bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
+
+            switch (rect.face)
+            {
+                case BlockFace.Right:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.plane, rect.minA, rect.minB),
+                        origin + new Vector3(rect.plane, rect.maxA, rect.minB),
+                        origin + new Vector3(rect.plane, rect.maxA, rect.maxB),
+                        origin + new Vector3(rect.plane, rect.minA, rect.maxB),
+                        Vector3.right,
+                        BlockFace.Right,
+                        Vector3Int.right,
+                        Vector3Int.up,
+                        Vector3Int.forward,
+                        mapping.GetTileCoord(BlockFace.Right),
+                        mapping.GetTint(BlockFace.Right),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+
+                case BlockFace.Left:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.plane, rect.minA, rect.maxB),
+                        origin + new Vector3(rect.plane, rect.maxA, rect.maxB),
+                        origin + new Vector3(rect.plane, rect.maxA, rect.minB),
+                        origin + new Vector3(rect.plane, rect.minA, rect.minB),
+                        Vector3.left,
+                        BlockFace.Left,
+                        Vector3Int.left,
+                        Vector3Int.up,
+                        Vector3Int.back,
+                        mapping.GetTileCoord(BlockFace.Left),
+                        mapping.GetTint(BlockFace.Left),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+
+                case BlockFace.Top:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.minA, rect.plane, rect.maxB),
+                        origin + new Vector3(rect.maxA, rect.plane, rect.maxB),
+                        origin + new Vector3(rect.maxA, rect.plane, rect.minB),
+                        origin + new Vector3(rect.minA, rect.plane, rect.minB),
+                        Vector3.up,
+                        BlockFace.Top,
+                        Vector3Int.up,
+                        Vector3Int.right,
+                        Vector3Int.back,
+                        mapping.GetTileCoord(BlockFace.Top),
+                        mapping.GetTint(BlockFace.Top),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+
+                case BlockFace.Bottom:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.minA, rect.plane, rect.minB),
+                        origin + new Vector3(rect.maxA, rect.plane, rect.minB),
+                        origin + new Vector3(rect.maxA, rect.plane, rect.maxB),
+                        origin + new Vector3(rect.minA, rect.plane, rect.maxB),
+                        Vector3.down,
+                        BlockFace.Bottom,
+                        Vector3Int.down,
+                        Vector3Int.right,
+                        Vector3Int.forward,
+                        mapping.GetTileCoord(BlockFace.Bottom),
+                        mapping.GetTint(BlockFace.Bottom),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+
+                case BlockFace.Front:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.maxA, rect.minB, rect.plane),
+                        origin + new Vector3(rect.maxA, rect.maxB, rect.plane),
+                        origin + new Vector3(rect.minA, rect.maxB, rect.plane),
+                        origin + new Vector3(rect.minA, rect.minB, rect.plane),
+                        Vector3.forward,
+                        BlockFace.Front,
+                        Vector3Int.forward,
+                        Vector3Int.up,
+                        Vector3Int.left,
+                        mapping.GetTileCoord(BlockFace.Front),
+                        mapping.GetTint(BlockFace.Front),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+
+                default:
+                    AddAmbientOccludedShapeFace(
+                        origin + new Vector3(rect.minA, rect.minB, rect.plane),
+                        origin + new Vector3(rect.minA, rect.maxB, rect.plane),
+                        origin + new Vector3(rect.maxA, rect.maxB, rect.plane),
+                        origin + new Vector3(rect.maxA, rect.minB, rect.plane),
+                        Vector3.back,
+                        BlockFace.Back,
+                        Vector3Int.back,
+                        Vector3Int.up,
+                        Vector3Int.right,
+                        mapping.GetTileCoord(BlockFace.Back),
+                        mapping.GetTint(BlockFace.Back),
+                        light01,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize,
+                        invAtlasTilesX,
+                        invAtlasTilesY,
+                        tris,
+                        disableAOForCurrentBlock,
+                        shapeBoxes,
+                        currentShape,
+                        currentPlacementAxis,
+                        currentRampVariant);
+                    return;
+            }
+        }
+
+        private void AddAmbientOccludedCustomQuad(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockFace sampledFace,
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector2 uv0,
+            Vector2 uv1,
+            Vector2 uv2,
+            Vector2 uv3,
+            Vector3 normal,
+            Vector3 aoNormal,
+            Vector3 aoStepU,
+            Vector3 aoStepV,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant,
+            bool invertWinding)
+        {
+            bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
+            Vector2Int tile = mapping.GetTileCoord(sampledFace);
+            bool tint = mapping.GetTint(sampledFace);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+
+            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(origin + p3, uv3, normal, aoNormal, -aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+
+            if (invertWinding)
+            {
+                tris.Add(vIndex + 0);
+                tris.Add(vIndex + 2);
+                tris.Add(vIndex + 1);
+                tris.Add(vIndex + 0);
+                tris.Add(vIndex + 3);
+                tris.Add(vIndex + 2);
+                return;
+            }
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
+        }
+
+        private void AddAmbientOccludedCustomTriangle(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockFace sampledFace,
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector2 uv0,
+            Vector2 uv1,
+            Vector2 uv2,
+            Vector3 normal,
+            Vector3 aoNormal,
+            Vector3 aoStepU,
+            Vector3 aoStepV,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant)
+        {
+            bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
+            Vector2Int tile = mapping.GetTileCoord(sampledFace);
+            bool tint = mapping.GetTint(sampledFace);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+
+            AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal, aoStepV, aoStepU, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+        }
+
+        private void AddAmbientOccludedShapeFace(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector3 normal,
+            BlockFace sampledFace,
+            Vector3 aoNormal,
+            Vector3 aoStepU,
+            Vector3 aoStepV,
+            Vector2Int tile,
+            bool tint,
+            float light01,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            bool disableAOForCurrentBlock,
+            in FixedList512Bytes<ShapeBox> shapeBoxes,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant)
+        {
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector3 blockOrigin = new Vector3(voxelX - border, voxelY, voxelZ - border);
+
+            AddAmbientOccludedShapeVertex(p0, ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin), normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p1, ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin), normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p2, ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin), normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p3, ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin), normal, aoNormal, -aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
+        }
+
+        private void AddAmbientOccludedShapeVertex(
+            Vector3 position,
+            Vector2 uv,
+            Vector3 normal,
+            Vector3 aoNormal,
+            Vector3 stepU,
+            Vector3 stepV,
+            bool tint,
+            float light01,
+            bool disableAO,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            Vector2 atlasUv,
+            in FixedList512Bytes<ShapeBox> shapeBoxes,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant)
+        {
+            byte aoValue = 3;
+            if (!disableAO)
+            {
+                const float normalOffset = 0.1f;
+                const float tangentOffset = 0.45f;
+                Vector3 sampleSpaceOffset = new Vector3(border, 0f, border);
+                Vector3 sampleOrigin = position + sampleSpaceOffset + aoNormal * normalOffset;
+                bool side1 = IsAmbientOccluderAtPoint(sampleOrigin + stepU * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+                bool side2 = IsAmbientOccluderAtPoint(sampleOrigin + stepV * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+                bool corner = IsAmbientOccluderAtPoint(sampleOrigin + (stepU + stepV) * tangentOffset, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+                aoValue = ResolveShapeVertexAO(side1, side2, corner);
+            }
+
+            float floatTint = tint ? 1f : 0f;
+            AddPackedVertex(
+                position,
+                normal,
+                uv,
+                atlasUv,
+                new Vector4(light01, floatTint, ResolveAmbientOcclusionFactor(aoValue), 0f));
+        }
+
+        private bool IsAmbientOccluderAtPoint(
+            Vector3 samplePos,
+            int currentVoxelX,
+            int currentVoxelY,
+            int currentVoxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            in FixedList512Bytes<ShapeBox> currentShapeBoxes,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            RampShapeVariant currentRampVariant)
+        {
+            int cellX = (int)math.floor(samplePos.x);
+            int cellY = (int)math.floor(samplePos.y);
+            int cellZ = (int)math.floor(samplePos.z);
+            Vector3 localPos = samplePos - new Vector3(cellX, cellY, cellZ);
+
+            if (cellX == currentVoxelX &&
+                cellY == currentVoxelY &&
+                cellZ == currentVoxelZ)
+            {
+                if (currentShape == BlockRenderShape.Ramp)
+                    return RampShapeUtility.ContainsLocalPoint(localPos, currentPlacementAxis, currentRampVariant);
+
+                return IsPointInsideShapeBoxes(localPos, currentShapeBoxes);
+            }
+
+            return IsAmbientOcclusionVolumeAtLocalPoint(cellX, cellY, cellZ, localPos, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        }
+
+        private bool IsAmbientOcclusionVolumeAtLocalPoint(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            Vector3 localPos,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!TryGetResolvedVoxelIndex(voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
+                return false;
+
+            if (!solids[idx])
+                return false;
+
+            BlockType blockType = (BlockType)blockTypes[idx];
+            int mapIndex = (int)blockType;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            BlockTextureMapping mapping = blockMappings[mapIndex];
+            if (!CastsShapeAmbientOcclusion(blockType, mapping))
+                return false;
+
+            BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+            switch (shape)
+            {
+                case BlockRenderShape.Cube:
+                    return true;
+
+                case BlockRenderShape.Cuboid:
+                    ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+                    return IsPointInsideBox(localPos, new ShapeBox(min, max));
+
+                case BlockRenderShape.Stairs:
+                {
+                    byte rawPlacementData = GetBlockPlacementAxisValue(idx);
+                    StairShapeVariant variant = ResolveStairShapeVariant(rawPlacementData, voxelX, voxelY, voxelZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                    FixedList512Bytes<ShapeBox> stairBoxes = BuildStairVisualBoxes(rawPlacementData, variant);
+                    return IsPointInsideShapeBoxes(localPos, stairBoxes);
+                }
+
+                case BlockRenderShape.Ramp:
+                {
+                    BlockPlacementAxis rampAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    RampShapeVariant rampVariant = ResolveRampShapeVariant(
+                        rampAxis,
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        blockTypes,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize);
+                    return RampShapeUtility.ContainsLocalPoint(localPos, rampAxis, rampVariant);
+                }
+
+                case BlockRenderShape.Fence:
+                {
+                    byte connectionMask = FenceShapeUtility.ResolveConnectionMask(
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        blockTypes,
+                        blockMappings,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize);
+                    FixedList512Bytes<ShapeBox> fenceBoxes = BuildFenceVisualBoxes(connectionMask);
+                    return IsPointInsideShapeBoxes(localPos, fenceBoxes);
+                }
+
+                default:
+                    ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+                    return IsPointInsideBox(localPos, new ShapeBox(fallbackMin, fallbackMax));
+            }
+        }
+
+        private static bool CastsShapeAmbientOcclusion(BlockType blockType, BlockTextureMapping mapping)
+        {
+            BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+            if (shape == BlockRenderShape.Cube)
+                return CastsAmbientOcclusion(blockType, mapping);
+
+            if (mapping.isEmpty ||
+                mapping.isLiquid ||
+                mapping.lightOpacity == 0 ||
+                mapping.isTransparent ||
+                !mapping.isSolid ||
+                TorchPlacementUtility.IsTorchLike(blockType))
+            {
+                return false;
+            }
+
+            return shape != BlockRenderShape.Cross && shape != BlockRenderShape.Plane;
+        }
+
+        private static bool IsPointInsideShapeBoxes(Vector3 localPos, in FixedList512Bytes<ShapeBox> boxes)
+        {
+            for (int i = 0; i < boxes.Length; i++)
+            {
+                if (IsPointInsideBox(localPos, boxes[i]))
+                    return true;
+            }
+
+            return false;
+        }
+
+        private static bool IsPointInsideBox(Vector3 localPos, ShapeBox box)
+        {
+            const float epsilon = 0.0001f;
+            return localPos.x > box.min.x + epsilon && localPos.x < box.max.x - epsilon &&
+                   localPos.y > box.min.y + epsilon && localPos.y < box.max.y - epsilon &&
+                   localPos.z > box.min.z + epsilon && localPos.z < box.max.z - epsilon;
+        }
+
+        private static byte ResolveShapeVertexAO(bool side1, bool side2, bool corner)
+        {
+            if (side1 && side2)
+                return 0;
+
+            return (byte)(3 - (side1 ? 1 : 0) - (side2 ? 1 : 0) - (corner ? 1 : 0));
+        }
+
+        private static Vector2 ResolveShapeProjectedUv(BlockFace sampledFace, Vector3 localPos)
+        {
+            return sampledFace switch
+            {
+                BlockFace.Top => new Vector2(localPos.x, localPos.z),
+                BlockFace.Bottom => new Vector2(localPos.x, localPos.z),
+                BlockFace.Right => new Vector2(localPos.z, localPos.y),
+                BlockFace.Left => new Vector2(localPos.z, localPos.y),
+                BlockFace.Front => new Vector2(localPos.x, localPos.y),
+                BlockFace.Back => new Vector2(localPos.x, localPos.y),
+                _ => new Vector2(localPos.x, localPos.y)
+            };
+        }
+
+        private static Vector3 ResolveShapeFaceNormal(BlockFace face)
+        {
+            return face switch
+            {
+                BlockFace.Right => Vector3.right,
+                BlockFace.Left => Vector3.left,
+                BlockFace.Top => Vector3.up,
+                BlockFace.Bottom => Vector3.down,
+                BlockFace.Front => Vector3.forward,
+                _ => Vector3.back
+            };
+        }
+
+        private float ResolveAmbientOcclusionFactor(byte aoValue)
+        {
+            float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
+            float aoBase = aoValue / 3f;
+            float aoCurved = math.pow(aoBase, aoCurve);
+            float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
+            return math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
+        }
+
+        private void AddStaticLitShapeBox(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            ShapeBox box,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.max.x, box.min.y, box.min.z),
+                origin + new Vector3(box.max.x, box.max.y, box.min.z),
+                origin + new Vector3(box.max.x, box.max.y, box.max.z),
+                origin + new Vector3(box.max.x, box.min.y, box.max.z),
+                mapping.GetTileCoord(BlockFace.Right),
+                mapping.GetTint(BlockFace.Right),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.min.x, box.min.y, box.max.z),
+                origin + new Vector3(box.min.x, box.max.y, box.max.z),
+                origin + new Vector3(box.min.x, box.max.y, box.min.z),
+                origin + new Vector3(box.min.x, box.min.y, box.min.z),
+                mapping.GetTileCoord(BlockFace.Left),
+                mapping.GetTint(BlockFace.Left),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.min.x, box.max.y, box.max.z),
+                origin + new Vector3(box.max.x, box.max.y, box.max.z),
+                origin + new Vector3(box.max.x, box.max.y, box.min.z),
+                origin + new Vector3(box.min.x, box.max.y, box.min.z),
+                mapping.GetTileCoord(BlockFace.Top),
+                mapping.GetTint(BlockFace.Top),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.min.x, box.min.y, box.min.z),
+                origin + new Vector3(box.max.x, box.min.y, box.min.z),
+                origin + new Vector3(box.max.x, box.min.y, box.max.z),
+                origin + new Vector3(box.min.x, box.min.y, box.max.z),
+                mapping.GetTileCoord(BlockFace.Bottom),
+                mapping.GetTint(BlockFace.Bottom),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.max.x, box.min.y, box.max.z),
+                origin + new Vector3(box.max.x, box.max.y, box.max.z),
+                origin + new Vector3(box.min.x, box.max.y, box.max.z),
+                origin + new Vector3(box.min.x, box.min.y, box.max.z),
+                mapping.GetTileCoord(BlockFace.Front),
+                mapping.GetTint(BlockFace.Front),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+
+            AddStaticLitShapeFace(
+                origin + new Vector3(box.min.x, box.min.y, box.min.z),
+                origin + new Vector3(box.min.x, box.max.y, box.min.z),
+                origin + new Vector3(box.max.x, box.max.y, box.min.z),
+                origin + new Vector3(box.max.x, box.min.y, box.min.z),
+                mapping.GetTileCoord(BlockFace.Back),
+                mapping.GetTint(BlockFace.Back),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
                 tris);
         }
     }

@@ -1535,10 +1535,12 @@ public class PlayerBlockBreaker : MonoBehaviour
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
 
             Vector3 lookForward = ResolvePlacementLookForward();
+            Vector3 hitPoint = selector != null ? selector.CurrentHitPoint : targetBlock + Vector3.one * 0.5f;
             BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
                 placedBlockType,
                 hitNormal,
-                lookForward);
+                lookForward,
+                hitPoint);
 
             bool canMergeWireState = placedBlockType == BlockType.wire &&
                                      blockAtPlacePos == BlockType.wire &&
@@ -1664,8 +1666,6 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType, BlockPlacementAxis placementAxis)
     {
-        Bounds blockBounds = ResolveBlockBounds(placePos, blockType, placementAxis);
-
         CharacterController characterController = GetComponent<CharacterController>();
         if (characterController != null)
         {
@@ -1673,14 +1673,84 @@ public class PlayerBlockBreaker : MonoBehaviour
             float height = Mathf.Max(characterController.height, 0.1f);
             float diameter = Mathf.Max(characterController.radius * 2f, 0.1f);
             Bounds playerBounds = new Bounds(worldCenter, new Vector3(diameter, height, diameter));
-            return playerBounds.Intersects(blockBounds);
+            return DoesBlockIntersectBounds(placePos, blockType, placementAxis, playerBounds);
         }
 
         float clampedRadius = Mathf.Max(0.1f, fallbackPlayerRadius);
         float clampedHeight = Mathf.Max(0.5f, fallbackPlayerHeight);
         Vector3 fallbackCenter = transform.position + Vector3.up * (clampedHeight * 0.5f);
         Bounds fallbackBounds = new Bounds(fallbackCenter, new Vector3(clampedRadius * 2f, clampedHeight, clampedRadius * 2f));
-        return fallbackBounds.Intersects(blockBounds);
+        return DoesBlockIntersectBounds(placePos, blockType, placementAxis, fallbackBounds);
+    }
+
+    private bool DoesBlockIntersectBounds(Vector3Int blockPos, BlockType blockType, BlockPlacementAxis placementAxis, Bounds testBounds)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return testBounds.Intersects(new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one));
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return testBounds.Intersects(new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one));
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        switch (BlockShapeUtility.GetEffectiveRenderShape(mapping))
+        {
+            case BlockRenderShape.Stairs:
+            {
+                StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, (byte)placementAxis);
+                StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+                if (testBounds.Intersects(box0.ToWorldBounds(blockPos)))
+                    return true;
+                if (boxCount > 1 && testBounds.Intersects(box1.ToWorldBounds(blockPos)))
+                    return true;
+                if (boxCount > 2 && testBounds.Intersects(box2.ToWorldBounds(blockPos)))
+                    return true;
+                if (boxCount > 3 && testBounds.Intersects(box3.ToWorldBounds(blockPos)))
+                    return true;
+                if (boxCount > 4 && testBounds.Intersects(box4.ToWorldBounds(blockPos)))
+                    return true;
+                return false;
+            }
+
+            case BlockRenderShape.Ramp:
+            {
+                BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
+                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, rampAxis);
+                var rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
+                for (int i = 0; i < rampBoxes.Length; i++)
+                {
+                    if (testBounds.Intersects(rampBoxes[i].ToWorldBounds(blockPos)))
+                        return true;
+                }
+
+                return false;
+            }
+
+            case BlockRenderShape.Fence:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
+                if (testBounds.Intersects(FenceShapeUtility.GetCenterPostColliderBox().ToWorldBounds(blockPos)))
+                    return true;
+
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectWest).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectEast).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(blockPos)))
+                    return true;
+                return false;
+            }
+
+            default:
+                return testBounds.Intersects(ResolveBlockBounds(blockPos, blockType, placementAxis));
+        }
     }
 
     private Bounds ResolveBlockBounds(Vector3Int blockPos, BlockType blockType)
@@ -1705,6 +1775,55 @@ public class PlayerBlockBreaker : MonoBehaviour
         BlockTextureMapping value = mapping.Value;
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+
+        switch (BlockShapeUtility.GetEffectiveRenderShape(value))
+        {
+            case BlockRenderShape.Stairs:
+            {
+                StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, (byte)placementAxis);
+                StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+                Bounds bounds = box0.ToWorldBounds(blockPos);
+                if (boxCount > 1) bounds.Encapsulate(box1.ToWorldBounds(blockPos));
+                if (boxCount > 2) bounds.Encapsulate(box2.ToWorldBounds(blockPos));
+                if (boxCount > 3) bounds.Encapsulate(box3.ToWorldBounds(blockPos));
+                if (boxCount > 4) bounds.Encapsulate(box4.ToWorldBounds(blockPos));
+                return bounds;
+            }
+
+            case BlockRenderShape.Ramp:
+            {
+                BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
+                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, rampAxis);
+                var rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
+                Bounds bounds = rampBoxes[0].ToWorldBounds(blockPos);
+                for (int i = 1; i < rampBoxes.Length; i++)
+                    bounds.Encapsulate(rampBoxes[i].ToWorldBounds(blockPos));
+                return bounds;
+            }
+
+            case BlockRenderShape.Fence:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
+                Bounds bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(blockPos);
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(blockPos));
+                return bounds;
+            }
+        }
 
         return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value, placementAxis);
     }

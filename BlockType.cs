@@ -51,6 +51,8 @@ public enum BlockType
     dead_bush = 46,
     Copper_ore = 47,
     wire = 48,
+    Oak_Leader = 49,
+    Oak_Ramp = 50,
 }
 
 public static class FluidBlockUtility

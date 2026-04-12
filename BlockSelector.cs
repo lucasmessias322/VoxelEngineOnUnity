@@ -8,6 +8,7 @@ public class BlockSelector : MonoBehaviour
     public float reach = 6f;
     public BlockType CurrentBlock { get; private set; } = BlockType.Air;
     public Vector3Int CurrentHitNormal { get; private set; } = Vector3Int.zero;
+    public Vector3 CurrentHitPoint { get; private set; }
     public bool HasBlock => hasBlock;
     public bool IsBillboardHit { get; private set; }
     public Vector3Int BillboardGroundBlockPos { get; private set; } = new Vector3Int(int.MinValue, 0, 0);
@@ -45,6 +46,7 @@ public class BlockSelector : MonoBehaviour
             line.enabled = false;
             CurrentBlock = BlockType.Air;
             CurrentHitNormal = Vector3Int.zero;
+            CurrentHitPoint = Vector3.zero;
             IsBillboardHit = false;
             BillboardGroundBlockPos = new Vector3Int(int.MinValue, 0, 0);
             return;
@@ -57,12 +59,14 @@ public class BlockSelector : MonoBehaviour
             reach,
             out Vector3Int blockPos,
             out Vector3Int hitNormal,
+            out Vector3 hitPoint,
             out BlockType hitType,
             out bool isBillboard,
             out Vector3Int billboardGroundPos))
         {
             currentBlock = blockPos;
             CurrentHitNormal = hitNormal;
+            CurrentHitPoint = hitPoint;
             CurrentBlock = hitType;
             IsBillboardHit = isBillboard;
             BillboardGroundBlockPos = billboardGroundPos;
@@ -75,6 +79,7 @@ public class BlockSelector : MonoBehaviour
             line.enabled = false;
             CurrentBlock = BlockType.Air;
             CurrentHitNormal = Vector3Int.zero;
+            CurrentHitPoint = Vector3.zero;
             IsBillboardHit = false;
             BillboardGroundBlockPos = new Vector3Int(int.MinValue, 0, 0);
         }
@@ -142,6 +147,44 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(pos, blockType);
+        switch (BlockShapeUtility.GetEffectiveRenderShape(value))
+        {
+            case BlockRenderShape.Stairs:
+            {
+                StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, pos, (byte)placementAxis);
+                StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+                bounds = box0.ToWorldBounds(pos);
+                if (boxCount > 1) bounds.Encapsulate(box1.ToWorldBounds(pos));
+                if (boxCount > 2) bounds.Encapsulate(box2.ToWorldBounds(pos));
+                if (boxCount > 3) bounds.Encapsulate(box3.ToWorldBounds(pos));
+                if (boxCount > 4) bounds.Encapsulate(box4.ToWorldBounds(pos));
+                return true;
+            }
+
+            case BlockRenderShape.Fence:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
+                bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(pos));
+                return true;
+            }
+        }
+
         if (BlockShapeUtility.IsFlatShape(value))
         {
             ResolvePlaneSupportFlags(pos, placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport);
@@ -183,12 +226,14 @@ public class BlockSelector : MonoBehaviour
         float maxDistance,
         out Vector3Int hitBlock,
         out Vector3Int hitNormal,
+        out Vector3 hitPoint,
         out BlockType hitType,
         out bool isBillboardHit,
         out Vector3Int billboardGroundPos)
     {
         hitBlock = default;
         hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
         hitType = BlockType.Air;
         isBillboardHit = false;
         billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
@@ -227,11 +272,12 @@ public class BlockSelector : MonoBehaviour
             bool hasLoadedBlock = world.TryGetLoadedBlockAt(voxel, out BlockType blockType);
             if (blockType != BlockType.Air)
             {
-                if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal))
+                if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal, out Vector3 customPoint))
                 {
                     hitBlock = voxel;
                     hitType = blockType;
                     hitNormal = customNormal;
+                    hitPoint = customPoint;
                     isBillboardHit = false;
                     billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
                     return true;
@@ -260,6 +306,7 @@ public class BlockSelector : MonoBehaviour
                         hitNormal = lastNormal;
                     }
 
+                    hitPoint = ray.GetPoint(Mathf.Max(0f, traveled));
                     return true;
                 }
             }
@@ -275,6 +322,7 @@ public class BlockSelector : MonoBehaviour
             {
                 hitBlock = voxel;
                 hitNormal = billboardNormal;
+                hitPoint = ray.GetPoint(Mathf.Max(0f, traveled));
                 hitType = billboardType;
                 isBillboardHit = true;
                 billboardGroundPos = groundPos;
@@ -323,9 +371,11 @@ public class BlockSelector : MonoBehaviour
         Vector3Int voxel,
         BlockType blockType,
         Vector3Int lastNormal,
-        out Vector3Int hitNormal)
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
     {
         hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
 
         World world = World.Instance;
         if (world == null || world.blockData == null)
@@ -340,13 +390,22 @@ public class BlockSelector : MonoBehaviour
         switch (BlockShapeUtility.GetEffectiveRenderShape(value))
         {
             case BlockRenderShape.Cuboid:
-                return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, placementAxis, lastNormal, out hitNormal);
+                return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.Cross:
-                return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal);
+                return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.Plane:
-                return TryHitPlaneBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal);
+                return TryHitPlaneBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
+            case BlockRenderShape.Stairs:
+                return TryHitStairBlock(ray, maxDistance, voxel, blockType, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
+            case BlockRenderShape.Ramp:
+                return TryHitRampBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
+            case BlockRenderShape.Fence:
+                return TryHitFenceBlock(ray, maxDistance, voxel, lastNormal, out hitNormal, out hitPoint);
 
             default:
                 return false;
@@ -361,17 +420,20 @@ public class BlockSelector : MonoBehaviour
         BlockTextureMapping mapping,
         BlockPlacementAxis placementAxis,
         Vector3Int lastNormal,
-        out Vector3Int hitNormal)
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
     {
         Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, blockType, mapping, placementAxis);
         if (!bounds.IntersectRay(ray, out float distance) || distance > maxDistance)
         {
             hitNormal = Vector3Int.zero;
+            hitPoint = Vector3.zero;
             return false;
         }
 
         Vector3 point = ray.GetPoint(Mathf.Max(0f, distance));
         hitNormal = ResolveBoundsHitNormal(bounds, point, lastNormal, ray.direction);
+        hitPoint = point;
         return true;
     }
 
@@ -382,7 +444,8 @@ public class BlockSelector : MonoBehaviour
         BlockTextureMapping mapping,
         BlockPlacementAxis placementAxis,
         Vector3Int lastNormal,
-        out Vector3Int hitNormal)
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
     {
         ResolvePlaneSupportFlags(voxel, placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport);
         BlockShapeUtility.ResolvePlaneQuad(
@@ -406,7 +469,8 @@ public class BlockSelector : MonoBehaviour
             origin + p3,
             maxDistance,
             lastNormal,
-            out hitNormal);
+            out hitNormal,
+            out hitPoint);
     }
 
     private void ResolvePlaneSupportFlags(Vector3Int voxel, BlockPlacementAxis placementAxis, out bool hasNegativeSupport, out bool hasPositiveSupport)
@@ -458,7 +522,8 @@ public class BlockSelector : MonoBehaviour
         Vector3Int voxel,
         BlockTextureMapping mapping,
         Vector3Int lastNormal,
-        out Vector3Int hitNormal)
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
     {
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
         Vector3 origin = voxel;
@@ -471,7 +536,8 @@ public class BlockSelector : MonoBehaviour
             origin + new Vector3(min.x, max.y, min.z),
             maxDistance,
             lastNormal,
-            out hitNormal))
+            out hitNormal,
+            out hitPoint))
         {
             return true;
         }
@@ -484,7 +550,274 @@ public class BlockSelector : MonoBehaviour
             origin + new Vector3(min.x, max.y, max.z),
             maxDistance,
             lastNormal,
-            out hitNormal);
+            out hitNormal,
+            out hitPoint);
+    }
+
+    private bool TryHitStairBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockType blockType,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, (byte)placementAxis);
+        StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+        return TryHitShapeBoxes(ray, maxDistance, voxel, lastNormal, out hitNormal, out hitPoint, boxCount, box0, box1, box2, box3, box4);
+    }
+
+    private bool TryHitRampBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+        Vector3 origin = voxel;
+        BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
+        RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, rampAxis);
+
+        RampShapeUtility.ResolveBottomQuad(rampAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + bottom0, origin + bottom1, origin + bottom2, origin + bottom3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        RampShapeUtility.ResolveTopTriangles(rampAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + top0a, origin + top0b, origin + top0c, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + top1a, origin + top1b, origin + top1c, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Left, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Right, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Front, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Back, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+
+        return hit;
+    }
+
+    private bool TryHitRampEdge(
+        Ray ray,
+        float maxDistance,
+        Vector3 origin,
+        BlockPlacementAxis rampAxis,
+        RampShapeVariant rampVariant,
+        RampEdge edge,
+        Vector3Int lastNormal,
+        ref float bestDistance,
+        ref Vector3Int bestNormal,
+        ref Vector3 bestPoint)
+    {
+        if (!RampShapeUtility.ResolveEdgeSurface(rampAxis, rampVariant, edge, out int vertexCount, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out _))
+            return false;
+
+        if (vertexCount == 4)
+            return TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + p0, origin + p1, origin + p2, origin + p3, ref bestDistance, ref bestNormal, ref bestPoint);
+
+        return TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + p0, origin + p1, origin + p2, ref bestDistance, ref bestNormal, ref bestPoint);
+    }
+
+    private bool TryHitFenceBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        byte connectionMask = FenceShapeUtility.ResolveConnectionMask(World.Instance, voxel);
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+
+        if (TryHitShapeBox(ray, maxDistance, FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(voxel), lastNormal, out float centerDistance, out Vector3Int centerNormal, out Vector3 centerPoint))
+        {
+            bestDistance = centerDistance;
+            hitNormal = centerNormal;
+            hitPoint = centerPoint;
+            hit = true;
+        }
+
+        hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectWest, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectEast, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectSouth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectNorth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        return hit;
+    }
+
+    private bool TryHitFenceRail(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        byte connectionMask,
+        byte directionFlag,
+        Vector3Int lastNormal,
+        ref float bestDistance,
+        ref Vector3Int bestNormal,
+        ref Vector3 bestPoint)
+    {
+        if (!FenceShapeUtility.IsFenceConnectionActive(connectionMask, directionFlag))
+            return false;
+
+        bool lowerHit = TryHitShapeBox(ray, maxDistance, FenceShapeUtility.GetRailVisualBox(directionFlag, false).ToWorldBounds(voxel), lastNormal, out float lowerDistance, out Vector3Int lowerNormal, out Vector3 lowerPoint);
+        bool upperHit = TryHitShapeBox(ray, maxDistance, FenceShapeUtility.GetRailVisualBox(directionFlag, true).ToWorldBounds(voxel), lastNormal, out float upperDistance, out Vector3Int upperNormal, out Vector3 upperPoint);
+
+        bool hit = false;
+        if (lowerHit && (float.IsPositiveInfinity(bestDistance) || lowerDistance < bestDistance))
+        {
+            bestDistance = lowerDistance;
+            bestNormal = lowerNormal;
+            bestPoint = lowerPoint;
+            hit = true;
+        }
+
+        if (upperHit && (float.IsPositiveInfinity(bestDistance) || upperDistance < bestDistance))
+        {
+            bestDistance = upperDistance;
+            bestNormal = upperNormal;
+            bestPoint = upperPoint;
+            hit = true;
+        }
+
+        return hit;
+    }
+
+    private bool TryUpdateCustomHit(
+        Ray ray,
+        float maxDistance,
+        Vector3Int lastNormal,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        Vector3 p3,
+        ref float bestDistance,
+        ref Vector3Int bestNormal,
+        ref Vector3 bestPoint)
+    {
+        if (!TryHitQuad(ray, p0, p1, p2, p3, maxDistance, lastNormal, out Vector3Int hitNormal, out Vector3 hitPoint))
+            return false;
+
+        float distance = Vector3.Distance(ray.origin, hitPoint);
+        if (distance >= bestDistance)
+            return false;
+
+        bestDistance = distance;
+        bestNormal = hitNormal;
+        bestPoint = hitPoint;
+        return true;
+    }
+
+    private bool TryUpdateCustomHit(
+        Ray ray,
+        float maxDistance,
+        Vector3Int lastNormal,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        ref float bestDistance,
+        ref Vector3Int bestNormal,
+        ref Vector3 bestPoint)
+    {
+        if (!TryHitTriangle(ray, p0, p1, p2, maxDistance, lastNormal, out Vector3Int hitNormal, out Vector3 hitPoint))
+            return false;
+
+        float distance = Vector3.Distance(ray.origin, hitPoint);
+        if (distance >= bestDistance)
+            return false;
+
+        bestDistance = distance;
+        bestNormal = hitNormal;
+        bestPoint = hitPoint;
+        return true;
+    }
+
+    private bool TryHitShapeBoxes(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint,
+        int boxCount,
+        ShapeBox box0,
+        ShapeBox box1,
+        ShapeBox box2,
+        ShapeBox box3,
+        ShapeBox box4)
+    {
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+
+        hit = TryHitShapeBox(ray, maxDistance, box0.ToWorldBounds(voxel), lastNormal, out float d0, out Vector3Int n0, out Vector3 p0) || hit;
+        if (hit && d0 < bestDistance)
+        {
+            bestDistance = d0;
+            hitNormal = n0;
+            hitPoint = p0;
+        }
+
+        if (boxCount > 1 && TryHitShapeBox(ray, maxDistance, box1.ToWorldBounds(voxel), lastNormal, out float d1, out Vector3Int n1, out Vector3 p1) && d1 < bestDistance)
+        {
+            bestDistance = d1;
+            hitNormal = n1;
+            hitPoint = p1;
+            hit = true;
+        }
+
+        if (boxCount > 2 && TryHitShapeBox(ray, maxDistance, box2.ToWorldBounds(voxel), lastNormal, out float d2, out Vector3Int n2, out Vector3 p2) && d2 < bestDistance)
+        {
+            bestDistance = d2;
+            hitNormal = n2;
+            hitPoint = p2;
+            hit = true;
+        }
+
+        if (boxCount > 3 && TryHitShapeBox(ray, maxDistance, box3.ToWorldBounds(voxel), lastNormal, out float d3, out Vector3Int n3, out Vector3 p3) && d3 < bestDistance)
+        {
+            bestDistance = d3;
+            hitNormal = n3;
+            hitPoint = p3;
+            hit = true;
+        }
+
+        if (boxCount > 4 && TryHitShapeBox(ray, maxDistance, box4.ToWorldBounds(voxel), lastNormal, out float d4, out Vector3Int n4, out Vector3 p4) && d4 < bestDistance)
+        {
+            hitNormal = n4;
+            hitPoint = p4;
+            hit = true;
+        }
+
+        return hit;
+    }
+
+    private static bool TryHitShapeBox(
+        Ray ray,
+        float maxDistance,
+        Bounds bounds,
+        Vector3Int lastNormal,
+        out float distance,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        distance = 0f;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+
+        if (!bounds.IntersectRay(ray, out float hitDistance) || hitDistance > maxDistance)
+            return false;
+
+        distance = Mathf.Max(0f, hitDistance);
+        hitPoint = ray.GetPoint(distance);
+        hitNormal = ResolveBoundsHitNormal(bounds, hitPoint, lastNormal, ray.direction);
+        return true;
     }
 
     private bool TryHitQuad(
@@ -495,9 +828,11 @@ public class BlockSelector : MonoBehaviour
         Vector3 p3,
         float maxDistance,
         Vector3Int lastNormal,
-        out Vector3Int hitNormal)
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
     {
         hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
 
         bool hitFirst = TryRayTriangle(ray, p0, p1, p2, maxDistance, out float t1, out Vector3 normal1);
         bool hitSecond = TryRayTriangle(ray, p0, p2, p3, maxDistance, out float t2, out Vector3 normal2);
@@ -506,10 +841,36 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         Vector3 normal = normal1;
+        float distance = t1;
         if (!hitFirst || (hitSecond && t2 < t1))
+        {
             normal = normal2;
+            distance = t2;
+        }
 
         hitNormal = ResolveCustomSurfaceNormal(normal, lastNormal, ray.direction);
+        hitPoint = ray.GetPoint(Mathf.Max(0f, distance));
+        return true;
+    }
+
+    private bool TryHitTriangle(
+        Ray ray,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        float maxDistance,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+
+        if (!TryRayTriangle(ray, p0, p1, p2, maxDistance, out float distance, out Vector3 normal))
+            return false;
+
+        hitNormal = ResolveCustomSurfaceNormal(normal, lastNormal, ray.direction);
+        hitPoint = ray.GetPoint(Mathf.Max(0f, distance));
         return true;
     }
 

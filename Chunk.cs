@@ -568,18 +568,6 @@ public class Chunk : MonoBehaviour
             return;
         }
 
-        if (TryGetSubchunkColliderOccupancyRange(subchunkIndex, out int wordOffset))
-        {
-            subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(
-                gameObject,
-                subchunkColliderOccupancyBits,
-                wordOffset,
-                ColliderOccupancyWordsPerSubchunk,
-                startY,
-                endY);
-            return;
-        }
-
         subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, startY, endY);
     }
 

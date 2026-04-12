@@ -31,27 +31,13 @@ internal sealed class SubchunkColliderBuilder
         }
 
         int volume = Chunk.SizeX * height * Chunk.SizeZ;
-        PrepareOccupancyBuffer(volume, out ulong[] occupancyBits, out int occupancyWordCount);
-        bool hasSolidBlocks = FillOccupancyBuffer(voxelData, blockMappings, clampedStartY, height, occupancyBits);
-
-        if (TryRestoreCachedColliderLayoutInternal(occupancyBits, 0, occupancyWordCount, clampedStartY, height, out bool restoredHasColliders))
-            return restoredHasColliders;
-
-        if (!hasSolidBlocks)
-        {
-            CacheColliderLayout(clampedStartY, height, occupancyBits, 0, occupancyWordCount, 0);
-            activeBoxColliderCount = 0;
-            DisableUnusedColliders(0);
-            return false;
-        }
-
         PrepareBuffers(volume, out bool[] solids, out bool[] visited);
-        FillSolidBufferFromOccupancy(occupancyBits, 0, volume, solids);
+        FillCubeSolidBuffer(voxelData, blockMappings, clampedStartY, height, solids);
 
         int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
+        colliderCount = AppendCustomShapeColliders(owner, voxelData, blockMappings, clampedStartY, height, colliderCount);
         activeBoxColliderCount = colliderCount;
         DisableUnusedColliders(colliderCount);
-        CacheColliderLayout(clampedStartY, height, occupancyBits, 0, occupancyWordCount, colliderCount);
         return colliderCount > 0;
     }
 
@@ -73,26 +59,8 @@ internal sealed class SubchunkColliderBuilder
             return false;
         }
 
-        if (TryRestoreCachedColliderLayoutInternal(occupancyBits, occupancyWordOffset, occupancyWordCount, clampedStartY, height, out bool restoredHasColliders))
-            return restoredHasColliders;
-
-        if (!HasAnyOccupiedWord(occupancyBits, occupancyWordOffset, occupancyWordCount))
-        {
-            CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordOffset, occupancyWordCount, 0);
-            activeBoxColliderCount = 0;
-            DisableUnusedColliders(0);
-            return false;
-        }
-
-        int volume = Chunk.SizeX * height * Chunk.SizeZ;
-        PrepareBuffers(volume, out bool[] solids, out bool[] visited);
-        FillSolidBufferFromOccupancy(occupancyBits, occupancyWordOffset, volume, solids);
-
-        int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
-        activeBoxColliderCount = colliderCount;
-        DisableUnusedColliders(colliderCount);
-        CacheColliderLayout(clampedStartY, height, occupancyBits, occupancyWordOffset, occupancyWordCount, colliderCount);
-        return colliderCount > 0;
+        Clear();
+        return false;
     }
 
     public void SetEnabled(bool enabled)
@@ -120,16 +88,7 @@ internal sealed class SubchunkColliderBuilder
         out bool hasColliders)
     {
         hasColliders = false;
-        if (!TryResolveBuildRange(startY, endY, out int clampedStartY, out int height) ||
-            occupancyBits == null ||
-            occupancyWordOffset < 0 ||
-            occupancyWordCount <= 0 ||
-            occupancyWordOffset + occupancyWordCount > occupancyBits.Length)
-        {
-            return false;
-        }
-
-        return TryRestoreCachedColliderLayoutInternal(occupancyBits, occupancyWordOffset, occupancyWordCount, clampedStartY, height, out hasColliders);
+        return false;
     }
 
     private static bool TryResolveBuildRange(
@@ -173,22 +132,13 @@ internal sealed class SubchunkColliderBuilder
         Array.Clear(visited, 0, volume);
     }
 
-    private void PrepareOccupancyBuffer(int volume, out ulong[] occupancyBits, out int occupancyWordCount)
-    {
-        occupancyWordCount = Mathf.Max(1, (volume + 63) >> 6);
-        EnsureOccupancyBuffers(occupancyWordCount);
-        occupancyBits = colliderOccupancyBuffer;
-        Array.Clear(occupancyBits, 0, occupancyWordCount);
-    }
-
-    private static bool FillOccupancyBuffer(
+    private static void FillCubeSolidBuffer(
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
         int clampedStartY,
         int height,
-        ulong[] occupancyBits)
+        bool[] solids)
     {
-        bool hasSolidBlocks = false;
         int plane = Chunk.SizeX * Chunk.SizeZ;
 
         for (int y = 0; y < height; y++)
@@ -205,26 +155,13 @@ internal sealed class SubchunkColliderBuilder
                 for (int x = 0; x < Chunk.SizeX; x++)
                 {
                     int worldIndex = worldYBase + worldZBase + x;
-                    if (!IsBlockCollidable(voxelData[worldIndex], blockMappings))
+                    if (!IsFullCubeCollidable(voxelData[worldIndex], blockMappings))
                         continue;
 
                     int localIndex = x + localYBase + localZBase;
-                    occupancyBits[localIndex >> 6] |= 1UL << (localIndex & 63);
-                    hasSolidBlocks = true;
+                    solids[localIndex] = true;
                 }
             }
-        }
-
-        return hasSolidBlocks;
-    }
-
-    private static void FillSolidBufferFromOccupancy(ulong[] occupancyBits, int occupancyWordOffset, int volume, bool[] solids)
-    {
-        for (int index = 0; index < volume; index++)
-        {
-            int wordIndex = occupancyWordOffset + (index >> 6);
-            if ((occupancyBits[wordIndex] & (1UL << (index & 63))) != 0)
-                solids[index] = true;
         }
     }
 
@@ -497,20 +434,137 @@ internal sealed class SubchunkColliderBuilder
             cachedColliderOccupancyBits = new ulong[occupancyWordCount];
     }
 
+    private int AppendCustomShapeColliders(
+        GameObject owner,
+        NativeArray<byte> voxelData,
+        BlockTextureMapping[] blockMappings,
+        int clampedStartY,
+        int height,
+        int colliderCount)
+    {
+        World world = World.Instance;
+        Chunk ownerChunk = owner != null ? owner.GetComponent<Chunk>() : null;
+        Vector2Int chunkCoord = ownerChunk != null ? ownerChunk.coord : Vector2Int.zero;
+        int plane = Chunk.SizeX * Chunk.SizeZ;
+
+        for (int y = 0; y < height; y++)
+        {
+            int worldY = clampedStartY + y;
+            int worldYBase = worldY * plane;
+
+            for (int z = 0; z < Chunk.SizeZ; z++)
+            {
+                int worldZBase = z * Chunk.SizeX;
+                for (int x = 0; x < Chunk.SizeX; x++)
+                {
+                    int worldIndex = worldYBase + worldZBase + x;
+                    BlockType blockType = (BlockType)voxelData[worldIndex];
+                    if (!TryGetCollidableMapping(blockType, blockMappings, out BlockTextureMapping mapping))
+                        continue;
+
+                    BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+                    if (shape == BlockRenderShape.Cube)
+                        continue;
+
+                    Vector3Int localBlockPos = new Vector3Int(x, worldY, z);
+                    Vector3Int worldPos = new Vector3Int(
+                        chunkCoord.x * Chunk.SizeX + x,
+                        worldY,
+                        chunkCoord.y * Chunk.SizeZ + z);
+
+                    switch (shape)
+                    {
+                        case BlockRenderShape.Cuboid:
+                            BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, new ShapeBox(min, max));
+                            break;
+
+                        case BlockRenderShape.Stairs:
+                        {
+                            BlockPlacementAxis rawState = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, worldPos, (byte)rawState);
+                            StairShapeUtility.ResolveBoxes((byte)rawState, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box0);
+                            if (boxCount > 1) colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box1);
+                            if (boxCount > 2) colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box2);
+                            if (boxCount > 3) colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box3);
+                            if (boxCount > 4) colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box4);
+                            break;
+                        }
+
+                        case BlockRenderShape.Ramp:
+                        {
+                            BlockPlacementAxis rampAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Z;
+                            RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, worldPos, rampAxis);
+                            FixedList512Bytes<ShapeBox> rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
+                            for (int i = 0; i < rampBoxes.Length; i++)
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, rampBoxes[i]);
+                            break;
+                        }
+
+                        case BlockRenderShape.Fence:
+                        {
+                            byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, worldPos);
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetCenterPostColliderBox());
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectWest));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectEast));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectSouth));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectNorth));
+                            break;
+                        }
+
+                        default:
+                        {
+                            Bounds bounds = BlockShapeUtility.GetWorldBounds(localBlockPos, blockType, mapping, BlockPlacementAxis.Y);
+                            ShapeBox box = new ShapeBox(bounds.min - (Vector3)localBlockPos, bounds.max - (Vector3)localBlockPos);
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        return colliderCount;
+    }
+
+    private int AddShapeColliderBox(GameObject owner, int colliderIndex, Vector3Int blockPos, ShapeBox box)
+    {
+        BoxCollider collider = GetOrCreateBoxCollider(owner, colliderIndex);
+        collider.center = (Vector3)blockPos + (box.min + box.max) * 0.5f;
+        collider.size = box.max - box.min;
+        collider.enabled = true;
+        return colliderIndex + 1;
+    }
+
     private static bool IsBlockCollidable(byte blockId, BlockTextureMapping[] blockMappings)
     {
-        BlockType blockType = (BlockType)blockId;
-        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+        return TryGetCollidableMapping((BlockType)blockId, blockMappings, out _);
+    }
+
+    private static bool IsFullCubeCollidable(byte blockId, BlockTextureMapping[] blockMappings)
+    {
+        if (!TryGetCollidableMapping((BlockType)blockId, blockMappings, out BlockTextureMapping mapping))
             return false;
 
-        if (TorchPlacementUtility.IsTorchLike(blockType))
+        return BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube;
+    }
+
+    private static bool TryGetCollidableMapping(BlockType blockType, BlockTextureMapping[] blockMappings, out BlockTextureMapping mapping)
+    {
+        mapping = default;
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType) || TorchPlacementUtility.IsTorchLike(blockType))
             return false;
 
-        int mapIndex = blockId;
+        int mapIndex = (int)blockType;
         if (mapIndex < 0 || mapIndex >= blockMappings.Length)
             return false;
 
-        BlockTextureMapping mapping = blockMappings[mapIndex];
+        mapping = blockMappings[mapIndex];
         return mapping.isSolid && !mapping.isEmpty;
     }
 }
