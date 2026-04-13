@@ -570,7 +570,14 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         BlockModelCuboid cuboid = new BlockModelCuboid(center01 - size * 0.5f, center01 + size * 0.5f)
         {
             eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(localRotation.eulerAngles),
-            faces = existing.EffectiveFaces
+            faces = existing.EffectiveFaces,
+            textureOverrideFaces = existing.EffectiveTextureOverrideFaces,
+            textureTop = existing.textureTop,
+            textureBottom = existing.textureBottom,
+            textureRight = existing.textureRight,
+            textureLeft = existing.textureLeft,
+            textureFront = existing.textureFront,
+            textureBack = existing.textureBack
         };
 
         return SanitizeCuboid(cuboid, snapToGrid, snapStep);
@@ -884,7 +891,14 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             min = min,
             max = max,
             eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(cuboid.eulerRotation),
-            faces = cuboid.faces == BlockCuboidFaceMask.None ? BlockCuboidFaceMask.All : cuboid.faces
+            faces = cuboid.faces == BlockCuboidFaceMask.None ? BlockCuboidFaceMask.All : cuboid.faces,
+            textureOverrideFaces = cuboid.EffectiveTextureOverrideFaces,
+            textureTop = cuboid.textureTop,
+            textureBottom = cuboid.textureBottom,
+            textureRight = cuboid.textureRight,
+            textureLeft = cuboid.textureLeft,
+            textureFront = cuboid.textureFront,
+            textureBack = cuboid.textureBack
         };
     }
 

@@ -19,6 +19,10 @@ public static partial class MeshGenerator
             public float maxA;
             public float minB;
             public float maxB;
+            public int tileX;
+            public int tileY;
+            public bool tint;
+            public bool usesExplicitAppearance;
         }
 
         private void GenerateDecorativeMeshes(
@@ -1564,10 +1568,10 @@ public static partial class MeshGenerator
                 p1,
                 p2,
                 p3,
-                new Vector2(0f, 0f),
-                new Vector2(1f, 0f),
-                new Vector2(1f, 1f),
-                new Vector2(0f, 1f),
+                ResolveShapeProjectedUv(worldFace, p0),
+                ResolveShapeProjectedUv(worldFace, p1),
+                ResolveShapeProjectedUv(worldFace, p2),
+                ResolveShapeProjectedUv(worldFace, p3),
                 normal,
                 normal,
                 (p1 - p0).normalized,
@@ -1585,7 +1589,10 @@ public static partial class MeshGenerator
                 BlockRenderShape.MultiCuboid,
                 placementAxis,
                 RampShapeVariant.Straight,
-                false);
+                false,
+                hasExplicitAppearance: true,
+                explicitTile: cuboid.GetTileCoord(localFace, mapping),
+                explicitTint: mapping.GetTint(localFace));
         }
 
         private int GetNativeMultiCuboidBoxCount(BlockTextureMapping mapping)
@@ -1848,10 +1855,23 @@ public static partial class MeshGenerator
                 return;
 
             BlockFace worldFace = BlockShapeUtility.TransformFaceForPlacement(localFace, mapping, placementAxis);
-            AppendShapeFaceRect(ref faceRects, box, worldFace);
+            Vector2Int tile = cuboid.GetTileCoord(localFace, mapping);
+            bool tint = mapping.GetTint(localFace);
+            AppendShapeFaceRect(ref faceRects, box, worldFace, tile, tint, true);
         }
 
         private static void AppendShapeFaceRect(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
+        {
+            AppendShapeFaceRect(ref faceRects, box, face, default, false, false);
+        }
+
+        private static void AppendShapeFaceRect(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            ShapeBox box,
+            BlockFace face,
+            Vector2Int tile,
+            bool tint,
+            bool usesExplicitAppearance)
         {
             switch (face)
             {
@@ -1863,7 +1883,11 @@ public static partial class MeshGenerator
                         minA = box.min.y,
                         maxA = box.max.y,
                         minB = box.min.z,
-                        maxB = box.max.z
+                        maxB = box.max.z,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
 
@@ -1875,7 +1899,11 @@ public static partial class MeshGenerator
                         minA = box.min.y,
                         maxA = box.max.y,
                         minB = box.min.z,
-                        maxB = box.max.z
+                        maxB = box.max.z,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
 
@@ -1887,7 +1915,11 @@ public static partial class MeshGenerator
                         minA = box.min.x,
                         maxA = box.max.x,
                         minB = box.min.z,
-                        maxB = box.max.z
+                        maxB = box.max.z,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
 
@@ -1899,7 +1931,11 @@ public static partial class MeshGenerator
                         minA = box.min.x,
                         maxA = box.max.x,
                         minB = box.min.z,
-                        maxB = box.max.z
+                        maxB = box.max.z,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
 
@@ -1911,7 +1947,11 @@ public static partial class MeshGenerator
                         minA = box.min.x,
                         maxA = box.max.x,
                         minB = box.min.y,
-                        maxB = box.max.y
+                        maxB = box.max.y,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
 
@@ -1923,7 +1963,11 @@ public static partial class MeshGenerator
                         minA = box.min.x,
                         maxA = box.max.x,
                         minB = box.min.y,
-                        maxB = box.max.y
+                        maxB = box.max.y,
+                        tileX = tile.x,
+                        tileY = tile.y,
+                        tint = tint,
+                        usesExplicitAppearance = usesExplicitAppearance
                     });
                     return;
             }
@@ -1957,7 +2001,9 @@ public static partial class MeshGenerator
             const float epsilon = 0.0001f;
             merged = default;
 
-            if (a.face != b.face || math.abs(a.plane - b.plane) > epsilon)
+            if (a.face != b.face ||
+                math.abs(a.plane - b.plane) > epsilon ||
+                !HasSameAppearance(a, b))
                 return false;
 
             bool sameA = math.abs(a.minA - b.minA) <= epsilon && math.abs(a.maxA - b.maxA) <= epsilon;
@@ -1980,6 +2026,15 @@ public static partial class MeshGenerator
             }
 
             return false;
+        }
+
+        private static bool HasSameAppearance(ShapeFaceRect a, ShapeFaceRect b)
+        {
+            return a.usesExplicitAppearance == b.usesExplicitAppearance &&
+                   (!a.usesExplicitAppearance ||
+                    (a.tileX == b.tileX &&
+                     a.tileY == b.tileY &&
+                     a.tint == b.tint));
         }
 
         private static void CullHiddenShapeFaceRects(
@@ -2173,17 +2228,16 @@ public static partial class MeshGenerator
                 return false;
 
             faceRects.RemoveAt(index);
-            AddShapeFaceRectFragment(ref faceRects, source.face, source.plane, source.minA, source.maxA, source.minB, overlap.minB);
-            AddShapeFaceRectFragment(ref faceRects, source.face, source.plane, source.minA, source.maxA, overlap.maxB, source.maxB);
-            AddShapeFaceRectFragment(ref faceRects, source.face, source.plane, source.minA, overlap.minA, overlap.minB, overlap.maxB);
-            AddShapeFaceRectFragment(ref faceRects, source.face, source.plane, overlap.maxA, source.maxA, overlap.minB, overlap.maxB);
+            AddShapeFaceRectFragment(ref faceRects, source, source.minA, source.maxA, source.minB, overlap.minB);
+            AddShapeFaceRectFragment(ref faceRects, source, source.minA, source.maxA, overlap.maxB, source.maxB);
+            AddShapeFaceRectFragment(ref faceRects, source, source.minA, overlap.minA, overlap.minB, overlap.maxB);
+            AddShapeFaceRectFragment(ref faceRects, source, overlap.maxA, source.maxA, overlap.minB, overlap.maxB);
             return true;
         }
 
         private static void AddShapeFaceRectFragment(
             ref FixedList4096Bytes<ShapeFaceRect> faceRects,
-            BlockFace face,
-            float plane,
+            ShapeFaceRect source,
             float minA,
             float maxA,
             float minB,
@@ -2198,12 +2252,16 @@ public static partial class MeshGenerator
 
             faceRects.Add(new ShapeFaceRect
             {
-                face = face,
-                plane = plane,
+                face = source.face,
+                plane = source.plane,
                 minA = minA,
                 maxA = maxA,
                 minB = minB,
-                maxB = maxB
+                maxB = maxB,
+                tileX = source.tileX,
+                tileY = source.tileY,
+                tint = source.tint,
+                usesExplicitAppearance = source.usesExplicitAppearance
             });
         }
 
@@ -2217,6 +2275,26 @@ public static partial class MeshGenerator
                 return worldFace;
 
             return BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, currentPlacementAxis);
+        }
+
+        private static void ResolveShapeRectAppearance(
+            ShapeFaceRect rect,
+            BlockTextureMapping mapping,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis,
+            out Vector2Int tile,
+            out bool tint)
+        {
+            if (rect.usesExplicitAppearance)
+            {
+                tile = new Vector2Int(rect.tileX, rect.tileY);
+                tint = rect.tint;
+                return;
+            }
+
+            BlockFace textureFace = ResolveShapeTextureFace(mapping, rect.face, currentShape, currentPlacementAxis);
+            tile = mapping.GetTileCoord(textureFace);
+            tint = mapping.GetTint(textureFace);
         }
 
         private void AddAmbientOccludedShapeRect(
@@ -2239,12 +2317,12 @@ public static partial class MeshGenerator
             RampShapeVariant currentRampVariant)
         {
             bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
+            ResolveShapeRectAppearance(rect, mapping, currentShape, currentPlacementAxis, out Vector2Int tile, out bool tint);
 
             switch (rect.face)
             {
                 case BlockFace.Right:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Right, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.plane, rect.minA, rect.minB),
                         origin + new Vector3(rect.plane, rect.maxA, rect.minB),
@@ -2255,8 +2333,8 @@ public static partial class MeshGenerator
                         Vector3Int.right,
                         Vector3Int.up,
                         Vector3Int.forward,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2277,7 +2355,6 @@ public static partial class MeshGenerator
 
                 case BlockFace.Left:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Left, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.plane, rect.minA, rect.maxB),
                         origin + new Vector3(rect.plane, rect.maxA, rect.maxB),
@@ -2288,8 +2365,8 @@ public static partial class MeshGenerator
                         Vector3Int.left,
                         Vector3Int.up,
                         Vector3Int.back,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2310,7 +2387,6 @@ public static partial class MeshGenerator
 
                 case BlockFace.Top:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Top, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.plane, rect.maxB),
                         origin + new Vector3(rect.maxA, rect.plane, rect.maxB),
@@ -2321,8 +2397,8 @@ public static partial class MeshGenerator
                         Vector3Int.up,
                         Vector3Int.right,
                         Vector3Int.back,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2343,7 +2419,6 @@ public static partial class MeshGenerator
 
                 case BlockFace.Bottom:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Bottom, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.plane, rect.minB),
                         origin + new Vector3(rect.maxA, rect.plane, rect.minB),
@@ -2354,8 +2429,8 @@ public static partial class MeshGenerator
                         Vector3Int.down,
                         Vector3Int.right,
                         Vector3Int.forward,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2376,7 +2451,6 @@ public static partial class MeshGenerator
 
                 case BlockFace.Front:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Front, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.maxA, rect.minB, rect.plane),
                         origin + new Vector3(rect.maxA, rect.maxB, rect.plane),
@@ -2387,8 +2461,8 @@ public static partial class MeshGenerator
                         Vector3Int.forward,
                         Vector3Int.up,
                         Vector3Int.left,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2409,7 +2483,6 @@ public static partial class MeshGenerator
 
                 default:
                 {
-                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Back, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.minB, rect.plane),
                         origin + new Vector3(rect.minA, rect.maxB, rect.plane),
@@ -2420,8 +2493,8 @@ public static partial class MeshGenerator
                         Vector3Int.back,
                         Vector3Int.up,
                         Vector3Int.right,
-                        mapping.GetTileCoord(textureFace),
-                        mapping.GetTint(textureFace),
+                        tile,
+                        tint,
                         light01,
                         voxelX,
                         voxelY,
@@ -2472,12 +2545,25 @@ public static partial class MeshGenerator
             BlockPlacementAxis currentPlacementAxis,
             RampShapeVariant currentRampVariant,
             bool invertWinding,
-            bool suppressNeighborRampAO = false)
+            bool suppressNeighborRampAO = false,
+            bool hasExplicitAppearance = false,
+            Vector2Int explicitTile = default(Vector2Int),
+            bool explicitTint = false)
         {
             bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
-            BlockFace textureFace = ResolveShapeTextureFace(mapping, sampledFace, currentShape, currentPlacementAxis);
-            Vector2Int tile = mapping.GetTileCoord(textureFace);
-            bool tint = mapping.GetTint(textureFace);
+            Vector2Int tile;
+            bool tint;
+            if (hasExplicitAppearance)
+            {
+                tile = explicitTile;
+                tint = explicitTint;
+            }
+            else
+            {
+                BlockFace textureFace = ResolveShapeTextureFace(mapping, sampledFace, currentShape, currentPlacementAxis);
+                tile = mapping.GetTileCoord(textureFace);
+                tint = mapping.GetTint(textureFace);
+            }
             Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();

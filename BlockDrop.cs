@@ -65,6 +65,10 @@ public class BlockDrop : MonoBehaviour
         public float maxA;
         public float minB;
         public float maxB;
+        public int tileX;
+        public int tileY;
+        public bool tint;
+        public bool usesExplicitAppearance;
     }
 
     private static readonly FaceDef[] FaceDefs = new FaceDef[]
@@ -547,7 +551,7 @@ public class BlockDrop : MonoBehaviour
 
             ShapeBox box = BlockShapeUtility.TransformShapeBoxForPlacement(cuboid.ToShapeBox(), mapping, BlockPlacementAxis.Y);
             boxes.Add(box);
-            AppendModelCuboidFaceRects(faceRects, box, cuboid);
+            AppendModelCuboidFaceRects(faceRects, box, cuboid, mapping);
         }
 
         if (!appendedAnyCuboid)
@@ -620,22 +624,27 @@ public class BlockDrop : MonoBehaviour
         p3 = RotateCuboidPoint(p3, center, rotation);
         normal = (rotation * normal).normalized;
 
-        AppendShapeFace(
+        AppendProjectedQuadFace(
             vertices,
             normals,
             uv0,
             uv1,
             uv2,
             tris,
-            origin + p0,
-            origin + p1,
-            origin + p2,
-            origin + p3,
+            mapping,
+            face,
+            origin,
+            p0,
+            p1,
+            p2,
+            p3,
             normal,
-            mapping.GetTileCoord(face),
-            mapping.GetTint(face),
             invAtlasTilesX,
-            invAtlasTilesY);
+            invAtlasTilesY,
+            false,
+            true,
+            cuboid.GetTileCoord(face, mapping),
+            mapping.GetTint(face));
     }
 
     private static Vector3 RotateCuboidPoint(Vector3 point, Vector3 center, Quaternion rotation)
@@ -913,25 +922,38 @@ public class BlockDrop : MonoBehaviour
             invAtlasTilesY);
     }
 
-    private static void AppendModelCuboidFaceRects(List<ShapeFaceRect> faceRects, ShapeBox box, BlockModelCuboid cuboid)
+    private static void AppendModelCuboidFaceRects(List<ShapeFaceRect> faceRects, ShapeBox box, BlockModelCuboid cuboid, BlockTextureMapping mapping)
     {
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Right);
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Left);
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Top);
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Bottom);
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Front);
-        AppendModelCuboidFaceRect(faceRects, box, cuboid, BlockFace.Back);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Right);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Left);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Top);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Bottom);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Front);
+        AppendModelCuboidFaceRect(faceRects, box, cuboid, mapping, BlockFace.Back);
     }
 
-    private static void AppendModelCuboidFaceRect(List<ShapeFaceRect> faceRects, ShapeBox box, BlockModelCuboid cuboid, BlockFace face)
+    private static void AppendModelCuboidFaceRect(List<ShapeFaceRect> faceRects, ShapeBox box, BlockModelCuboid cuboid, BlockTextureMapping mapping, BlockFace face)
     {
         if (!cuboid.HasFace(face))
             return;
 
-        AppendShapeFaceRect(faceRects, box, face);
+        Vector2Int tile = cuboid.GetTileCoord(face, mapping);
+        bool tint = mapping.GetTint(face);
+        AppendShapeFaceRect(faceRects, box, face, tile, tint, true);
     }
 
     private static void AppendShapeFaceRect(List<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
+    {
+        AppendShapeFaceRect(faceRects, box, face, default, false, false);
+    }
+
+    private static void AppendShapeFaceRect(
+        List<ShapeFaceRect> faceRects,
+        ShapeBox box,
+        BlockFace face,
+        Vector2Int tile,
+        bool tint,
+        bool usesExplicitAppearance)
     {
         switch (face)
         {
@@ -943,7 +965,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.y,
                     maxA = box.max.y,
                     minB = box.min.z,
-                    maxB = box.max.z
+                    maxB = box.max.z,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
 
@@ -955,7 +981,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.y,
                     maxA = box.max.y,
                     minB = box.min.z,
-                    maxB = box.max.z
+                    maxB = box.max.z,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
 
@@ -967,7 +997,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.x,
                     maxA = box.max.x,
                     minB = box.min.z,
-                    maxB = box.max.z
+                    maxB = box.max.z,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
 
@@ -979,7 +1013,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.x,
                     maxA = box.max.x,
                     minB = box.min.z,
-                    maxB = box.max.z
+                    maxB = box.max.z,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
 
@@ -991,7 +1029,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.x,
                     maxA = box.max.x,
                     minB = box.min.y,
-                    maxB = box.max.y
+                    maxB = box.max.y,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
 
@@ -1003,7 +1045,11 @@ public class BlockDrop : MonoBehaviour
                     minA = box.min.x,
                     maxA = box.max.x,
                     minB = box.min.y,
-                    maxB = box.max.y
+                    maxB = box.max.y,
+                    tileX = tile.x,
+                    tileY = tile.y,
+                    tint = tint,
+                    usesExplicitAppearance = usesExplicitAppearance
                 });
                 return;
         }
@@ -1193,17 +1239,16 @@ public class BlockDrop : MonoBehaviour
             return false;
 
         faceRects.RemoveAt(index);
-        AddShapeFaceRectFragment(faceRects, source.face, source.plane, source.minA, source.maxA, source.minB, overlap.minB);
-        AddShapeFaceRectFragment(faceRects, source.face, source.plane, source.minA, source.maxA, overlap.maxB, source.maxB);
-        AddShapeFaceRectFragment(faceRects, source.face, source.plane, source.minA, overlap.minA, overlap.minB, overlap.maxB);
-        AddShapeFaceRectFragment(faceRects, source.face, source.plane, overlap.maxA, source.maxA, overlap.minB, overlap.maxB);
+        AddShapeFaceRectFragment(faceRects, source, source.minA, source.maxA, source.minB, overlap.minB);
+        AddShapeFaceRectFragment(faceRects, source, source.minA, source.maxA, overlap.maxB, source.maxB);
+        AddShapeFaceRectFragment(faceRects, source, source.minA, overlap.minA, overlap.minB, overlap.maxB);
+        AddShapeFaceRectFragment(faceRects, source, overlap.maxA, source.maxA, overlap.minB, overlap.maxB);
         return true;
     }
 
     private static void AddShapeFaceRectFragment(
         List<ShapeFaceRect> faceRects,
-        BlockFace face,
-        float plane,
+        ShapeFaceRect source,
         float minA,
         float maxA,
         float minB,
@@ -1214,12 +1259,16 @@ public class BlockDrop : MonoBehaviour
 
         faceRects.Add(new ShapeFaceRect
         {
-            face = face,
-            plane = plane,
+            face = source.face,
+            plane = source.plane,
             minA = minA,
             maxA = maxA,
             minB = minB,
-            maxB = maxB
+            maxB = maxB,
+            tileX = source.tileX,
+            tileY = source.tileY,
+            tint = source.tint,
+            usesExplicitAppearance = source.usesExplicitAppearance
         });
     }
 
@@ -1250,7 +1299,9 @@ public class BlockDrop : MonoBehaviour
     {
         merged = default;
 
-        if (a.face != b.face || Mathf.Abs(a.plane - b.plane) > ShapeFaceEpsilon)
+        if (a.face != b.face ||
+            Mathf.Abs(a.plane - b.plane) > ShapeFaceEpsilon ||
+            !HasSameAppearance(a, b))
             return false;
 
         bool sameA = Mathf.Abs(a.minA - b.minA) <= ShapeFaceEpsilon && Mathf.Abs(a.maxA - b.maxA) <= ShapeFaceEpsilon;
@@ -1275,6 +1326,15 @@ public class BlockDrop : MonoBehaviour
         return false;
     }
 
+    private static bool HasSameAppearance(ShapeFaceRect a, ShapeFaceRect b)
+    {
+        return a.usesExplicitAppearance == b.usesExplicitAppearance &&
+               (!a.usesExplicitAppearance ||
+                (a.tileX == b.tileX &&
+                 a.tileY == b.tileY &&
+                 a.tint == b.tint));
+    }
+
     private static void AppendShapeRect(
         List<Vector3> vertices,
         List<Vector3> normals,
@@ -1288,6 +1348,10 @@ public class BlockDrop : MonoBehaviour
         float invAtlasTilesX,
         float invAtlasTilesY)
     {
+        bool hasExplicitAppearance = rect.usesExplicitAppearance;
+        Vector2Int explicitTile = new Vector2Int(rect.tileX, rect.tileY);
+        bool explicitTint = rect.tint;
+
         switch (rect.face)
         {
             case BlockFace.Right:
@@ -1299,7 +1363,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.right,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
 
             case BlockFace.Left:
@@ -1311,7 +1378,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.left,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
 
             case BlockFace.Top:
@@ -1323,7 +1393,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.up,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
 
             case BlockFace.Bottom:
@@ -1335,7 +1408,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.down,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
 
             case BlockFace.Front:
@@ -1347,7 +1423,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.forward,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
 
             case BlockFace.Back:
@@ -1359,7 +1438,10 @@ public class BlockDrop : MonoBehaviour
                     Vector3.back,
                     invAtlasTilesX,
                     invAtlasTilesY,
-                    false);
+                    false,
+                    hasExplicitAppearance,
+                    explicitTile,
+                    explicitTint);
                 return;
         }
     }
@@ -1435,12 +1517,15 @@ public class BlockDrop : MonoBehaviour
         Vector3 normal,
         float invAtlasTilesX,
         float invAtlasTilesY,
-        bool invertWinding)
+        bool invertWinding,
+        bool hasExplicitAppearance = false,
+        Vector2Int explicitTile = default(Vector2Int),
+        bool explicitTint = false)
     {
         int baseIndex = vertices.Count;
-        Vector2Int tile = mapping.GetTileCoord(sampledFace);
+        Vector2Int tile = hasExplicitAppearance ? explicitTile : mapping.GetTileCoord(sampledFace);
         Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
-        Vector4 extra = new Vector4(1f, mapping.GetTint(sampledFace) ? 1f : 0f, 1f, 0f);
+        Vector4 extra = new Vector4(1f, (hasExplicitAppearance ? explicitTint : mapping.GetTint(sampledFace)) ? 1f : 0f, 1f, 0f);
 
         vertices.Add(origin + local0);
         vertices.Add(origin + local1);

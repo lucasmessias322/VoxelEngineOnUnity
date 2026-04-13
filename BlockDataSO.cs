@@ -41,12 +41,29 @@ public struct BlockModelCuboid
     [Tooltip("Faces desenhadas para este cuboide. None e tratado como All para facilitar a criacao no Inspector.")]
     public BlockCuboidFaceMask faces;
 
+    [Tooltip("Faces que usam tile proprio neste cuboide. Faces nao marcadas continuam usando o mapping do bloco.")]
+    public BlockCuboidFaceMask textureOverrideFaces;
+
+    public Vector2Int textureTop;
+    public Vector2Int textureBottom;
+    public Vector2Int textureRight;
+    public Vector2Int textureLeft;
+    public Vector2Int textureFront;
+    public Vector2Int textureBack;
+
     public BlockModelCuboid(Vector3 min, Vector3 max)
     {
         this.min = min;
         this.max = max;
         eulerRotation = Vector3.zero;
         faces = BlockCuboidFaceMask.All;
+        textureOverrideFaces = BlockCuboidFaceMask.None;
+        textureTop = Vector2Int.zero;
+        textureBottom = Vector2Int.zero;
+        textureRight = Vector2Int.zero;
+        textureLeft = Vector2Int.zero;
+        textureFront = Vector2Int.zero;
+        textureBack = Vector2Int.zero;
     }
 
     public ShapeBox ToShapeBox()
@@ -57,6 +74,11 @@ public struct BlockModelCuboid
     public BlockCuboidFaceMask EffectiveFaces
     {
         get { return faces == BlockCuboidFaceMask.None ? BlockCuboidFaceMask.All : faces; }
+    }
+
+    public BlockCuboidFaceMask EffectiveTextureOverrideFaces
+    {
+        get { return textureOverrideFaces & BlockCuboidFaceMask.All; }
     }
 
     public bool HasFace(BlockFace face)
@@ -71,6 +93,46 @@ public struct BlockModelCuboid
             case BlockFace.Front: return (mask & BlockCuboidFaceMask.Front) != 0;
             case BlockFace.Back: return (mask & BlockCuboidFaceMask.Back) != 0;
             default: return false;
+        }
+    }
+
+    public bool HasTextureOverride(BlockFace face)
+    {
+        return (EffectiveTextureOverrideFaces & GetMaskForFace(face)) != 0;
+    }
+
+    public Vector2Int GetTileCoord(BlockFace face, BlockTextureMapping fallbackMapping)
+    {
+        return HasTextureOverride(face)
+            ? GetOverrideTileCoord(face)
+            : fallbackMapping.GetTileCoord(face);
+    }
+
+    private Vector2Int GetOverrideTileCoord(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Top: return textureTop;
+            case BlockFace.Bottom: return textureBottom;
+            case BlockFace.Right: return textureRight;
+            case BlockFace.Left: return textureLeft;
+            case BlockFace.Front: return textureFront;
+            case BlockFace.Back: return textureBack;
+            default: return Vector2Int.zero;
+        }
+    }
+
+    private static BlockCuboidFaceMask GetMaskForFace(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Right: return BlockCuboidFaceMask.Right;
+            case BlockFace.Left: return BlockCuboidFaceMask.Left;
+            case BlockFace.Top: return BlockCuboidFaceMask.Top;
+            case BlockFace.Bottom: return BlockCuboidFaceMask.Bottom;
+            case BlockFace.Front: return BlockCuboidFaceMask.Front;
+            case BlockFace.Back: return BlockCuboidFaceMask.Back;
+            default: return BlockCuboidFaceMask.None;
         }
     }
 }
@@ -409,7 +471,14 @@ public class BlockDataSO : ScriptableObject
             min = min,
             max = max,
             eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(source.eulerRotation),
-            faces = source.EffectiveFaces
+            faces = source.EffectiveFaces,
+            textureOverrideFaces = source.EffectiveTextureOverrideFaces,
+            textureTop = source.textureTop,
+            textureBottom = source.textureBottom,
+            textureRight = source.textureRight,
+            textureLeft = source.textureLeft,
+            textureFront = source.textureFront,
+            textureBack = source.textureBack
         };
         return true;
     }
@@ -1246,7 +1315,14 @@ public static class BlockShapeUtility
             min = sanitized.min,
             max = sanitized.max,
             eulerRotation = NormalizeCuboidEulerRotation(source.eulerRotation),
-            faces = source.EffectiveFaces
+            faces = source.EffectiveFaces,
+            textureOverrideFaces = source.EffectiveTextureOverrideFaces,
+            textureTop = source.textureTop,
+            textureBottom = source.textureBottom,
+            textureRight = source.textureRight,
+            textureLeft = source.textureLeft,
+            textureFront = source.textureFront,
+            textureBack = source.textureBack
         };
         return true;
     }
