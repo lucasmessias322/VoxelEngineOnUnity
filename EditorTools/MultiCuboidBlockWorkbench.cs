@@ -12,6 +12,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public const float DefaultSnapStep = 0.0625f;
     private const float MinCuboidSize = 0.01f;
     private static readonly Vector3 HalfVoxelOffset = Vector3.one * 0.5f;
+    private static Mesh previewMesh;
 
     [Header("Block Source")]
     public BlockDataSO blockData;
@@ -58,7 +59,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     private void OnEnable()
     {
         EnsureCuboidList();
-        if (GetWorkbenchChildCount() != cuboids.Count)
+        if (NeedsVisualRebuild())
             RebuildVisuals();
     }
 
@@ -69,7 +70,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 
         EnsureCuboidList();
 
-        if (GetWorkbenchChildCount() != cuboids.Count)
+        if (NeedsVisualRebuild())
         {
             RebuildVisuals();
             return;
@@ -577,18 +578,23 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 
     private void CreateCuboidChild(int index)
     {
-        GameObject child = GameObject.CreatePrimitive(PrimitiveType.Cube);
+        GameObject child = new GameObject(GetCuboidChildName(index));
+        MeshFilter meshFilter = child.AddComponent<MeshFilter>();
+        MeshRenderer renderer = child.AddComponent<MeshRenderer>();
         child.name = GetCuboidChildName(index);
         child.transform.SetParent(transform, false);
+
+        meshFilter.sharedMesh = GetPreviewMesh();
 
         MultiCuboidWorkbenchCuboid marker = child.AddComponent<MultiCuboidWorkbenchCuboid>();
         marker.owner = this;
         marker.index = index;
 
-        Renderer renderer = child.GetComponent<Renderer>();
         if (renderer != null)
         {
             renderer.sharedMaterial = GetPreviewMaterial();
+            renderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.Off;
+            renderer.receiveShadows = false;
             ApplyColor(renderer, index);
         }
 
@@ -642,7 +648,134 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             hideFlags = HideFlags.HideAndDontSave
         };
 
+        if (previewMaterial.HasProperty("_BaseColor"))
+            previewMaterial.SetColor("_BaseColor", Color.white);
+        if (previewMaterial.HasProperty("_Color"))
+            previewMaterial.SetColor("_Color", Color.white);
+        if (previewMaterial.HasProperty("_Cull"))
+            previewMaterial.SetFloat("_Cull", (float)UnityEngine.Rendering.CullMode.Off);
+        if (previewMaterial.HasProperty("_CullMode"))
+            previewMaterial.SetFloat("_CullMode", (float)UnityEngine.Rendering.CullMode.Off);
+        if (previewMaterial.HasProperty("_ZWrite"))
+            previewMaterial.SetFloat("_ZWrite", 1f);
+        if (previewMaterial.HasProperty("_Surface"))
+            previewMaterial.SetFloat("_Surface", 0f);
+        previewMaterial.doubleSidedGI = true;
+
         return previewMaterial;
+    }
+
+    private static Mesh GetPreviewMesh()
+    {
+        if (previewMesh != null)
+            return previewMesh;
+
+        previewMesh = new Mesh
+        {
+            name = "Multi Cuboid Workbench Preview Mesh",
+            hideFlags = HideFlags.HideAndDontSave
+        };
+
+        List<Vector3> vertices = new List<Vector3>(24);
+        List<Vector3> normals = new List<Vector3>(24);
+        List<int> triangles = new List<int>(72);
+
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(0.5f, -0.5f, 0.5f),
+            Vector3.right);
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            Vector3.left);
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            Vector3.up);
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, -0.5f, -0.5f),
+            new Vector3(0.5f, -0.5f, 0.5f),
+            Vector3.down);
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(0.5f, -0.5f, 0.5f),
+            new Vector3(0.5f, 0.5f, 0.5f),
+            new Vector3(-0.5f, 0.5f, 0.5f),
+            new Vector3(-0.5f, -0.5f, 0.5f),
+            Vector3.forward);
+        AddDoubleSidedFace(
+            vertices,
+            normals,
+            triangles,
+            new Vector3(-0.5f, -0.5f, -0.5f),
+            new Vector3(-0.5f, 0.5f, -0.5f),
+            new Vector3(0.5f, 0.5f, -0.5f),
+            new Vector3(0.5f, -0.5f, -0.5f),
+            Vector3.back);
+
+        previewMesh.SetVertices(vertices);
+        previewMesh.SetNormals(normals);
+        previewMesh.SetTriangles(triangles, 0, true);
+        previewMesh.RecalculateBounds();
+        return previewMesh;
+    }
+
+    private static void AddDoubleSidedFace(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<int> triangles,
+        Vector3 p0,
+        Vector3 p1,
+        Vector3 p2,
+        Vector3 p3,
+        Vector3 normal)
+    {
+        int start = vertices.Count;
+        vertices.Add(p0);
+        vertices.Add(p1);
+        vertices.Add(p2);
+        vertices.Add(p3);
+
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+
+        triangles.Add(start + 0);
+        triangles.Add(start + 1);
+        triangles.Add(start + 2);
+        triangles.Add(start + 0);
+        triangles.Add(start + 2);
+        triangles.Add(start + 3);
+
+        triangles.Add(start + 0);
+        triangles.Add(start + 2);
+        triangles.Add(start + 1);
+        triangles.Add(start + 0);
+        triangles.Add(start + 3);
+        triangles.Add(start + 2);
     }
 
     private void DestroyWorkbenchChildren()
@@ -658,6 +791,31 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             else
                 DestroyImmediate(child.gameObject);
         }
+    }
+
+    private bool NeedsVisualRebuild()
+    {
+        if (GetWorkbenchChildCount() != cuboids.Count)
+            return true;
+
+        MultiCuboidWorkbenchCuboid[] markers = GetChildMarkers();
+        Mesh expectedMesh = GetPreviewMesh();
+        for (int i = 0; i < markers.Length; i++)
+        {
+            MultiCuboidWorkbenchCuboid marker = markers[i];
+            if (marker == null || marker.owner != this || marker.index != i)
+                return true;
+
+            MeshFilter meshFilter = marker.GetComponent<MeshFilter>();
+            MeshRenderer meshRenderer = marker.GetComponent<MeshRenderer>();
+            if (meshFilter == null || meshRenderer == null)
+                return true;
+
+            if (meshFilter.sharedMesh != expectedMesh)
+                return true;
+        }
+
+        return false;
     }
 
     private int GetWorkbenchChildCount()
