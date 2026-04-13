@@ -15,6 +15,15 @@ public class PlayerBlockBreaker : MonoBehaviour
         Wood = 3
     }
 
+    private const float MinecraftTicksPerSecond = 20f;
+    private const float MinecraftMinBreakDurationSeconds = 1f / MinecraftTicksPerSecond;
+    private const float MinecraftHarvestableDamageDivisor = 30f;
+    private const float MinecraftUnharvestableDamageDivisor = 100f;
+    private const float MinecraftStoneToolSpeed = 4f;
+    private const float MinecraftIronToolSpeed = 6f;
+    private const float MinecraftDiamondToolSpeed = 8f;
+    private const float MinecraftNetheriteToolSpeed = 9f;
+    private const float MinecraftGoldenToolSpeed = 12f;
     private const float BreakVisualDefaultAOCurveExponent = 1.12f;
     private static readonly Vector3Int[] BreakVisualHorizontalLightDirections =
     {
@@ -39,6 +48,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     public AudioClip breakBlockClip;
 
     [Header("Break settings")]
+    [Tooltip("Fallback usado somente para BlockTypes sem dureza Minecraft mapeada.")]
     [Min(0.05f)] public float breakDurationSeconds = 0.45f;
     [Tooltip("Material transparente para desenhar as rachaduras sobre o bloco.")]
     public Material breakCrackMaterial;
@@ -189,7 +199,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (breakProgress01 < 1f)
             return;
 
-        bool shouldDrop = !creativeMode && ShouldDropBlock(current);
+        bool canHarvestDrop = CanHarvestSelectedBlock(current);
+        bool shouldDrop = !creativeMode && ShouldDropBlock(current, canHarvestDrop);
         Vector3 throwDir = cam != null ? cam.transform.forward : transform.forward;
         bool treeCapitatorTriggered = world.TryQueueTreeCapitatorBreak(sel, current, shouldDrop, throwDir);
         if (!treeCapitatorTriggered)
@@ -216,14 +227,17 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     bool CanBreak(BlockType blockType)
     {
-        return blockType != BlockType.Bedrock &&
-               blockType != BlockType.Air &&
-               !IsLiquid(blockType);
+        return blockType != BlockType.Air &&
+               !IsLiquid(blockType) &&
+               ResolveBlockHardness(blockType) >= 0f;
     }
 
-    bool ShouldDropBlock(BlockType blockType)
+    bool ShouldDropBlock(BlockType blockType, bool canHarvest)
     {
-        return blockType != BlockType.Leaves;
+        if (blockType == BlockType.Leaves)
+            return false;
+
+        return !RequiresCorrectToolForDrop(blockType) || canHarvest;
     }
 
     bool IsLiquid(BlockType blockType)
@@ -240,32 +254,43 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     float GetBreakDurationSeconds(BlockType blockType)
     {
-        float duration = Mathf.Max(0.05f, breakDurationSeconds);
-
         World world = World.Instance;
-        if (world == null || world.blockData == null)
-            return duration;
+        BlockTextureMapping? mapping = world != null && world.blockData != null
+            ? world.blockData.GetMapping(blockType)
+            : null;
 
-        BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
-        if (mapping == null)
-            return duration;
+        float hardness = ResolveBlockHardness(blockType, mapping);
+        if (hardness < 0f)
+            return float.PositiveInfinity;
+        if (hardness <= 0f)
+            return MinecraftMinBreakDurationSeconds;
 
-        BlockTextureMapping blockMapping = mapping.Value;
-        float hardnessMultiplier = ResolveBreakTimeMultiplier(blockType, blockMapping);
-        ToolType preferredTool = ResolvePreferredTool(blockType, blockMapping);
+        ToolType preferredTool = mapping != null
+            ? ResolvePreferredTool(blockType, mapping.Value)
+            : GetDefaultPreferredTool(blockType);
+        bool hasSelectedTool = TryGetSelectedTool(out ToolType selectedTool, out float toolSpeed);
+        bool canHarvest = CanHarvestBlock(blockType, hasSelectedTool, selectedTool, toolSpeed);
+        bool isBestTool = preferredTool != ToolType.None &&
+                          hasSelectedTool &&
+                          selectedTool == preferredTool;
 
-        duration *= hardnessMultiplier;
+        float speedMultiplier = 1f;
+        if (isBestTool && canHarvest)
+            speedMultiplier = Mathf.Max(1f, toolSpeed);
 
-        if (preferredTool == ToolType.None)
-            return Mathf.Max(0.05f, duration);
+        float damagePerTick = speedMultiplier / hardness;
+        damagePerTick /= canHarvest
+            ? MinecraftHarvestableDamageDivisor
+            : MinecraftUnharvestableDamageDivisor;
 
-        if (!TryGetSelectedTool(out ToolType selectedTool, out float toolEfficiency))
-            return Mathf.Max(0.05f, duration);
+        float duration = damagePerTick > 1f
+            ? MinecraftMinBreakDurationSeconds
+            : Mathf.Ceil(1f / Mathf.Max(0.0001f, damagePerTick)) / MinecraftTicksPerSecond;
 
-        if (selectedTool != preferredTool)
-            return Mathf.Max(0.05f, duration);
+        if (mapping != null && mapping.Value.breakTimeMultiplier > 0f)
+            duration *= mapping.Value.breakTimeMultiplier;
 
-        return Mathf.Max(0.05f, duration / Mathf.Max(1f, toolEfficiency));
+        return Mathf.Max(MinecraftMinBreakDurationSeconds, duration);
     }
 
     bool TryGetSelectedTool(out ToolType toolType, out float toolEfficiency)
@@ -276,9 +301,96 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (hotbar == null || !hotbar.TryGetSelectedItem(out Item selectedItem) || selectedItem == null)
             return false;
 
+        if (PlayerInventory.Instance != null &&
+            PlayerInventory.Instance.TryGetBlockForItem(selectedItem, out _))
+        {
+            return false;
+        }
+
         toolType = selectedItem.toolType;
         toolEfficiency = Mathf.Max(1f, selectedItem.toolEfficiency);
         return toolType != ToolType.None;
+    }
+
+    bool CanHarvestBlock(BlockType blockType, bool hasSelectedTool, ToolType selectedTool, float toolSpeed)
+    {
+        ToolType requiredTool = GetRequiredToolForDrop(blockType);
+        if (requiredTool == ToolType.None)
+            return true;
+
+        if (!hasSelectedTool || selectedTool != requiredTool)
+            return false;
+
+        return GetToolHarvestTier(toolSpeed) >= GetRequiredHarvestTier(blockType);
+    }
+
+    bool CanHarvestSelectedBlock(BlockType blockType)
+    {
+        bool hasSelectedTool = TryGetSelectedTool(out ToolType selectedTool, out float toolSpeed);
+        return CanHarvestBlock(blockType, hasSelectedTool, selectedTool, toolSpeed);
+    }
+
+    bool RequiresCorrectToolForDrop(BlockType blockType)
+    {
+        return GetRequiredToolForDrop(blockType) != ToolType.None;
+    }
+
+    ToolType GetRequiredToolForDrop(BlockType blockType)
+    {
+        switch (blockType)
+        {
+            case BlockType.Stone:
+            case BlockType.Deepslate:
+            case BlockType.CoalOre:
+            case BlockType.IronOre:
+            case BlockType.GoldOre:
+            case BlockType.Copper_ore:
+            case BlockType.DiamondOre:
+            case BlockType.EmeraldOre:
+            case BlockType.Crafter:
+            case BlockType.StoneFurnance:
+                return ToolType.Pickaxe;
+
+            case BlockType.Snow:
+                return ToolType.Shovel;
+
+            default:
+                return ToolType.None;
+        }
+    }
+
+    int GetRequiredHarvestTier(BlockType blockType)
+    {
+        switch (blockType)
+        {
+            case BlockType.IronOre:
+            case BlockType.Copper_ore:
+                return 1;
+
+            case BlockType.GoldOre:
+            case BlockType.DiamondOre:
+            case BlockType.EmeraldOre:
+                return 2;
+
+            default:
+                return 0;
+        }
+    }
+
+    int GetToolHarvestTier(float toolSpeed)
+    {
+        if (toolSpeed >= MinecraftGoldenToolSpeed)
+            return 0;
+        if (toolSpeed >= MinecraftNetheriteToolSpeed)
+            return 3;
+        if (toolSpeed >= MinecraftDiamondToolSpeed)
+            return 3;
+        if (toolSpeed >= MinecraftIronToolSpeed)
+            return 2;
+        if (toolSpeed >= MinecraftStoneToolSpeed)
+            return 1;
+
+        return 0;
     }
 
     BlockType GetBillboardBreakType(Vector3Int billboardPos)
@@ -304,12 +416,22 @@ public class PlayerBlockBreaker : MonoBehaviour
         return GetDefaultPreferredTool(blockType);
     }
 
-    float ResolveBreakTimeMultiplier(BlockType blockType, BlockTextureMapping mapping)
+    float ResolveBlockHardness(BlockType blockType)
     {
-        if (mapping.breakTimeMultiplier > 0f)
-            return mapping.breakTimeMultiplier;
+        World world = World.Instance;
+        BlockTextureMapping? mapping = world != null && world.blockData != null
+            ? world.blockData.GetMapping(blockType)
+            : null;
 
-        return GetDefaultBreakTimeMultiplier(blockType);
+        return ResolveBlockHardness(blockType, mapping);
+    }
+
+    float ResolveBlockHardness(BlockType blockType, BlockTextureMapping? mapping)
+    {
+        if (mapping != null && mapping.Value.minecraftHardness != 0f)
+            return mapping.Value.minecraftHardness;
+
+        return GetDefaultMinecraftHardness(blockType);
     }
 
     ToolType GetDefaultPreferredTool(BlockType blockType)
@@ -324,16 +446,17 @@ public class PlayerBlockBreaker : MonoBehaviour
             case BlockType.Copper_ore:
             case BlockType.DiamondOre:
             case BlockType.EmeraldOre:
-            case BlockType.glass:
-            case BlockType.glowstone:
             case BlockType.Crafter:
+            case BlockType.StoneFurnance:
                 return ToolType.Pickaxe;
 
             case BlockType.Log:
             case BlockType.birch_log:
             case BlockType.acacia_log:
             case BlockType.oak_planks:
-            case BlockType.Cactus:
+            case BlockType.Oak_Leader:
+            case BlockType.Oak_Ramp:
+            case BlockType.Oak_VerticalRamp:
                 return ToolType.Axe;
 
             case BlockType.Grass:
@@ -351,37 +474,89 @@ public class PlayerBlockBreaker : MonoBehaviour
         }
     }
 
-    float GetDefaultBreakTimeMultiplier(BlockType blockType)
+    float GetDefaultMinecraftHardness(BlockType blockType)
     {
         switch (blockType)
         {
+            case BlockType.Air:
+                return 0f;
+
+            case BlockType.Bedrock:
+                return -1f;
+
+            case BlockType.Grass:
+                return 0.6f;
+
+            case BlockType.Dirt:
+            case BlockType.Sand:
+                return 0.5f;
+
             case BlockType.Stone:
-                return 1.25f;
+            case BlockType.Crafter:
+                return 1.5f;
+
             case BlockType.Deepslate:
-                return 1.75f;
             case BlockType.CoalOre:
             case BlockType.IronOre:
             case BlockType.GoldOre:
             case BlockType.Copper_ore:
             case BlockType.DiamondOre:
             case BlockType.EmeraldOre:
-                return 1.5f;
+                return 3f;
+
+            case BlockType.Leaves:
+            case BlockType.Snow:
+                return 0.2f;
+
             case BlockType.Log:
             case BlockType.birch_log:
             case BlockType.acacia_log:
             case BlockType.oak_planks:
+            case BlockType.Oak_Leader:
+            case BlockType.Oak_Ramp:
+            case BlockType.Oak_VerticalRamp:
+                return 2f;
+
+            case BlockType.glass:
+            case BlockType.glowstone:
+                return 0.3f;
+
             case BlockType.Cactus:
-                return 1.1f;
-            case BlockType.Grass:
-            case BlockType.Dirt:
-            case BlockType.Sand:
-            case BlockType.Snow:
-                return 0.85f;
-            case BlockType.Leaves:
+                return 0.4f;
+
+            case BlockType.StoneFurnance:
+                return 3.5f;
+
             case BlockType.short_grass4:
-                return 0.35f;
+            case BlockType.dead_bush:
+            case BlockType.torch:
+            case BlockType.WallTorchEast:
+            case BlockType.WallTorchWest:
+            case BlockType.WallTorchSouth:
+            case BlockType.WallTorchNorth:
+            case BlockType.wire:
+                return 0f;
+
+            case BlockType.Water:
+            case BlockType.WaterFlow1:
+            case BlockType.WaterFlow2:
+            case BlockType.WaterFlow3:
+            case BlockType.WaterFlow4:
+            case BlockType.WaterFlow5:
+            case BlockType.WaterFlow6:
+            case BlockType.WaterFlow7:
+            case BlockType.WaterFall0:
+            case BlockType.WaterFall1:
+            case BlockType.WaterFall2:
+            case BlockType.WaterFall3:
+            case BlockType.WaterFall4:
+            case BlockType.WaterFall5:
+            case BlockType.WaterFall6:
+            case BlockType.WaterFall7:
+                return 100f;
+
             default:
-                return 1f;
+                return Mathf.Max(MinecraftMinBreakDurationSeconds, breakDurationSeconds) / 1.5f;
         }
     }
 

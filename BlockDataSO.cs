@@ -428,6 +428,9 @@ public struct BlockTextureMapping
     public int materialIndex;  // default: 0
 
     [Header("Breaking")]
+    [Tooltip("Dureza estilo Minecraft. 0 usa o valor padrao do BlockType; -1 torna o bloco inquebravel no Survival.")]
+    [Min(-1f)] public float minecraftHardness;
+    [Tooltip("Ajuste legado opcional aplicado depois da formula Minecraft. 0 ignora.")]
     [Min(0f)] public float breakTimeMultiplier;
     public ToolType preferredTool;
 
