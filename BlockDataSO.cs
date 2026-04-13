@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
-public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7 }
+public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7, MultiCuboid = 8 }
 public enum BlockPlacementAxis : byte
 {
     Y = 0,
@@ -12,6 +12,71 @@ public enum BlockPlacementAxis : byte
     ZNegative = 4
 }
 public enum BlockPlacementRotationAxes : byte { Vertical = 0, Horizontal = 1, Both = 2 }
+
+[System.Flags]
+public enum BlockCuboidFaceMask : byte
+{
+    None = 0,
+    Right = 1 << 0,
+    Left = 1 << 1,
+    Top = 1 << 2,
+    Bottom = 1 << 3,
+    Front = 1 << 4,
+    Back = 1 << 5,
+    All = Right | Left | Top | Bottom | Front | Back
+}
+
+[System.Serializable]
+public struct BlockModelCuboid
+{
+    [Tooltip("Canto minimo local do cuboide dentro do voxel (0..1).")]
+    public Vector3 min;
+
+    [Tooltip("Canto maximo local do cuboide dentro do voxel (0..1).")]
+    public Vector3 max;
+
+    [Tooltip("Faces desenhadas para este cuboide. None e tratado como All para facilitar a criacao no Inspector.")]
+    public BlockCuboidFaceMask faces;
+
+    public BlockModelCuboid(Vector3 min, Vector3 max)
+    {
+        this.min = min;
+        this.max = max;
+        faces = BlockCuboidFaceMask.All;
+    }
+
+    public ShapeBox ToShapeBox()
+    {
+        return new ShapeBox(min, max);
+    }
+
+    public BlockCuboidFaceMask EffectiveFaces
+    {
+        get { return faces == BlockCuboidFaceMask.None ? BlockCuboidFaceMask.All : faces; }
+    }
+
+    public bool HasFace(BlockFace face)
+    {
+        BlockCuboidFaceMask mask = EffectiveFaces;
+        switch (face)
+        {
+            case BlockFace.Right: return (mask & BlockCuboidFaceMask.Right) != 0;
+            case BlockFace.Left: return (mask & BlockCuboidFaceMask.Left) != 0;
+            case BlockFace.Top: return (mask & BlockCuboidFaceMask.Top) != 0;
+            case BlockFace.Bottom: return (mask & BlockCuboidFaceMask.Bottom) != 0;
+            case BlockFace.Front: return (mask & BlockCuboidFaceMask.Front) != 0;
+            case BlockFace.Back: return (mask & BlockCuboidFaceMask.Back) != 0;
+            default: return false;
+        }
+    }
+}
+
+[System.Serializable]
+public sealed class BlockMultiCuboidDefinition
+{
+    public BlockType blockType;
+    public List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>();
+}
 
 public static class WirePlacementUtility
 {
@@ -213,8 +278,15 @@ public class BlockDataSO : ScriptableObject
     public bool atlasCoordinatesStartTopLeft = true;
     public List<BlockTextureMapping> blockTextures = new List<BlockTextureMapping>();
 
+    [Header("Multi Cubos")]
+    [Tooltip("Modelos por blocos compostos por varios cuboides 0..1. Use renderShape = MultiCuboid no bloco, ou preencha uma entrada aqui para ativar automaticamente.")]
+    public List<BlockMultiCuboidDefinition> multiCuboidShapes = new List<BlockMultiCuboidDefinition>();
+
     [System.NonSerialized]
     public BlockTextureMapping[] mappings;
+
+    [System.NonSerialized]
+    public BlockModelCuboid[] runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
 
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
@@ -250,6 +322,99 @@ public class BlockDataSO : ScriptableObject
 
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
+        BuildMultiCuboidRuntimeData();
+    }
+
+    private void BuildMultiCuboidRuntimeData()
+    {
+        if (mappings == null)
+        {
+            runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
+            return;
+        }
+
+        for (int i = 0; i < mappings.Length; i++)
+        {
+            BlockTextureMapping mapping = mappings[i];
+            mapping.multiCuboidStartIndex = 0;
+            mapping.multiCuboidCount = 0;
+            mappings[i] = mapping;
+        }
+
+        if (multiCuboidShapes == null || multiCuboidShapes.Count == 0)
+        {
+            runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
+            return;
+        }
+
+        List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>(multiCuboidShapes.Count * 3);
+        for (int i = 0; i < multiCuboidShapes.Count; i++)
+        {
+            BlockMultiCuboidDefinition definition = multiCuboidShapes[i];
+            if (definition == null || definition.cuboids == null)
+                continue;
+
+            int mappingIndex = (int)definition.blockType;
+            if (mappingIndex < 0 || mappingIndex >= mappings.Length)
+                continue;
+
+            int startIndex = cuboids.Count;
+            for (int c = 0; c < definition.cuboids.Count; c++)
+            {
+                if (!TrySanitizeModelCuboid(definition.cuboids[c], out BlockModelCuboid sanitized))
+                    continue;
+
+                cuboids.Add(sanitized);
+            }
+
+            int count = cuboids.Count - startIndex;
+            if (count <= 0)
+                continue;
+
+            BlockTextureMapping mapping = mappings[mappingIndex];
+            mapping.blockType = definition.blockType;
+            mapping.renderShape = BlockRenderShape.MultiCuboid;
+            mapping.multiCuboidStartIndex = startIndex;
+            mapping.multiCuboidCount = count;
+            mappings[mappingIndex] = mapping;
+        }
+
+        runtimeMultiCuboidBoxes = cuboids.Count > 0
+            ? cuboids.ToArray()
+            : System.Array.Empty<BlockModelCuboid>();
+    }
+
+    private static bool TrySanitizeModelCuboid(BlockModelCuboid source, out BlockModelCuboid sanitized)
+    {
+        Vector3 min = Clamp01(source.min);
+        Vector3 max = Clamp01(source.max);
+
+        bool valid =
+            max.x > min.x + 0.0001f &&
+            max.y > min.y + 0.0001f &&
+            max.z > min.z + 0.0001f;
+
+        if (!valid)
+        {
+            sanitized = default;
+            return false;
+        }
+
+        sanitized = new BlockModelCuboid
+        {
+            min = min,
+            max = max,
+            faces = source.EffectiveFaces
+        };
+        return true;
+    }
+
+    private static Vector3 Clamp01(Vector3 value)
+    {
+        return new Vector3(
+            Mathf.Clamp01(value.x),
+            Mathf.Clamp01(value.y),
+            Mathf.Clamp01(value.z));
     }
 
     private static int GetMaxBlockTypeValue()
@@ -418,6 +583,8 @@ public struct BlockTextureMapping
     public Vector3 shapeMin;
     [Tooltip("Canto maximo local do formato dentro do voxel (0..1). Usado em Cross, Cuboid e Plane.")]
     public Vector3 shapeMax;
+    [HideInInspector] public int multiCuboidStartIndex;
+    [HideInInspector] public int multiCuboidCount;
 
     [Header("Behavior (use to control face culling / water handling)")]
     public bool isEmpty;       // ex: true para agua/ar
@@ -625,8 +792,9 @@ public static class BlockPlacementRotationUtility
         if (!mapping.usePlacementAxisRotation)
             return worldFace;
 
+        BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
         if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
-            BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+            (shape == BlockRenderShape.Cube || shape == BlockRenderShape.MultiCuboid))
         {
             return RemapHorizontalFacingFace(worldFace, axis);
         }
@@ -1022,6 +1190,199 @@ public static class BlockShapeUtility
             return 0.5f;
 
         return hasNegativeSupport ? PlaneAttachmentInset01 : 1f - PlaneAttachmentInset01;
+    }
+
+    public static int GetMultiCuboidBoxCount(BlockTextureMapping mapping, BlockModelCuboid[] cuboids)
+    {
+        if (cuboids == null || cuboids.Length == 0 || mapping.multiCuboidCount <= 0)
+            return 0;
+
+        if (mapping.multiCuboidStartIndex < 0 || mapping.multiCuboidStartIndex >= cuboids.Length)
+            return 0;
+
+        return Mathf.Min(mapping.multiCuboidCount, cuboids.Length - mapping.multiCuboidStartIndex);
+    }
+
+    public static bool TryGetMultiCuboidBox(
+        BlockTextureMapping mapping,
+        BlockModelCuboid[] cuboids,
+        int localIndex,
+        BlockPlacementAxis placementAxis,
+        out ShapeBox box)
+    {
+        box = default;
+        int count = GetMultiCuboidBoxCount(mapping, cuboids);
+        if (localIndex < 0 || localIndex >= count)
+            return false;
+
+        BlockModelCuboid cuboid = cuboids[mapping.multiCuboidStartIndex + localIndex];
+        if (!TrySanitizeShapeBox(cuboid.min, cuboid.max, out ShapeBox sanitized))
+            return false;
+
+        box = TransformShapeBoxForPlacement(sanitized, mapping, placementAxis);
+        return true;
+    }
+
+    public static bool TryGetMultiCuboidBounds(
+        Vector3Int blockPos,
+        BlockTextureMapping mapping,
+        BlockModelCuboid[] cuboids,
+        BlockPlacementAxis placementAxis,
+        out Bounds bounds)
+    {
+        bounds = default;
+        int count = GetMultiCuboidBoxCount(mapping, cuboids);
+        if (count <= 0)
+            return false;
+
+        bool hasBounds = false;
+        for (int i = 0; i < count; i++)
+        {
+            if (!TryGetMultiCuboidBox(mapping, cuboids, i, placementAxis, out ShapeBox box))
+                continue;
+
+            Bounds boxBounds = box.ToWorldBounds(blockPos);
+            if (!hasBounds)
+            {
+                bounds = boxBounds;
+                hasBounds = true;
+                continue;
+            }
+
+            bounds.Encapsulate(boxBounds);
+        }
+
+        return hasBounds;
+    }
+
+    public static ShapeBox TransformShapeBoxForPlacement(
+        ShapeBox box,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (!ShouldRotateShapeForPlacement(mapping))
+            return box;
+
+        return RotateHorizontalShapeBox(box, placementAxis);
+    }
+
+    public static BlockFace TransformFaceForPlacement(
+        BlockFace face,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (!ShouldRotateShapeForPlacement(mapping))
+            return face;
+
+        return RotateHorizontalFace(face, placementAxis);
+    }
+
+    private static bool ShouldRotateShapeForPlacement(BlockTextureMapping mapping)
+    {
+        if (!mapping.usePlacementAxisRotation)
+            return false;
+
+        return mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal ||
+               mapping.placementRotationAxes == BlockPlacementRotationAxes.Both;
+    }
+
+    private static bool TrySanitizeShapeBox(Vector3 sourceMin, Vector3 sourceMax, out ShapeBox box)
+    {
+        Vector3 min = Clamp01(sourceMin);
+        Vector3 max = Clamp01(sourceMax);
+        bool valid =
+            max.x > min.x + BoundsEpsilon &&
+            max.y > min.y + BoundsEpsilon &&
+            max.z > min.z + BoundsEpsilon;
+
+        if (!valid)
+        {
+            box = default;
+            return false;
+        }
+
+        box = new ShapeBox(min, max);
+        return true;
+    }
+
+    private static ShapeBox RotateHorizontalShapeBox(ShapeBox box, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        if (axis == BlockPlacementAxis.Y || axis == BlockPlacementAxis.Z)
+            return box;
+
+        Vector3 a = RotateHorizontalPoint(new Vector3(box.min.x, box.min.y, box.min.z), axis);
+        Vector3 b = RotateHorizontalPoint(new Vector3(box.max.x, box.min.y, box.min.z), axis);
+        Vector3 c = RotateHorizontalPoint(new Vector3(box.min.x, box.min.y, box.max.z), axis);
+        Vector3 d = RotateHorizontalPoint(new Vector3(box.max.x, box.min.y, box.max.z), axis);
+
+        float minX = Mathf.Min(Mathf.Min(a.x, b.x), Mathf.Min(c.x, d.x));
+        float maxX = Mathf.Max(Mathf.Max(a.x, b.x), Mathf.Max(c.x, d.x));
+        float minZ = Mathf.Min(Mathf.Min(a.z, b.z), Mathf.Min(c.z, d.z));
+        float maxZ = Mathf.Max(Mathf.Max(a.z, b.z), Mathf.Max(c.z, d.z));
+
+        return new ShapeBox(
+            new Vector3(minX, box.min.y, minZ),
+            new Vector3(maxX, box.max.y, maxZ));
+    }
+
+    private static Vector3 RotateHorizontalPoint(Vector3 point, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                return new Vector3(point.z, point.y, 1f - point.x);
+
+            case BlockPlacementAxis.ZNegative:
+                return new Vector3(1f - point.x, point.y, 1f - point.z);
+
+            case BlockPlacementAxis.XNegative:
+                return new Vector3(1f - point.z, point.y, point.x);
+
+            default:
+                return point;
+        }
+    }
+
+    private static BlockFace RotateHorizontalFace(BlockFace face, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                switch (face)
+                {
+                    case BlockFace.Right: return BlockFace.Back;
+                    case BlockFace.Left: return BlockFace.Front;
+                    case BlockFace.Front: return BlockFace.Right;
+                    case BlockFace.Back: return BlockFace.Left;
+                    default: return face;
+                }
+
+            case BlockPlacementAxis.ZNegative:
+                switch (face)
+                {
+                    case BlockFace.Right: return BlockFace.Left;
+                    case BlockFace.Left: return BlockFace.Right;
+                    case BlockFace.Front: return BlockFace.Back;
+                    case BlockFace.Back: return BlockFace.Front;
+                    default: return face;
+                }
+
+            case BlockPlacementAxis.XNegative:
+                switch (face)
+                {
+                    case BlockFace.Right: return BlockFace.Front;
+                    case BlockFace.Left: return BlockFace.Back;
+                    case BlockFace.Front: return BlockFace.Left;
+                    case BlockFace.Back: return BlockFace.Right;
+                    default: return face;
+                }
+
+            default:
+                return face;
+        }
     }
 
     private static Vector3 Clamp01(Vector3 value)

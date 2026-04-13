@@ -107,6 +107,22 @@ public static partial class MeshGenerator
                                         AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
                                         break;
 
+                                    case BlockRenderShape.MultiCuboid:
+                                        AddMultiCuboidShape(
+                                            origin,
+                                            mapping,
+                                            placementAxis,
+                                            x,
+                                            y,
+                                            z,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
                                     case BlockRenderShape.Plane:
                                         AddPlaneShape(
                                             origin,
@@ -1386,6 +1402,113 @@ public static partial class MeshGenerator
             AddStaticLitShapeBox(origin, mapping, FenceShapeUtility.GetRailVisualBox(directionFlag, true), light01, invAtlasTilesX, invAtlasTilesY, tris);
         }
 
+        private void AddMultiCuboidShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+            FixedList512Bytes<ShapeBox> shapeBoxes = default;
+            FixedList4096Bytes<ShapeFaceRect> faceRects = default;
+
+            int boxCount = GetNativeMultiCuboidBoxCount(mapping);
+            for (int i = 0; i < boxCount && i < 16; i++)
+            {
+                if (!TryGetNativeMultiCuboid(mapping, i, out BlockModelCuboid cuboid))
+                    continue;
+
+                ShapeBox box = BlockShapeUtility.TransformShapeBoxForPlacement(cuboid.ToShapeBox(), mapping, placementAxis);
+                shapeBoxes.Add(box);
+                AppendModelCuboidFaceRects(ref faceRects, box, cuboid, mapping, placementAxis);
+            }
+
+            if (shapeBoxes.Length == 0)
+            {
+                ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+                ShapeBox fallback = new ShapeBox(fallbackMin, fallbackMax);
+                shapeBoxes.Add(fallback);
+                AppendShapeFaceRects(ref faceRects, fallback);
+            }
+
+            MergeShapeFaceRects(ref faceRects);
+
+            for (int i = 0; i < faceRects.Length; i++)
+            {
+                AddAmbientOccludedShapeRect(
+                    origin,
+                    mapping,
+                    faceRects[i],
+                    light01,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris,
+                    shapeBoxes,
+                    BlockRenderShape.MultiCuboid,
+                    placementAxis,
+                    RampShapeVariant.Straight);
+            }
+        }
+
+        private int GetNativeMultiCuboidBoxCount(BlockTextureMapping mapping)
+        {
+            if (!blockModelCuboids.IsCreated || blockModelCuboids.Length == 0 || mapping.multiCuboidCount <= 0)
+                return 0;
+
+            if (mapping.multiCuboidStartIndex < 0 || mapping.multiCuboidStartIndex >= blockModelCuboids.Length)
+                return 0;
+
+            return math.min(mapping.multiCuboidCount, blockModelCuboids.Length - mapping.multiCuboidStartIndex);
+        }
+
+        private bool TryGetNativeMultiCuboid(BlockTextureMapping mapping, int localIndex, out BlockModelCuboid cuboid)
+        {
+            cuboid = default;
+            int count = GetNativeMultiCuboidBoxCount(mapping);
+            if (localIndex < 0 || localIndex >= count)
+                return false;
+
+            cuboid = blockModelCuboids[mapping.multiCuboidStartIndex + localIndex];
+            return true;
+        }
+
+        private FixedList512Bytes<ShapeBox> BuildNativeMultiCuboidShapeBoxes(
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis)
+        {
+            FixedList512Bytes<ShapeBox> boxes = default;
+            int boxCount = GetNativeMultiCuboidBoxCount(mapping);
+            for (int i = 0; i < boxCount && i < 16; i++)
+            {
+                if (!TryGetNativeMultiCuboid(mapping, i, out BlockModelCuboid cuboid))
+                    continue;
+
+                boxes.Add(BlockShapeUtility.TransformShapeBoxForPlacement(cuboid.ToShapeBox(), mapping, placementAxis));
+            }
+
+            if (boxes.Length == 0)
+            {
+                ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+                boxes.Add(new ShapeBox(fallbackMin, fallbackMax));
+            }
+
+            return boxes;
+        }
+
         private void AddAmbientOccludedShapeBoxes(
             Vector3 origin,
             BlockTextureMapping mapping,
@@ -1433,65 +1556,120 @@ public static partial class MeshGenerator
 
         private static void AppendShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box)
         {
-            faceRects.Add(new ShapeFaceRect
-            {
-                face = BlockFace.Right,
-                plane = box.max.x,
-                minA = box.min.y,
-                maxA = box.max.y,
-                minB = box.min.z,
-                maxB = box.max.z
-            });
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Right);
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Left);
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Top);
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Bottom);
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Front);
+            AppendShapeFaceRect(ref faceRects, box, BlockFace.Back);
+        }
 
-            faceRects.Add(new ShapeFaceRect
-            {
-                face = BlockFace.Left,
-                plane = box.min.x,
-                minA = box.min.y,
-                maxA = box.max.y,
-                minB = box.min.z,
-                maxB = box.max.z
-            });
+        private static void AppendModelCuboidFaceRects(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            ShapeBox box,
+            BlockModelCuboid cuboid,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis)
+        {
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Right);
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Left);
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Top);
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Bottom);
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Front);
+            AppendModelCuboidFaceRect(ref faceRects, box, cuboid, mapping, placementAxis, BlockFace.Back);
+        }
 
-            faceRects.Add(new ShapeFaceRect
-            {
-                face = BlockFace.Top,
-                plane = box.max.y,
-                minA = box.min.x,
-                maxA = box.max.x,
-                minB = box.min.z,
-                maxB = box.max.z
-            });
+        private static void AppendModelCuboidFaceRect(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            ShapeBox box,
+            BlockModelCuboid cuboid,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            BlockFace localFace)
+        {
+            if (!cuboid.HasFace(localFace))
+                return;
 
-            faceRects.Add(new ShapeFaceRect
-            {
-                face = BlockFace.Bottom,
-                plane = box.min.y,
-                minA = box.min.x,
-                maxA = box.max.x,
-                minB = box.min.z,
-                maxB = box.max.z
-            });
+            BlockFace worldFace = BlockShapeUtility.TransformFaceForPlacement(localFace, mapping, placementAxis);
+            AppendShapeFaceRect(ref faceRects, box, worldFace);
+        }
 
-            faceRects.Add(new ShapeFaceRect
+        private static void AppendShapeFaceRect(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
+        {
+            switch (face)
             {
-                face = BlockFace.Front,
-                plane = box.max.z,
-                minA = box.min.x,
-                maxA = box.max.x,
-                minB = box.min.y,
-                maxB = box.max.y
-            });
+                case BlockFace.Right:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Right,
+                        plane = box.max.x,
+                        minA = box.min.y,
+                        maxA = box.max.y,
+                        minB = box.min.z,
+                        maxB = box.max.z
+                    });
+                    return;
 
-            faceRects.Add(new ShapeFaceRect
-            {
-                face = BlockFace.Back,
-                plane = box.min.z,
-                minA = box.min.x,
-                maxA = box.max.x,
-                minB = box.min.y,
-                maxB = box.max.y
-            });
+                case BlockFace.Left:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Left,
+                        plane = box.min.x,
+                        minA = box.min.y,
+                        maxA = box.max.y,
+                        minB = box.min.z,
+                        maxB = box.max.z
+                    });
+                    return;
+
+                case BlockFace.Top:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Top,
+                        plane = box.max.y,
+                        minA = box.min.x,
+                        maxA = box.max.x,
+                        minB = box.min.z,
+                        maxB = box.max.z
+                    });
+                    return;
+
+                case BlockFace.Bottom:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Bottom,
+                        plane = box.min.y,
+                        minA = box.min.x,
+                        maxA = box.max.x,
+                        minB = box.min.z,
+                        maxB = box.max.z
+                    });
+                    return;
+
+                case BlockFace.Front:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Front,
+                        plane = box.max.z,
+                        minA = box.min.x,
+                        maxA = box.max.x,
+                        minB = box.min.y,
+                        maxB = box.max.y
+                    });
+                    return;
+
+                case BlockFace.Back:
+                    faceRects.Add(new ShapeFaceRect
+                    {
+                        face = BlockFace.Back,
+                        plane = box.min.z,
+                        minA = box.min.x,
+                        maxA = box.max.x,
+                        minB = box.min.y,
+                        maxB = box.max.y
+                    });
+                    return;
+            }
         }
 
         private static void MergeShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects)
@@ -1547,6 +1725,18 @@ public static partial class MeshGenerator
             return false;
         }
 
+        private static BlockFace ResolveShapeTextureFace(
+            BlockTextureMapping mapping,
+            BlockFace worldFace,
+            BlockRenderShape currentShape,
+            BlockPlacementAxis currentPlacementAxis)
+        {
+            if (currentShape != BlockRenderShape.MultiCuboid)
+                return worldFace;
+
+            return BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, currentPlacementAxis);
+        }
+
         private void AddAmbientOccludedShapeRect(
             Vector3 origin,
             BlockTextureMapping mapping,
@@ -1571,6 +1761,8 @@ public static partial class MeshGenerator
             switch (rect.face)
             {
                 case BlockFace.Right:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Right, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.plane, rect.minA, rect.minB),
                         origin + new Vector3(rect.plane, rect.maxA, rect.minB),
@@ -1581,8 +1773,8 @@ public static partial class MeshGenerator
                         Vector3Int.right,
                         Vector3Int.up,
                         Vector3Int.forward,
-                        mapping.GetTileCoord(BlockFace.Right),
-                        mapping.GetTint(BlockFace.Right),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1599,8 +1791,11 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
 
                 case BlockFace.Left:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Left, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.plane, rect.minA, rect.maxB),
                         origin + new Vector3(rect.plane, rect.maxA, rect.maxB),
@@ -1611,8 +1806,8 @@ public static partial class MeshGenerator
                         Vector3Int.left,
                         Vector3Int.up,
                         Vector3Int.back,
-                        mapping.GetTileCoord(BlockFace.Left),
-                        mapping.GetTint(BlockFace.Left),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1629,8 +1824,11 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
 
                 case BlockFace.Top:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Top, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.plane, rect.maxB),
                         origin + new Vector3(rect.maxA, rect.plane, rect.maxB),
@@ -1641,8 +1839,8 @@ public static partial class MeshGenerator
                         Vector3Int.up,
                         Vector3Int.right,
                         Vector3Int.back,
-                        mapping.GetTileCoord(BlockFace.Top),
-                        mapping.GetTint(BlockFace.Top),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1659,8 +1857,11 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
 
                 case BlockFace.Bottom:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Bottom, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.plane, rect.minB),
                         origin + new Vector3(rect.maxA, rect.plane, rect.minB),
@@ -1671,8 +1872,8 @@ public static partial class MeshGenerator
                         Vector3Int.down,
                         Vector3Int.right,
                         Vector3Int.forward,
-                        mapping.GetTileCoord(BlockFace.Bottom),
-                        mapping.GetTint(BlockFace.Bottom),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1689,8 +1890,11 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
 
                 case BlockFace.Front:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Front, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.maxA, rect.minB, rect.plane),
                         origin + new Vector3(rect.maxA, rect.maxB, rect.plane),
@@ -1701,8 +1905,8 @@ public static partial class MeshGenerator
                         Vector3Int.forward,
                         Vector3Int.up,
                         Vector3Int.left,
-                        mapping.GetTileCoord(BlockFace.Front),
-                        mapping.GetTint(BlockFace.Front),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1719,8 +1923,11 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
 
                 default:
+                {
+                    BlockFace textureFace = ResolveShapeTextureFace(mapping, BlockFace.Back, currentShape, currentPlacementAxis);
                     AddAmbientOccludedShapeFace(
                         origin + new Vector3(rect.minA, rect.minB, rect.plane),
                         origin + new Vector3(rect.minA, rect.maxB, rect.plane),
@@ -1731,8 +1938,8 @@ public static partial class MeshGenerator
                         Vector3Int.back,
                         Vector3Int.up,
                         Vector3Int.right,
-                        mapping.GetTileCoord(BlockFace.Back),
-                        mapping.GetTint(BlockFace.Back),
+                        mapping.GetTileCoord(textureFace),
+                        mapping.GetTint(textureFace),
                         light01,
                         voxelX,
                         voxelY,
@@ -1749,6 +1956,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant);
                     return;
+                }
             }
         }
 
@@ -2093,6 +2301,13 @@ public static partial class MeshGenerator
                 case BlockRenderShape.Cuboid:
                     ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
                     return IsPointInsideBox(localPos, new ShapeBox(min, max));
+
+                case BlockRenderShape.MultiCuboid:
+                {
+                    BlockPlacementAxis multiAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    FixedList512Bytes<ShapeBox> multiBoxes = BuildNativeMultiCuboidShapeBoxes(mapping, multiAxis);
+                    return IsPointInsideShapeBoxes(localPos, multiBoxes);
+                }
 
                 case BlockRenderShape.Stairs:
                 {

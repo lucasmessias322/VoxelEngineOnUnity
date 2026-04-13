@@ -460,6 +460,10 @@ public static class BlockItemIconCache
                 AddVisibleBoxFaces(faces, cuboidMin, cuboidMax);
                 break;
 
+            case BlockRenderShape.MultiCuboid:
+                AppendMultiCuboidFaces(faces, mapping);
+                break;
+
             case BlockRenderShape.Stairs:
                 AppendStairFaces(faces);
                 break;
@@ -482,6 +486,30 @@ public static class BlockItemIconCache
         }
 
         return faces;
+    }
+
+    private static void AppendMultiCuboidFaces(List<IconFace3D> faces, BlockTextureMapping mapping)
+    {
+        World world = World.Instance;
+        BlockModelCuboid[] cuboids = world != null && world.blockData != null
+            ? world.blockData.runtimeMultiCuboidBoxes
+            : null;
+
+        int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, cuboids);
+        if (boxCount <= 0)
+        {
+            BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+            AddVisibleBoxFaces(faces, fallbackMin, fallbackMax);
+            return;
+        }
+
+        for (int i = 0; i < boxCount; i++)
+        {
+            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, BlockPlacementAxis.Y, out ShapeBox box))
+                continue;
+
+            AddVisibleBoxFaces(faces, box.min, box.max);
+        }
     }
 
     private static void RenderFaces(

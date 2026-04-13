@@ -556,6 +556,7 @@ public class Chunk : MonoBehaviour
         int subchunkIndex,
         NativeArray<byte> voxelSource,
         BlockTextureMapping[] blockMappings,
+        BlockModelCuboid[] blockModelCuboids,
         int startY,
         int endY)
     {
@@ -568,7 +569,7 @@ public class Chunk : MonoBehaviour
             return;
         }
 
-        subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, startY, endY);
+        subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, blockModelCuboids, startY, endY);
     }
 
     private bool TryGetSubchunkColliderOccupancyRange(int subchunkIndex, out int wordOffset)

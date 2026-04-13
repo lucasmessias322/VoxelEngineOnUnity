@@ -1943,6 +1943,24 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return false;
             }
 
+            case BlockRenderShape.MultiCuboid:
+            {
+                int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, world.blockData.runtimeMultiCuboidBoxes);
+                if (boxCount <= 0)
+                    return testBounds.Intersects(ResolveBlockBounds(blockPos, blockType, placementAxis));
+
+                for (int i = 0; i < boxCount; i++)
+                {
+                    if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, out ShapeBox box) &&
+                        testBounds.Intersects(box.ToWorldBounds(blockPos)))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
+
             default:
                 return testBounds.Intersects(ResolveBlockBounds(blockPos, blockType, placementAxis));
         }
@@ -2027,6 +2045,21 @@ public class PlayerBlockBreaker : MonoBehaviour
                 if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
                     bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(blockPos));
                 return bounds;
+            }
+
+            case BlockRenderShape.MultiCuboid:
+            {
+                if (BlockShapeUtility.TryGetMultiCuboidBounds(
+                    blockPos,
+                    value,
+                    world.blockData.runtimeMultiCuboidBoxes,
+                    placementAxis,
+                    out Bounds bounds))
+                {
+                    return bounds;
+                }
+
+                break;
             }
         }
 

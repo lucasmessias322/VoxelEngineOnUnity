@@ -468,6 +468,7 @@ public partial class World : MonoBehaviour
     private bool vegetationBillboardRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
+    private NativeArray<BlockModelCuboid> cachedNativeBlockModelCuboids;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
@@ -695,6 +696,7 @@ public partial class World : MonoBehaviour
     {
         if (cachedNativeNoiseLayers.IsCreated) cachedNativeNoiseLayers.Dispose();
         if (cachedNativeBlockMappings.IsCreated) cachedNativeBlockMappings.Dispose();
+        if (cachedNativeBlockModelCuboids.IsCreated) cachedNativeBlockModelCuboids.Dispose();
         if (cachedNativeEffectiveLightOpacityByBlock.IsCreated) cachedNativeEffectiveLightOpacityByBlock.Dispose();
         if (cachedNativeOreSettings.IsCreated) cachedNativeOreSettings.Dispose();
         if (cachedNativeTreeSpawnRules.IsCreated) cachedNativeTreeSpawnRules.Dispose();
@@ -706,6 +708,7 @@ public partial class World : MonoBehaviour
         // Copia a configuracao viva do World para NativeArrays persistentes usados pelos jobs.
         bool cachesCreated = cachedNativeNoiseLayers.IsCreated &&
                              cachedNativeBlockMappings.IsCreated &&
+                             cachedNativeBlockModelCuboids.IsCreated &&
                              cachedNativeEffectiveLightOpacityByBlock.IsCreated &&
                              cachedNativeOreSettings.IsCreated &&
                              cachedNativeTreeSpawnRules.IsCreated &&
@@ -729,12 +732,16 @@ public partial class World : MonoBehaviour
         BlockTextureMapping[] runtimeBlockMappings = blockData != null && blockData.mappings != null
             ? blockData.mappings
             : Array.Empty<BlockTextureMapping>();
+        BlockModelCuboid[] runtimeBlockModelCuboids = blockData != null && blockData.runtimeMultiCuboidBoxes != null
+            ? blockData.runtimeMultiCuboidBoxes
+            : Array.Empty<BlockModelCuboid>();
         OreSpawnSettings[] runtimeOreSettings = oreSettings ?? Array.Empty<OreSpawnSettings>();
         TreeSpawnRuleData[] runtimeTreeSpawnRules = GetActiveTreeSpawnRules();
         VegetationBillboardRuleData[] runtimeVegetationBillboardRules = GetActiveVegetationBillboardRules();
 
         cachedNativeNoiseLayers = new NativeArray<NoiseLayer>(runtimeNoiseLayers, Allocator.Persistent);
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
+        cachedNativeBlockModelCuboids = new NativeArray<BlockModelCuboid>(runtimeBlockModelCuboids, Allocator.Persistent);
         cachedNativeEffectiveLightOpacityByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
         for (int i = 0; i < runtimeBlockMappings.Length; i++)
             cachedNativeEffectiveLightOpacityByBlock[i] = ChunkLighting.GetEffectiveOpacity(runtimeBlockMappings[i]);
@@ -960,6 +967,7 @@ public partial class World : MonoBehaviour
         int processed = 0;
         int attempts = queuedColliderBuilds.Count;
         BlockTextureMapping[] blockMappings = blockData != null ? blockData.mappings : null;
+        BlockModelCuboid[] blockModelCuboids = blockData != null ? blockData.runtimeMultiCuboidBoxes : null;
         Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedColliderBuilds.Count > 0)
@@ -1007,7 +1015,7 @@ public partial class World : MonoBehaviour
 
             int startY = request.subchunkIndex * Chunk.SubchunkHeight;
             int endY = Mathf.Min(startY + Chunk.SubchunkHeight, Chunk.SizeY);
-            chunk.RebuildSubchunkColliders(request.subchunkIndex, chunk.voxelData, blockMappings, startY, endY);
+            chunk.RebuildSubchunkColliders(request.subchunkIndex, chunk.voxelData, blockMappings, blockModelCuboids, startY, endY);
             chunk.SetSubchunkColliderSystemEnabled(request.subchunkIndex, true);
             processed++;
         }
@@ -2542,7 +2550,7 @@ public partial class World : MonoBehaviour
                 }
 
                 MeshGenerator.ScheduleMeshJob(
-                    pd.heightCache, pd.blockTypes, pd.blockPlacementAxes, pd.solids, pd.light, cachedNativeBlockMappings, nativeSuppressedBillboards,
+                    pd.heightCache, pd.blockTypes, pd.blockPlacementAxes, pd.solids, pd.light, cachedNativeBlockMappings, cachedNativeBlockModelCuboids, nativeSuppressedBillboards,
                     pd.subchunkNonEmpty, pd.knownVoxelData, pd.useKnownVoxelData,
                     atlasTilesX, atlasTilesY, true, borderSize,
                     pd.coord.x, pd.coord.y,

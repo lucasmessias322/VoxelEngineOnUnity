@@ -21,6 +21,7 @@ public static partial class MeshGenerator
         [ReadOnly] public NativeArray<byte> blockPlacementAxes;
         [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
+        [ReadOnly] public NativeArray<BlockModelCuboid> blockModelCuboids;
         [ReadOnly] public NativeArray<byte> light;
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
         [ReadOnly] public NativeArray<VegetationBillboardRuleData> vegetationBillboardRules;

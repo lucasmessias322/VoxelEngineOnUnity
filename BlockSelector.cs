@@ -183,6 +183,19 @@ public class BlockSelector : MonoBehaviour
                     bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(pos));
                 return true;
             }
+
+            case BlockRenderShape.MultiCuboid:
+                if (BlockShapeUtility.TryGetMultiCuboidBounds(
+                    pos,
+                    value,
+                    world.blockData.runtimeMultiCuboidBoxes,
+                    placementAxis,
+                    out bounds))
+                {
+                    return true;
+                }
+
+                break;
         }
 
         if (BlockShapeUtility.IsFlatShape(value))
@@ -392,6 +405,9 @@ public class BlockSelector : MonoBehaviour
             case BlockRenderShape.Cuboid:
                 return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
+            case BlockRenderShape.MultiCuboid:
+                return TryHitMultiCuboidBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
             case BlockRenderShape.Cross:
                 return TryHitCrossBlock(ray, maxDistance, voxel, value, lastNormal, out hitNormal, out hitPoint);
 
@@ -438,6 +454,52 @@ public class BlockSelector : MonoBehaviour
         hitNormal = ResolveBoundsHitNormal(bounds, point, lastNormal, ray.direction);
         hitPoint = point;
         return true;
+    }
+
+    private bool TryHitMultiCuboidBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, world.blockData.runtimeMultiCuboidBoxes);
+        if (boxCount <= 0)
+        {
+            Bounds fallbackBounds = BlockShapeUtility.GetWorldBounds(voxel, BlockType.Air, mapping, placementAxis);
+            return TryHitShapeBox(ray, maxDistance, fallbackBounds, lastNormal, out _, out hitNormal, out hitPoint);
+        }
+
+        float bestDistance = float.PositiveInfinity;
+        bool hit = false;
+        for (int i = 0; i < boxCount; i++)
+        {
+            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, out ShapeBox box))
+                continue;
+
+            if (!TryHitShapeBox(ray, maxDistance, box.ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point))
+                continue;
+
+            if (distance >= bestDistance)
+                continue;
+
+            bestDistance = distance;
+            hitNormal = normal;
+            hitPoint = point;
+            hit = true;
+        }
+
+        return hit;
     }
 
     private bool TryHitPlaneBlock(

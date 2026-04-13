@@ -21,6 +21,7 @@ internal sealed class SubchunkColliderBuilder
         GameObject owner,
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
+        BlockModelCuboid[] blockModelCuboids,
         int startY,
         int endY)
     {
@@ -35,7 +36,7 @@ internal sealed class SubchunkColliderBuilder
         FillCubeSolidBuffer(voxelData, blockMappings, clampedStartY, height, solids);
 
         int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
-        colliderCount = AppendCustomShapeColliders(owner, voxelData, blockMappings, clampedStartY, height, colliderCount);
+        colliderCount = AppendCustomShapeColliders(owner, voxelData, blockMappings, blockModelCuboids, clampedStartY, height, colliderCount);
         activeBoxColliderCount = colliderCount;
         DisableUnusedColliders(colliderCount);
         return colliderCount > 0;
@@ -438,6 +439,7 @@ internal sealed class SubchunkColliderBuilder
         GameObject owner,
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
+        BlockModelCuboid[] blockModelCuboids,
         int clampedStartY,
         int height,
         int colliderCount)
@@ -478,6 +480,26 @@ internal sealed class SubchunkColliderBuilder
                             BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
                             colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, new ShapeBox(min, max));
                             break;
+
+                        case BlockRenderShape.MultiCuboid:
+                        {
+                            BlockPlacementAxis multiAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, blockModelCuboids);
+                            if (boxCount <= 0)
+                            {
+                                BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, new ShapeBox(fallbackMin, fallbackMax));
+                                break;
+                            }
+
+                            for (int boxIndex = 0; boxIndex < boxCount; boxIndex++)
+                            {
+                                if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, blockModelCuboids, boxIndex, multiAxis, out ShapeBox box))
+                                    colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box);
+                            }
+
+                            break;
+                        }
 
                         case BlockRenderShape.Stairs:
                         {

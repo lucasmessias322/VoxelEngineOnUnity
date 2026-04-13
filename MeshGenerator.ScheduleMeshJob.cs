@@ -16,6 +16,7 @@ public static partial class MeshGenerator
         NativeArray<bool> solids,
         NativeArray<byte> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
+        NativeArray<BlockModelCuboid> nativeBlockModelCuboids,
         NativeArray<int3> suppressedGrassBillboards,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<byte> knownVoxelData,
@@ -89,6 +90,7 @@ public static partial class MeshGenerator
             light = light, // Usa a luz previamente calculada e passada por parÃƒÆ’Ã‚Â¢metro
             heightCache = heightCache,
             blockMappings = nativeBlockMappings,
+            blockModelCuboids = nativeBlockModelCuboids,
             suppressedGrassBillboards = suppressedGrassBillboards,
             subchunkNonEmpty = subchunkNonEmpty,
             knownVoxelData = knownVoxelData,

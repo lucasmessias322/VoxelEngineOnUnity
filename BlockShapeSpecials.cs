@@ -35,6 +35,7 @@ public enum RampEdge : byte
     Back = 3
 }
 
+[System.Serializable]
 public struct ShapeBox
 {
     public Vector3 min;

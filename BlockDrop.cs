@@ -265,6 +265,10 @@ public class BlockDrop : MonoBehaviour
                 AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
+            case BlockRenderShape.MultiCuboid:
+                AppendMultiCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, world.blockData != null ? world.blockData.runtimeMultiCuboidBoxes : null, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
+
             case BlockRenderShape.Plane:
                 AppendPlaneMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
@@ -492,6 +496,35 @@ public class BlockDrop : MonoBehaviour
             mapping.GetTint(BlockFace.Back),
             invAtlasTilesX,
             invAtlasTilesY);
+    }
+
+    private static void AppendMultiCuboidMesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        BlockModelCuboid[] cuboids,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, cuboids);
+        if (boxCount <= 0)
+        {
+            AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+            return;
+        }
+
+        for (int i = 0; i < boxCount; i++)
+        {
+            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, BlockPlacementAxis.Y, out ShapeBox box))
+                continue;
+
+            AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box, invAtlasTilesX, invAtlasTilesY);
+        }
     }
 
     private static void AppendStairMesh(
