@@ -55,6 +55,7 @@ public enum BlockType
     Oak_Ramp = 50,
     Oak_VerticalRamp = 51,
     Anvil = 52,
+    SolarPanel = 53,
 }
 
 public static class FluidBlockUtility

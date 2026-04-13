@@ -29,6 +29,11 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public Color voxelBoundsColor = new Color(1f, 1f, 1f, 0.72f);
     public Color selectedBoundsColor = new Color(1f, 0.78f, 0.18f, 1f);
 
+    [Header("Placement Rotation Preview")]
+    public bool showPlacementRotationPreview = true;
+    public BlockPlacementAxis placementPreviewAxis = BlockPlacementAxis.X;
+    public Color placementPreviewColor = new Color(0.16f, 0.78f, 1f, 0.86f);
+
     [Header("Model")]
     public List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>();
 
@@ -409,7 +414,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         if (selectedIndex >= 0 && TryGetCuboid(selectedIndex, out BlockModelCuboid selectedCuboid))
         {
             Gizmos.color = selectedBoundsColor;
-            Gizmos.DrawWireCube(ToSceneLocalCenter(selectedCuboid), ToSceneLocalSize(selectedCuboid));
+            DrawCuboidWireGizmo(selectedCuboid);
         }
 
         Gizmos.color = new Color(1f, 0.25f, 0.2f, 0.85f);
@@ -421,6 +426,17 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 
         Gizmos.matrix = previousMatrix;
         Gizmos.color = previousColor;
+    }
+
+    private static void DrawCuboidWireGizmo(BlockModelCuboid cuboid)
+    {
+        Matrix4x4 previousMatrix = Gizmos.matrix;
+        Gizmos.matrix = Gizmos.matrix * Matrix4x4.TRS(
+            ToSceneLocalCenter(cuboid),
+            Quaternion.Euler(cuboid.eulerRotation),
+            Vector3.one);
+        Gizmos.DrawWireCube(Vector3.zero, ToSceneLocalSize(cuboid));
+        Gizmos.matrix = previousMatrix;
     }
 
     private void DrawHorizontalGrid()
@@ -535,6 +551,8 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             shapeMax = Vector3.one,
             isSolid = true,
             isEmpty = false,
+            usePlacementAxisRotation = true,
+            placementRotationAxes = BlockPlacementRotationAxes.Horizontal,
             lightOpacity = 15,
             materialIndex = 0
         };
@@ -543,13 +561,14 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     private BlockModelCuboid ReadCuboidFromChild(MultiCuboidWorkbenchCuboid marker)
     {
         Transform child = marker.transform;
-        child.localRotation = Quaternion.identity;
+        Quaternion localRotation = child.localRotation;
 
         Vector3 size = Abs(child.localScale);
         Vector3 center01 = child.localPosition + HalfVoxelOffset;
         BlockModelCuboid existing = cuboids[marker.index];
         BlockModelCuboid cuboid = new BlockModelCuboid(center01 - size * 0.5f, center01 + size * 0.5f)
         {
+            eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(localRotation.eulerAngles),
             faces = existing.EffectiveFaces
         };
 
@@ -585,7 +604,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         cuboids[index] = cuboid;
 
         child.localPosition = ToSceneLocalCenter(cuboid);
-        child.localRotation = Quaternion.identity;
+        child.localRotation = Quaternion.Euler(cuboid.eulerRotation);
         child.localScale = ToSceneLocalSize(cuboid);
 
         MultiCuboidWorkbenchCuboid marker = child.GetComponent<MultiCuboidWorkbenchCuboid>();
@@ -706,6 +725,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         {
             min = min,
             max = max,
+            eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(cuboid.eulerRotation),
             faces = cuboid.faces == BlockCuboidFaceMask.None ? BlockCuboidFaceMask.All : cuboid.faces
         };
     }

@@ -35,6 +35,9 @@ public struct BlockModelCuboid
     [Tooltip("Canto maximo local do cuboide dentro do voxel (0..1).")]
     public Vector3 max;
 
+    [Tooltip("Rotacao local em graus ao redor do centro do cuboide.")]
+    public Vector3 eulerRotation;
+
     [Tooltip("Faces desenhadas para este cuboide. None e tratado como All para facilitar a criacao no Inspector.")]
     public BlockCuboidFaceMask faces;
 
@@ -42,6 +45,7 @@ public struct BlockModelCuboid
     {
         this.min = min;
         this.max = max;
+        eulerRotation = Vector3.zero;
         faces = BlockCuboidFaceMask.All;
     }
 
@@ -404,6 +408,7 @@ public class BlockDataSO : ScriptableObject
         {
             min = min,
             max = max,
+            eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(source.eulerRotation),
             faces = source.EffectiveFaces
         };
         return true;
@@ -1211,15 +1216,38 @@ public static class BlockShapeUtility
         out ShapeBox box)
     {
         box = default;
+        if (!TryGetMultiCuboidModelCuboid(mapping, cuboids, localIndex, out BlockModelCuboid cuboid))
+            return false;
+
+        ShapeBox sanitized = cuboid.ToShapeBox();
+        box = HasCuboidRotation(cuboid)
+            ? GetTransformedCuboidBounds(sanitized, cuboid.eulerRotation, mapping, placementAxis)
+            : TransformShapeBoxForPlacement(sanitized, mapping, placementAxis);
+        return true;
+    }
+
+    public static bool TryGetMultiCuboidModelCuboid(
+        BlockTextureMapping mapping,
+        BlockModelCuboid[] cuboids,
+        int localIndex,
+        out BlockModelCuboid cuboid)
+    {
+        cuboid = default;
         int count = GetMultiCuboidBoxCount(mapping, cuboids);
         if (localIndex < 0 || localIndex >= count)
             return false;
 
-        BlockModelCuboid cuboid = cuboids[mapping.multiCuboidStartIndex + localIndex];
-        if (!TrySanitizeShapeBox(cuboid.min, cuboid.max, out ShapeBox sanitized))
+        BlockModelCuboid source = cuboids[mapping.multiCuboidStartIndex + localIndex];
+        if (!TrySanitizeShapeBox(source.min, source.max, out ShapeBox sanitized))
             return false;
 
-        box = TransformShapeBoxForPlacement(sanitized, mapping, placementAxis);
+        cuboid = new BlockModelCuboid
+        {
+            min = sanitized.min,
+            max = sanitized.max,
+            eulerRotation = NormalizeCuboidEulerRotation(source.eulerRotation),
+            faces = source.EffectiveFaces
+        };
         return true;
     }
 
@@ -1266,6 +1294,28 @@ public static class BlockShapeUtility
         return RotateHorizontalShapeBox(box, placementAxis);
     }
 
+    public static Vector3 TransformPointForPlacement(
+        Vector3 point,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (!ShouldRotateShapeForPlacement(mapping))
+            return point;
+
+        return RotateHorizontalPoint(point, placementAxis);
+    }
+
+    public static Vector3 TransformDirectionForPlacement(
+        Vector3 direction,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (!ShouldRotateShapeForPlacement(mapping))
+            return direction;
+
+        return RotateHorizontalDirection(direction, placementAxis);
+    }
+
     public static BlockFace TransformFaceForPlacement(
         BlockFace face,
         BlockTextureMapping mapping,
@@ -1284,6 +1334,34 @@ public static class BlockShapeUtility
 
         return mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal ||
                mapping.placementRotationAxes == BlockPlacementRotationAxes.Both;
+    }
+
+    public static bool HasCuboidRotation(BlockModelCuboid cuboid)
+    {
+        Vector3 rotation = NormalizeCuboidEulerRotation(cuboid.eulerRotation);
+        return Mathf.Abs(rotation.x) > BoundsEpsilon ||
+               Mathf.Abs(rotation.y) > BoundsEpsilon ||
+               Mathf.Abs(rotation.z) > BoundsEpsilon;
+    }
+
+    public static Vector3 NormalizeCuboidEulerRotation(Vector3 eulerRotation)
+    {
+        return new Vector3(
+            NormalizeEulerAngle(eulerRotation.x),
+            NormalizeEulerAngle(eulerRotation.y),
+            NormalizeEulerAngle(eulerRotation.z));
+    }
+
+    private static float NormalizeEulerAngle(float angle)
+    {
+        if (float.IsNaN(angle) || float.IsInfinity(angle))
+            return 0f;
+
+        angle %= 360f;
+        if (angle < 0f)
+            angle += 360f;
+
+        return Mathf.Abs(angle - 360f) <= BoundsEpsilon ? 0f : angle;
     }
 
     private static bool TrySanitizeShapeBox(Vector3 sourceMin, Vector3 sourceMax, out ShapeBox box)
@@ -1326,6 +1404,47 @@ public static class BlockShapeUtility
             new Vector3(maxX, box.max.y, maxZ));
     }
 
+    private static ShapeBox GetTransformedCuboidBounds(
+        ShapeBox box,
+        Vector3 eulerRotation,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        Vector3 center = (box.min + box.max) * 0.5f;
+        Quaternion rotation = Quaternion.Euler(NormalizeCuboidEulerRotation(eulerRotation));
+        Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+        Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+
+        EncapsulateTransformedCuboidPoint(box.min.x, box.min.y, box.min.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.max.x, box.min.y, box.min.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.min.x, box.max.y, box.min.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.max.x, box.max.y, box.min.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.min.x, box.min.y, box.max.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.max.x, box.min.y, box.max.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.min.x, box.max.y, box.max.z, center, rotation, mapping, placementAxis, ref min, ref max);
+        EncapsulateTransformedCuboidPoint(box.max.x, box.max.y, box.max.z, center, rotation, mapping, placementAxis, ref min, ref max);
+
+        return new ShapeBox(min, max);
+    }
+
+    private static void EncapsulateTransformedCuboidPoint(
+        float x,
+        float y,
+        float z,
+        Vector3 center,
+        Quaternion rotation,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        ref Vector3 min,
+        ref Vector3 max)
+    {
+        Vector3 point = new Vector3(x, y, z);
+        point = center + rotation * (point - center);
+        point = TransformPointForPlacement(point, mapping, placementAxis);
+        min = Vector3.Min(min, point);
+        max = Vector3.Max(max, point);
+    }
+
     private static Vector3 RotateHorizontalPoint(Vector3 point, BlockPlacementAxis placementAxis)
     {
         BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
@@ -1342,6 +1461,25 @@ public static class BlockShapeUtility
 
             default:
                 return point;
+        }
+    }
+
+    private static Vector3 RotateHorizontalDirection(Vector3 direction, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                return new Vector3(direction.z, direction.y, -direction.x);
+
+            case BlockPlacementAxis.ZNegative:
+                return new Vector3(-direction.x, direction.y, -direction.z);
+
+            case BlockPlacementAxis.XNegative:
+                return new Vector3(-direction.z, direction.y, direction.x);
+
+            default:
+                return direction;
         }
     }
 
