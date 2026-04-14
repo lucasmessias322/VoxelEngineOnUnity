@@ -50,6 +50,8 @@ public class PlayerBlockBreaker : MonoBehaviour
     [Header("Break settings")]
     [Tooltip("Fallback usado somente para BlockTypes sem dureza Minecraft mapeada.")]
     [Min(0.05f)] public float breakDurationSeconds = 0.45f;
+    [Tooltip("Tempo de quebra no modo criativo. 0 usa o mesmo valor de Break Duration Seconds.")]
+    [Min(0f)] [SerializeField] private float creativeBreakDurationSeconds = 0f;
     [Tooltip("Material transparente para desenhar as rachaduras sobre o bloco.")]
     public Material breakCrackMaterial;
     [Tooltip("Texturas em ordem de dano (0..N-1). Ex.: crack_0 ate crack_9.")]
@@ -153,7 +155,9 @@ public class PlayerBlockBreaker : MonoBehaviour
                 lastCrackStage = -1;
             }
 
-            float breakDuration = creativeMode ? 0.05f : GetBreakDurationSeconds(GetBillboardBreakType(sel));
+            float breakDuration = creativeMode
+                ? GetCreativeBreakDurationSeconds()
+                : GetBreakDurationSeconds(GetBillboardBreakType(sel));
             breakProgress01 += Time.deltaTime / breakDuration;
             ClearBreakShaderEffect();
             UpdateCrackOverlay(sel, breakProgress01);
@@ -191,7 +195,9 @@ public class PlayerBlockBreaker : MonoBehaviour
             lastCrackStage = -1;
         }
 
-        float currentBreakDuration = creativeMode ? 0.05f : GetBreakDurationSeconds(current);
+        float currentBreakDuration = creativeMode
+            ? GetCreativeBreakDurationSeconds()
+            : GetBreakDurationSeconds(current);
         breakProgress01 += Time.deltaTime / currentBreakDuration;
         UpdateBreakShaderEffect(sel, current, hitNormal, breakProgress01);
         UpdateCrackOverlay(sel, breakProgress01);
@@ -291,6 +297,15 @@ public class PlayerBlockBreaker : MonoBehaviour
             duration *= mapping.Value.breakTimeMultiplier;
 
         return Mathf.Max(MinecraftMinBreakDurationSeconds, duration);
+    }
+
+    float GetCreativeBreakDurationSeconds()
+    {
+        float configuredDuration = creativeBreakDurationSeconds > 0f
+            ? creativeBreakDurationSeconds
+            : breakDurationSeconds;
+
+        return Mathf.Max(MinecraftMinBreakDurationSeconds, configuredDuration);
     }
 
     bool TryGetSelectedTool(out ToolType toolType, out float toolEfficiency)

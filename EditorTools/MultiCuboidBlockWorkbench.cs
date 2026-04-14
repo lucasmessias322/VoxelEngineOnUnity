@@ -176,6 +176,31 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         return cuboids.Count - 1;
     }
 
+    public void ReplaceCuboids(IEnumerable<BlockModelCuboid> importedCuboids, int selectedIndex = 0)
+    {
+        EnsureCuboidList();
+
+#if UNITY_EDITOR
+        Undo.RecordObject(this, "Import Blockbench Model");
+#endif
+
+        cuboids.Clear();
+        if (importedCuboids != null)
+        {
+            foreach (BlockModelCuboid cuboid in importedCuboids)
+                cuboids.Add(SanitizeCuboid(cuboid, snapToGrid, snapStep));
+        }
+
+        RebuildVisuals();
+
+#if UNITY_EDITOR
+        if (cuboids.Count > 0)
+            SelectCuboid(Mathf.Clamp(selectedIndex, 0, cuboids.Count - 1));
+        else
+            Selection.activeGameObject = gameObject;
+#endif
+    }
+
     public void DuplicateSelectedCuboid()
     {
         EnsureCuboidList();
