@@ -293,7 +293,7 @@ public static partial class MeshGenerator
                                 float packedSubchunkAndOverlay =
                                     faceSubchunkIndex + (useGrassSideOverlay ? 0.25f : 0f);
                                 Vector2Int tile = m.GetTileCoord(sampledFace);
-                                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+                                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
 
                                 for (int l = 0; l < 4; l++)
                                 {

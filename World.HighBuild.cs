@@ -227,7 +227,7 @@ public partial class World
                 uv0.Add(new Vector2(0f, 1f));
 
                 Vector2Int tile = GetTileForFace(mapping, f, placementAxis);
-                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
 
                 uv1.Add(atlasUv);
                 uv1.Add(atlasUv);

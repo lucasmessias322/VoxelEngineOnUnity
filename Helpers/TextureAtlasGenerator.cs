@@ -6,7 +6,7 @@ using System.IO;
 public class TextureAtlasGenerator : MonoBehaviour
 {
     [Header("Padding (extrusão real)")]
-    public int paddingPixels = 2; // use 2 ou 4 (recomendado)
+    public int paddingPixels = 0; // use 2 ou 4 (recomendado)
 
     [Header("Configuração do Atlas")]
     public List<Texture2D> blockTextures; // Texturas individuais

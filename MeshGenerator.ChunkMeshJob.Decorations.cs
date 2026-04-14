@@ -68,8 +68,8 @@ public static partial class MeshGenerator
                     {
                         Vector2Int leavesTile = leavesMapping.GetTileCoord(BlockFace.Front);
                         leavesAtlasUv = new Vector2(
-                            leavesTile.x * invAtlasTilesX + 0.001f,
-                            leavesTile.y * invAtlasTilesY + 0.001f);
+                            leavesTile.x * invAtlasTilesX,
+                            leavesTile.y * invAtlasTilesY);
                         leavesTint = leavesMapping.GetTint(BlockFace.Front) ? 1f : 0f;
                     }
                 }
@@ -271,8 +271,8 @@ public static partial class MeshGenerator
                         BlockTextureMapping billboardMapping = blockMappings[billboardMappingIndex];
                         Vector2Int billboardTile = billboardMapping.GetTileCoord(BlockFace.Front);
                         Vector2 billboardAtlasUv = new Vector2(
-                            billboardTile.x * invAtlasTilesX + 0.001f,
-                            billboardTile.y * invAtlasTilesY + 0.001f);
+                            billboardTile.x * invAtlasTilesX,
+                            billboardTile.y * invAtlasTilesY);
                         float billboardTint = billboardMapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
                         float jx = VegetationBillboardUtility.ComputeJitterOffset(variationHash, 8, jitter);
@@ -535,7 +535,7 @@ public static partial class MeshGenerator
             ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
             Vector2Int tile = mapping.GetTileCoord(BlockFace.Front);
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             float tint = mapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
             NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
@@ -597,7 +597,7 @@ public static partial class MeshGenerator
                 out _);
 
             Vector2Int tile = mapping.GetTileCoord(sampledFace);
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             float tint = mapping.GetTint(sampledFace) ? 1f : 0f;
 
             NativeList<int> tris = FluidBlockUtility.IsWater(blockType)
@@ -624,11 +624,11 @@ public static partial class MeshGenerator
                 }
 
                 Vector2Int lineTile = mapping.GetTileCoord(BlockFace.Front);
-                Vector2 lineAtlasUv = new Vector2(lineTile.x * invAtlasTilesX + 0.001f, lineTile.y * invAtlasTilesY + 0.001f);
+                Vector2 lineAtlasUv = new Vector2(lineTile.x * invAtlasTilesX, lineTile.y * invAtlasTilesY);
                 Vector2Int shortLineTile = mapping.GetTileCoord(BlockFace.Back);
-                Vector2 shortLineAtlasUv = new Vector2(shortLineTile.x * invAtlasTilesX + 0.001f, shortLineTile.y * invAtlasTilesY + 0.001f);
+                Vector2 shortLineAtlasUv = new Vector2(shortLineTile.x * invAtlasTilesX, shortLineTile.y * invAtlasTilesY);
                 Vector2Int dotTile = ResolveWireDotTile(mapping, lineTile);
-                Vector2 dotAtlasUv = new Vector2(dotTile.x * invAtlasTilesX + 0.001f, dotTile.y * invAtlasTilesY + 0.001f);
+                Vector2 dotAtlasUv = new Vector2(dotTile.x * invAtlasTilesX, dotTile.y * invAtlasTilesY);
 
                 if (wireHasTopOnCurrentCell)
                 {
@@ -2564,7 +2564,7 @@ public static partial class MeshGenerator
                 tile = mapping.GetTileCoord(textureFace);
                 tint = mapping.GetTint(textureFace);
             }
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
 
@@ -2572,6 +2572,9 @@ public static partial class MeshGenerator
             ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
             ResolveCustomFaceVertexAOFrame(sampledFace, p2, normal, out Vector3 aoNormal2, out Vector3 stepU2, out Vector3 stepV2);
             ResolveCustomFaceVertexAOFrame(sampledFace, p3, normal, out Vector3 aoNormal3, out Vector3 stepU3, out Vector3 stepV3);
+
+            if (currentShape == BlockRenderShape.MultiCuboid)
+                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
 
             AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal0, stepU0, stepV0, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
             AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal1, stepU1, stepV1, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
@@ -2629,7 +2632,7 @@ public static partial class MeshGenerator
             bool disableAOForCurrentBlock = aoStrength <= 0f || IsEmissiveBlock(mapping);
             Vector2Int tile = mapping.GetTileCoord(sampledFace);
             bool tint = mapping.GetTint(sampledFace);
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
 
@@ -2730,13 +2733,20 @@ public static partial class MeshGenerator
             RampShapeVariant currentRampVariant)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             Vector3 blockOrigin = new Vector3(voxelX - border, voxelY, voxelZ - border);
 
-            AddAmbientOccludedShapeVertex(p0, ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin), normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(p1, ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin), normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(p2, ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin), normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
-            AddAmbientOccludedShapeVertex(p3, ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin), normal, aoNormal, -aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            Vector2 uv0 = ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin);
+            Vector2 uv1 = ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin);
+            Vector2 uv2 = ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin);
+            Vector2 uv3 = ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin);
+            if (currentShape == BlockRenderShape.MultiCuboid)
+                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+
+            AddAmbientOccludedShapeVertex(p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p1, uv1, normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p2, uv2, normal, aoNormal, aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
+            AddAmbientOccludedShapeVertex(p3, uv3, normal, aoNormal, -aoStepU, aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -2992,6 +3002,22 @@ public static partial class MeshGenerator
                 BlockFace.Back => new Vector2(localPos.x, localPos.y),
                 _ => new Vector2(localPos.x, localPos.y)
             };
+        }
+
+        private static void NormalizeProjectedQuadUv(ref Vector2 uv0, ref Vector2 uv1, ref Vector2 uv2, ref Vector2 uv3)
+        {
+            float minU = math.min(math.min(uv0.x, uv1.x), math.min(uv2.x, uv3.x));
+            float maxU = math.max(math.max(uv0.x, uv1.x), math.max(uv2.x, uv3.x));
+            float minV = math.min(math.min(uv0.y, uv1.y), math.min(uv2.y, uv3.y));
+            float maxV = math.max(math.max(uv0.y, uv1.y), math.max(uv2.y, uv3.y));
+
+            float invSpanU = 1f / math.max(maxU - minU, 1e-6f);
+            float invSpanV = 1f / math.max(maxV - minV, 1e-6f);
+
+            uv0 = new Vector2((uv0.x - minU) * invSpanU, (uv0.y - minV) * invSpanV);
+            uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);
+            uv2 = new Vector2((uv2.x - minU) * invSpanU, (uv2.y - minV) * invSpanV);
+            uv3 = new Vector2((uv3.x - minU) * invSpanU, (uv3.y - minV) * invSpanV);
         }
 
         private static Vector3 ResolveShapeFaceNormal(BlockFace face)

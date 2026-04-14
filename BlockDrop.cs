@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using UnityEngine;
 
 [RequireComponent(typeof(MeshFilter))]
@@ -326,7 +326,7 @@ public class BlockDrop : MonoBehaviour
                     uv0.Add(GetFaceBaseUv(f, face.v3));
 
                     Vector2Int tile = GetTileForFace(mapping, f);
-                    Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+                    Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
                     uv1.Add(atlasUv);
                     uv1.Add(atlasUv);
                     uv1.Add(atlasUv);
@@ -383,7 +383,7 @@ public class BlockDrop : MonoBehaviour
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
         Vector2Int tile = mapping.GetTileCoord(BlockFace.Front);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         float tint = mapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
         Vector3 a0 = origin + new Vector3(min.x, min.y, min.z);
@@ -414,7 +414,7 @@ public class BlockDrop : MonoBehaviour
         BlockShapeUtility.ResolvePlaneQuad(mapping, BlockPlacementAxis.Y, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace, out _);
 
         Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         float tint = mapping.GetTint(sampledFace) ? 1f : 0f;
 
         AppendDoubleSidedQuad(
@@ -1480,7 +1480,7 @@ public class BlockDrop : MonoBehaviour
         uv0.Add(new Vector2(1f, 1f));
         uv0.Add(new Vector2(0f, 1f));
 
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         uv1.Add(atlasUv);
         uv1.Add(atlasUv);
         uv1.Add(atlasUv);
@@ -1524,7 +1524,7 @@ public class BlockDrop : MonoBehaviour
     {
         int baseIndex = vertices.Count;
         Vector2Int tile = hasExplicitAppearance ? explicitTile : mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         Vector4 extra = new Vector4(1f, (hasExplicitAppearance ? explicitTint : mapping.GetTint(sampledFace)) ? 1f : 0f, 1f, 0f);
 
         vertices.Add(origin + local0);
@@ -1537,10 +1537,17 @@ public class BlockDrop : MonoBehaviour
         normals.Add(normal);
         normals.Add(normal);
 
-        uv0.Add(ResolveProjectedUv(sampledFace, local0));
-        uv0.Add(ResolveProjectedUv(sampledFace, local1));
-        uv0.Add(ResolveProjectedUv(sampledFace, local2));
-        uv0.Add(ResolveProjectedUv(sampledFace, local3));
+        Vector2 projectedUv0 = ResolveProjectedUv(sampledFace, local0);
+        Vector2 projectedUv1 = ResolveProjectedUv(sampledFace, local1);
+        Vector2 projectedUv2 = ResolveProjectedUv(sampledFace, local2);
+        Vector2 projectedUv3 = ResolveProjectedUv(sampledFace, local3);
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.MultiCuboid)
+            NormalizeProjectedQuadUv(ref projectedUv0, ref projectedUv1, ref projectedUv2, ref projectedUv3);
+
+        uv0.Add(projectedUv0);
+        uv0.Add(projectedUv1);
+        uv0.Add(projectedUv2);
+        uv0.Add(projectedUv3);
 
         uv1.Add(atlasUv);
         uv1.Add(atlasUv);
@@ -1590,7 +1597,7 @@ public class BlockDrop : MonoBehaviour
     {
         int baseIndex = vertices.Count;
         Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         Vector4 extra = new Vector4(1f, mapping.GetTint(sampledFace) ? 1f : 0f, 1f, 0f);
 
         vertices.Add(origin + local0);
@@ -1709,6 +1716,22 @@ public class BlockDrop : MonoBehaviour
             BlockFace.Back => new Vector2(localPos.x, localPos.y),
             _ => new Vector2(localPos.x, localPos.y)
         };
+    }
+
+    private static void NormalizeProjectedQuadUv(ref Vector2 uv0, ref Vector2 uv1, ref Vector2 uv2, ref Vector2 uv3)
+    {
+        float minU = Mathf.Min(Mathf.Min(uv0.x, uv1.x), Mathf.Min(uv2.x, uv3.x));
+        float maxU = Mathf.Max(Mathf.Max(uv0.x, uv1.x), Mathf.Max(uv2.x, uv3.x));
+        float minV = Mathf.Min(Mathf.Min(uv0.y, uv1.y), Mathf.Min(uv2.y, uv3.y));
+        float maxV = Mathf.Max(Mathf.Max(uv0.y, uv1.y), Mathf.Max(uv2.y, uv3.y));
+
+        float invSpanU = 1f / Mathf.Max(maxU - minU, 1e-6f);
+        float invSpanV = 1f / Mathf.Max(maxV - minV, 1e-6f);
+
+        uv0 = new Vector2((uv0.x - minU) * invSpanU, (uv0.y - minV) * invSpanV);
+        uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);
+        uv2 = new Vector2((uv2.x - minU) * invSpanU, (uv2.y - minV) * invSpanV);
+        uv3 = new Vector2((uv3.x - minU) * invSpanU, (uv3.y - minV) * invSpanV);
     }
 
     private static Vector3 ResolveSpecialFaceNormal(BlockFace face)

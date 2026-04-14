@@ -235,7 +235,7 @@ public static partial class MeshGenerator
             if (normal.sqrMagnitude < 0.0001f)
                 normal = Vector3.up;
 
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
             AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra);
             AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra);
@@ -324,7 +324,7 @@ public static partial class MeshGenerator
         {
             int vertexGlobalStart = vertices.Length;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
             AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, default);
             AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, default);
             AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, default);

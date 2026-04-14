@@ -1106,7 +1106,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         BlockPlacementAxis uvPlacementAxis = ResolveBreakVisualUvPlacementAxis(mapping, placementAxis);
         BlockFace uvSamplingFace = ResolveBreakVisualUvSamplingFace(mapping, worldFace, sampledFace);
         Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX + 0.001f, tile.y * invAtlasTilesY + 0.001f);
+        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
         float tintMask = mapping.GetTint(sampledFace) ? 1f : 0f;
         bool grassSideOverlay = blockType == BlockType.Grass &&
                                 sampledFace != BlockFace.Top &&
