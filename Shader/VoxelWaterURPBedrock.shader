@@ -127,6 +127,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             float2 uv0 : TEXCOORD0;
             float2 uv1 : TEXCOORD1;
             float4 uv2 : TEXCOORD2;
+            float2 uv3 : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
@@ -137,7 +138,8 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             half3 normalWS : TEXCOORD1;
             float2 localUV : TEXCOORD2;
             float2 atlasOrigin : TEXCOORD3;
-            half3 extra : TEXCOORD4;
+            float2 atlasSize : TEXCOORD4;
+            half3 extra : TEXCOORD5;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -158,9 +160,9 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             return uv - floor(uv);
         }
 
-        float2 ResolveAtlasUV(float2 localUV, float2 atlasOrigin)
+        float2 ResolveAtlasUV(float2 localUV, float2 atlasOrigin, float2 atlasSize)
         {
-            float2 tileSize = GetAtlasTileSize();
+            float2 tileSize = max(atlasSize, float2(1e-5, 1e-5));
             float2 repeatedUV = RepeatTileUV(localUV);
             float2 normalizedPadding = saturate(_PaddingUV / max(tileSize, float2(1e-5, 1e-5)));
             repeatedUV = lerp(normalizedPadding, 1.0 - normalizedPadding, repeatedUV);
@@ -240,7 +242,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             normalWS = normalize(normalWS + half3(-slope.x, 0.0, -slope.y) * (half)(amplitude * waveFreq * 0.6));
         }
 
-        float2 ComputeFlowingAtlasUV(float2 localUV, float2 atlasOrigin, float flowSign)
+        float2 ComputeFlowingAtlasUV(float2 localUV, float2 atlasOrigin, float2 atlasSize, float flowSign)
         {
             float2 tileUV = RepeatTileUV(localUV);
             float2 waveDir = NormalizeDirection(_WaveDirection.xy, float2(1.0, 0.0));
@@ -254,13 +256,13 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             flowOffset = frac(flowOffset);
 
             float2 flowedTileUV = RepeatTileUV(tileUV + flowOffset);
-            return ResolveAtlasUV(flowedTileUV, atlasOrigin);
+            return ResolveAtlasUV(flowedTileUV, atlasOrigin, atlasSize);
         }
 
-        SurfaceSample SampleWaterSurface(float2 localUV, float2 atlasOrigin, float3 positionWS)
+        SurfaceSample SampleWaterSurface(float2 localUV, float2 atlasOrigin, float2 atlasSize, float3 positionWS)
         {
-            float2 uvA = ComputeFlowingAtlasUV(localUV, atlasOrigin, 1.0);
-            float2 uvB = ComputeFlowingAtlasUV(localUV, atlasOrigin, -1.0);
+            float2 uvA = ComputeFlowingAtlasUV(localUV, atlasOrigin, atlasSize, 1.0);
+            float2 uvB = ComputeFlowingAtlasUV(localUV, atlasOrigin, atlasSize, -1.0);
 
             half4 sampleA = SampleWaterTexture(uvA);
             half4 sampleB = SampleWaterTexture(uvB);
@@ -332,6 +334,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             output.localUV = input.uv0;
             output.atlasOrigin = input.uv1;
+            output.atlasSize = input.uv3;
             output.extra = saturate(input.uv2.xyz);
 
             ApplyWaterWaves(output.positionWS, output.normalWS);
@@ -349,7 +352,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             if (distanceOpacity <= 0.0001h)
                 clip(-1.0h);
 
-            SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
+            SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.atlasSize, input.positionWS);
             ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
 
             half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
@@ -384,6 +387,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             output.localUV = input.uv0;
             output.atlasOrigin = input.uv1;
+            output.atlasSize = input.uv3;
             output.extra = saturate(input.uv2.xyz);
 
             ApplyWaterWaves(output.positionWS, output.normalWS);
@@ -449,7 +453,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 if (distanceOpacity <= 0.0001h)
                     clip(-1.0h);
 
-                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
+                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.atlasSize, input.positionWS);
                 ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
                 return 0;
             }
@@ -485,7 +489,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                 if (distanceOpacity <= 0.0001h)
                     clip(-1.0h);
 
-                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
+                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.atlasSize, input.positionWS);
                 ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
                 return input.positionCS.z;
             }
@@ -521,7 +525,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
                     clip(-1.0h);
 
                 half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
-                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.positionWS);
+                SurfaceSample surface = SampleWaterSurface(input.localUV, input.atlasOrigin, input.atlasSize, input.positionWS);
                 ApplyVoxelAlphaClip(surface.alpha * distanceOpacity);
 
                 return half4(normalWS, 0.0h);

@@ -96,7 +96,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(max.x, max.y, max.z),
                 origin + new Vector3(max.x, min.y, max.z),
                 Vector3.right,
-                mapping.GetTileCoord(BlockFace.Right),
+                BlockFace.Right,
+                mapping,
                 mapping.GetTint(BlockFace.Right),
                 new Vector3Int(voxelX + 1, voxelY, voxelZ),
                 Vector3Int.up,
@@ -112,7 +113,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(min.x, max.y, min.z),
                 origin + new Vector3(min.x, min.y, min.z),
                 Vector3.left,
-                mapping.GetTileCoord(BlockFace.Left),
+                BlockFace.Left,
+                mapping,
                 mapping.GetTint(BlockFace.Left),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.up,
@@ -128,7 +130,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(max.x, max.y, min.z),
                 origin + new Vector3(min.x, max.y, min.z),
                 Vector3.up,
-                mapping.GetTileCoord(BlockFace.Top),
+                BlockFace.Top,
+                mapping,
                 mapping.GetTint(BlockFace.Top),
                 new Vector3Int(voxelX, voxelY + 1, voxelZ),
                 Vector3Int.right,
@@ -144,7 +147,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(max.x, min.y, max.z),
                 origin + new Vector3(min.x, min.y, max.z),
                 Vector3.down,
-                mapping.GetTileCoord(BlockFace.Bottom),
+                BlockFace.Bottom,
+                mapping,
                 mapping.GetTint(BlockFace.Bottom),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.right,
@@ -160,7 +164,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(min.x, max.y, max.z),
                 origin + new Vector3(min.x, min.y, max.z),
                 Vector3.forward,
-                mapping.GetTileCoord(BlockFace.Front),
+                BlockFace.Front,
+                mapping,
                 mapping.GetTint(BlockFace.Front),
                 new Vector3Int(voxelX, voxelY, voxelZ + 1),
                 Vector3Int.right,
@@ -176,7 +181,8 @@ public static partial class MeshGenerator
                 origin + new Vector3(max.x, max.y, min.z),
                 origin + new Vector3(max.x, min.y, min.z),
                 Vector3.back,
-                mapping.GetTileCoord(BlockFace.Back),
+                BlockFace.Back,
+                mapping,
                 mapping.GetTint(BlockFace.Back),
                 new Vector3Int(voxelX, voxelY, voxelZ),
                 Vector3Int.right,
@@ -210,12 +216,12 @@ public static partial class MeshGenerator
             Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z));
             Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z));
 
-            AddStaticLitShapeFace(p100, p110, p111, p101, mapping.GetTileCoord(BlockFace.Right), mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p001, p011, p010, p000, mapping.GetTileCoord(BlockFace.Left), mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p011, p111, p110, p010, mapping.GetTileCoord(BlockFace.Top), mapping.GetTint(BlockFace.Top), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p100, p101, p001, mapping.GetTileCoord(BlockFace.Bottom), mapping.GetTint(BlockFace.Bottom), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p101, p111, p011, p001, mapping.GetTileCoord(BlockFace.Front), mapping.GetTint(BlockFace.Front), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p010, p110, p100, mapping.GetTileCoord(BlockFace.Back), mapping.GetTint(BlockFace.Back), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p100, p110, p111, p101, mapping, BlockFace.Right, mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p001, p011, p010, p000, mapping, BlockFace.Left, mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p011, p111, p110, p010, mapping, BlockFace.Top, mapping.GetTint(BlockFace.Top), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p100, p101, p001, mapping, BlockFace.Bottom, mapping.GetTint(BlockFace.Bottom), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p101, p111, p011, p001, mapping, BlockFace.Front, mapping.GetTint(BlockFace.Front), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p000, p010, p110, p100, mapping, BlockFace.Back, mapping.GetTint(BlockFace.Back), light01, invAtlasTilesX, invAtlasTilesY, tris);
         }
 
         private void AddStaticLitShapeFace(
@@ -223,7 +229,8 @@ public static partial class MeshGenerator
             Vector3 p1,
             Vector3 p2,
             Vector3 p3,
-            Vector2Int tile,
+            BlockTextureMapping mapping,
+            BlockFace face,
             bool tint,
             float light01,
             float invAtlasTilesX,
@@ -235,12 +242,12 @@ public static partial class MeshGenerator
             if (normal.sqrMagnitude < 0.0001f)
                 normal = Vector3.up;
 
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+            ResolveAtlasRect(mapping, face, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
             Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
-            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra);
-            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra);
-            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra);
-            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra, atlasSize);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra, atlasSize);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra, atlasSize);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra, atlasSize);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -312,7 +319,8 @@ public static partial class MeshGenerator
             Vector3 p2,
             Vector3 p3,
             Vector3 normal,
-            Vector2Int tile,
+            BlockFace face,
+            BlockTextureMapping mapping,
             bool tint,
             Vector3Int lightPlanePos,
             Vector3Int lightStepU,
@@ -324,11 +332,11 @@ public static partial class MeshGenerator
         {
             int vertexGlobalStart = vertices.Length;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
-            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, default);
-            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, default);
-            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, default);
-            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, default);
+            ResolveAtlasRect(mapping, face, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, default, atlasSize);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, default, atlasSize);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, default, atlasSize);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, default, atlasSize);
 
             for (int corner = 0; corner < 4; corner++)
             {
@@ -396,6 +404,7 @@ public static partial class MeshGenerator
             Vector3 p2,
             Vector3 p3,
             Vector2 atlasUv,
+            Vector2 atlasSize,
             float light01,
             float tint,
             NativeList<int> tris,
@@ -406,10 +415,10 @@ public static partial class MeshGenerator
             ResolveShapeQuadUv(uvQuarterTurns, out Vector2 uv0, out Vector2 uv1, out Vector2 uv2, out Vector2 uv3);
 
             Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            AddPackedVertex(p0, planeNormal, uv0, atlasUv, e);
-            AddPackedVertex(p1, planeNormal, uv1, atlasUv, e);
-            AddPackedVertex(p2, planeNormal, uv2, atlasUv, e);
-            AddPackedVertex(p3, planeNormal, uv3, atlasUv, e);
+            AddPackedVertex(p0, planeNormal, uv0, atlasUv, e, atlasSize);
+            AddPackedVertex(p1, planeNormal, uv1, atlasUv, e, atlasSize);
+            AddPackedVertex(p2, planeNormal, uv2, atlasUv, e, atlasSize);
+            AddPackedVertex(p3, planeNormal, uv3, atlasUv, e, atlasSize);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);

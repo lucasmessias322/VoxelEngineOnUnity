@@ -16,6 +16,7 @@ public partial class World
         public readonly List<Vector2> uv0 = new List<Vector2>(256);
         public readonly List<Vector2> uv1 = new List<Vector2>(256);
         public readonly List<Vector4> uv2 = new List<Vector4>(256);
+        public readonly List<Vector2> uv3 = new List<Vector2>(256);
         public readonly List<int> opaqueTris = new List<int>(384);
         public readonly List<int> transparentTris = new List<int>(384);
         public readonly List<int> waterTris = new List<int>(384);
@@ -184,12 +185,14 @@ public partial class World
         List<Vector2> uv0 = data.uv0;
         List<Vector2> uv1 = data.uv1;
         List<Vector4> uv2 = data.uv2;
+        List<Vector2> uv3 = data.uv3;
         List<int> opaqueTris = data.opaqueTris;
         List<int> transparentTris = data.transparentTris;
         List<int> waterTris = data.waterTris;
 
-        float invAtlasTilesX = 1f / Mathf.Max(1, atlasTilesX);
-        float invAtlasTilesY = 1f / Mathf.Max(1, atlasTilesY);
+        Vector2Int legacyAtlasTiles = new Vector2Int(
+            Mathf.Max(1, atlasTilesX),
+            Mathf.Max(1, atlasTilesY));
 
         foreach (Vector3Int pos in positions)
         {
@@ -226,13 +229,22 @@ public partial class World
                 uv0.Add(new Vector2(1f, 1f));
                 uv0.Add(new Vector2(0f, 1f));
 
-                Vector2Int tile = GetTileForFace(mapping, f, placementAxis);
-                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+                Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(
+                    mapping,
+                    BlockFaceUtility.FromCubeFaceIndex(f),
+                    legacyAtlasTiles,
+                    blockData.atlasCoordinatesStartTopLeft);
+                Vector2 atlasUv = new Vector2(uvRectData.x, uvRectData.y);
+                Vector2 atlasSize = new Vector2(uvRectData.z, uvRectData.w);
 
                 uv1.Add(atlasUv);
                 uv1.Add(atlasUv);
                 uv1.Add(atlasUv);
                 uv1.Add(atlasUv);
+                uv3.Add(atlasSize);
+                uv3.Add(atlasSize);
+                uv3.Add(atlasSize);
+                uv3.Add(atlasSize);
 
                 float tint = GetTintForFace(mapping, f, placementAxis) ? 1f : 0f;
                 bool useGrassSideOverlay = blockType == BlockType.Grass && Mathf.Abs(face.normal.y) < 0.5f;
@@ -267,6 +279,7 @@ public partial class World
         data.mesh.SetUVs(0, uv0);
         data.mesh.SetUVs(1, uv1);
         data.mesh.SetUVs(2, uv2);
+        data.mesh.SetUVs(3, uv3);
         data.mesh.subMeshCount = 3;
         data.mesh.SetTriangles(opaqueTris, 0, true);
         data.mesh.SetTriangles(transparentTris, 1, true);
@@ -560,6 +573,7 @@ public partial class World
         data.uv0.Clear();
         data.uv1.Clear();
         data.uv2.Clear();
+        data.uv3.Clear();
         data.opaqueTris.Clear();
         data.transparentTris.Clear();
         data.waterTris.Clear();
@@ -569,6 +583,7 @@ public partial class World
         if (data.uv0.Capacity < vertexCapacity) data.uv0.Capacity = vertexCapacity;
         if (data.uv1.Capacity < vertexCapacity) data.uv1.Capacity = vertexCapacity;
         if (data.uv2.Capacity < vertexCapacity) data.uv2.Capacity = vertexCapacity;
+        if (data.uv3.Capacity < vertexCapacity) data.uv3.Capacity = vertexCapacity;
         if (data.opaqueTris.Capacity < triangleCapacity) data.opaqueTris.Capacity = triangleCapacity;
         if (data.transparentTris.Capacity < triangleCapacity) data.transparentTris.Capacity = triangleCapacity;
         if (data.waterTris.Capacity < triangleCapacity) data.waterTris.Capacity = triangleCapacity;

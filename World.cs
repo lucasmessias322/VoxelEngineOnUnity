@@ -161,6 +161,8 @@ public partial class World : MonoBehaviour
     public Material[] Material;
     public int atlasTilesX = 4;
     public int atlasTilesY = 4;
+    [Tooltip("Gerador do atlas de blocos usado para converter o mapeamento legacy por tiles para UV rects runtime.")]
+    public TextureAtlasGenerator blockAtlasGenerator;
 
     [Header("Inventory Block Icons")]
     [Tooltip("Atlas opcional usado apenas para gerar os icones isometricos dos blocos no inventario. Se vazio, usa o atlas encontrado nos materiais do mundo.")]
@@ -1720,7 +1722,11 @@ public partial class World : MonoBehaviour
 
     private void Start()
     {
-        if (blockData != null) blockData.InitializeDictionary();
+        if (blockData != null)
+        {
+            blockData.InitializeDictionary();
+            RebuildBlockAtlasCompatibility();
+        }
         RefreshTerrainGenerationRuntimeState();
 
         // Pre-instantiate pool
@@ -1739,6 +1745,141 @@ public partial class World : MonoBehaviour
         lastTreeLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
+    }
+
+    [ContextMenu("Rebuild Block Atlas Compatibility")]
+    public void RebuildBlockAtlasCompatibility()
+    {
+        if (blockData == null)
+            return;
+
+        TextureAtlasGenerator generator = ResolveBlockAtlasGenerator();
+        if (generator == null)
+            return;
+
+        Vector2Int legacyAtlasTiles = new Vector2Int(
+            Mathf.Max(1, atlasTilesX),
+            Mathf.Max(1, atlasTilesY));
+
+        if (!VoxelAtlasCompatibility.Apply(
+                generator,
+                blockData,
+                legacyAtlasTiles,
+                blockData.atlasCoordinatesStartTopLeft))
+        {
+            return;
+        }
+
+        ApplyGeneratedAtlasToWorldMaterials(generator.GeneratedAtlas);
+
+        if (blockItemIconAtlasTexture == null && generator.GeneratedAtlas != null)
+            blockItemIconAtlasTexture = generator.GeneratedAtlas;
+
+        InvalidateNativeGenerationCaches();
+    }
+
+    private TextureAtlasGenerator ResolveBlockAtlasGenerator()
+    {
+        if (blockAtlasGenerator != null)
+            return blockAtlasGenerator;
+
+        TextureAtlasGenerator[] generators = FindObjectsOfType<TextureAtlasGenerator>(true);
+        TextureAtlasGenerator bestMatch = null;
+        int bestScore = int.MinValue;
+
+        for (int i = 0; i < generators.Length; i++)
+        {
+            TextureAtlasGenerator candidate = generators[i];
+            if (candidate == null)
+                continue;
+
+            int score = ScoreAtlasGenerator(candidate);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestMatch = candidate;
+            }
+        }
+
+        blockAtlasGenerator = bestMatch;
+        return blockAtlasGenerator;
+    }
+
+    private int ScoreAtlasGenerator(TextureAtlasGenerator generator)
+    {
+        if (generator == null)
+            return int.MinValue;
+
+        int score = 0;
+        if (generator == blockAtlasGenerator)
+            score += 1000;
+
+        if (generator.targetMaterials != null && Material != null)
+        {
+            for (int i = 0; i < generator.targetMaterials.Count; i++)
+            {
+                Material targetMaterial = generator.targetMaterials[i];
+                if (targetMaterial == null)
+                    continue;
+
+                for (int j = 0; j < Material.Length; j++)
+                {
+                    if (ReferenceEquals(targetMaterial, Material[j]))
+                        score += 100;
+                }
+            }
+        }
+
+        if (generator.targetRenderer != null && Material != null)
+        {
+            Material[] rendererMaterials = generator.targetRenderer.sharedMaterials;
+            for (int i = 0; i < rendererMaterials.Length; i++)
+            {
+                Material rendererMaterial = rendererMaterials[i];
+                if (rendererMaterial == null)
+                    continue;
+
+                for (int j = 0; j < Material.Length; j++)
+                {
+                    if (ReferenceEquals(rendererMaterial, Material[j]))
+                        score += 50;
+                }
+            }
+        }
+
+        if (generator.GeneratedAtlas != null)
+            score += 10;
+        if (generator.generateOnStart)
+            score += 5;
+
+        return score;
+    }
+
+    private void ApplyGeneratedAtlasToWorldMaterials(Texture atlasTexture)
+    {
+        if (atlasTexture == null || Material == null)
+            return;
+
+        for (int i = 0; i < Material.Length; i++)
+        {
+            Material material = Material[i];
+            if (material == null)
+                continue;
+
+            if (material.HasProperty("_Atlas"))
+                material.SetTexture("_Atlas", atlasTexture);
+            else if (material.HasProperty("_BaseMap"))
+                material.SetTexture("_BaseMap", atlasTexture);
+            else if (material.HasProperty("_MainTex"))
+                material.SetTexture("_MainTex", atlasTexture);
+            else
+                material.mainTexture = atlasTexture;
+
+            if (material.HasProperty("_AtlasOriginTopLeft"))
+                material.SetFloat("_AtlasOriginTopLeft", 0f);
+            if (material.HasProperty("_PaddingUV"))
+                material.SetFloat("_PaddingUV", 0f);
+        }
     }
 
     private void OnEnable()

@@ -214,6 +214,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float2 uv0 : TEXCOORD0;
             float2 uv1 : TEXCOORD1;
             float4 uv2 : TEXCOORD2;
+            float2 uv3 : TEXCOORD3;
             uint proceduralVertexID : SV_VertexID;
             uint proceduralInstanceID : SV_InstanceID;
             UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -226,9 +227,10 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 normalWS : TEXCOORD1;
             float2 localUV : TEXCOORD2;
             float2 atlasOrigin : TEXCOORD3;
-            half3 extra : TEXCOORD4;
-            half3 tintColor : TEXCOORD5;
-            half subchunkIndex : TEXCOORD6;
+            float2 atlasSize : TEXCOORD4;
+            half3 extra : TEXCOORD5;
+            half3 tintColor : TEXCOORD6;
+            half subchunkIndex : TEXCOORD7;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -238,9 +240,10 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float4 positionCS : SV_POSITION;
             float2 localUV : TEXCOORD0;
             float2 atlasOrigin : TEXCOORD1;
-            half3 normalWS : TEXCOORD2;
-            half subchunkIndex : TEXCOORD3;
-            float3 positionWS : TEXCOORD4;
+            float2 atlasSize : TEXCOORD2;
+            half3 normalWS : TEXCOORD3;
+            half subchunkIndex : TEXCOORD4;
+            float3 positionWS : TEXCOORD5;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -261,9 +264,9 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             return uv - floor(uv);
         }
 
-        float2 ResolveAtlasUV(float2 localUV, float2 atlasOrigin)
+        float2 ResolveAtlasUV(float2 localUV, float2 atlasOrigin, float2 atlasSize)
         {
-            float2 tileSize = GetAtlasTileSize();
+            float2 tileSize = max(atlasSize, float2(1e-5, 1e-5));
             float2 repeatedUV = RepeatTileUV(localUV);
             float2 normalizedPadding = saturate(_PaddingUV / max(tileSize, float2(1e-5, 1e-5)));
             repeatedUV = lerp(normalizedPadding, 1.0 - normalizedPadding, repeatedUV);
@@ -275,9 +278,9 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             return resolvedOrigin + repeatedUV * tileSize;
         }
 
-        SurfaceSample SampleVoxelSurface(float2 localUV, float2 atlasOrigin)
+        SurfaceSample SampleVoxelSurface(float2 localUV, float2 atlasOrigin, float2 atlasSize)
         {
-            float2 atlasUV = ResolveAtlasUV(localUV, atlasOrigin);
+            float2 atlasUV = ResolveAtlasUV(localUV, atlasOrigin, atlasSize);
 
             SurfaceSample surface;
             surface.color = SAMPLE_TEXTURE2D(_Atlas, sampler_Atlas, atlasUV) * _BaseColor;
@@ -636,12 +639,13 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             normalWS = normalize(normalWS + half3(offsetXZ.x, 0.0, offsetXZ.y) * (half)(0.22 * finalMask));
         }
 
-        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out half3 extra, out half3 tintColor, out half subchunkIndex)
+        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out float2 atlasSize, out half3 extra, out half3 tintColor, out half subchunkIndex)
         {
             positionWS = 0.0.xxx;
             normalWS = half3(0.0h, 1.0h, 0.0h);
             localUV = 0.0.xx;
             atlasOrigin = 0.0.xx;
+            atlasSize = GetAtlasTileSize();
             extra = half3(1.0h, 0.0h, 1.0h);
             tintColor = half3(1.0h, 1.0h, 1.0h);
             subchunkIndex = 0.0h;
@@ -669,6 +673,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 faceIndex += faceBaseIndex;
                 half windBendMask = 1.0h;
                 ResolveCompactOpaqueFaceData(faceIndex, vertexIndex, chunkOriginWS, positionWS, normalWS, localUV, atlasOrigin, extra, subchunkIndex, windBendMask);
+                atlasSize = GetAtlasTileSize();
                 half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
                 tintColor = lerp(half3(1.0h, 1.0h, 1.0h), foliageTint, saturate(extra.y));
                 ApplyLeafWind(positionWS, normalWS, saturate(extra.y), windBendMask);
@@ -696,6 +701,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 normalWS = normalize(face.normalWS.xyz);
                 localUV = face.uvBounds.xy + face.uvBounds.zw * cornerUV01.x + face.atlasAndFlags.xy * cornerUV01.y;
                 atlasOrigin = face.atlasAndFlags.zw;
+                atlasSize = GetAtlasTileSize();
                 extra = half3(
                     (half)ResolveProceduralCornerValue(face.cornerLight01, corner),
                     1.0h,
@@ -725,6 +731,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             localUV = input.uv0;
             atlasOrigin = input.uv1;
+            atlasSize = input.uv3;
             extra = saturate(input.uv2.xyz);
             half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
             half tintMask = saturate(input.uv2.y);
@@ -745,7 +752,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             UNITY_TRANSFER_INSTANCE_ID(input, output);
             UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.extra, output.tintColor, output.subchunkIndex);
+            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.atlasSize, output.extra, output.tintColor, output.subchunkIndex);
             output.positionCS = TransformWorldToHClip(output.positionWS);
             return output;
         }
@@ -755,7 +762,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             UNITY_SETUP_INSTANCE_ID(input);
             UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-            SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin);
+            SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin, input.atlasSize);
             ApplyVoxelAlphaClip(surface.alpha);
             ApplySectionVisibilityMask(input.subchunkIndex);
 
@@ -789,7 +796,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 normalWS;
             half3 extra;
             half3 tintColor;
-            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, extra, tintColor, output.subchunkIndex);
+            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex);
 
             output.positionCS = TransformWorldToHClip(positionWS);
             output.normalWS = normalWS;
@@ -845,7 +852,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 half3 normalWS;
                 half3 extra;
                 half3 tintColor;
-                ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, extra, tintColor, output.subchunkIndex);
+                ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex);
 
                 #if _CASTING_PUNCTUAL_LIGHT_SHADOW
                     float3 lightDirectionWS = normalize(_LightPosition - positionWS);
@@ -865,7 +872,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin);
+                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin, input.atlasSize);
                 ApplyVoxelAlphaClip(surface.alpha);
                 ApplySectionVisibilityMask(input.subchunkIndex);
                 return 0;
@@ -898,7 +905,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin);
+                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin, input.atlasSize);
                 ApplyVoxelAlphaClip(surface.alpha);
                 ApplySectionVisibilityMask(input.subchunkIndex);
                 return input.positionCS.z;
@@ -930,7 +937,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
 
-                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin);
+                SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin, input.atlasSize);
                 ApplyVoxelAlphaClip(surface.alpha);
                 ApplySectionVisibilityMask(input.subchunkIndex);
 

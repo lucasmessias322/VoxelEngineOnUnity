@@ -40,5 +40,6 @@ public static partial class MeshGenerator
         public Vector2 uv0;
         public Vector2 uv1;
         public Vector4 uv2;
+        public Vector2 uv3;
     }
 }

@@ -292,8 +292,13 @@ public static partial class MeshGenerator
                                 int faceSubchunkIndex = math.clamp(baseBlockY / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
                                 float packedSubchunkAndOverlay =
                                     faceSubchunkIndex + (useGrassSideOverlay ? 0.25f : 0f);
-                                Vector2Int tile = m.GetTileCoord(sampledFace);
-                                Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+                                ResolveAtlasRect(
+                                    m,
+                                    sampledFace,
+                                    invAtlasTilesX,
+                                    invAtlasTilesY,
+                                    out Vector2 atlasUv,
+                                    out Vector2 atlasSize);
 
                                 for (int l = 0; l < 4; l++)
                                 {
@@ -336,7 +341,8 @@ public static partial class MeshGenerator
                                         normal,
                                         uvCoord,
                                         atlasUv,
-                                        new Vector4(rawLight, floatTint, floatAO, packedSubchunkAndOverlay));
+                                        new Vector4(rawLight, floatTint, floatAO, packedSubchunkAndOverlay),
+                                        atlasSize);
                                 }
 
                                 NativeList<int> tris = FluidBlockUtility.IsWater(bt)

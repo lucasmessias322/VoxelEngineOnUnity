@@ -69,6 +69,7 @@ public class BlockDrop : MonoBehaviour
         public int tileY;
         public bool tint;
         public bool usesExplicitAppearance;
+        public Vector4 explicitUvRectData;
     }
 
     private static readonly FaceDef[] FaceDefs = new FaceDef[]
@@ -84,6 +85,8 @@ public class BlockDrop : MonoBehaviour
     private static Material fallbackDropMaterial;
     private const int MaxPoolSize = 512;
     private const float ShapeFaceEpsilon = 0.0001f;
+    private static Vector2Int currentLegacyAtlasTiles = Vector2Int.one;
+    private static bool currentAtlasOriginTopLeft;
 
     private struct CachedDropMesh
     {
@@ -258,6 +261,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0 = new List<Vector2>(24);
         List<Vector2> uv1 = new List<Vector2>(24);
         List<Vector4> uv2 = new List<Vector4>(24);
+        List<Vector2> uv3 = new List<Vector2>(24);
         List<int> tris = new List<int>(36);
 
         int mapIndex = (int)blockType;
@@ -267,41 +271,43 @@ public class BlockDrop : MonoBehaviour
 
         float invAtlasTilesX = 1f / Mathf.Max(1, world.atlasTilesX);
         float invAtlasTilesY = 1f / Mathf.Max(1, world.atlasTilesY);
+        currentLegacyAtlasTiles = new Vector2Int(Mathf.Max(1, world.atlasTilesX), Mathf.Max(1, world.atlasTilesY));
+        currentAtlasOriginTopLeft = world.blockData != null && world.blockData.atlasCoordinatesStartTopLeft;
         Vector3 origin = -Vector3.one * 0.5f;
         BlockRenderShape effectiveShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
 
         switch (effectiveShape)
         {
             case BlockRenderShape.Cross:
-                AppendCrossMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendCrossMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.Cuboid:
-                AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.MultiCuboid:
-                AppendMultiCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, world.blockData != null ? world.blockData.runtimeMultiCuboidBoxes : null, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendMultiCuboidMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, world.blockData != null ? world.blockData.runtimeMultiCuboidBoxes : null, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.Plane:
-                AppendPlaneMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendPlaneMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.Stairs:
-                AppendStairMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendStairMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.Fence:
-                AppendFenceMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendFenceMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.Ramp:
-                AppendRampMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendRampMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             case BlockRenderShape.VerticalRamp:
-                AppendVerticalRampMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                AppendVerticalRampMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
             default:
@@ -325,12 +331,8 @@ public class BlockDrop : MonoBehaviour
                     uv0.Add(GetFaceBaseUv(f, face.v2));
                     uv0.Add(GetFaceBaseUv(f, face.v3));
 
-                    Vector2Int tile = GetTileForFace(mapping, f);
-                    Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
-                    uv1.Add(atlasUv);
-                    uv1.Add(atlasUv);
-                    uv1.Add(atlasUv);
-                    uv1.Add(atlasUv);
+                    ResolveAtlasRect(mapping, BlockFaceUtility.FromCubeFaceIndex(f), out Vector2 atlasUv, out Vector2 atlasSize);
+                    AppendAtlasRect(uv1, uv3, atlasUv, atlasSize, 4);
 
                     float tint = GetTintForFace(mapping, f) ? 1f : 0f;
                     bool useGrassSideOverlay = blockType == BlockType.Grass && face.normal3.y == 0f;
@@ -355,6 +357,7 @@ public class BlockDrop : MonoBehaviour
         mesh.SetUVs(0, uv0);
         mesh.SetUVs(1, uv1);
         mesh.SetUVs(2, uv2);
+        mesh.SetUVs(3, uv3);
         mesh.subMeshCount = 3;
 
         if (FluidBlockUtility.IsWater(blockType)) submeshIndex = 2;
@@ -374,6 +377,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -382,21 +386,20 @@ public class BlockDrop : MonoBehaviour
     {
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-        Vector2Int tile = mapping.GetTileCoord(BlockFace.Front);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+        ResolveAtlasRect(mapping, BlockFace.Front, out Vector2 atlasUv, out Vector2 atlasSize);
         float tint = mapping.GetTint(BlockFace.Front) ? 1f : 0f;
 
         Vector3 a0 = origin + new Vector3(min.x, min.y, min.z);
         Vector3 a1 = origin + new Vector3(max.x, min.y, max.z);
         Vector3 a2 = origin + new Vector3(max.x, max.y, max.z);
         Vector3 a3 = origin + new Vector3(min.x, max.y, min.z);
-        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, tris, a0, a1, a2, a3, atlasUv, tint);
+        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, uv3, tris, a0, a1, a2, a3, atlasUv, atlasSize, tint);
 
         Vector3 b0 = origin + new Vector3(min.x, min.y, max.z);
         Vector3 b1 = origin + new Vector3(max.x, min.y, min.z);
         Vector3 b2 = origin + new Vector3(max.x, max.y, min.z);
         Vector3 b3 = origin + new Vector3(min.x, max.y, max.z);
-        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, tris, b0, b1, b2, b3, atlasUv, tint);
+        AppendDoubleSidedQuad(vertices, normals, uv0, uv1, uv2, uv3, tris, b0, b1, b2, b3, atlasUv, atlasSize, tint);
     }
 
     private static void AppendPlaneMesh(
@@ -405,6 +408,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -413,8 +417,7 @@ public class BlockDrop : MonoBehaviour
     {
         BlockShapeUtility.ResolvePlaneQuad(mapping, BlockPlacementAxis.Y, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace, out _);
 
-        Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+        ResolveAtlasRect(mapping, sampledFace, out Vector2 atlasUv, out Vector2 atlasSize);
         float tint = mapping.GetTint(sampledFace) ? 1f : 0f;
 
         AppendDoubleSidedQuad(
@@ -423,12 +426,14 @@ public class BlockDrop : MonoBehaviour
             uv0,
             uv1,
             uv2,
+            uv3,
             tris,
             origin + p0,
             origin + p1,
             origin + p2,
             origin + p3,
             atlasUv,
+            atlasSize,
             tint);
     }
 
@@ -438,6 +443,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -446,68 +452,74 @@ public class BlockDrop : MonoBehaviour
     {
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(max.x, min.y, min.z),
             origin + new Vector3(max.x, max.y, min.z),
             origin + new Vector3(max.x, max.y, max.z),
             origin + new Vector3(max.x, min.y, max.z),
             Vector3.right,
-            mapping.GetTileCoord(BlockFace.Right),
+            mapping,
+            BlockFace.Right,
             mapping.GetTint(BlockFace.Right),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(min.x, min.y, max.z),
             origin + new Vector3(min.x, max.y, max.z),
             origin + new Vector3(min.x, max.y, min.z),
             origin + new Vector3(min.x, min.y, min.z),
             Vector3.left,
-            mapping.GetTileCoord(BlockFace.Left),
+            mapping,
+            BlockFace.Left,
             mapping.GetTint(BlockFace.Left),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(min.x, max.y, max.z),
             origin + new Vector3(max.x, max.y, max.z),
             origin + new Vector3(max.x, max.y, min.z),
             origin + new Vector3(min.x, max.y, min.z),
             Vector3.up,
-            mapping.GetTileCoord(BlockFace.Top),
+            mapping,
+            BlockFace.Top,
             mapping.GetTint(BlockFace.Top),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(min.x, min.y, min.z),
             origin + new Vector3(max.x, min.y, min.z),
             origin + new Vector3(max.x, min.y, max.z),
             origin + new Vector3(min.x, min.y, max.z),
             Vector3.down,
-            mapping.GetTileCoord(BlockFace.Bottom),
+            mapping,
+            BlockFace.Bottom,
             mapping.GetTint(BlockFace.Bottom),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(max.x, min.y, max.z),
             origin + new Vector3(max.x, max.y, max.z),
             origin + new Vector3(min.x, max.y, max.z),
             origin + new Vector3(min.x, min.y, max.z),
             Vector3.forward,
-            mapping.GetTileCoord(BlockFace.Front),
+            mapping,
+            BlockFace.Front,
             mapping.GetTint(BlockFace.Front),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(min.x, min.y, min.z),
             origin + new Vector3(min.x, max.y, min.z),
             origin + new Vector3(max.x, max.y, min.z),
             origin + new Vector3(max.x, min.y, min.z),
             Vector3.back,
-            mapping.GetTileCoord(BlockFace.Back),
+            mapping,
+            BlockFace.Back,
             mapping.GetTint(BlockFace.Back),
             invAtlasTilesX,
             invAtlasTilesY);
@@ -519,6 +531,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         BlockModelCuboid[] cuboids,
@@ -529,7 +542,7 @@ public class BlockDrop : MonoBehaviour
         int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, cuboids);
         if (boxCount <= 0)
         {
-            AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+            AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
             return;
         }
 
@@ -545,7 +558,7 @@ public class BlockDrop : MonoBehaviour
             appendedAnyCuboid = true;
             if (BlockShapeUtility.HasCuboidRotation(cuboid))
             {
-                AppendRotatedModelCuboid(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, invAtlasTilesX, invAtlasTilesY);
+                AppendRotatedModelCuboid(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, invAtlasTilesX, invAtlasTilesY);
                 continue;
             }
 
@@ -556,7 +569,7 @@ public class BlockDrop : MonoBehaviour
 
         if (!appendedAnyCuboid)
         {
-            AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+            AppendCuboidMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
             return;
         }
 
@@ -568,7 +581,7 @@ public class BlockDrop : MonoBehaviour
 
         for (int i = 0; i < faceRects.Count; i++)
         {
-            AppendShapeRect(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, faceRects[i], invAtlasTilesX, invAtlasTilesY);
+            AppendShapeRect(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, faceRects[i], invAtlasTilesX, invAtlasTilesY);
         }
     }
 
@@ -578,6 +591,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -589,12 +603,12 @@ public class BlockDrop : MonoBehaviour
         Vector3 center = (box.min + box.max) * 0.5f;
         Quaternion rotation = Quaternion.Euler(cuboid.eulerRotation);
 
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Right, invAtlasTilesX, invAtlasTilesY);
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Left, invAtlasTilesX, invAtlasTilesY);
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Top, invAtlasTilesX, invAtlasTilesY);
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Bottom, invAtlasTilesX, invAtlasTilesY);
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Front, invAtlasTilesX, invAtlasTilesY);
-        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Back, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Right, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Left, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Top, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Bottom, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Front, invAtlasTilesX, invAtlasTilesY);
+        AppendRotatedModelCuboidFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, cuboid, box, center, rotation, BlockFace.Back, invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendRotatedModelCuboidFace(
@@ -603,6 +617,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -623,6 +638,9 @@ public class BlockDrop : MonoBehaviour
         p2 = RotateCuboidPoint(p2, center, rotation);
         p3 = RotateCuboidPoint(p3, center, rotation);
         normal = (rotation * normal).normalized;
+        Vector4 explicitUvRectData = cuboid.TryGetUvRectData(face, mapping, out Vector4 cuboidUvRectData)
+            ? cuboidUvRectData
+            : default;
 
         AppendProjectedQuadFace(
             vertices,
@@ -630,6 +648,7 @@ public class BlockDrop : MonoBehaviour
             uv0,
             uv1,
             uv2,
+            uv3,
             tris,
             mapping,
             face,
@@ -644,7 +663,8 @@ public class BlockDrop : MonoBehaviour
             false,
             true,
             cuboid.GetTileCoord(face, mapping),
-            mapping.GetTint(face));
+            mapping.GetTint(face),
+            explicitUvRectData);
     }
 
     private static Vector3 RotateCuboidPoint(Vector3 point, Vector3 center, Quaternion rotation)
@@ -721,6 +741,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -728,11 +749,11 @@ public class BlockDrop : MonoBehaviour
         float invAtlasTilesY)
     {
         StairShapeUtility.ResolveBoxes((byte)StairPlacementUtility.Encode(StairFacing.North, false), StairShapeVariant.Straight, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box0, invAtlasTilesX, invAtlasTilesY);
-        if (boxCount > 1) AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box1, invAtlasTilesX, invAtlasTilesY);
-        if (boxCount > 2) AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box2, invAtlasTilesX, invAtlasTilesY);
-        if (boxCount > 3) AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box3, invAtlasTilesX, invAtlasTilesY);
-        if (boxCount > 4) AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, box4, invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, box0, invAtlasTilesX, invAtlasTilesY);
+        if (boxCount > 1) AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, box1, invAtlasTilesX, invAtlasTilesY);
+        if (boxCount > 2) AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, box2, invAtlasTilesX, invAtlasTilesY);
+        if (boxCount > 3) AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, box3, invAtlasTilesX, invAtlasTilesY);
+        if (boxCount > 4) AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, box4, invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendFenceMesh(
@@ -741,17 +762,18 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
         float invAtlasTilesX,
         float invAtlasTilesY)
     {
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, FenceShapeUtility.GetCenterPostVisualBox(), invAtlasTilesX, invAtlasTilesY);
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false), invAtlasTilesX, invAtlasTilesY);
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true), invAtlasTilesX, invAtlasTilesY);
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false), invAtlasTilesX, invAtlasTilesY);
-        AppendShapeBox(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetCenterPostVisualBox(), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true), invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendRampMesh(
@@ -760,6 +782,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -770,18 +793,18 @@ public class BlockDrop : MonoBehaviour
         RampShapeVariant rampVariant = RampShapeVariant.Straight;
 
         RampShapeUtility.ResolveBottomQuad(rampAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
-        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Bottom, origin, bottom0, bottom1, bottom2, bottom3, Vector3.down, invAtlasTilesX, invAtlasTilesY, false);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Bottom, origin, bottom0, bottom1, bottom2, bottom3, Vector3.down, invAtlasTilesX, invAtlasTilesY, false);
 
         RampShapeUtility.ResolveTopTriangles(rampAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
         Vector3 topNormal0 = Vector3.Normalize(Vector3.Cross(top0b - top0a, top0c - top0a));
         Vector3 topNormal1 = Vector3.Normalize(Vector3.Cross(top1b - top1a, top1c - top1a));
-        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Top, origin, top0a, top0b, top0c, topNormal0, invAtlasTilesX, invAtlasTilesY);
-        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Top, origin, top1a, top1b, top1c, topNormal1, invAtlasTilesX, invAtlasTilesY);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Top, origin, top0a, top0b, top0c, topNormal0, invAtlasTilesX, invAtlasTilesY);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Top, origin, top1a, top1b, top1c, topNormal1, invAtlasTilesX, invAtlasTilesY);
 
-        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Left, invAtlasTilesX, invAtlasTilesY);
-        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Right, invAtlasTilesX, invAtlasTilesY);
-        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Front, invAtlasTilesX, invAtlasTilesY);
-        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Back, invAtlasTilesX, invAtlasTilesY);
+        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Left, invAtlasTilesX, invAtlasTilesY);
+        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Right, invAtlasTilesX, invAtlasTilesY);
+        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Front, invAtlasTilesX, invAtlasTilesY);
+        AppendRampEdgeFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, rampAxis, rampVariant, RampEdge.Back, invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendRampEdgeFace(
@@ -790,6 +813,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -805,11 +829,11 @@ public class BlockDrop : MonoBehaviour
         Vector3 normal = ResolveSpecialFaceNormal(sampledFace);
         if (vertexCount == 4)
         {
-            AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, sampledFace, origin, p0, p1, p2, p3, normal, invAtlasTilesX, invAtlasTilesY, false);
+            AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, sampledFace, origin, p0, p1, p2, p3, normal, invAtlasTilesX, invAtlasTilesY, false);
             return;
         }
 
-        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, sampledFace, origin, p0, p1, p2, normal, invAtlasTilesX, invAtlasTilesY);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, sampledFace, origin, p0, p1, p2, normal, invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendVerticalRampMesh(
@@ -818,6 +842,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -827,19 +852,19 @@ public class BlockDrop : MonoBehaviour
         BlockPlacementAxis axis = BlockPlacementAxis.ZNegative;
 
         VerticalRampShapeUtility.ResolveBottomTriangle(axis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2);
-        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Bottom, origin, bottom0, bottom1, bottom2, Vector3.down, invAtlasTilesX, invAtlasTilesY);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Bottom, origin, bottom0, bottom1, bottom2, Vector3.down, invAtlasTilesX, invAtlasTilesY);
 
         VerticalRampShapeUtility.ResolveTopTriangle(axis, out Vector3 top0, out Vector3 top1, out Vector3 top2);
-        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Top, origin, top0, top1, top2, Vector3.up, invAtlasTilesX, invAtlasTilesY);
+        AppendProjectedTriangleFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Top, origin, top0, top1, top2, Vector3.up, invAtlasTilesX, invAtlasTilesY);
 
         VerticalRampShapeUtility.ResolveSideQuad(axis, out Vector3 side0, out Vector3 side1, out Vector3 side2, out Vector3 side3, out BlockFace sideFace);
-        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, sideFace, origin, side0, side1, side2, side3, ResolveSpecialFaceNormal(sideFace), invAtlasTilesX, invAtlasTilesY, false);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, sideFace, origin, side0, side1, side2, side3, ResolveSpecialFaceNormal(sideFace), invAtlasTilesX, invAtlasTilesY, false);
 
         VerticalRampShapeUtility.ResolveFrontQuad(axis, out Vector3 front0, out Vector3 front1, out Vector3 front2, out Vector3 front3, out BlockFace frontFace);
-        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, frontFace, origin, front0, front1, front2, front3, ResolveSpecialFaceNormal(frontFace), invAtlasTilesX, invAtlasTilesY, false);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, frontFace, origin, front0, front1, front2, front3, ResolveSpecialFaceNormal(frontFace), invAtlasTilesX, invAtlasTilesY, false);
 
         VerticalRampShapeUtility.ResolveSlopeQuad(axis, out Vector3 slope0, out Vector3 slope1, out Vector3 slope2, out Vector3 slope3, out BlockFace slopeFace, out Vector3 slopeNormal);
-        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, slopeFace, origin, slope0, slope1, slope2, slope3, slopeNormal, invAtlasTilesX, invAtlasTilesY, false);
+        AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, slopeFace, origin, slope0, slope1, slope2, slope3, slopeNormal, invAtlasTilesX, invAtlasTilesY, false);
     }
 
     private static void AppendShapeBox(
@@ -848,6 +873,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -855,68 +881,74 @@ public class BlockDrop : MonoBehaviour
         float invAtlasTilesX,
         float invAtlasTilesY)
     {
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.max.x, box.min.y, box.min.z),
             origin + new Vector3(box.max.x, box.max.y, box.min.z),
             origin + new Vector3(box.max.x, box.max.y, box.max.z),
             origin + new Vector3(box.max.x, box.min.y, box.max.z),
             Vector3.right,
-            mapping.GetTileCoord(BlockFace.Right),
+            mapping,
+            BlockFace.Right,
             mapping.GetTint(BlockFace.Right),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.min.x, box.min.y, box.max.z),
             origin + new Vector3(box.min.x, box.max.y, box.max.z),
             origin + new Vector3(box.min.x, box.max.y, box.min.z),
             origin + new Vector3(box.min.x, box.min.y, box.min.z),
             Vector3.left,
-            mapping.GetTileCoord(BlockFace.Left),
+            mapping,
+            BlockFace.Left,
             mapping.GetTint(BlockFace.Left),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.min.x, box.max.y, box.max.z),
             origin + new Vector3(box.max.x, box.max.y, box.max.z),
             origin + new Vector3(box.max.x, box.max.y, box.min.z),
             origin + new Vector3(box.min.x, box.max.y, box.min.z),
             Vector3.up,
-            mapping.GetTileCoord(BlockFace.Top),
+            mapping,
+            BlockFace.Top,
             mapping.GetTint(BlockFace.Top),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.min.x, box.min.y, box.min.z),
             origin + new Vector3(box.max.x, box.min.y, box.min.z),
             origin + new Vector3(box.max.x, box.min.y, box.max.z),
             origin + new Vector3(box.min.x, box.min.y, box.max.z),
             Vector3.down,
-            mapping.GetTileCoord(BlockFace.Bottom),
+            mapping,
+            BlockFace.Bottom,
             mapping.GetTint(BlockFace.Bottom),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.max.x, box.min.y, box.max.z),
             origin + new Vector3(box.max.x, box.max.y, box.max.z),
             origin + new Vector3(box.min.x, box.max.y, box.max.z),
             origin + new Vector3(box.min.x, box.min.y, box.max.z),
             Vector3.forward,
-            mapping.GetTileCoord(BlockFace.Front),
+            mapping,
+            BlockFace.Front,
             mapping.GetTint(BlockFace.Front),
             invAtlasTilesX,
             invAtlasTilesY);
 
-        AppendShapeFace(vertices, normals, uv0, uv1, uv2, tris,
+        AppendShapeFace(vertices, normals, uv0, uv1, uv2, uv3, tris,
             origin + new Vector3(box.min.x, box.min.y, box.min.z),
             origin + new Vector3(box.min.x, box.max.y, box.min.z),
             origin + new Vector3(box.max.x, box.max.y, box.min.z),
             origin + new Vector3(box.max.x, box.min.y, box.min.z),
             Vector3.back,
-            mapping.GetTileCoord(BlockFace.Back),
+            mapping,
+            BlockFace.Back,
             mapping.GetTint(BlockFace.Back),
             invAtlasTilesX,
             invAtlasTilesY);
@@ -939,12 +971,21 @@ public class BlockDrop : MonoBehaviour
 
         Vector2Int tile = cuboid.GetTileCoord(face, mapping);
         bool tint = mapping.GetTint(face);
-        AppendShapeFaceRect(faceRects, box, face, tile, tint, true);
+        AppendShapeFaceRect(
+            faceRects,
+            box,
+            face,
+            tile,
+            tint,
+            true,
+            cuboid.TryGetUvRectData(face, mapping, out Vector4 explicitUvRectData)
+                ? explicitUvRectData
+                : default);
     }
 
     private static void AppendShapeFaceRect(List<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
     {
-        AppendShapeFaceRect(faceRects, box, face, default, false, false);
+        AppendShapeFaceRect(faceRects, box, face, default, false, false, default);
     }
 
     private static void AppendShapeFaceRect(
@@ -953,7 +994,8 @@ public class BlockDrop : MonoBehaviour
         BlockFace face,
         Vector2Int tile,
         bool tint,
-        bool usesExplicitAppearance)
+        bool usesExplicitAppearance,
+        Vector4 explicitUvRectData)
     {
         switch (face)
         {
@@ -969,7 +1011,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
 
@@ -985,7 +1028,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
 
@@ -1001,7 +1045,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
 
@@ -1017,7 +1062,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
 
@@ -1033,7 +1079,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
 
@@ -1049,7 +1096,8 @@ public class BlockDrop : MonoBehaviour
                     tileX = tile.x,
                     tileY = tile.y,
                     tint = tint,
-                    usesExplicitAppearance = usesExplicitAppearance
+                    usesExplicitAppearance = usesExplicitAppearance,
+                    explicitUvRectData = explicitUvRectData
                 });
                 return;
         }
@@ -1268,7 +1316,8 @@ public class BlockDrop : MonoBehaviour
             tileX = source.tileX,
             tileY = source.tileY,
             tint = source.tint,
-            usesExplicitAppearance = source.usesExplicitAppearance
+            usesExplicitAppearance = source.usesExplicitAppearance,
+            explicitUvRectData = source.explicitUvRectData
         });
     }
 
@@ -1332,7 +1381,8 @@ public class BlockDrop : MonoBehaviour
                (!a.usesExplicitAppearance ||
                 (a.tileX == b.tileX &&
                  a.tileY == b.tileY &&
-                 a.tint == b.tint));
+                 a.tint == b.tint &&
+                 Vector4.SqrMagnitude(a.explicitUvRectData - b.explicitUvRectData) <= 1e-10f));
     }
 
     private static void AppendShapeRect(
@@ -1341,6 +1391,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         Vector3 origin,
@@ -1351,11 +1402,12 @@ public class BlockDrop : MonoBehaviour
         bool hasExplicitAppearance = rect.usesExplicitAppearance;
         Vector2Int explicitTile = new Vector2Int(rect.tileX, rect.tileY);
         bool explicitTint = rect.tint;
+        Vector4 explicitUvRectData = rect.explicitUvRectData;
 
         switch (rect.face)
         {
             case BlockFace.Right:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Right, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Right, origin,
                     new Vector3(rect.plane, rect.minA, rect.minB),
                     new Vector3(rect.plane, rect.maxA, rect.minB),
                     new Vector3(rect.plane, rect.maxA, rect.maxB),
@@ -1366,11 +1418,12 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
 
             case BlockFace.Left:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Left, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Left, origin,
                     new Vector3(rect.plane, rect.minA, rect.maxB),
                     new Vector3(rect.plane, rect.maxA, rect.maxB),
                     new Vector3(rect.plane, rect.maxA, rect.minB),
@@ -1381,11 +1434,12 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
 
             case BlockFace.Top:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Top, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Top, origin,
                     new Vector3(rect.minA, rect.plane, rect.maxB),
                     new Vector3(rect.maxA, rect.plane, rect.maxB),
                     new Vector3(rect.maxA, rect.plane, rect.minB),
@@ -1396,11 +1450,12 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
 
             case BlockFace.Bottom:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Bottom, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Bottom, origin,
                     new Vector3(rect.minA, rect.plane, rect.minB),
                     new Vector3(rect.maxA, rect.plane, rect.minB),
                     new Vector3(rect.maxA, rect.plane, rect.maxB),
@@ -1411,11 +1466,12 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
 
             case BlockFace.Front:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Front, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Front, origin,
                     new Vector3(rect.maxA, rect.minB, rect.plane),
                     new Vector3(rect.maxA, rect.maxB, rect.plane),
                     new Vector3(rect.minA, rect.maxB, rect.plane),
@@ -1426,11 +1482,12 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
 
             case BlockFace.Back:
-                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, tris, mapping, BlockFace.Back, origin,
+                AppendProjectedQuadFace(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, BlockFace.Back, origin,
                     new Vector3(rect.minA, rect.minB, rect.plane),
                     new Vector3(rect.minA, rect.maxB, rect.plane),
                     new Vector3(rect.maxA, rect.maxB, rect.plane),
@@ -1441,7 +1498,8 @@ public class BlockDrop : MonoBehaviour
                     false,
                     hasExplicitAppearance,
                     explicitTile,
-                    explicitTint);
+                    explicitTint,
+                    explicitUvRectData);
                 return;
         }
     }
@@ -1452,18 +1510,21 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         Vector3 p0,
         Vector3 p1,
         Vector3 p2,
         Vector3 p3,
         Vector3 normal,
-        Vector2Int tile,
+        BlockTextureMapping mapping,
+        BlockFace textureFace,
         bool tint,
         float invAtlasTilesX,
         float invAtlasTilesY)
     {
         int baseIndex = vertices.Count;
+        ResolveAtlasRect(mapping, textureFace, out Vector2 atlasUv, out Vector2 atlasSize);
 
         vertices.Add(p0);
         vertices.Add(p1);
@@ -1480,11 +1541,7 @@ public class BlockDrop : MonoBehaviour
         uv0.Add(new Vector2(1f, 1f));
         uv0.Add(new Vector2(0f, 1f));
 
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
+        AppendAtlasRect(uv1, uv3, atlasUv, atlasSize, 4);
 
         Vector4 extra = new Vector4(1f, tint ? 1f : 0f, 1f, 0f);
         uv2.Add(extra);
@@ -1506,6 +1563,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         BlockFace sampledFace,
@@ -1520,11 +1578,25 @@ public class BlockDrop : MonoBehaviour
         bool invertWinding,
         bool hasExplicitAppearance = false,
         Vector2Int explicitTile = default(Vector2Int),
-        bool explicitTint = false)
+        bool explicitTint = false,
+        Vector4 explicitUvRectData = default)
     {
         int baseIndex = vertices.Count;
-        Vector2Int tile = hasExplicitAppearance ? explicitTile : mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+        Vector2 atlasUv;
+        Vector2 atlasSize;
+        if (BlockAtlasUvUtility.IsValidUvRectData(explicitUvRectData))
+        {
+            atlasUv = new Vector2(explicitUvRectData.x, explicitUvRectData.y);
+            atlasSize = new Vector2(explicitUvRectData.z, explicitUvRectData.w);
+        }
+        else if (hasExplicitAppearance)
+        {
+            ResolveAtlasRect(explicitTile, out atlasUv, out atlasSize);
+        }
+        else
+        {
+            ResolveAtlasRect(mapping, sampledFace, out atlasUv, out atlasSize);
+        }
         Vector4 extra = new Vector4(1f, (hasExplicitAppearance ? explicitTint : mapping.GetTint(sampledFace)) ? 1f : 0f, 1f, 0f);
 
         vertices.Add(origin + local0);
@@ -1549,10 +1621,7 @@ public class BlockDrop : MonoBehaviour
         uv0.Add(projectedUv2);
         uv0.Add(projectedUv3);
 
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
+        AppendAtlasRect(uv1, uv3, atlasUv, atlasSize, 4);
 
         uv2.Add(extra);
         uv2.Add(extra);
@@ -1584,6 +1653,7 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         BlockTextureMapping mapping,
         BlockFace sampledFace,
@@ -1596,8 +1666,7 @@ public class BlockDrop : MonoBehaviour
         float invAtlasTilesY)
     {
         int baseIndex = vertices.Count;
-        Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+        ResolveAtlasRect(mapping, sampledFace, out Vector2 atlasUv, out Vector2 atlasSize);
         Vector4 extra = new Vector4(1f, mapping.GetTint(sampledFace) ? 1f : 0f, 1f, 0f);
 
         vertices.Add(origin + local0);
@@ -1612,9 +1681,7 @@ public class BlockDrop : MonoBehaviour
         uv0.Add(ResolveProjectedUv(sampledFace, local1));
         uv0.Add(ResolveProjectedUv(sampledFace, local2));
 
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
+        AppendAtlasRect(uv1, uv3, atlasUv, atlasSize, 3);
 
         uv2.Add(extra);
         uv2.Add(extra);
@@ -1631,12 +1698,14 @@ public class BlockDrop : MonoBehaviour
         List<Vector2> uv0,
         List<Vector2> uv1,
         List<Vector4> uv2,
+        List<Vector2> uv3,
         List<int> tris,
         Vector3 p0,
         Vector3 p1,
         Vector3 p2,
         Vector3 p3,
         Vector2 atlasUv,
+        Vector2 atlasSize,
         float tint)
     {
         int baseIndex = vertices.Count;
@@ -1657,10 +1726,7 @@ public class BlockDrop : MonoBehaviour
         uv0.Add(new Vector2(1f, 1f));
         uv0.Add(new Vector2(0f, 1f));
 
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
-        uv1.Add(atlasUv);
+        AppendAtlasRect(uv1, uv3, atlasUv, atlasSize, 4);
 
         Vector4 extra = new Vector4(1f, tint, 1f, 0f);
         uv2.Add(extra);
@@ -1681,6 +1747,36 @@ public class BlockDrop : MonoBehaviour
         tris.Add(baseIndex + 0);
         tris.Add(baseIndex + 3);
         tris.Add(baseIndex + 2);
+    }
+
+    private static void ResolveAtlasRect(Vector2Int tile, out Vector2 atlasUv, out Vector2 atlasSize)
+    {
+        Vector4 uvRectData = BlockAtlasUvUtility.BuildLegacyUvRectData(tile, currentLegacyAtlasTiles, currentAtlasOriginTopLeft);
+        atlasUv = new Vector2(uvRectData.x, uvRectData.y);
+        atlasSize = new Vector2(uvRectData.z, uvRectData.w);
+    }
+
+    private static void ResolveAtlasRect(BlockTextureMapping mapping, BlockFace face, out Vector2 atlasUv, out Vector2 atlasSize)
+    {
+        Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(mapping, face, currentLegacyAtlasTiles, currentAtlasOriginTopLeft);
+        atlasUv = new Vector2(uvRectData.x, uvRectData.y);
+        atlasSize = new Vector2(uvRectData.z, uvRectData.w);
+    }
+
+    private static void ResolveAtlasRect(BlockModelCuboid cuboid, BlockTextureMapping mapping, BlockFace face, out Vector2 atlasUv, out Vector2 atlasSize)
+    {
+        Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(cuboid, face, mapping, currentLegacyAtlasTiles, currentAtlasOriginTopLeft);
+        atlasUv = new Vector2(uvRectData.x, uvRectData.y);
+        atlasSize = new Vector2(uvRectData.z, uvRectData.w);
+    }
+
+    private static void AppendAtlasRect(List<Vector2> uv1, List<Vector2> uv3, Vector2 atlasUv, Vector2 atlasSize, int vertexCount)
+    {
+        for (int i = 0; i < vertexCount; i++)
+        {
+            uv1.Add(atlasUv);
+            uv3.Add(atlasSize);
+        }
     }
 
     private static Vector2Int GetTileForFace(BlockTextureMapping mapping, int faceIndex)

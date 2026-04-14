@@ -14,6 +14,20 @@ public class TextureAtlasGeneratorEditor : Editor
         EditorGUILayout.Space();
         EditorGUILayout.LabelField("Gerar Atlas", EditorStyles.boldLabel);
 
+        if (GUILayout.Button("Migrar Legacy -> textureEntries"))
+        {
+            Undo.RecordObject(generator, "Fill textureEntries From Legacy");
+            generator.FillTextureEntriesFromLegacy();
+            EditorUtility.SetDirty(generator);
+        }
+
+        if (GUILayout.Button("Aplicar Preset Minecraft Moderno"))
+        {
+            Undo.RecordObject(generator, "Apply Modern Minecraft Atlas Preset");
+            generator.ApplyModernMinecraftPreset();
+            EditorUtility.SetDirty(generator);
+        }
+
         if (GUILayout.Button("Gerar Agora"))
         {
             generator.GenerateAtlas();

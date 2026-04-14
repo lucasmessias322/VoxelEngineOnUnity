@@ -61,8 +61,11 @@ public static partial class MeshGenerator
             BlockPlacementAxis wallSurfaceAxis,
             int wallAttachmentSide,
             Vector2 lineAtlasUv,
+            Vector2 lineAtlasSize,
             Vector2 shortLineAtlasUv,
+            Vector2 shortLineAtlasSize,
             Vector2 dotAtlasUv,
+            Vector2 dotAtlasSize,
             float light01,
             float tint,
             NativeList<int> tris,
@@ -105,16 +108,16 @@ public static partial class MeshGenerator
 
             float topY = p0.y;
             if (eastConnection == WireTopConnectionMode.Up)
-                AddWireTopVerticalBridge(origin, topY, 1, 0, true, lineAtlasUv, light01, tint, tris);
+                AddWireTopVerticalBridge(origin, topY, 1, 0, true, lineAtlasUv, lineAtlasSize, light01, tint, tris);
 
             if (westConnection == WireTopConnectionMode.Up)
-                AddWireTopVerticalBridge(origin, topY, -1, 0, true, lineAtlasUv, light01, tint, tris);
+                AddWireTopVerticalBridge(origin, topY, -1, 0, true, lineAtlasUv, lineAtlasSize, light01, tint, tris);
 
             if (northConnection == WireTopConnectionMode.Up)
-                AddWireTopVerticalBridge(origin, topY, 0, 1, true, lineAtlasUv, light01, tint, tris);
+                AddWireTopVerticalBridge(origin, topY, 0, 1, true, lineAtlasUv, lineAtlasSize, light01, tint, tris);
 
             if (southConnection == WireTopConnectionMode.Up)
-                AddWireTopVerticalBridge(origin, topY, 0, -1, true, lineAtlasUv, light01, tint, tris);
+                AddWireTopVerticalBridge(origin, topY, 0, -1, true, lineAtlasUv, lineAtlasSize, light01, tint, tris);
 
             if (!connectEast && !connectWest && !connectNorth && !connectSouth)
             {
@@ -129,6 +132,7 @@ public static partial class MeshGenerator
                     0.5f - centerHalfSize,
                     0.5f + centerHalfSize,
                     dotAtlasUv,
+                    dotAtlasSize,
                     light01,
                     tint,
                     tris,
@@ -141,27 +145,27 @@ public static partial class MeshGenerator
 
             if (straightX)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, lineAtlasSize, light01, tint, tris, 0);
                 return;
             }
 
             if (straightZ)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, lineAtlasSize, light01, tint, tris, 1);
                 return;
             }
 
             if (connectEast)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0, layerStep);
 
             if (connectWest)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0, layerStep * 2f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0, layerStep * 2f);
 
             if (connectNorth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 3f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, layerStep * 3f);
 
             if (connectSouth)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1, layerStep * 4f);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, layerStep * 4f);
         }
 
         private void RenderWireWallSurface(
@@ -174,8 +178,11 @@ public static partial class MeshGenerator
             int wireAttachmentSide,
             bool hasTopOnCurrentCell,
             Vector2 lineAtlasUv,
+            Vector2 lineAtlasSize,
             Vector2 shortLineAtlasUv,
+            Vector2 shortLineAtlasSize,
             Vector2 dotAtlasUv,
+            Vector2 dotAtlasSize,
             float light01,
             float tint,
             NativeList<int> tris,
@@ -275,7 +282,7 @@ public static partial class MeshGenerator
                     connectNegS = true;
 
                 if (!hasTopOnCurrentCell)
-                    AddWireWallGroundBridge(origin, wireSurfaceAxis, lineAtlasUv, light01, tint, tris);
+                    AddWireWallGroundBridge(origin, wireSurfaceAxis, lineAtlasUv, lineAtlasSize, light01, tint, tris);
             }
 
             if (hasTopOnCurrentCell)
@@ -299,6 +306,7 @@ public static partial class MeshGenerator
                     0.5f - centerHalfSize,
                     0.5f + centerHalfSize,
                     dotAtlasUv,
+                    dotAtlasSize,
                     light01,
                     tint,
                     tris,
@@ -311,27 +319,27 @@ public static partial class MeshGenerator
 
             if (straightS)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, lineAtlasUv, lineAtlasSize, light01, tint, tris, 0);
                 return;
             }
 
             if (straightT)
             {
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 1f + WireConnectionOverlap, lineAtlasUv, lineAtlasSize, light01, tint, tris, 1);
                 return;
             }
 
             if (connectPosS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0);
 
             if (connectNegS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0);
 
             if (connectPosT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1);
 
             if (connectNegT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1);
         }
 
         private enum WireTopConnectionMode : byte
@@ -633,6 +641,7 @@ public static partial class MeshGenerator
             Vector3 origin,
             BlockPlacementAxis surfaceAxis,
             Vector2 atlasUv,
+            Vector2 atlasSize,
             float light01,
             float tint,
             NativeList<int> tris)
@@ -648,6 +657,7 @@ public static partial class MeshGenerator
                     origin + new Vector3(1f, floorInset, 0.5f + armHalfWidth),
                     origin + new Vector3(1f, floorInset, 0.5f - armHalfWidth),
                     atlasUv,
+                    atlasSize,
                     light01,
                     tint,
                     tris,
@@ -661,6 +671,7 @@ public static partial class MeshGenerator
                 origin + new Vector3(0.5f + armHalfWidth, floorInset, 1f),
                 origin + new Vector3(0.5f + armHalfWidth, floorInset, 0f),
                 atlasUv,
+                atlasSize,
                 light01,
                 tint,
                 tris,
@@ -674,6 +685,7 @@ public static partial class MeshGenerator
             int dirZ,
             bool ascend,
             Vector2 atlasUv,
+            Vector2 atlasSize,
             float light01,
             float tint,
             NativeList<int> tris)
@@ -736,6 +748,7 @@ public static partial class MeshGenerator
                 origin + p2,
                 origin + p3,
                 atlasUv,
+                atlasSize,
                 light01,
                 tint,
                 tris,
@@ -974,6 +987,7 @@ public static partial class MeshGenerator
             float minT,
             float maxT,
             Vector2 atlasUv,
+            Vector2 atlasSize,
             float light01,
             float tint,
             NativeList<int> tris,
@@ -1002,6 +1016,7 @@ public static partial class MeshGenerator
                 origin + q2,
                 origin + q3,
                 atlasUv,
+                atlasSize,
                 light01,
                 tint,
                 tris,

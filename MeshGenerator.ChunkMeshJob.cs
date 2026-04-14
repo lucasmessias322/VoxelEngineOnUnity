@@ -158,7 +158,7 @@ public static partial class MeshGenerator
             return vertices.Length - currentSubchunkVertexStart;
         }
 
-        private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2)
+        private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector2 uv3)
         {
             vertices.Add(new PackedChunkVertex
             {
@@ -166,8 +166,50 @@ public static partial class MeshGenerator
                 normal = normal,
                 uv0 = uv0,
                 uv1 = uv1,
-                uv2 = uv2
+                uv2 = uv2,
+                uv3 = uv3
             });
+        }
+
+        private static void ResolveAtlasRect(
+            BlockTextureMapping mapping,
+            BlockFace face,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            out Vector2 atlasOrigin,
+            out Vector2 atlasSize)
+        {
+            if (mapping.TryGetUvRectData(face, out Vector4 uvRectData))
+            {
+                atlasOrigin = new Vector2(uvRectData.x, uvRectData.y);
+                atlasSize = new Vector2(uvRectData.z, uvRectData.w);
+                return;
+            }
+
+            Vector2Int tile = mapping.GetTileCoord(face);
+            atlasOrigin = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+            atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
+        }
+
+        private static void ResolveAtlasRect(
+            BlockModelCuboid cuboid,
+            BlockFace face,
+            BlockTextureMapping fallbackMapping,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            out Vector2 atlasOrigin,
+            out Vector2 atlasSize)
+        {
+            if (cuboid.TryGetUvRectData(face, fallbackMapping, out Vector4 uvRectData))
+            {
+                atlasOrigin = new Vector2(uvRectData.x, uvRectData.y);
+                atlasSize = new Vector2(uvRectData.z, uvRectData.w);
+                return;
+            }
+
+            Vector2Int tile = cuboid.GetTileCoord(face, fallbackMapping);
+            atlasOrigin = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+            atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
         }
 
         private ulong ComputeVisibilityMask(NativeArray<byte> occlusionState, NativeArray<int> queue)

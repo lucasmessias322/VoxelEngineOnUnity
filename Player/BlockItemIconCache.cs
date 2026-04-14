@@ -113,34 +113,33 @@ public static class BlockItemIconCache
         BlockTextureMapping mapping = mappingResult.Value;
         bool atlasCoordinatesStartTopLeft = blockData.atlasCoordinatesStartTopLeft;
 
-        Vector2Int topCoord = blockData.GetTileCoord(blockType, BlockFace.Top);
-        Vector2Int frontCoord = blockData.GetTileCoord(blockType, BlockFace.Front);
-        Vector2Int rightCoord = blockData.GetTileCoord(blockType, BlockFace.Right);
-
-        if (!TryExtractTilePixels(
+        if (!TryExtractFacePixels(
                 atlasTexture,
                 atlasTiles,
-                topCoord,
+                mapping,
+                BlockFace.Top,
                 atlasCoordinatesStartTopLeft,
                 out Color32[] topPixels,
                 out int tileWidth,
                 out int tileHeight))
             return null;
 
-        if (!TryExtractTilePixels(
+        if (!TryExtractFacePixels(
                 atlasTexture,
                 atlasTiles,
-                frontCoord,
+                mapping,
+                BlockFace.Front,
                 atlasCoordinatesStartTopLeft,
                 out Color32[] frontPixels,
                 out int frontWidth,
                 out int frontHeight))
             return null;
 
-        if (!TryExtractTilePixels(
+        if (!TryExtractFacePixels(
                 atlasTexture,
                 atlasTiles,
-                rightCoord,
+                mapping,
+                BlockFace.Right,
                 atlasCoordinatesStartTopLeft,
                 out Color32[] rightPixels,
                 out int rightWidth,
@@ -256,10 +255,11 @@ public static class BlockItemIconCache
         return atlasTexture != null;
     }
 
-    private static bool TryExtractTilePixels(
+    private static bool TryExtractFacePixels(
         Texture atlasTexture,
         Vector2Int atlasTiles,
-        Vector2Int tileCoord,
+        BlockTextureMapping mapping,
+        BlockFace face,
         bool atlasCoordinatesStartTopLeft,
         out Color32[] tilePixels,
         out int tileWidth,
@@ -269,65 +269,45 @@ public static class BlockItemIconCache
         tileWidth = 0;
         tileHeight = 0;
 
-        if (!TryResolveAtlasLayout(atlasTexture, atlasTiles, out Vector2Int resolvedAtlasTiles, out tileWidth, out tileHeight))
+        if (atlasTexture == null)
             return false;
 
-        int safeTileX = Mathf.Clamp(tileCoord.x, 0, resolvedAtlasTiles.x - 1);
-        int safeTileY = Mathf.Clamp(tileCoord.y, 0, resolvedAtlasTiles.y - 1);
-        if (atlasCoordinatesStartTopLeft)
-            safeTileY = resolvedAtlasTiles.y - 1 - safeTileY;
+        Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(
+            mapping,
+            face,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft);
+        if (!BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
+            return false;
 
-        int pixelX = safeTileX * tileWidth;
-        int pixelY = safeTileY * tileHeight;
+        RectInt pixelRect = ResolvePixelRect(atlasTexture, uvRectData);
+        tileWidth = pixelRect.width;
+        tileHeight = pixelRect.height;
+        if (tileWidth <= 0 || tileHeight <= 0)
+            return false;
 
         if (atlasTexture is Texture2D readableAtlas && readableAtlas.isReadable)
-            return TryExtractFromReadableTexture(readableAtlas, pixelX, pixelY, tileWidth, tileHeight, out tilePixels);
+            return TryExtractFromReadableTexture(readableAtlas, pixelRect.x, pixelRect.y, tileWidth, tileHeight, out tilePixels);
 
-        return TryExtractFromGpu(atlasTexture, resolvedAtlasTiles, safeTileX, safeTileY, tileWidth, tileHeight, out tilePixels);
+        return TryExtractFromGpu(atlasTexture, pixelRect, out tilePixels);
     }
 
-    private static bool TryResolveAtlasLayout(
-        Texture atlasTexture,
-        Vector2Int atlasSetting,
-        out Vector2Int resolvedAtlasTiles,
-        out int tileWidth,
-        out int tileHeight)
+    private static RectInt ResolvePixelRect(Texture atlasTexture, Vector4 uvRectData)
     {
-        resolvedAtlasTiles = atlasSetting;
-        tileWidth = 0;
-        tileHeight = 0;
+        if (atlasTexture == null)
+            return new RectInt(0, 0, 0, 0);
 
-        if (atlasTexture == null || atlasSetting.x <= 0 || atlasSetting.y <= 0)
-            return false;
+        int atlasWidth = Mathf.Max(1, atlasTexture.width);
+        int atlasHeight = Mathf.Max(1, atlasTexture.height);
+        int pixelX = Mathf.Clamp(Mathf.RoundToInt(uvRectData.x * atlasWidth), 0, atlasWidth - 1);
+        int pixelY = Mathf.Clamp(Mathf.RoundToInt(uvRectData.y * atlasHeight), 0, atlasHeight - 1);
+        int pixelWidth = Mathf.Max(1, Mathf.RoundToInt(uvRectData.z * atlasWidth));
+        int pixelHeight = Mathf.Max(1, Mathf.RoundToInt(uvRectData.w * atlasHeight));
 
-        int interpretedTileWidth = atlasTexture.width / atlasSetting.x;
-        int interpretedTileHeight = atlasTexture.height / atlasSetting.y;
-        if (interpretedTileWidth <= 0 || interpretedTileHeight <= 0)
-            return false;
+        pixelWidth = Mathf.Min(pixelWidth, atlasWidth - pixelX);
+        pixelHeight = Mathf.Min(pixelHeight, atlasHeight - pixelY);
 
-        bool canInterpretAsTilePixelSize =
-            atlasTexture.width % atlasSetting.x == 0 &&
-            atlasTexture.height % atlasSetting.y == 0;
-
-        bool configuredTileSizeIsSquare = atlasSetting.x == atlasSetting.y;
-        bool interpretedTilesAreNonSquare = interpretedTileWidth != interpretedTileHeight;
-
-        // Some atlases store atlasSize as tile pixel size (e.g. 32x32 pixels per block),
-        // not as the number of tiles in the atlas. In those cases, dividing the texture by
-        // atlasSize produces distorted non-square cells; derive the tile count from the texture.
-        if (canInterpretAsTilePixelSize && configuredTileSizeIsSquare && interpretedTilesAreNonSquare)
-        {
-            tileWidth = atlasSetting.x;
-            tileHeight = atlasSetting.y;
-            resolvedAtlasTiles = new Vector2Int(
-                Mathf.Max(1, atlasTexture.width / tileWidth),
-                Mathf.Max(1, atlasTexture.height / tileHeight));
-            return true;
-        }
-
-        tileWidth = interpretedTileWidth;
-        tileHeight = interpretedTileHeight;
-        return true;
+        return new RectInt(pixelX, pixelY, pixelWidth, pixelHeight);
     }
 
     private static bool TryExtractFromReadableTexture(
@@ -368,29 +348,29 @@ public static class BlockItemIconCache
 
     private static bool TryExtractFromGpu(
         Texture atlasTexture,
-        Vector2Int atlasTiles,
-        int safeTileX,
-        int safeTileY,
-        int tileWidth,
-        int tileHeight,
+        RectInt pixelRect,
         out Color32[] tilePixels)
     {
         tilePixels = null;
+        int tileWidth = pixelRect.width;
+        int tileHeight = pixelRect.height;
+        if (atlasTexture == null || tileWidth <= 0 || tileHeight <= 0)
+            return false;
 
         RenderTexture rt = RenderTexture.GetTemporary(tileWidth, tileHeight, 0, RenderTextureFormat.ARGB32);
         rt.filterMode = FilterMode.Point;
         RenderTexture previous = RenderTexture.active;
 
-        float tileScaleX = tileWidth / (float)atlasTexture.width;
-        float tileScaleY = tileHeight / (float)atlasTexture.height;
+        float tileScaleX = pixelRect.width / (float)atlasTexture.width;
+        float tileScaleY = pixelRect.height / (float)atlasTexture.height;
         float texelInsetX = 0.5f / atlasTexture.width;
         float texelInsetY = 0.5f / atlasTexture.height;
         Vector2 scale = new Vector2(
             Mathf.Max(0f, tileScaleX - texelInsetX * 2f),
             Mathf.Max(0f, tileScaleY - texelInsetY * 2f));
         Vector2 offset = new Vector2(
-            safeTileX * tileScaleX + texelInsetX,
-            safeTileY * tileScaleY + texelInsetY);
+            pixelRect.x / (float)atlasTexture.width + texelInsetX,
+            pixelRect.y / (float)atlasTexture.height + texelInsetY);
 
         try
         {

@@ -962,11 +962,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         breakVisualSkyLightEstimateCache.Clear();
 
         World world = World.Instance;
-        Vector2 atlasSize = world != null && world.blockData != null
-            ? world.blockData.atlasSize
-            : Vector2.one;
-        float invAtlasTilesX = 1f / Mathf.Max(1f, atlasSize.x);
-        float invAtlasTilesY = 1f / Mathf.Max(1f, atlasSize.y);
+        Vector2Int legacyAtlasTiles = world != null
+            ? new Vector2Int(Mathf.Max(1, world.atlasTilesX), Mathf.Max(1, world.atlasTilesY))
+            : Vector2Int.one;
         int faceSubchunkIndex = Mathf.Clamp(blockPos.y / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
 
         Vector3 extents = size * 0.5f;
@@ -978,12 +976,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector2[] uv0 = new Vector2[24];
         Vector2[] uv1 = new Vector2[24];
         Vector4[] uv2 = new Vector4[24];
+        Vector2[] uv3 = new Vector2[24];
         int[] triangles = new int[36];
 
         int vertexStart = 0;
         int triangleStart = 0;
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -992,11 +991,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -1005,11 +1003,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -1018,11 +1015,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -1031,11 +1027,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -1044,11 +1039,10 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
         AddBreakVisualFace(
-            vertices, normals, uv0, uv1, uv2, triangles,
+            vertices, normals, uv0, uv1, uv2, uv3, triangles,
             ref vertexStart, ref triangleStart,
             blockPos,
             min,
@@ -1057,8 +1051,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             blockType,
             mapping,
             placementAxis,
-            invAtlasTilesX,
-            invAtlasTilesY,
+            legacyAtlasTiles,
             faceSubchunkIndex);
 
         breakVisualMesh.Clear();
@@ -1067,6 +1060,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         breakVisualMesh.uv = uv0;
         breakVisualMesh.uv2 = uv1;
         breakVisualMesh.SetUVs(2, uv2);
+        breakVisualMesh.SetUVs(3, uv3);
         breakVisualMesh.triangles = triangles;
         breakVisualMesh.RecalculateBounds();
     }
@@ -1077,6 +1071,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector2[] uv0,
         Vector2[] uv1,
         Vector4[] uv2,
+        Vector2[] uv3,
         int[] triangles,
         ref int vertexStart,
         ref int triangleStart,
@@ -1087,8 +1082,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         BlockType blockType,
         BlockTextureMapping mapping,
         BlockPlacementAxis placementAxis,
-        float invAtlasTilesX,
-        float invAtlasTilesY,
+        Vector2Int legacyAtlasTiles,
         int faceSubchunkIndex)
     {
         if (!TryGetBreakVisualFaceAxes(
@@ -1105,8 +1099,16 @@ public class PlayerBlockBreaker : MonoBehaviour
         BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(mapping, worldFace, placementAxis);
         BlockPlacementAxis uvPlacementAxis = ResolveBreakVisualUvPlacementAxis(mapping, placementAxis);
         BlockFace uvSamplingFace = ResolveBreakVisualUvSamplingFace(mapping, worldFace, sampledFace);
-        Vector2Int tile = mapping.GetTileCoord(sampledFace);
-        Vector2 atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+        bool atlasOriginTopLeft = World.Instance != null &&
+                                  World.Instance.blockData != null &&
+                                  World.Instance.blockData.atlasCoordinatesStartTopLeft;
+        Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(
+            mapping,
+            sampledFace,
+            legacyAtlasTiles,
+            atlasOriginTopLeft);
+        Vector2 atlasUv = new Vector2(uvRectData.x, uvRectData.y);
+        Vector2 atlasSize = new Vector2(uvRectData.z, uvRectData.w);
         float tintMask = mapping.GetTint(sampledFace) ? 1f : 0f;
         bool grassSideOverlay = blockType == BlockType.Grass &&
                                 sampledFace != BlockFace.Top &&
@@ -1125,6 +1127,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             normals[index] = normal;
             uv0[index] = ComputeBreakVisualPlacementAwareUv(blockPos, vertex, uvSamplingFace, uvPlacementAxis);
             uv1[index] = atlasUv;
+            uv3[index] = atlasSize;
             uv2[index] = new Vector4(
                 faceLighting.GetLight(corner),
                 tintMask,

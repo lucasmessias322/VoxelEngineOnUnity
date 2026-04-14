@@ -51,6 +51,14 @@ public struct BlockModelCuboid
     public Vector2Int textureFront;
     public Vector2Int textureBack;
 
+    [SerializeField, HideInInspector] private Vector4 textureTopUvRect;
+    [SerializeField, HideInInspector] private Vector4 textureBottomUvRect;
+    [SerializeField, HideInInspector] private Vector4 textureRightUvRect;
+    [SerializeField, HideInInspector] private Vector4 textureLeftUvRect;
+    [SerializeField, HideInInspector] private Vector4 textureFrontUvRect;
+    [SerializeField, HideInInspector] private Vector4 textureBackUvRect;
+    [SerializeField, HideInInspector] private bool runtimeUvRectOverridesInitialized;
+
     public BlockModelCuboid(Vector3 min, Vector3 max)
     {
         this.min = min;
@@ -64,6 +72,13 @@ public struct BlockModelCuboid
         textureLeft = Vector2Int.zero;
         textureFront = Vector2Int.zero;
         textureBack = Vector2Int.zero;
+        textureTopUvRect = Vector4.zero;
+        textureBottomUvRect = Vector4.zero;
+        textureRightUvRect = Vector4.zero;
+        textureLeftUvRect = Vector4.zero;
+        textureFrontUvRect = Vector4.zero;
+        textureBackUvRect = Vector4.zero;
+        runtimeUvRectOverridesInitialized = false;
     }
 
     public ShapeBox ToShapeBox()
@@ -108,6 +123,43 @@ public struct BlockModelCuboid
             : fallbackMapping.GetTileCoord(face);
     }
 
+    public void SetOverrideUvRectData(BlockFace face, Vector4 uvRectData)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                textureTopUvRect = uvRectData;
+                break;
+            case BlockFace.Bottom:
+                textureBottomUvRect = uvRectData;
+                break;
+            case BlockFace.Right:
+                textureRightUvRect = uvRectData;
+                break;
+            case BlockFace.Left:
+                textureLeftUvRect = uvRectData;
+                break;
+            case BlockFace.Front:
+                textureFrontUvRect = uvRectData;
+                break;
+            case BlockFace.Back:
+                textureBackUvRect = uvRectData;
+                break;
+            default:
+                return;
+        }
+
+        runtimeUvRectOverridesInitialized = true;
+    }
+
+    public bool TryGetUvRectData(BlockFace face, BlockTextureMapping fallbackMapping, out Vector4 uvRectData)
+    {
+        if (HasTextureOverride(face) && TryGetOverrideUvRectData(face, out uvRectData))
+            return true;
+
+        return fallbackMapping.TryGetUvRectData(face, out uvRectData);
+    }
+
     private Vector2Int GetOverrideTileCoord(BlockFace face)
     {
         switch (face)
@@ -120,6 +172,39 @@ public struct BlockModelCuboid
             case BlockFace.Back: return textureBack;
             default: return Vector2Int.zero;
         }
+    }
+
+    private bool TryGetOverrideUvRectData(BlockFace face, out Vector4 uvRectData)
+    {
+        uvRectData = default;
+        if (!runtimeUvRectOverridesInitialized)
+            return false;
+
+        switch (face)
+        {
+            case BlockFace.Top:
+                uvRectData = textureTopUvRect;
+                break;
+            case BlockFace.Bottom:
+                uvRectData = textureBottomUvRect;
+                break;
+            case BlockFace.Right:
+                uvRectData = textureRightUvRect;
+                break;
+            case BlockFace.Left:
+                uvRectData = textureLeftUvRect;
+                break;
+            case BlockFace.Front:
+                uvRectData = textureFrontUvRect;
+                break;
+            case BlockFace.Back:
+                uvRectData = textureBackUvRect;
+                break;
+            default:
+                return false;
+        }
+
+        return BlockAtlasUvUtility.IsValidUvRectData(uvRectData);
     }
 
     private static BlockCuboidFaceMask GetMaskForFace(BlockFace face)
@@ -647,6 +732,13 @@ public struct BlockTextureMapping
 
     [HideInInspector] public Vector2Int side; // legado: usado para migrar assets antigos
     [SerializeField, HideInInspector] private bool directionalSideDataInitialized;
+    [SerializeField, HideInInspector] private Vector4 topUvRect;
+    [SerializeField, HideInInspector] private Vector4 bottomUvRect;
+    [SerializeField, HideInInspector] private Vector4 rightUvRect;
+    [SerializeField, HideInInspector] private Vector4 leftUvRect;
+    [SerializeField, HideInInspector] private Vector4 frontUvRect;
+    [SerializeField, HideInInspector] private Vector4 backUvRect;
+    [SerializeField, HideInInspector] private bool runtimeUvRectDataInitialized;
 
     [Header("Rendering")]
     [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes), Plane = quad dupla face (redstone/quadros/vinhas).")]
@@ -762,6 +854,137 @@ public struct BlockTextureMapping
             default:
                 return tintSide;
         }
+    }
+
+    public void SetUvRectData(BlockFace face, Vector4 uvRectData)
+    {
+        switch (face)
+        {
+            case BlockFace.Top:
+                topUvRect = uvRectData;
+                break;
+            case BlockFace.Bottom:
+                bottomUvRect = uvRectData;
+                break;
+            case BlockFace.Right:
+                rightUvRect = uvRectData;
+                break;
+            case BlockFace.Left:
+                leftUvRect = uvRectData;
+                break;
+            case BlockFace.Front:
+                frontUvRect = uvRectData;
+                break;
+            case BlockFace.Back:
+                backUvRect = uvRectData;
+                break;
+            default:
+                return;
+        }
+
+        runtimeUvRectDataInitialized = true;
+    }
+
+    public bool TryGetUvRectData(BlockFace face, out Vector4 uvRectData)
+    {
+        uvRectData = default;
+        if (!runtimeUvRectDataInitialized)
+            return false;
+
+        switch (face)
+        {
+            case BlockFace.Top:
+                uvRectData = topUvRect;
+                break;
+            case BlockFace.Bottom:
+                uvRectData = bottomUvRect;
+                break;
+            case BlockFace.Right:
+                uvRectData = rightUvRect;
+                break;
+            case BlockFace.Left:
+                uvRectData = leftUvRect;
+                break;
+            case BlockFace.Front:
+                uvRectData = frontUvRect;
+                break;
+            case BlockFace.Back:
+                uvRectData = backUvRect;
+                break;
+            default:
+                return false;
+        }
+
+        return BlockAtlasUvUtility.IsValidUvRectData(uvRectData);
+    }
+}
+
+public static class BlockAtlasUvUtility
+{
+    public static bool IsValidUvRectData(Vector4 uvRectData)
+    {
+        return uvRectData.z > 0f && uvRectData.w > 0f;
+    }
+
+    public static Vector4 RectToUvRectData(Rect uvRect)
+    {
+        return new Vector4(uvRect.x, uvRect.y, uvRect.width, uvRect.height);
+    }
+
+    public static Rect UvRectDataToRect(Vector4 uvRectData)
+    {
+        return new Rect(uvRectData.x, uvRectData.y, uvRectData.z, uvRectData.w);
+    }
+
+    public static Vector4 BuildLegacyUvRectData(Vector2Int tile, Vector2Int atlasTiles, bool atlasOriginTopLeft)
+    {
+        int safeTilesX = Mathf.Max(1, atlasTiles.x);
+        int safeTilesY = Mathf.Max(1, atlasTiles.y);
+        int tileX = Mathf.Clamp(tile.x, 0, safeTilesX - 1);
+        int tileY = Mathf.Clamp(tile.y, 0, safeTilesY - 1);
+
+        float tileWidth = 1f / safeTilesX;
+        float tileHeight = 1f / safeTilesY;
+        float originX = tileX * tileWidth;
+        float originY = atlasOriginTopLeft
+            ? 1f - (tileY + 1) * tileHeight
+            : tileY * tileHeight;
+
+        return new Vector4(originX, originY, tileWidth, tileHeight);
+    }
+
+    public static Vector4 ResolveUvRectData(
+        BlockTextureMapping mapping,
+        BlockFace face,
+        Vector2Int atlasTiles,
+        bool atlasOriginTopLeft)
+    {
+        if (mapping.TryGetUvRectData(face, out Vector4 uvRectData))
+            return uvRectData;
+
+        return BuildLegacyUvRectData(mapping.GetTileCoord(face), atlasTiles, atlasOriginTopLeft);
+    }
+
+    public static Vector4 ResolveUvRectData(
+        BlockModelCuboid cuboid,
+        BlockFace face,
+        BlockTextureMapping fallbackMapping,
+        Vector2Int atlasTiles,
+        bool atlasOriginTopLeft)
+    {
+        if (cuboid.TryGetUvRectData(face, fallbackMapping, out Vector4 uvRectData))
+            return uvRectData;
+
+        return BuildLegacyUvRectData(cuboid.GetTileCoord(face, fallbackMapping), atlasTiles, atlasOriginTopLeft);
+    }
+
+    public static Rect ResolveUvRect(
+        BlockTextureMapping mapping,
+        BlockFace face,
+        Vector2Int atlasTiles,
+        bool atlasOriginTopLeft)
+    {
+        return UvRectDataToRect(ResolveUvRectData(mapping, face, atlasTiles, atlasOriginTopLeft));
     }
 }
 
