@@ -7,6 +7,7 @@ using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.Rendering;
+using UnityEngine.SceneManagement;
 using Unity.Plastic.Newtonsoft.Json.Linq;
 
 [CustomEditor(typeof(MultiCuboidBlockWorkbench))]
@@ -573,7 +574,7 @@ internal static class MultiCuboidWorkbenchEditorGui
             return;
 
         Undo.RecordObject(workbench, "Edit Workbench Cuboid");
-        workbench.SetCuboid(index, new BlockModelCuboid
+        BlockModelCuboid updatedCuboid = new BlockModelCuboid
         {
             min = min,
             max = max,
@@ -588,7 +589,9 @@ internal static class MultiCuboidWorkbenchEditorGui
             textureFront = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, cuboid.textureFront),
             textureBack = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, cuboid.textureBack),
            
-        });
+        };
+        updatedCuboid.CopyUvRectOverrideDataFrom(cuboid);
+        workbench.SetCuboid(index, updatedCuboid);
         MarkWorkbenchDirty(workbench);
     }
 
@@ -909,15 +912,56 @@ internal static class BlockbenchMultiCuboidImporter
     {
         public BlockModelCuboid cuboid;
         public Dictionary<BlockFace, Vector2Int> faceTiles = new Dictionary<BlockFace, Vector2Int>();
+        public Dictionary<BlockFace, Vector4> faceUvRects = new Dictionary<BlockFace, Vector4>();
+        public Dictionary<BlockFace, string> faceTextureRequests = new Dictionary<BlockFace, string>();
+    }
+
+    private sealed class BlockbenchTextureSource
+    {
+        public string key;
+        public string displayName;
+        public Vector2Int size;
+        public Texture2D texture;
+    }
+
+    private sealed class FaceTextureRequest
+    {
+        public string key;
+        public string hash;
+        public string entryId;
+        public string assetPath;
+        public BlockbenchTextureSource source;
+        public float u0;
+        public float v0;
+        public float u1;
+        public float v1;
+        public float rotation;
+        public Vector2Int tile;
+        public bool hasAssignedTile;
+        public Vector4 uvRectData;
+        public bool hasAssignedUvRect;
     }
 
     private sealed class ImportContext
     {
+        public string modelPath;
         public BlockDataSO blockData;
         public Vector2Int atlasTiles;
         public Vector2Int textureSize;
         public int convertedFaceCount;
+        public int importedTextureCount;
+        public int importedFaceCount;
+        public TextureAtlasGenerator atlasGenerator;
+        public World world;
+        public string atlasScenePath;
+        public string atlasSceneName;
+        public Scene previousActiveScene;
+        public Scene temporaryAtlasScene;
+        public bool openedTemporaryAtlasScene;
         public List<string> warnings = new List<string>();
+        public Dictionary<string, BlockbenchTextureSource> textureSources = new Dictionary<string, BlockbenchTextureSource>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, string> textureAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        public Dictionary<string, FaceTextureRequest> faceTextureRequests = new Dictionary<string, FaceTextureRequest>(StringComparer.Ordinal);
 
         private readonly HashSet<string> warningKeys = new HashSet<string>(StringComparer.Ordinal);
 
@@ -930,6 +974,17 @@ internal static class BlockbenchMultiCuboidImporter
                        atlasTiles.y > 0 &&
                        textureSize.x > 0 &&
                        textureSize.y > 0;
+            }
+        }
+
+        public bool CanImportTexturesToAtlas
+        {
+            get
+            {
+                return blockData != null &&
+                       atlasGenerator != null &&
+                       atlasTiles.x > 0 &&
+                       atlasTiles.y > 0;
             }
         }
 
@@ -946,7 +1001,7 @@ internal static class BlockbenchMultiCuboidImporter
             return false;
 
         string initialDirectory = ResolveInitialDirectory();
-        string path = EditorUtility.OpenFilePanel("Importar JSON do Blockbench", initialDirectory, "json");
+        string path = EditorUtility.OpenFilePanel("Importar JSON/BBModel do Blockbench", initialDirectory, string.Empty);
         if (string.IsNullOrEmpty(path))
             return false;
 
@@ -954,23 +1009,27 @@ internal static class BlockbenchMultiCuboidImporter
         if (!string.IsNullOrEmpty(directory))
             EditorPrefs.SetString(LastDirectoryKey, directory);
 
+        ImportContext context = null;
         try
         {
             string json = File.ReadAllText(path);
             JObject root = JObject.Parse(json);
-            ImportContext context = CreateContext(root, workbench.blockData);
+            context = CreateContext(root, workbench.blockData, path);
             List<ImportedCuboidData> importedCuboids = ParseElements(root, context);
             if (importedCuboids.Count == 0)
                 throw new InvalidDataException("O arquivo nao trouxe nenhum cuboide utilizavel para o formato MultiCuboid.");
 
+            FinalizeFaceTextureRequests(context, importedCuboids, workbench.blockType);
+
             bool hasExistingMapping = workbench.TryGetTextureMapping(out BlockTextureMapping existingMapping);
             BlockTextureMapping? existingMappingValue = hasExistingMapping ? existingMapping : (BlockTextureMapping?)null;
             Dictionary<BlockFace, Vector2Int> baseTiles = BuildBaseTiles(importedCuboids, existingMappingValue);
+            Dictionary<BlockFace, Vector4> baseUvRects = BuildBaseUvRects(importedCuboids, baseTiles, existingMappingValue);
             List<BlockModelCuboid> cuboids = BuildCuboids(importedCuboids, baseTiles);
 
             workbench.ReplaceCuboids(cuboids);
 
-            bool appliedTextureMapping = ApplyTextureMapping(workbench, baseTiles, existingMappingValue);
+            bool appliedTextureMapping = ApplyTextureMapping(workbench, baseTiles, baseUvRects, existingMappingValue);
             string message = BuildSummary(path, cuboids.Count, context, appliedTextureMapping, workbench.blockData != null);
 
             Debug.Log(message, workbench);
@@ -986,6 +1045,10 @@ internal static class BlockbenchMultiCuboidImporter
                 "OK");
             return false;
         }
+        finally
+        {
+            CleanupImportContext(context);
+        }
     }
 
     private static string ResolveInitialDirectory()
@@ -997,22 +1060,608 @@ internal static class BlockbenchMultiCuboidImporter
         return Application.dataPath;
     }
 
-    private static ImportContext CreateContext(JObject root, BlockDataSO blockData)
+    private static ImportContext CreateContext(JObject root, BlockDataSO blockData, string modelPath)
     {
         ImportContext context = new ImportContext
         {
+            modelPath = modelPath,
             blockData = blockData,
             atlasTiles = ResolveAtlasTiles(blockData)
         };
 
-        if (!TryResolveTextureSize(root, out context.textureSize))
+        try
         {
-            context.AddWarning(
-                "texture_size",
-                "O JSON nao informou resolucao de textura utilizavel; a geometria foi importada, mas a conversao automatica de UV para tiles pode ficar incompleta.");
+            RegisterTextureSources(root, context);
+            TryResolveAtlasImportTargets(context);
+
+            if (!TryResolveTextureSize(root, out context.textureSize))
+            {
+                foreach (BlockbenchTextureSource source in context.textureSources.Values)
+                {
+                    if (source == null || source.size.x <= 0 || source.size.y <= 0)
+                        continue;
+
+                    context.textureSize = source.size;
+                    break;
+                }
+
+                if (context.textureSize.x <= 0 || context.textureSize.y <= 0)
+                {
+                    context.AddWarning(
+                        "texture_size",
+                        "O JSON nao informou resolucao de textura utilizavel; a conversao automatica de UV para tiles pode ficar incompleta.");
+                }
+            }
+
+            return context;
+        }
+        catch
+        {
+            CleanupImportContext(context);
+            throw;
+        }
+    }
+
+    private static void RegisterTextureSources(JObject root, ImportContext context)
+    {
+        if (!(root["textures"] is JToken texturesToken))
+            return;
+
+        if (texturesToken is JArray texturesArray)
+        {
+            for (int i = 0; i < texturesArray.Count; i++)
+            {
+                if (!(texturesArray[i] is JObject textureObject))
+                    continue;
+
+                string fallbackKey = i.ToString(CultureInfo.InvariantCulture);
+                RegisterTextureSource(fallbackKey, textureObject, context);
+            }
+
+            return;
         }
 
-        return context;
+        if (!(texturesToken is JObject texturesObject))
+            return;
+
+        foreach (JProperty property in texturesObject.Properties())
+            RegisterTextureSource(property.Name, property.Value, context);
+    }
+
+    private static void RegisterTextureSource(string fallbackKey, JToken token, ImportContext context)
+    {
+        if (string.IsNullOrWhiteSpace(fallbackKey) || token == null)
+            return;
+
+        string safeFallbackKey = fallbackKey.Trim();
+        if (token.Type == JTokenType.String)
+        {
+            string rawValue = token.Value<string>();
+            if (string.IsNullOrWhiteSpace(rawValue))
+                return;
+
+            if (rawValue.TrimStart().StartsWith("#", StringComparison.Ordinal))
+            {
+                context.textureAliases[safeFallbackKey] = rawValue.Trim();
+                return;
+            }
+
+            if (TryLoadTextureSource(safeFallbackKey, safeFallbackKey, rawValue, null, context, out BlockbenchTextureSource directSource))
+                context.textureSources[safeFallbackKey] = directSource;
+            return;
+        }
+
+        if (!(token is JObject textureObject))
+            return;
+
+        string idKey = ResolveTextureKey(textureObject["id"], safeFallbackKey);
+        string displayName = textureObject["name"] != null
+            ? textureObject["name"].ToString()
+            : idKey;
+
+        string sourceCandidate = ReadTrimmedString(textureObject["source"]);
+        string pathCandidate = ReadTrimmedString(textureObject["path"]);
+        string relativePathCandidate = ReadTrimmedString(textureObject["relative_path"]);
+
+        if (TryLoadTextureSource(idKey, displayName, sourceCandidate, textureObject, context, out BlockbenchTextureSource source))
+            context.textureSources[idKey] = source;
+        else if (TryLoadTextureSource(idKey, displayName, pathCandidate, textureObject, context, out source))
+            context.textureSources[idKey] = source;
+        else if (TryLoadTextureSource(idKey, displayName, relativePathCandidate, textureObject, context, out source))
+            context.textureSources[idKey] = source;
+        else
+            context.AddWarning("missing_texture_source", "O arquivo referencia texturas do Blockbench, mas algumas nao puderam ser localizadas para entrar no atlas.");
+
+        if (!string.Equals(idKey, safeFallbackKey, StringComparison.OrdinalIgnoreCase))
+            context.textureAliases[safeFallbackKey] = idKey;
+    }
+
+    private static bool TryLoadTextureSource(
+        string key,
+        string displayName,
+        string candidate,
+        JObject textureObject,
+        ImportContext context,
+        out BlockbenchTextureSource source)
+    {
+        source = null;
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+
+        if (!TryLoadTextureFromCandidate(candidate, context.modelPath, out Texture2D texture))
+            return false;
+
+        Vector2Int size = texture != null
+            ? new Vector2Int(texture.width, texture.height)
+            : Vector2Int.zero;
+
+        if ((size.x <= 0 || size.y <= 0) && textureObject != null)
+            TryReadNamedVector2(textureObject, "uv_width", "uv_height", out size);
+        if ((size.x <= 0 || size.y <= 0) && textureObject != null)
+            TryReadNamedVector2(textureObject, "width", "height", out size);
+
+        source = new BlockbenchTextureSource
+        {
+            key = string.IsNullOrWhiteSpace(key) ? displayName : key.Trim(),
+            displayName = string.IsNullOrWhiteSpace(displayName) ? key : displayName.Trim(),
+            size = size,
+            texture = texture
+        };
+        return true;
+    }
+
+    private static bool TryLoadTextureFromCandidate(string candidate, string modelPath, out Texture2D texture)
+    {
+        texture = null;
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+
+        string trimmed = candidate.Trim();
+        byte[] data = null;
+
+        if (trimmed.StartsWith("data:", StringComparison.OrdinalIgnoreCase))
+        {
+            int base64Index = trimmed.IndexOf("base64,", StringComparison.OrdinalIgnoreCase);
+            if (base64Index >= 0)
+            {
+                string base64 = trimmed.Substring(base64Index + "base64,".Length);
+                try
+                {
+                    data = Convert.FromBase64String(base64);
+                }
+                catch (FormatException)
+                {
+                    return false;
+                }
+            }
+        }
+        else
+        {
+            if (!TryResolveTextureFilePath(trimmed, modelPath, out string resolvedPath))
+                return false;
+
+            data = File.ReadAllBytes(resolvedPath);
+        }
+
+        if (data == null || data.Length == 0)
+            return false;
+
+        texture = new Texture2D(2, 2, TextureFormat.RGBA32, false, false)
+        {
+            name = Path.GetFileNameWithoutExtension(trimmed),
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+
+        if (!ImageConversion.LoadImage(texture, data, false))
+        {
+            UnityEngine.Object.DestroyImmediate(texture);
+            texture = null;
+            return false;
+        }
+
+        texture.filterMode = FilterMode.Point;
+        texture.wrapMode = TextureWrapMode.Clamp;
+        return true;
+    }
+
+    private static bool TryResolveTextureFilePath(string candidate, string modelPath, out string resolvedPath)
+    {
+        resolvedPath = null;
+        if (string.IsNullOrWhiteSpace(candidate))
+            return false;
+
+        List<string> candidates = new List<string>();
+        string trimmed = candidate.Trim().Trim('"');
+
+        if (trimmed.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+        {
+            try
+            {
+                trimmed = new Uri(trimmed).LocalPath;
+            }
+            catch (UriFormatException)
+            {
+                return false;
+            }
+        }
+
+        if (Path.IsPathRooted(trimmed))
+        {
+            candidates.Add(trimmed);
+            if (!Path.HasExtension(trimmed))
+                candidates.Add(trimmed + ".png");
+        }
+        else
+        {
+            string modelDirectory = Path.GetDirectoryName(modelPath);
+            if (!string.IsNullOrEmpty(modelDirectory))
+            {
+                string combined = Path.Combine(modelDirectory, trimmed);
+                candidates.Add(combined);
+                if (!Path.HasExtension(combined))
+                    candidates.Add(combined + ".png");
+
+                string fileNameCandidate = Path.GetFileName(trimmed);
+                if (!string.IsNullOrEmpty(fileNameCandidate))
+                {
+                    string siblingCandidate = Path.Combine(modelDirectory, fileNameCandidate);
+                    candidates.Add(siblingCandidate);
+                    if (!Path.HasExtension(siblingCandidate))
+                        candidates.Add(siblingCandidate + ".png");
+                }
+            }
+        }
+
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            string current = candidates[i];
+            if (string.IsNullOrWhiteSpace(current))
+                continue;
+
+            string normalized = current.Replace('/', Path.DirectorySeparatorChar).Replace('\\', Path.DirectorySeparatorChar);
+            if (!File.Exists(normalized))
+                continue;
+
+            resolvedPath = normalized;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static string ResolveTextureKey(JToken token, string fallbackKey)
+    {
+        if (token == null)
+            return fallbackKey;
+
+        return token.Type switch
+        {
+            JTokenType.Integer => token.Value<long>().ToString(CultureInfo.InvariantCulture),
+            JTokenType.Float => Mathf.RoundToInt(token.Value<float>()).ToString(CultureInfo.InvariantCulture),
+            JTokenType.String => string.IsNullOrWhiteSpace(token.Value<string>()) ? fallbackKey : token.Value<string>().Trim(),
+            _ => fallbackKey
+        };
+    }
+
+    private static string ReadTrimmedString(JToken token)
+    {
+        return token != null && token.Type == JTokenType.String
+            ? token.Value<string>()?.Trim()
+            : null;
+    }
+
+    private static void TryResolveAtlasImportTargets(ImportContext context)
+    {
+        TryResolveAtlasImportTargetsFromLoadedScenes(context);
+        if (context.atlasGenerator == null &&
+            context.blockData != null &&
+            context.textureSources.Count > 0)
+        {
+            TryResolveAtlasImportTargetsFromProjectScenes(context);
+        }
+
+        if (context.textureSources.Count > 0 && context.blockData != null && context.atlasGenerator == null)
+        {
+            context.AddWarning(
+                "missing_block_generator",
+                "As texturas do Blockbench foram detectadas, mas nao encontrei um TextureAtlasGenerator de blocos nem nas cenas abertas nem nas cenas do projeto; mantive a geometria e tentei reaproveitar apenas os tiles compativeis.");
+        }
+    }
+
+    private static void TryResolveAtlasImportTargetsFromLoadedScenes(ImportContext context)
+    {
+#if UNITY_2023_1_OR_NEWER
+        World[] worlds = UnityEngine.Object.FindObjectsByType<World>(FindObjectsInactive.Include);
+        TextureAtlasGenerator[] generators = UnityEngine.Object.FindObjectsByType<TextureAtlasGenerator>(FindObjectsInactive.Include);
+#else
+        World[] worlds = UnityEngine.Object.FindObjectsOfType<World>(true);
+        TextureAtlasGenerator[] generators = UnityEngine.Object.FindObjectsOfType<TextureAtlasGenerator>(true);
+#endif
+
+        context.world = SelectBestWorld(context, worlds);
+        context.atlasGenerator = SelectBestGenerator(context, generators, context.world);
+        UpdateResolvedAtlasSceneInfo(context, context.atlasGenerator, context.world);
+    }
+
+    private static void TryResolveAtlasImportTargetsFromProjectScenes(ImportContext context)
+    {
+        List<string> candidateScenePaths = BuildAtlasImportCandidateScenePaths();
+        for (int i = 0; i < candidateScenePaths.Count; i++)
+        {
+            string scenePath = candidateScenePaths[i];
+            if (string.IsNullOrWhiteSpace(scenePath))
+                continue;
+
+            Scene alreadyLoadedScene = SceneManager.GetSceneByPath(scenePath);
+            if (alreadyLoadedScene.IsValid() && alreadyLoadedScene.isLoaded)
+                continue;
+
+            Scene previousActiveScene = EditorSceneManager.GetActiveScene();
+            Scene openedScene;
+            try
+            {
+                openedScene = EditorSceneManager.OpenScene(scenePath, OpenSceneMode.Additive);
+            }
+            catch
+            {
+                continue;
+            }
+
+            if (previousActiveScene.IsValid() && previousActiveScene.isLoaded)
+                EditorSceneManager.SetActiveScene(previousActiveScene);
+
+            World sceneWorld = null;
+            TextureAtlasGenerator sceneGenerator = null;
+            try
+            {
+                sceneWorld = SelectBestWorld(context, CollectSceneComponents<World>(openedScene));
+                sceneGenerator = SelectBestGenerator(context, CollectSceneComponents<TextureAtlasGenerator>(openedScene), sceneWorld);
+                if (sceneGenerator == null)
+                {
+                    EditorSceneManager.CloseScene(openedScene, true);
+                    continue;
+                }
+
+                context.previousActiveScene = previousActiveScene;
+                context.temporaryAtlasScene = openedScene;
+                context.openedTemporaryAtlasScene = true;
+                context.world = sceneWorld;
+                context.atlasGenerator = sceneGenerator;
+                UpdateResolvedAtlasSceneInfo(context, sceneGenerator, sceneWorld);
+                return;
+            }
+            catch
+            {
+                if (openedScene.IsValid() && openedScene.isLoaded)
+                    EditorSceneManager.CloseScene(openedScene, true);
+                throw;
+            }
+        }
+    }
+
+    private static List<T> CollectSceneComponents<T>(Scene scene) where T : Component
+    {
+        List<T> components = new List<T>();
+        if (!scene.IsValid() || !scene.isLoaded)
+            return components;
+
+        GameObject[] roots = scene.GetRootGameObjects();
+        for (int i = 0; i < roots.Length; i++)
+        {
+            GameObject root = roots[i];
+            if (root == null)
+                continue;
+
+            components.AddRange(root.GetComponentsInChildren<T>(true));
+        }
+
+        return components;
+    }
+
+    private static World SelectBestWorld(ImportContext context, IList<World> worlds)
+    {
+        World bestWorld = null;
+        int bestWorldScore = int.MinValue;
+        for (int i = 0; i < worlds.Count; i++)
+        {
+            World candidate = worlds[i];
+            int score = ScoreImportWorldCandidate(context, candidate);
+            if (score > bestWorldScore)
+            {
+                bestWorldScore = score;
+                bestWorld = candidate;
+            }
+        }
+
+        return bestWorld;
+    }
+
+    private static TextureAtlasGenerator SelectBestGenerator(
+        ImportContext context,
+        IList<TextureAtlasGenerator> generators,
+        World bestWorld)
+    {
+        TextureAtlasGenerator bestGenerator = null;
+        int bestGeneratorScore = int.MinValue;
+        for (int i = 0; i < generators.Count; i++)
+        {
+            TextureAtlasGenerator candidate = generators[i];
+            int score = ScoreImportGeneratorCandidate(context, candidate, bestWorld);
+            if (score > bestGeneratorScore)
+            {
+                bestGeneratorScore = score;
+                bestGenerator = candidate;
+            }
+        }
+
+        return bestGenerator;
+    }
+
+    private static int ScoreImportWorldCandidate(ImportContext context, World candidate)
+    {
+        if (candidate == null)
+            return int.MinValue;
+
+        int score = 0;
+        if (candidate.blockData == context.blockData && context.blockData != null)
+            score += 1000;
+        if (candidate.blockAtlasGenerator != null)
+            score += 100;
+
+        string sceneName = candidate.gameObject.scene.name.ToLowerInvariant();
+        if (sceneName.Contains("game"))
+            score += 80;
+        if (sceneName.Contains("menu") || sceneName.Contains("workbench"))
+            score -= 120;
+
+        return score;
+    }
+
+    private static int ScoreImportGeneratorCandidate(
+        ImportContext context,
+        TextureAtlasGenerator candidate,
+        World bestWorld)
+    {
+        if (candidate == null)
+            return int.MinValue;
+
+        int score = 0;
+        if (bestWorld != null && ReferenceEquals(candidate, bestWorld.blockAtlasGenerator))
+            score += 1000;
+
+        string candidateName = candidate.name.ToLowerInvariant();
+        if (candidateName.Contains("bloco") || candidateName.Contains("block"))
+            score += 150;
+        if (candidateName.Contains("item"))
+            score -= 150;
+
+        string sceneName = candidate.gameObject.scene.name.ToLowerInvariant();
+        if (sceneName.Contains("game"))
+            score += 80;
+        if (sceneName.Contains("menu") || sceneName.Contains("workbench"))
+            score -= 120;
+
+        if (bestWorld != null && bestWorld.Material != null && candidate.targetMaterials != null)
+        {
+            for (int m = 0; m < candidate.targetMaterials.Count; m++)
+            {
+                Material candidateMaterial = candidate.targetMaterials[m];
+                if (candidateMaterial == null)
+                    continue;
+
+                for (int w = 0; w < bestWorld.Material.Length; w++)
+                {
+                    if (ReferenceEquals(candidateMaterial, bestWorld.Material[w]))
+                        score += 40;
+                }
+            }
+        }
+
+        return score;
+    }
+
+    private static List<string> BuildAtlasImportCandidateScenePaths()
+    {
+        List<string> scenePaths = new List<string>();
+        HashSet<string> seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        EditorBuildSettingsScene[] buildScenes = EditorBuildSettings.scenes;
+        for (int i = 0; i < buildScenes.Length; i++)
+        {
+            EditorBuildSettingsScene scene = buildScenes[i];
+            if (scene == null || string.IsNullOrWhiteSpace(scene.path))
+                continue;
+
+            if (seen.Add(scene.path))
+                scenePaths.Add(scene.path);
+        }
+
+        string[] sceneGuids = AssetDatabase.FindAssets("t:Scene", new[] { "Assets/Scenes" });
+        for (int i = 0; i < sceneGuids.Length; i++)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(sceneGuids[i]);
+            if (string.IsNullOrWhiteSpace(path))
+                continue;
+
+            if (seen.Add(path))
+                scenePaths.Add(path);
+        }
+
+        scenePaths.Sort((left, right) => ScoreScenePathForAtlasImport(right).CompareTo(ScoreScenePathForAtlasImport(left)));
+        return scenePaths;
+    }
+
+    private static int ScoreScenePathForAtlasImport(string scenePath)
+    {
+        if (string.IsNullOrWhiteSpace(scenePath))
+            return int.MinValue;
+
+        string normalized = scenePath.Replace('\\', '/').ToLowerInvariant();
+        string fileName = Path.GetFileNameWithoutExtension(normalized);
+        int score = 0;
+
+        if (fileName.Contains("game"))
+            score += 1000;
+        if (fileName.Contains("main"))
+            score += 100;
+        if (fileName.Contains("workbench"))
+            score -= 1000;
+        if (fileName.Contains("menu"))
+            score -= 800;
+        if (normalized.Contains("/_recovery/"))
+            score -= 2000;
+
+        return score;
+    }
+
+    private static void UpdateResolvedAtlasSceneInfo(
+        ImportContext context,
+        TextureAtlasGenerator atlasGenerator,
+        World world)
+    {
+        Scene scene = atlasGenerator != null
+            ? atlasGenerator.gameObject.scene
+            : world != null
+                ? world.gameObject.scene
+                : default;
+        if (!scene.IsValid())
+            return;
+
+        context.atlasScenePath = scene.path;
+        context.atlasSceneName = scene.name;
+    }
+
+    private static void CleanupImportContext(ImportContext context)
+    {
+        if (context == null)
+            return;
+
+        HashSet<Texture2D> destroyedTextures = new HashSet<Texture2D>();
+        foreach (BlockbenchTextureSource source in context.textureSources.Values)
+        {
+            if (source?.texture == null)
+                continue;
+
+            if (!destroyedTextures.Add(source.texture))
+                continue;
+
+            UnityEngine.Object.DestroyImmediate(source.texture);
+        }
+
+        if (context.openedTemporaryAtlasScene &&
+            context.temporaryAtlasScene.IsValid() &&
+            context.temporaryAtlasScene.isLoaded)
+        {
+            if (context.previousActiveScene.IsValid() &&
+                context.previousActiveScene.isLoaded &&
+                context.previousActiveScene != context.temporaryAtlasScene)
+            {
+                EditorSceneManager.SetActiveScene(context.previousActiveScene);
+            }
+
+            EditorSceneManager.CloseScene(context.temporaryAtlasScene, true);
+        }
     }
 
     private static Vector2Int ResolveAtlasTiles(BlockDataSO blockData)
@@ -1078,6 +1727,363 @@ internal static class BlockbenchMultiCuboidImporter
 
         value = new Vector2Int(x, y);
         return true;
+    }
+
+    private static void FinalizeFaceTextureRequests(
+        ImportContext context,
+        List<ImportedCuboidData> importedCuboids,
+        BlockType blockType)
+    {
+        if (context == null || importedCuboids == null || context.faceTextureRequests.Count == 0)
+            return;
+
+        if (!context.CanImportTexturesToAtlas)
+        {
+            if (context.blockData == null)
+            {
+                context.AddWarning(
+                    "missing_blockdata_for_texture_import",
+                    "As texturas do Blockbench foram detectadas, mas faltou um BlockDataSO para reservar tiles e salvar o mapping base do bloco.");
+            }
+
+            return;
+        }
+
+        bool useTextureEntries = ShouldUseTextureEntries(context.atlasGenerator);
+        bool changedAtlasGenerator = false;
+
+        foreach (FaceTextureRequest request in context.faceTextureRequests.Values)
+        {
+            if (request == null || request.source == null || request.source.texture == null)
+                continue;
+
+            EnsureFaceTextureIdentity(blockType, request);
+            Texture2D croppedTexture = CreateOrUpdateCroppedTextureAsset(request);
+            if (croppedTexture == null)
+                continue;
+
+            int legacyIndex = useTextureEntries
+                ? RegisterTextureEntry(context.atlasGenerator, request, croppedTexture)
+                : RegisterLegacyTexture(context.atlasGenerator, croppedTexture);
+            if (legacyIndex < 0)
+                continue;
+
+            if (!TryConvertLegacyIndexToTile(legacyIndex, context.atlasTiles, context.blockData.atlasCoordinatesStartTopLeft, out Vector2Int tile))
+            {
+                context.AddWarning(
+                    "atlas_capacity",
+                    "O atlas configurado no BlockDataSO nao tem espaco suficiente para reservar mais tiles do import do Blockbench.");
+                continue;
+            }
+
+            request.tile = tile;
+            request.hasAssignedTile = true;
+            if (context.atlasGenerator.TryGetLegacyTileUv(
+                    tile,
+                    context.atlasTiles,
+                    context.blockData.atlasCoordinatesStartTopLeft,
+                    out Rect uvRect))
+            {
+                request.uvRectData = BlockAtlasUvUtility.RectToUvRectData(uvRect);
+                request.hasAssignedUvRect = true;
+            }
+
+            context.importedTextureCount++;
+            changedAtlasGenerator = true;
+        }
+
+        if (changedAtlasGenerator)
+        {
+            EditorUtility.SetDirty(context.atlasGenerator);
+            context.atlasGenerator.GenerateAtlas();
+
+            if (context.world != null)
+            {
+                EditorUtility.SetDirty(context.world);
+                context.world.RebuildBlockAtlasCompatibility();
+            }
+            else if (context.blockData != null)
+            {
+                VoxelAtlasCompatibility.Apply(
+                    context.atlasGenerator,
+                    context.blockData,
+                    context.atlasTiles,
+                    context.blockData.atlasCoordinatesStartTopLeft);
+            }
+
+            if (context.blockData != null)
+                EditorUtility.SetDirty(context.blockData);
+
+            Scene generatorScene = context.atlasGenerator.gameObject.scene;
+            if (generatorScene.IsValid() && generatorScene.isLoaded)
+                EditorSceneManager.MarkSceneDirty(generatorScene);
+
+            if (context.world != null)
+            {
+                Scene worldScene = context.world.gameObject.scene;
+                if (worldScene.IsValid() && worldScene.isLoaded)
+                    EditorSceneManager.MarkSceneDirty(worldScene);
+            }
+
+            AssetDatabase.SaveAssets();
+            if (context.openedTemporaryAtlasScene &&
+                context.temporaryAtlasScene.IsValid() &&
+                context.temporaryAtlasScene.isLoaded)
+            {
+                EditorSceneManager.SaveScene(context.temporaryAtlasScene);
+            }
+        }
+
+        for (int i = 0; i < importedCuboids.Count; i++)
+        {
+            ImportedCuboidData cuboid = importedCuboids[i];
+            foreach (KeyValuePair<BlockFace, string> pair in cuboid.faceTextureRequests)
+            {
+                if (!context.faceTextureRequests.TryGetValue(pair.Value, out FaceTextureRequest request) || !request.hasAssignedTile)
+                    continue;
+
+                cuboid.faceTiles[pair.Key] = request.tile;
+                if (request.hasAssignedUvRect)
+                    cuboid.faceUvRects[pair.Key] = request.uvRectData;
+                context.importedFaceCount++;
+            }
+        }
+    }
+
+    private static void EnsureFaceTextureIdentity(BlockType blockType, FaceTextureRequest request)
+    {
+        if (request == null)
+            return;
+
+        string safeBlockName = AtlasKeyUtility.NormalizePathSegment(blockType.ToString());
+        string safeSourceName = AtlasKeyUtility.NormalizePathSegment(
+            request.source != null && !string.IsNullOrWhiteSpace(request.source.displayName)
+                ? request.source.displayName
+                : "face");
+        string fileName = $"{safeSourceName}_{request.hash}.png";
+        request.entryId ??= $"blockbench/{safeBlockName}/{request.hash}";
+        request.assetPath ??= $"Assets/Generated/BlockbenchImports/{safeBlockName}/{fileName}";
+    }
+
+    private static bool ShouldUseTextureEntries(TextureAtlasGenerator generator)
+    {
+        return generator != null &&
+               generator.textureEntries != null &&
+               generator.textureEntries.Exists(entry => entry != null && entry.texture != null);
+    }
+
+    private static int RegisterTextureEntry(TextureAtlasGenerator generator, FaceTextureRequest request, Texture2D texture)
+    {
+        if (generator == null || request == null || texture == null)
+            return -1;
+
+        if (generator.textureEntries == null)
+            generator.textureEntries = new List<AtlasTextureEntry>();
+
+        int entryIndex = -1;
+        for (int i = 0; i < generator.textureEntries.Count; i++)
+        {
+            AtlasTextureEntry existingEntry = generator.textureEntries[i];
+            if (existingEntry == null || !string.Equals(existingEntry.id, request.entryId, StringComparison.Ordinal))
+                continue;
+
+            existingEntry.texture = texture;
+            generator.textureEntries[i] = existingEntry;
+            entryIndex = i;
+            break;
+        }
+
+        if (entryIndex < 0)
+        {
+            generator.textureEntries.Add(new AtlasTextureEntry
+            {
+                id = request.entryId,
+                texture = texture
+            });
+            entryIndex = generator.textureEntries.Count - 1;
+        }
+
+        int legacyIndex = 0;
+        for (int i = 0; i < generator.textureEntries.Count; i++)
+        {
+            AtlasTextureEntry current = generator.textureEntries[i];
+            if (current == null || current.texture == null)
+                continue;
+
+            if (i == entryIndex)
+                return legacyIndex;
+
+            legacyIndex++;
+        }
+
+        return -1;
+    }
+
+    private static int RegisterLegacyTexture(TextureAtlasGenerator generator, Texture2D texture)
+    {
+        if (generator == null || texture == null)
+            return -1;
+
+        if (generator.blockTextures == null)
+            generator.blockTextures = new List<Texture2D>();
+
+        int entryIndex = -1;
+        for (int i = 0; i < generator.blockTextures.Count; i++)
+        {
+            if (!ReferenceEquals(generator.blockTextures[i], texture))
+                continue;
+
+            entryIndex = i;
+            break;
+        }
+
+        if (entryIndex < 0)
+        {
+            generator.blockTextures.Add(texture);
+            entryIndex = generator.blockTextures.Count - 1;
+        }
+
+        int legacyIndex = 0;
+        for (int i = 0; i < generator.blockTextures.Count; i++)
+        {
+            if (generator.blockTextures[i] == null)
+                continue;
+
+            if (i == entryIndex)
+                return legacyIndex;
+
+            legacyIndex++;
+        }
+
+        return -1;
+    }
+
+    private static bool TryConvertLegacyIndexToTile(
+        int legacyIndex,
+        Vector2Int atlasTiles,
+        bool atlasOriginTopLeft,
+        out Vector2Int tile)
+    {
+        tile = Vector2Int.zero;
+        int capacity = Mathf.Max(0, atlasTiles.x) * Mathf.Max(0, atlasTiles.y);
+        if (legacyIndex < 0 || capacity <= 0 || legacyIndex >= capacity)
+            return false;
+
+        int x = legacyIndex % atlasTiles.x;
+        int yFromBottom = legacyIndex / atlasTiles.x;
+        int y = atlasOriginTopLeft
+            ? atlasTiles.y - 1 - yFromBottom
+            : yFromBottom;
+        tile = new Vector2Int(x, y);
+        return true;
+    }
+
+    private static Texture2D CreateOrUpdateCroppedTextureAsset(FaceTextureRequest request)
+    {
+        Texture2D bakedTexture = BakeFaceTexture(request);
+        if (bakedTexture == null)
+            return null;
+
+        try
+        {
+            string assetPath = request.assetPath;
+            string fullPath = ToProjectAbsolutePath(assetPath);
+            string directory = Path.GetDirectoryName(fullPath);
+            if (!string.IsNullOrEmpty(directory))
+                Directory.CreateDirectory(directory);
+
+            File.WriteAllBytes(fullPath, bakedTexture.EncodeToPNG());
+            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            ConfigureImportedTextureAsset(assetPath);
+            return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+        }
+        finally
+        {
+            UnityEngine.Object.DestroyImmediate(bakedTexture);
+        }
+    }
+
+    private static void ConfigureImportedTextureAsset(string assetPath)
+    {
+        if (!(AssetImporter.GetAtPath(assetPath) is TextureImporter importer))
+            return;
+
+        bool changed = false;
+        if (!importer.isReadable)
+        {
+            importer.isReadable = true;
+            changed = true;
+        }
+
+        if (importer.filterMode != FilterMode.Point)
+        {
+            importer.filterMode = FilterMode.Point;
+            changed = true;
+        }
+
+        if (importer.wrapMode != TextureWrapMode.Clamp)
+        {
+            importer.wrapMode = TextureWrapMode.Clamp;
+            changed = true;
+        }
+
+        if (importer.mipmapEnabled)
+        {
+            importer.mipmapEnabled = false;
+            changed = true;
+        }
+
+        if (changed)
+            importer.SaveAndReimport();
+    }
+
+    private static Texture2D BakeFaceTexture(FaceTextureRequest request)
+    {
+        if (request == null || request.source == null || request.source.texture == null)
+            return null;
+
+        Texture2D source = request.source.texture;
+        int outputWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(request.u1 - request.u0)));
+        int outputHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(request.v1 - request.v0)));
+        Color32[] sourcePixels = source.GetPixels32();
+        Color32[] targetPixels = new Color32[outputWidth * outputHeight];
+        int sourceWidth = Mathf.Max(1, source.width);
+        int sourceHeight = Mathf.Max(1, source.height);
+
+        for (int y = 0; y < outputHeight; y++)
+        {
+            float localVBottom = (y + 0.5f) / outputHeight;
+            float localVTop = 1f - localVBottom;
+
+            for (int x = 0; x < outputWidth; x++)
+            {
+                float localU = (x + 0.5f) / outputWidth;
+                float sampleU = Mathf.Lerp(request.u0, request.u1, localU);
+                float sampleVFromTop = Mathf.Lerp(request.v0, request.v1, localVTop);
+
+                int pixelX = Mathf.Clamp(Mathf.FloorToInt(sampleU), 0, sourceWidth - 1);
+                int pixelYFromTop = Mathf.Clamp(Mathf.FloorToInt(sampleVFromTop), 0, sourceHeight - 1);
+                int pixelY = sourceHeight - 1 - pixelYFromTop;
+                targetPixels[y * outputWidth + x] = sourcePixels[pixelY * sourceWidth + pixelX];
+            }
+        }
+
+        Texture2D baked = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false, false)
+        {
+            name = Path.GetFileNameWithoutExtension(request.assetPath),
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        baked.SetPixels32(targetPixels);
+        baked.Apply(false, false);
+        return baked;
+    }
+
+    private static string ToProjectAbsolutePath(string assetPath)
+    {
+        string projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? Application.dataPath;
+        string relativePath = assetPath.Replace('/', Path.DirectorySeparatorChar);
+        return Path.Combine(projectRoot, relativePath);
     }
 
     private static List<ImportedCuboidData> ParseElements(JObject root, ImportContext context)
@@ -1160,8 +2166,24 @@ internal static class BlockbenchMultiCuboidImporter
 
                 faceMask |= GetFaceMask(face);
 
-                if (TryResolveFaceTile(faceObject, context, out Vector2Int tile))
+                Vector2Int faceTextureSize = context.textureSize;
+                bool capturedFaceTextureRequest = TryCaptureFaceTextureRequest(
+                    faceObject,
+                    context,
+                    out string requestKey,
+                    out Vector2Int resolvedTextureSize);
+                if (capturedFaceTextureRequest)
+                {
+                    importedCuboid.faceTextureRequests[face] = requestKey;
+                    if (resolvedTextureSize.x > 0 && resolvedTextureSize.y > 0)
+                        faceTextureSize = resolvedTextureSize;
+                }
+
+                if (!capturedFaceTextureRequest &&
+                    TryResolveFaceTile(faceObject, context, faceTextureSize, out Vector2Int tile))
+                {
                     importedCuboid.faceTiles[face] = tile;
+                }
             }
         }
 
@@ -1201,14 +2223,6 @@ internal static class BlockbenchMultiCuboidImporter
         }
 
         Vector3 centerModel = (minModel + maxModel) * 0.5f;
-        if (usedCustomPivot && (pivotModel - centerModel).sqrMagnitude > PivotEpsilon * PivotEpsilon)
-        {
-            context.AddWarning(
-                "pivot_rotation",
-                "Rotacoes com pivot fora do centro do cuboide ainda nao tem equivalente direto na engine; nesses casos a importacao manteve apenas a caixa sem rotacao.");
-            return;
-        }
-
         if (usesRescale)
         {
             context.AddWarning(
@@ -1216,7 +2230,134 @@ internal static class BlockbenchMultiCuboidImporter
                 "Rotacao com 'rescale' do Blockbench nao tem equivalente direto aqui; a importacao manteve a rotacao, mas sem o ajuste extra de escala.");
         }
 
-        cuboid.eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(euler);
+        Vector3 normalizedEuler = BlockShapeUtility.NormalizeCuboidEulerRotation(euler);
+        if (usedCustomPivot && (pivotModel - centerModel).sqrMagnitude > PivotEpsilon * PivotEpsilon)
+        {
+            Quaternion rotation = Quaternion.Euler(normalizedEuler);
+            Vector3 rotatedCenterModel = pivotModel + rotation * (centerModel - pivotModel);
+            Vector3 halfSizeModel = (maxModel - minModel) * 0.5f;
+            cuboid.min = (rotatedCenterModel - halfSizeModel) / ModelUnitsPerVoxel;
+            cuboid.max = (rotatedCenterModel + halfSizeModel) / ModelUnitsPerVoxel;
+        }
+
+        cuboid.eulerRotation = normalizedEuler;
+    }
+
+    private static bool TryCaptureFaceTextureRequest(
+        JObject faceObject,
+        ImportContext context,
+        out string requestKey,
+        out Vector2Int resolvedTextureSize)
+    {
+        requestKey = null;
+        resolvedTextureSize = Vector2Int.zero;
+
+        if (faceObject == null || faceObject["texture"] == null)
+            return false;
+
+        if (!context.CanImportTexturesToAtlas)
+            return false;
+
+        if (!TryResolveTextureReference(faceObject["texture"], context, out BlockbenchTextureSource source))
+            return false;
+
+        if (!TryReadRawUvCoordinates(faceObject, out float u0, out float v0, out float u1, out float v1))
+            return false;
+
+        if (Mathf.Abs(u1 - u0) <= 0.0001f || Mathf.Abs(v1 - v0) <= 0.0001f)
+            return false;
+
+        float rotation = ReadFloat(faceObject["rotation"]);
+        if (Mathf.Abs(rotation) > 0.0001f)
+        {
+            context.AddWarning(
+                "uv_rotation",
+                "Rotacao de UV por face no Blockbench ainda nao e convertida automaticamente; a textura foi recortada sem girar.");
+        }
+
+        string canonicalKey =
+            $"{source.key}|{u0.ToString("0.####", CultureInfo.InvariantCulture)}|{v0.ToString("0.####", CultureInfo.InvariantCulture)}|" +
+            $"{u1.ToString("0.####", CultureInfo.InvariantCulture)}|{v1.ToString("0.####", CultureInfo.InvariantCulture)}|" +
+            $"{rotation.ToString("0.####", CultureInfo.InvariantCulture)}";
+
+        if (!context.faceTextureRequests.TryGetValue(canonicalKey, out FaceTextureRequest request))
+        {
+            request = new FaceTextureRequest
+            {
+                key = canonicalKey,
+                hash = Hash128.Compute(canonicalKey).ToString(),
+                source = source,
+                u0 = u0,
+                v0 = v0,
+                u1 = u1,
+                v1 = v1,
+                rotation = rotation
+            };
+            context.faceTextureRequests[canonicalKey] = request;
+        }
+
+        requestKey = canonicalKey;
+        resolvedTextureSize = source.size;
+        return true;
+    }
+
+    private static bool TryResolveTextureReference(JToken textureToken, ImportContext context, out BlockbenchTextureSource source)
+    {
+        source = null;
+        string reference = ResolveTextureKey(textureToken, string.Empty);
+        if (string.IsNullOrWhiteSpace(reference))
+            return false;
+
+        string current = reference.Trim().TrimStart('#');
+        HashSet<string> visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        while (!string.IsNullOrWhiteSpace(current) && visited.Add(current))
+        {
+            if (context.textureSources.TryGetValue(current, out source) && source != null)
+                return true;
+
+            if (!context.textureAliases.TryGetValue(current, out string alias))
+                break;
+
+            current = alias.Trim().TrimStart('#');
+        }
+
+        return false;
+    }
+
+    private static bool TryReadRawUvCoordinates(
+        JObject faceObject,
+        out float u0,
+        out float v0,
+        out float u1,
+        out float v1)
+    {
+        u0 = 0f;
+        v0 = 0f;
+        u1 = 0f;
+        v1 = 0f;
+
+        if (faceObject["uv"] is JArray uvArray && uvArray.Count >= 4)
+        {
+            u0 = ReadFloat(uvArray[0]);
+            v0 = ReadFloat(uvArray[1]);
+            u1 = ReadFloat(uvArray[2]);
+            v1 = ReadFloat(uvArray[3]);
+            return true;
+        }
+
+        if (faceObject["uv"] is JArray originArray &&
+            originArray.Count >= 2 &&
+            faceObject["uv_size"] is JArray sizeArray &&
+            sizeArray.Count >= 2)
+        {
+            u0 = ReadFloat(originArray[0]);
+            v0 = ReadFloat(originArray[1]);
+            u1 = u0 + ReadFloat(sizeArray[0]);
+            v1 = v0 + ReadFloat(sizeArray[1]);
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryResolveRotation(
@@ -1281,17 +2422,23 @@ internal static class BlockbenchMultiCuboidImporter
         return false;
     }
 
-    private static bool TryResolveFaceTile(JObject faceObject, ImportContext context, out Vector2Int tile)
+    private static bool TryResolveFaceTile(JObject faceObject, ImportContext context, Vector2Int faceTextureSize, out Vector2Int tile)
     {
         tile = Vector2Int.zero;
-        if (!context.CanConvertTiles)
+        if (context.blockData == null ||
+            context.atlasTiles.x <= 0 ||
+            context.atlasTiles.y <= 0 ||
+            faceTextureSize.x <= 0 ||
+            faceTextureSize.y <= 0)
+        {
             return false;
+        }
 
         if (!TryReadUvRect(faceObject, out Rect uvRect))
             return false;
 
-        float tileWidth = (float)context.textureSize.x / context.atlasTiles.x;
-        float tileHeight = (float)context.textureSize.y / context.atlasTiles.y;
+        float tileWidth = (float)faceTextureSize.x / context.atlasTiles.x;
+        float tileHeight = (float)faceTextureSize.y / context.atlasTiles.y;
         if (tileWidth <= 0f || tileHeight <= 0f)
             return false;
 
@@ -1414,6 +2561,49 @@ internal static class BlockbenchMultiCuboidImporter
         return baseTiles;
     }
 
+    private static Dictionary<BlockFace, Vector4> BuildBaseUvRects(
+        List<ImportedCuboidData> importedCuboids,
+        Dictionary<BlockFace, Vector2Int> baseTiles,
+        BlockTextureMapping? existingMapping)
+    {
+        Dictionary<BlockFace, Vector4> baseUvRects = new Dictionary<BlockFace, Vector4>();
+
+        for (int i = 0; i < SupportedFaces.Length; i++)
+        {
+            BlockFace face = SupportedFaces[i];
+
+            if (baseTiles.TryGetValue(face, out Vector2Int baseTile))
+            {
+                for (int c = 0; c < importedCuboids.Count; c++)
+                {
+                    ImportedCuboidData imported = importedCuboids[c];
+                    if (!imported.faceTiles.TryGetValue(face, out Vector2Int importedTile) ||
+                        importedTile != baseTile ||
+                        !imported.faceUvRects.TryGetValue(face, out Vector4 importedUvRect) ||
+                        !BlockAtlasUvUtility.IsValidUvRectData(importedUvRect))
+                    {
+                        continue;
+                    }
+
+                    baseUvRects[face] = importedUvRect;
+                    break;
+                }
+            }
+
+            if (baseUvRects.ContainsKey(face))
+                continue;
+
+            if (existingMapping.HasValue &&
+                existingMapping.Value.TryGetUvRectData(face, out Vector4 existingUvRect) &&
+                BlockAtlasUvUtility.IsValidUvRectData(existingUvRect))
+            {
+                baseUvRects[face] = existingUvRect;
+            }
+        }
+
+        return baseUvRects;
+    }
+
     private static Vector2Int ResolveMostCommonTile(Dictionary<Vector2Int, int> counts, Vector2Int? preferredTile)
     {
         Vector2Int bestTile = Vector2Int.zero;
@@ -1457,6 +2647,11 @@ internal static class BlockbenchMultiCuboidImporter
 
                 cuboid.textureOverrideFaces |= GetFaceMask(pair.Key);
                 SetCuboidFaceTile(ref cuboid, pair.Key, pair.Value);
+                if (imported.faceUvRects.TryGetValue(pair.Key, out Vector4 uvRectData) &&
+                    BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
+                {
+                    cuboid.SetOverrideUvRectData(pair.Key, uvRectData);
+                }
             }
 
             cuboids.Add(cuboid);
@@ -1468,6 +2663,7 @@ internal static class BlockbenchMultiCuboidImporter
     private static bool ApplyTextureMapping(
         MultiCuboidBlockWorkbench workbench,
         Dictionary<BlockFace, Vector2Int> baseTiles,
+        Dictionary<BlockFace, Vector4> baseUvRects,
         BlockTextureMapping? existingMapping)
     {
         if (workbench == null || workbench.blockData == null || baseTiles.Count == 0)
@@ -1484,6 +2680,12 @@ internal static class BlockbenchMultiCuboidImporter
                 continue;
 
             changed |= SetMappingFaceTile(ref mapping, face, tile);
+            if (baseUvRects != null &&
+                baseUvRects.TryGetValue(face, out Vector4 uvRectData) &&
+                BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
+            {
+                changed |= SetMappingFaceUvRect(ref mapping, face, uvRectData);
+            }
         }
 
         mapping.side = mapping.right;
@@ -1525,6 +2727,27 @@ internal static class BlockbenchMultiCuboidImporter
         builder.Append(Path.GetFileName(path));
         builder.AppendLine(" para a bancada.");
 
+        if (context.importedTextureCount > 0)
+        {
+            builder.Append("Texturas do Blockbench viraram ");
+            builder.Append(context.importedTextureCount);
+            builder.Append(" recorte(s) reservados no atlas");
+            if (context.atlasGenerator != null)
+            {
+                builder.Append(" via ");
+                builder.Append(context.atlasGenerator.name);
+            }
+
+            builder.AppendLine(".");
+        }
+
+        if (context.openedTemporaryAtlasScene && !string.IsNullOrWhiteSpace(context.atlasSceneName))
+        {
+            builder.Append("O atlas foi atualizado automaticamente na cena ");
+            builder.Append(context.atlasSceneName);
+            builder.AppendLine(".");
+        }
+
         if (context.convertedFaceCount > 0)
         {
             if (appliedTextureMapping)
@@ -1536,7 +2759,10 @@ internal static class BlockbenchMultiCuboidImporter
         }
         else
         {
-            builder.AppendLine("A geometria entrou, mas nenhuma UV compativel com tiles inteiros do atlas foi encontrada.");
+            if (context.importedFaceCount > 0)
+                builder.AppendLine("As faces detectadas ja foram ligadas aos novos tiles importados.");
+            else
+                builder.AppendLine("A geometria entrou, mas nenhuma UV compativel com tiles inteiros do atlas foi encontrada.");
         }
 
         builder.AppendLine("Clique em 'Save no BlockData' para gravar a geometria no asset.");
@@ -1700,6 +2926,21 @@ internal static class BlockbenchMultiCuboidImporter
             default:
                 return false;
         }
+    }
+
+    private static bool SetMappingFaceUvRect(ref BlockTextureMapping mapping, BlockFace face, Vector4 uvRectData)
+    {
+        if (!BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
+            return false;
+
+        if (mapping.TryGetUvRectData(face, out Vector4 existingUvRect) &&
+            Vector4.SqrMagnitude(existingUvRect - uvRectData) <= 1e-10f)
+        {
+            return false;
+        }
+
+        mapping.SetUvRectData(face, uvRectData);
+        return true;
     }
 
     private static bool TryReadVector3(JToken token, out Vector3 value)

@@ -459,7 +459,7 @@ public sealed class MultiCuboidBlockEditorWindow : EditorWindow
         if (max.y <= min.y) min.y = Mathf.Max(0f, max.y - MinCuboidSize);
         if (max.z <= min.z) min.z = Mathf.Max(0f, max.z - MinCuboidSize);
 
-        return new BlockModelCuboid
+        BlockModelCuboid sanitized = new BlockModelCuboid
         {
             min = min,
             max = max,
@@ -475,6 +475,8 @@ public sealed class MultiCuboidBlockEditorWindow : EditorWindow
             textureBack = cuboid.textureBack,
           
         };
+        sanitized.CopyUvRectOverrideDataFrom(cuboid);
+        return sanitized;
     }
 
     private Vector3 SnapVector(Vector3 value)
@@ -996,7 +998,18 @@ internal static class MultiCuboidBlockPreviewResources
         Vector3 p2,
         Vector3 p3)
     {
-        Rect uvRect = GetTileUvRect(mapping.GetTileCoord(face), atlasTiles, atlasOriginTopLeft, atlasTexture);
+        Rect uvRect = BlockAtlasUvUtility.ResolveUvRect(mapping, face, atlasTiles, atlasOriginTopLeft);
+        if (atlasTexture != null && atlasTexture.width > 0 && atlasTexture.height > 0)
+        {
+            float insetU = 0.5f / atlasTexture.width;
+            float insetV = 0.5f / atlasTexture.height;
+            uvRect = Rect.MinMaxRect(
+                uvRect.xMin + insetU,
+                uvRect.yMin + insetV,
+                uvRect.xMax - insetU,
+                uvRect.yMax - insetV);
+        }
+
         uvs[startIndex + 0] = RemapUv(ResolveLocalFaceUv(face, p0), uvRect);
         uvs[startIndex + 1] = RemapUv(ResolveLocalFaceUv(face, p1), uvRect);
         uvs[startIndex + 2] = RemapUv(ResolveLocalFaceUv(face, p2), uvRect);
@@ -1029,37 +1042,6 @@ internal static class MultiCuboidBlockPreviewResources
             default:
                 return Vector2.zero;
         }
-    }
-
-    private static Rect GetTileUvRect(Vector2Int tile, Vector2Int atlasTiles, bool atlasOriginTopLeft, Texture atlasTexture)
-    {
-        int safeTilesX = Mathf.Max(1, atlasTiles.x);
-        int safeTilesY = Mathf.Max(1, atlasTiles.y);
-        int tileX = Mathf.Clamp(tile.x, 0, safeTilesX - 1);
-        int tileY = Mathf.Clamp(tile.y, 0, safeTilesY - 1);
-
-        float tileWidth = 1f / safeTilesX;
-        float tileHeight = 1f / safeTilesY;
-        float insetU = atlasTexture != null && atlasTexture.width > 0 ? 0.5f / atlasTexture.width : 0f;
-        float insetV = atlasTexture != null && atlasTexture.height > 0 ? 0.5f / atlasTexture.height : 0f;
-
-        float minU = tileX * tileWidth + insetU;
-        float maxU = (tileX + 1) * tileWidth - insetU;
-
-        float minV;
-        float maxV;
-        if (atlasOriginTopLeft)
-        {
-            minV = 1f - (tileY + 1) * tileHeight + insetV;
-            maxV = 1f - tileY * tileHeight - insetV;
-        }
-        else
-        {
-            minV = tileY * tileHeight + insetV;
-            maxV = (tileY + 1) * tileHeight - insetV;
-        }
-
-        return Rect.MinMaxRect(minU, minV, maxU, maxV);
     }
 
     private static Vector2 RemapUv(Vector2 localUv, Rect uvRect)

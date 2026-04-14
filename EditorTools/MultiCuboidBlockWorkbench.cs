@@ -604,6 +604,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             textureFront = existing.textureFront,
             textureBack = existing.textureBack
         };
+        cuboid.CopyUvRectOverrideDataFrom(existing);
 
         return SanitizeCuboid(cuboid, snapToGrid, snapStep);
     }
@@ -911,7 +912,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         EnsureAxisSize(ref min.y, ref max.y);
         EnsureAxisSize(ref min.z, ref max.z);
 
-        return new BlockModelCuboid
+        BlockModelCuboid sanitized = new BlockModelCuboid
         {
             min = min,
             max = max,
@@ -925,6 +926,8 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             textureFront = cuboid.textureFront,
             textureBack = cuboid.textureBack
         };
+        sanitized.CopyUvRectOverrideDataFrom(cuboid);
+        return sanitized;
     }
 
     private static void EnsureAxisSize(ref float min, ref float max)

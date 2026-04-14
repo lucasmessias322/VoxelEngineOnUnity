@@ -160,6 +160,17 @@ public struct BlockModelCuboid
         return fallbackMapping.TryGetUvRectData(face, out uvRectData);
     }
 
+    public void CopyUvRectOverrideDataFrom(BlockModelCuboid source)
+    {
+        textureTopUvRect = source.textureTopUvRect;
+        textureBottomUvRect = source.textureBottomUvRect;
+        textureRightUvRect = source.textureRightUvRect;
+        textureLeftUvRect = source.textureLeftUvRect;
+        textureFrontUvRect = source.textureFrontUvRect;
+        textureBackUvRect = source.textureBackUvRect;
+        runtimeUvRectOverridesInitialized = source.runtimeUvRectOverridesInitialized;
+    }
+
     private Vector2Int GetOverrideTileCoord(BlockFace face)
     {
         switch (face)
@@ -565,6 +576,7 @@ public class BlockDataSO : ScriptableObject
             textureFront = source.textureFront,
             textureBack = source.textureBack
         };
+        sanitized.CopyUvRectOverrideDataFrom(source);
         return true;
     }
 
@@ -916,6 +928,17 @@ public struct BlockTextureMapping
         }
 
         return BlockAtlasUvUtility.IsValidUvRectData(uvRectData);
+    }
+
+    public void CopyUvRectDataFrom(BlockTextureMapping source)
+    {
+        topUvRect = source.topUvRect;
+        bottomUvRect = source.bottomUvRect;
+        rightUvRect = source.rightUvRect;
+        leftUvRect = source.leftUvRect;
+        frontUvRect = source.frontUvRect;
+        backUvRect = source.backUvRect;
+        runtimeUvRectDataInitialized = source.runtimeUvRectDataInitialized;
     }
 }
 
@@ -1547,6 +1570,7 @@ public static class BlockShapeUtility
             textureFront = source.textureFront,
             textureBack = source.textureBack
         };
+        cuboid.CopyUvRectOverrideDataFrom(source);
         return true;
     }
 

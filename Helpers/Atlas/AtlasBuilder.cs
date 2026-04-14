@@ -121,16 +121,23 @@ public sealed class AtlasBuilder
         if (source == null)
             return null;
 
-        try
-        {
-            source.GetPixels32();
+        if (source.width <= 0 || source.height <= 0)
+            return null;
+
+        if (source.isReadable)
             return source;
-        }
-        catch (UnityException)
+
+        try
         {
             Texture2D copy = CreateReadableCopy(source);
             ownsCopy = copy != null;
             return copy;
+        }
+        catch (Exception ex)
+        {
+            throw new InvalidOperationException(
+                $"Nao foi possivel criar uma copia legivel da textura '{source.name}'.",
+                ex);
         }
     }
 
