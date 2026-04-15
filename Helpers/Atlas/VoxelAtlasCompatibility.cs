@@ -29,8 +29,10 @@ public static class VoxelAtlasCompatibility
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
 
-        bool updatedAnyMapping = ApplyBlockMappings(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
-        bool updatedAnyCuboid = ApplyMultiCuboidMappings(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
+        blockData.NormalizeBuiltInTextureEntryIds(generator);
+
+        bool updatedAnyMapping = ApplyBlockMappings(generator, blockData);
+        bool updatedAnyCuboid = ApplyMultiCuboidMappings(generator, blockData);
 
         if (updatedAnyMapping || updatedAnyCuboid || blockData.mappings == null)
             blockData.InitializeDictionary();
@@ -55,6 +57,8 @@ public static class VoxelAtlasCompatibility
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
 
+        blockData.NormalizeBuiltInTextureEntryIds(generator);
+
         bool updatedAnyMapping = CaptureBlockMappingEntryIds(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
         bool updatedAnyCuboid = CaptureMultiCuboidEntryIds(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
         return updatedAnyMapping || updatedAnyCuboid;
@@ -62,9 +66,7 @@ public static class VoxelAtlasCompatibility
 
     private static bool ApplyBlockMappings(
         TextureAtlasGenerator generator,
-        BlockDataSO blockData,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft)
+        BlockDataSO blockData)
     {
         if (blockData.blockTextures == null || blockData.blockTextures.Count == 0)
             return false;
@@ -73,7 +75,7 @@ public static class VoxelAtlasCompatibility
         for (int i = 0; i < blockData.blockTextures.Count; i++)
         {
             BlockTextureMapping mapping = blockData.blockTextures[i];
-            if (ApplyMapping(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft, ref mapping))
+            if (ApplyMapping(generator, blockData, ref mapping))
                 updated = true;
 
             blockData.blockTextures[i] = mapping;
@@ -84,9 +86,7 @@ public static class VoxelAtlasCompatibility
 
     private static bool ApplyMultiCuboidMappings(
         TextureAtlasGenerator generator,
-        BlockDataSO blockData,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft)
+        BlockDataSO blockData)
     {
         if (blockData.multiCuboidShapes == null || blockData.multiCuboidShapes.Count == 0)
             return false;
@@ -98,15 +98,13 @@ public static class VoxelAtlasCompatibility
             if (definition == null || definition.cuboids == null || definition.cuboids.Count == 0)
                 continue;
 
-            BlockTextureMapping? mappingResult = blockData.GetMapping(definition.blockType);
-            if (!mappingResult.HasValue)
+            if (!blockData.GetMapping(definition.blockType).HasValue)
                 continue;
 
-            BlockTextureMapping fallbackMapping = mappingResult.Value;
             for (int c = 0; c < definition.cuboids.Count; c++)
             {
                 BlockModelCuboid cuboid = definition.cuboids[c];
-                if (ApplyCuboid(generator, blockData, definition.blockType, c, legacyAtlasTiles, atlasOriginTopLeft, fallbackMapping, ref cuboid))
+                if (ApplyCuboid(generator, blockData, definition.blockType, c, ref cuboid))
                     updated = true;
 
                 definition.cuboids[c] = cuboid;
@@ -119,17 +117,15 @@ public static class VoxelAtlasCompatibility
     private static bool ApplyMapping(
         TextureAtlasGenerator generator,
         BlockDataSO blockData,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft,
         ref BlockTextureMapping mapping)
     {
         bool updated = false;
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Top), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Top);
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Bottom), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Bottom);
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Right), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Right);
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Left), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Left);
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Front), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Front);
-        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, mapping.GetTileCoord(BlockFace.Back), legacyAtlasTiles, atlasOriginTopLeft, ref mapping, BlockFace.Back);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Top);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Bottom);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Right);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Left);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Front);
+        updated |= TryAssignMappingRect(generator, blockData, mapping.blockType, ref mapping, BlockFace.Back);
         return updated;
     }
 
@@ -138,9 +134,6 @@ public static class VoxelAtlasCompatibility
         BlockDataSO blockData,
         BlockType blockType,
         int cuboidIndex,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft,
-        BlockTextureMapping fallbackMapping,
         ref BlockModelCuboid cuboid)
     {
         bool updated = false;
@@ -157,9 +150,6 @@ public static class VoxelAtlasCompatibility
                     blockType,
                     cuboidIndex,
                     face,
-                    cuboid.GetTileCoord(face, fallbackMapping),
-                    legacyAtlasTiles,
-                    atlasOriginTopLeft,
                     out Rect uvRect))
             {
                 continue;
@@ -188,8 +178,12 @@ public static class VoxelAtlasCompatibility
             for (int f = 0; f < SupportedFaces.Length; f++)
             {
                 BlockFace face = SupportedFaces[f];
-                if (blockData.TryGetTextureEntryId(mapping.blockType, face, out _))
+                if (blockData.TryGetResolvedTextureEntryId(generator, mapping.blockType, face, out string resolvedEntryId))
+                {
+                    if (blockData.SetTextureEntryId(mapping.blockType, face, resolvedEntryId))
+                        updated = true;
                     continue;
+                }
 
                 if (!generator.TryGetLegacyTileId(mapping.GetTileCoord(face), legacyAtlasTiles, atlasOriginTopLeft, out string entryId))
                     continue;
@@ -257,13 +251,10 @@ public static class VoxelAtlasCompatibility
         TextureAtlasGenerator generator,
         BlockDataSO blockData,
         BlockType blockType,
-        Vector2Int tileCoord,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft,
         ref BlockTextureMapping mapping,
         BlockFace face)
     {
-        if (!TryResolveMappingUvRect(generator, blockData, blockType, face, tileCoord, legacyAtlasTiles, atlasOriginTopLeft, out Rect uvRect))
+        if (!TryResolveMappingUvRect(generator, blockData, blockType, face, out Rect uvRect))
             return false;
 
         mapping.SetUvRectData(face, BlockAtlasUvUtility.RectToUvRectData(uvRect));
@@ -275,21 +266,19 @@ public static class VoxelAtlasCompatibility
         BlockDataSO blockData,
         BlockType blockType,
         BlockFace face,
-        Vector2Int tileCoord,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft,
         out Rect uvRect)
     {
         uvRect = default;
 
         if (blockData != null &&
-            blockData.TryGetTextureEntryId(blockType, face, out string entryId) &&
+            blockData.TryGetResolvedTextureEntryId(generator, blockType, face, out string entryId) &&
             generator.TryGetUv(entryId, out uvRect))
         {
+            blockData.SetTextureEntryId(blockType, face, entryId);
             return true;
         }
 
-        return generator.TryGetLegacyTileUv(tileCoord, legacyAtlasTiles, atlasOriginTopLeft, out uvRect);
+        return false;
     }
 
     private static bool TryResolveCuboidUvRect(
@@ -298,9 +287,6 @@ public static class VoxelAtlasCompatibility
         BlockType blockType,
         int cuboidIndex,
         BlockFace face,
-        Vector2Int tileCoord,
-        Vector2Int legacyAtlasTiles,
-        bool atlasOriginTopLeft,
         out Rect uvRect)
     {
         uvRect = default;
@@ -312,6 +298,8 @@ public static class VoxelAtlasCompatibility
             return true;
         }
 
-        return generator.TryGetLegacyTileUv(tileCoord, legacyAtlasTiles, atlasOriginTopLeft, out uvRect);
+        return blockData != null &&
+               blockData.TryGetResolvedTextureEntryId(generator, blockType, face, out string baseEntryId) &&
+               generator.TryGetUv(baseEntryId, out uvRect);
     }
 }

@@ -964,18 +964,6 @@ public static partial class MeshGenerator
             return attachmentSide == neighborAttachmentSide;
         }
 
-        private static Vector2Int ResolveWireDotTile(BlockTextureMapping mapping, Vector2Int lineTile)
-        {
-            Vector2Int configuredDotTile = mapping.GetTileCoord(BlockFace.Top);
-            if (configuredDotTile != lineTile)
-                return configuredDotTile;
-
-            if (lineTile.x > 0)
-                return new Vector2Int(lineTile.x - 1, lineTile.y);
-
-            return lineTile;
-        }
-
         private void AddWireSurfaceQuad(
             Vector3 origin,
             Vector3 planeP0,

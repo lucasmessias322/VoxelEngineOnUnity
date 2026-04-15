@@ -626,20 +626,7 @@ public static partial class MeshGenerator
 
                 ResolveAtlasRect(mapping, BlockFace.Front, invAtlasTilesX, invAtlasTilesY, out Vector2 lineAtlasUv, out Vector2 lineAtlasSize);
                 ResolveAtlasRect(mapping, BlockFace.Back, invAtlasTilesX, invAtlasTilesY, out Vector2 shortLineAtlasUv, out Vector2 shortLineAtlasSize);
-                Vector2Int lineTile = mapping.GetTileCoord(BlockFace.Front);
-                Vector2Int configuredDotTile = mapping.GetTileCoord(BlockFace.Top);
-                Vector2 dotAtlasUv;
-                Vector2 dotAtlasSize;
-                if (configuredDotTile != lineTile)
-                {
-                    ResolveAtlasRect(mapping, BlockFace.Top, invAtlasTilesX, invAtlasTilesY, out dotAtlasUv, out dotAtlasSize);
-                }
-                else
-                {
-                    Vector2Int dotTile = ResolveWireDotTile(mapping, lineTile);
-                    dotAtlasUv = new Vector2(dotTile.x * invAtlasTilesX, dotTile.y * invAtlasTilesY);
-                    dotAtlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
-                }
+                ResolveAtlasRect(mapping, BlockFace.Top, invAtlasTilesX, invAtlasTilesY, out Vector2 dotAtlasUv, out Vector2 dotAtlasSize);
 
                 if (wireHasTopOnCurrentCell)
                 {

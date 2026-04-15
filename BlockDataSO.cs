@@ -41,15 +41,15 @@ public struct BlockModelCuboid
     [Tooltip("Faces desenhadas para este cuboide. None e tratado como All para facilitar a criacao no Inspector.")]
     public BlockCuboidFaceMask faces;
 
-    [Tooltip("Faces que usam tile proprio neste cuboide. Faces nao marcadas continuam usando o mapping do bloco.")]
+    [Tooltip("Faces que usam textura propria neste cuboide. Faces nao marcadas continuam usando o mapping do bloco.")]
     public BlockCuboidFaceMask textureOverrideFaces;
 
-    public Vector2Int textureTop;
-    public Vector2Int textureBottom;
-    public Vector2Int textureRight;
-    public Vector2Int textureLeft;
-    public Vector2Int textureFront;
-    public Vector2Int textureBack;
+    [HideInInspector] public Vector2Int textureTop;
+    [HideInInspector] public Vector2Int textureBottom;
+    [HideInInspector] public Vector2Int textureRight;
+    [HideInInspector] public Vector2Int textureLeft;
+    [HideInInspector] public Vector2Int textureFront;
+    [HideInInspector] public Vector2Int textureBack;
 
     [SerializeField, HideInInspector] private Vector4 textureTopUvRect;
     [SerializeField, HideInInspector] private Vector4 textureBottomUvRect;
@@ -561,6 +561,15 @@ public class BlockDataSO : ScriptableObject
 
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
+    private static readonly BlockFace[] SupportedTextureFaces =
+    {
+        BlockFace.Top,
+        BlockFace.Bottom,
+        BlockFace.Right,
+        BlockFace.Left,
+        BlockFace.Front,
+        BlockFace.Back
+    };
 
     private void OnEnable()
     {
@@ -579,6 +588,27 @@ public class BlockDataSO : ScriptableObject
         return record != null &&
                record.entryIds != null &&
                record.entryIds.TryGet(face, out entryId);
+    }
+
+    public bool TryGetResolvedTextureEntryId(TextureAtlasGenerator generator, BlockType blockType, BlockFace face, out string entryId)
+    {
+        entryId = string.Empty;
+
+        if (TryGetTextureEntryId(blockType, face, out string explicitEntryId) &&
+            (generator == null || generator.TryGetUv(explicitEntryId, out _)))
+        {
+            entryId = explicitEntryId;
+            return true;
+        }
+
+        if (BlockTextureEntryIdResolver.TryGetCanonicalEntryId(blockType, face, out string canonicalEntryId) &&
+            (generator == null || generator.TryGetUv(canonicalEntryId, out _)))
+        {
+            entryId = canonicalEntryId;
+            return true;
+        }
+
+        return false;
     }
 
     public bool SetTextureEntryId(BlockType blockType, BlockFace face, string entryId)
@@ -633,6 +663,48 @@ public class BlockDataSO : ScriptableObject
                 changed = true;
             }
         }
+
+        return changed;
+    }
+
+    [ContextMenu("Normalize Built-In Texture Entry IDs")]
+    public void NormalizeBuiltInTextureEntryIdsContextMenu()
+    {
+        NormalizeBuiltInTextureEntryIds(null);
+    }
+
+    public bool NormalizeBuiltInTextureEntryIds(TextureAtlasGenerator generator)
+    {
+        if (blockTextures == null || blockTextures.Count == 0)
+            return false;
+
+        bool changed = false;
+        for (int i = 0; i < blockTextures.Count; i++)
+        {
+            BlockType blockType = blockTextures[i].blockType;
+            for (int f = 0; f < SupportedTextureFaces.Length; f++)
+            {
+                BlockFace face = SupportedTextureFaces[f];
+                if (TryGetTextureEntryId(blockType, face, out string explicitEntryId) &&
+                    (generator == null || generator.TryGetUv(explicitEntryId, out _)))
+                {
+                    continue;
+                }
+
+                if (!BlockTextureEntryIdResolver.TryGetCanonicalEntryId(blockType, face, out string entryId))
+                    continue;
+
+                if (generator != null && !generator.TryGetUv(entryId, out _))
+                    continue;
+
+                changed |= SetTextureEntryId(blockType, face, entryId);
+            }
+        }
+
+#if UNITY_EDITOR
+        if (changed && !Application.isPlaying)
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
 
         return changed;
     }
@@ -1002,12 +1074,12 @@ public class BlockDataSO : ScriptableObject
 public struct BlockTextureMapping
 {
     public BlockType blockType;
-    public Vector2Int top;    // coordenada no atlas para a face de cima (tileX, tileY)
-    public Vector2Int bottom; // coordenada no atlas para a face de baixo
-    public Vector2Int right;  // face +X
-    public Vector2Int left;   // face -X
-    public Vector2Int front;  // face +Z
-    public Vector2Int back;   // face -Z
+    [HideInInspector] public Vector2Int top;    // legado: coordenada no atlas para a face de cima (tileX, tileY)
+    [HideInInspector] public Vector2Int bottom; // legado: coordenada no atlas para a face de baixo
+    [HideInInspector] public Vector2Int right;  // legado: face +X
+    [HideInInspector] public Vector2Int left;   // legado: face -X
+    [HideInInspector] public Vector2Int front;  // legado: face +Z
+    [HideInInspector] public Vector2Int back;   // legado: face -Z
 
     [HideInInspector] public Vector2Int side; // legado: usado para migrar assets antigos
     [SerializeField, HideInInspector] private bool directionalSideDataInitialized;
@@ -1252,7 +1324,7 @@ public static class BlockAtlasUvUtility
         if (mapping.TryGetUvRectData(face, out Vector4 uvRectData))
             return uvRectData;
 
-        return BuildLegacyUvRectData(mapping.GetTileCoord(face), atlasTiles, atlasOriginTopLeft);
+        return default;
     }
 
     public static Vector4 ResolveUvRectData(
@@ -1265,7 +1337,7 @@ public static class BlockAtlasUvUtility
         if (cuboid.TryGetUvRectData(face, fallbackMapping, out Vector4 uvRectData))
             return uvRectData;
 
-        return BuildLegacyUvRectData(cuboid.GetTileCoord(face, fallbackMapping), atlasTiles, atlasOriginTopLeft);
+        return default;
     }
 
     public static Rect ResolveUvRect(

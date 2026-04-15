@@ -186,9 +186,8 @@ public static partial class MeshGenerator
                 return;
             }
 
-            Vector2Int tile = mapping.GetTileCoord(face);
-            atlasOrigin = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
-            atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
+            atlasOrigin = Vector2.zero;
+            atlasSize = Vector2.zero;
         }
 
         private static void ResolveAtlasRect(
@@ -207,9 +206,8 @@ public static partial class MeshGenerator
                 return;
             }
 
-            Vector2Int tile = cuboid.GetTileCoord(face, fallbackMapping);
-            atlasOrigin = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
-            atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
+            atlasOrigin = Vector2.zero;
+            atlasSize = Vector2.zero;
         }
 
         private ulong ComputeVisibilityMask(NativeArray<byte> occlusionState, NativeArray<int> queue)
