@@ -673,6 +673,12 @@ public class BlockDataSO : ScriptableObject
         NormalizeBuiltInTextureEntryIds(null);
     }
 
+    [ContextMenu("Clear Legacy Texture Tile Coords")]
+    public void ClearLegacyTextureTileCoordsContextMenu()
+    {
+        ClearLegacyTextureTileCoords();
+    }
+
     public bool NormalizeBuiltInTextureEntryIds(TextureAtlasGenerator generator)
     {
         if (blockTextures == null || blockTextures.Count == 0)
@@ -698,6 +704,57 @@ public class BlockDataSO : ScriptableObject
                     continue;
 
                 changed |= SetTextureEntryId(blockType, face, entryId);
+            }
+        }
+
+#if UNITY_EDITOR
+        if (changed && !Application.isPlaying)
+            UnityEditor.EditorUtility.SetDirty(this);
+#endif
+
+        return changed;
+    }
+
+    public bool ClearLegacyTextureTileCoords()
+    {
+        bool changed = false;
+
+        if (blockTextures != null)
+        {
+            for (int i = 0; i < blockTextures.Count; i++)
+            {
+                BlockTextureMapping mapping = blockTextures[i];
+                if (!HasResolvedTextureEntryIdsForAllFaces(mapping.blockType))
+                    continue;
+
+                if (!mapping.TryClearLegacyTextureTileCoords())
+                    continue;
+
+                blockTextures[i] = mapping;
+                changed = true;
+            }
+        }
+
+        if (multiCuboidShapes != null)
+        {
+            for (int i = 0; i < multiCuboidShapes.Count; i++)
+            {
+                BlockMultiCuboidDefinition definition = multiCuboidShapes[i];
+                if (definition == null || definition.cuboids == null)
+                    continue;
+
+                for (int c = 0; c < definition.cuboids.Count; c++)
+                {
+                    BlockModelCuboid cuboid = definition.cuboids[c];
+                    if (!CanClearLegacyCuboidTextureTileCoords(definition.blockType, c, cuboid))
+                        continue;
+
+                    if (!TryClearLegacyTextureTileCoords(ref cuboid))
+                        continue;
+
+                    definition.cuboids[c] = cuboid;
+                    changed = true;
+                }
             }
         }
 
@@ -1068,6 +1125,59 @@ public class BlockDataSO : ScriptableObject
             blockTextures[i] = mapping;
         }
     }
+
+    private bool HasResolvedTextureEntryIdsForAllFaces(BlockType blockType)
+    {
+        for (int i = 0; i < SupportedTextureFaces.Length; i++)
+        {
+            if (!TryGetResolvedTextureEntryId(null, blockType, SupportedTextureFaces[i], out _))
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool CanClearLegacyCuboidTextureTileCoords(BlockType blockType, int cuboidIndex, BlockModelCuboid cuboid)
+    {
+        if (cuboid.EffectiveTextureOverrideFaces == BlockCuboidFaceMask.None)
+            return HasAnyLegacyTextureTileCoords(cuboid);
+
+        for (int i = 0; i < SupportedTextureFaces.Length; i++)
+        {
+            BlockFace face = SupportedTextureFaces[i];
+            if (!cuboid.HasTextureOverride(face))
+                continue;
+
+            if (!TryGetCuboidTextureEntryId(blockType, cuboidIndex, face, out _))
+                return false;
+        }
+
+        return true;
+    }
+
+    private static bool HasAnyLegacyTextureTileCoords(BlockModelCuboid cuboid)
+    {
+        return cuboid.textureTop != Vector2Int.zero ||
+               cuboid.textureBottom != Vector2Int.zero ||
+               cuboid.textureRight != Vector2Int.zero ||
+               cuboid.textureLeft != Vector2Int.zero ||
+               cuboid.textureFront != Vector2Int.zero ||
+               cuboid.textureBack != Vector2Int.zero;
+    }
+
+    private static bool TryClearLegacyTextureTileCoords(ref BlockModelCuboid cuboid)
+    {
+        if (!HasAnyLegacyTextureTileCoords(cuboid))
+            return false;
+
+        cuboid.textureTop = Vector2Int.zero;
+        cuboid.textureBottom = Vector2Int.zero;
+        cuboid.textureRight = Vector2Int.zero;
+        cuboid.textureLeft = Vector2Int.zero;
+        cuboid.textureFront = Vector2Int.zero;
+        cuboid.textureBack = Vector2Int.zero;
+        return true;
+    }
 }
 
 [System.Serializable]
@@ -1278,6 +1388,29 @@ public struct BlockTextureMapping
         frontUvRect = source.frontUvRect;
         backUvRect = source.backUvRect;
         runtimeUvRectDataInitialized = source.runtimeUvRectDataInitialized;
+    }
+
+    public bool TryClearLegacyTextureTileCoords()
+    {
+        if (top == Vector2Int.zero &&
+            bottom == Vector2Int.zero &&
+            right == Vector2Int.zero &&
+            left == Vector2Int.zero &&
+            front == Vector2Int.zero &&
+            back == Vector2Int.zero &&
+            side == Vector2Int.zero)
+        {
+            return false;
+        }
+
+        top = Vector2Int.zero;
+        bottom = Vector2Int.zero;
+        right = Vector2Int.zero;
+        left = Vector2Int.zero;
+        front = Vector2Int.zero;
+        back = Vector2Int.zero;
+        side = Vector2Int.zero;
+        return true;
     }
 }
 

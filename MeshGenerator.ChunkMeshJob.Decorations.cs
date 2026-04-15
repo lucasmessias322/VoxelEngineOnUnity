@@ -2051,9 +2051,8 @@ public static partial class MeshGenerator
         {
             return a.usesExplicitAppearance == b.usesExplicitAppearance &&
                    (!a.usesExplicitAppearance ||
-                    (a.tileX == b.tileX &&
-                     a.tileY == b.tileY &&
-                     a.tint == b.tint));
+                    (a.tint == b.tint &&
+                     math.lengthsq(a.explicitUvRectData - b.explicitUvRectData) <= 1e-10f));
         }
 
         private static void CullHiddenShapeFaceRects(
@@ -2280,7 +2279,8 @@ public static partial class MeshGenerator
                 tileX = source.tileX,
                 tileY = source.tileY,
                 tint = source.tint,
-                usesExplicitAppearance = source.usesExplicitAppearance
+                usesExplicitAppearance = source.usesExplicitAppearance,
+                explicitUvRectData = source.explicitUvRectData
             });
         }
 
