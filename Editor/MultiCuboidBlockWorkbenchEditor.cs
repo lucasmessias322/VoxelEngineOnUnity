@@ -2225,62 +2225,7 @@ internal static class BlockbenchMultiCuboidImporter
         if (generator == null)
             return;
 
-        if (!ShouldUseTextureEntries(generator))
-        {
-            if (generator.blockTextures != null && generator.blockTextures.Exists(texture => texture != null))
-                generator.FillTextureEntriesFromLegacy();
-        }
-
-        if (CanRetireLegacyBlockTextures(generator))
-            generator.blockTextures.Clear();
-
         generator.GetWritableTextureEntries();
-    }
-
-    private static bool ShouldUseTextureEntries(TextureAtlasGenerator generator)
-    {
-        return generator != null && generator.HasConfiguredTextureEntries();
-    }
-
-    private static bool CanRetireLegacyBlockTextures(TextureAtlasGenerator generator)
-    {
-        if (generator == null || generator.blockTextures == null || generator.blockTextures.Count == 0)
-            return false;
-
-        List<AtlasTextureEntry> configuredEntries = generator.GetAllTextureEntriesSnapshot();
-        if (configuredEntries == null || configuredEntries.Count == 0)
-            return false;
-
-        for (int i = 0; i < generator.blockTextures.Count; i++)
-        {
-            Texture2D legacyTexture = generator.blockTextures[i];
-            if (legacyTexture == null)
-                continue;
-
-            bool foundMatch = false;
-            for (int e = 0; e < configuredEntries.Count; e++)
-            {
-                AtlasTextureEntry entry = configuredEntries[e];
-                if (entry == null ||
-                    entry.texture == null ||
-                    entry.useSourceRect ||
-                    entry.useUvSampling)
-                {
-                    continue;
-                }
-
-                if (ReferenceEquals(entry.texture, legacyTexture))
-                {
-                    foundMatch = true;
-                    break;
-                }
-            }
-
-            if (!foundMatch)
-                return false;
-        }
-
-        return true;
     }
 
     private static Texture2D EnsureSourceTextureAsset(BlockType blockType, BlockbenchTextureSource source)
@@ -2432,45 +2377,6 @@ internal static class BlockbenchMultiCuboidImporter
                 continue;
 
             if (string.Equals(current.id, request.entryId, StringComparison.Ordinal))
-                return legacyIndex;
-
-            legacyIndex++;
-        }
-
-        return -1;
-    }
-
-    private static int RegisterLegacyTexture(TextureAtlasGenerator generator, Texture2D texture)
-    {
-        if (generator == null || texture == null)
-            return -1;
-
-        if (generator.blockTextures == null)
-            generator.blockTextures = new List<Texture2D>();
-
-        int entryIndex = -1;
-        for (int i = 0; i < generator.blockTextures.Count; i++)
-        {
-            if (!ReferenceEquals(generator.blockTextures[i], texture))
-                continue;
-
-            entryIndex = i;
-            break;
-        }
-
-        if (entryIndex < 0)
-        {
-            generator.blockTextures.Add(texture);
-            entryIndex = generator.blockTextures.Count - 1;
-        }
-
-        int legacyIndex = 0;
-        for (int i = 0; i < generator.blockTextures.Count; i++)
-        {
-            if (generator.blockTextures[i] == null)
-                continue;
-
-            if (i == entryIndex)
                 return legacyIndex;
 
             legacyIndex++;

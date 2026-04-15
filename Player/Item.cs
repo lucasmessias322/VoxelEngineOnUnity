@@ -12,7 +12,7 @@ public class Item : ScriptableObject
 {
     [Header("Info")]
     public string itemName;
-    [Tooltip("Auto usa bloco isometrico para itens mapeados como bloco. ItemIconOnly sempre usa o atlas do item.")]
+    [Tooltip("Auto usa sprite direto quando existir, senao bloco isometrico para itens mapeados como bloco. ItemIconOnly ignora o bloco e usa sprite/atlas. IsometricBlockOnly sempre usa o bloco.")]
     public InventoryIconMode inventoryIconMode = InventoryIconMode.Auto;
 
     [Header("Stack")]
@@ -21,6 +21,10 @@ public class Item : ScriptableObject
     [Header("Tool")]
     public ToolType toolType = ToolType.None;
     [Min(1f)] public float toolEfficiency = 1f;
+
+    [Header("Visual")]
+    [Tooltip("Sprite principal do item. Quando definido, UI, drop no mundo e item plano na mao usam este sprite direto, sem depender de coordenadas de atlas.")]
+    public Sprite itemSprite;
 
     [Header("Held Visual")]
     [Tooltip("Optional prefab shown in the player's hand when this item is selected.")]
@@ -40,10 +44,22 @@ public class Item : ScriptableObject
 
 public static class ItemIconResolver
 {
+    public static bool TryGetDirectSprite(Item item, out Sprite sprite)
+    {
+        sprite = item != null ? item.itemSprite : null;
+        return sprite != null;
+    }
+
     public static Sprite ResolveForUI(Item item)
     {
         if (item == null)
             return null;
+
+        if (item.inventoryIconMode == InventoryIconMode.IsometricBlockOnly)
+            return TryResolveBlockIcon(item, out Sprite forcedBlockIcon) ? forcedBlockIcon : null;
+
+        if (TryGetDirectSprite(item, out Sprite directSprite))
+            return directSprite;
 
         if (item.inventoryIconMode == InventoryIconMode.ItemIconOnly)
             return ResolveFlatItemIcon(item);

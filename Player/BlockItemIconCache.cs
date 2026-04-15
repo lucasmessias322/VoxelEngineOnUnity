@@ -48,13 +48,30 @@ public static class BlockItemIconCache
     private struct IconFace3D
     {
         public IconTextureSlot textureSlot;
+        public Color32[] sourcePixels;
+        public int sourceWidth;
+        public int sourceHeight;
         public float shade;
         public IconVertex3D[] vertices;
         public float sortKey;
 
         public IconFace3D(IconTextureSlot textureSlot, float shade, IconVertex3D[] vertices)
+            : this(textureSlot, shade, vertices, null, 0, 0)
+        {
+        }
+
+        public IconFace3D(
+            IconTextureSlot textureSlot,
+            float shade,
+            IconVertex3D[] vertices,
+            Color32[] sourcePixels,
+            int sourceWidth,
+            int sourceHeight)
         {
             this.textureSlot = textureSlot;
+            this.sourcePixels = sourcePixels;
+            this.sourceWidth = sourceWidth;
+            this.sourceHeight = sourceHeight;
             this.shade = shade;
             this.vertices = vertices;
 
@@ -164,7 +181,10 @@ public static class BlockItemIconCache
             rightPixels,
             rightWidth,
             rightHeight,
-            mapping);
+            mapping,
+            atlasTexture,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft);
 
         Texture2D iconTexture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false, false);
         iconTexture.name = $"BlockIcon_{blockType}";
@@ -277,6 +297,47 @@ public static class BlockItemIconCache
             face,
             atlasTiles,
             atlasCoordinatesStartTopLeft);
+        return TryExtractFacePixels(atlasTexture, uvRectData, out tilePixels, out tileWidth, out tileHeight);
+    }
+
+    private static bool TryExtractFacePixels(
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        BlockModelCuboid cuboid,
+        BlockTextureMapping fallbackMapping,
+        BlockFace face,
+        bool atlasCoordinatesStartTopLeft,
+        out Color32[] tilePixels,
+        out int tileWidth,
+        out int tileHeight)
+    {
+        tilePixels = null;
+        tileWidth = 0;
+        tileHeight = 0;
+
+        if (atlasTexture == null)
+            return false;
+
+        Vector4 uvRectData = BlockAtlasUvUtility.ResolveUvRectData(
+            cuboid,
+            face,
+            fallbackMapping,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft);
+        return TryExtractFacePixels(atlasTexture, uvRectData, out tilePixels, out tileWidth, out tileHeight);
+    }
+
+    private static bool TryExtractFacePixels(
+        Texture atlasTexture,
+        Vector4 uvRectData,
+        out Color32[] tilePixels,
+        out int tileWidth,
+        out int tileHeight)
+    {
+        tilePixels = null;
+        tileWidth = 0;
+        tileHeight = 0;
+
         if (!BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
             return false;
 
@@ -409,9 +470,12 @@ public static class BlockItemIconCache
         Color32[] rightPixels,
         int rightWidth,
         int rightHeight,
-        BlockTextureMapping mapping)
+        BlockTextureMapping mapping,
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        bool atlasCoordinatesStartTopLeft)
     {
-        List<IconFace3D> faces = BuildFacesForShape(mapping);
+        List<IconFace3D> faces = BuildFacesForShape(mapping, atlasTexture, atlasTiles, atlasCoordinatesStartTopLeft);
         if (faces.Count == 0)
             AddVisibleBoxFaces(faces, Vector3.zero, Vector3.one);
 
@@ -430,7 +494,11 @@ public static class BlockItemIconCache
             faces);
     }
 
-    private static List<IconFace3D> BuildFacesForShape(BlockTextureMapping mapping)
+    private static List<IconFace3D> BuildFacesForShape(
+        BlockTextureMapping mapping,
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        bool atlasCoordinatesStartTopLeft)
     {
         List<IconFace3D> faces = new List<IconFace3D>(12);
         switch (BlockShapeUtility.GetEffectiveRenderShape(mapping))
@@ -441,7 +509,7 @@ public static class BlockItemIconCache
                 break;
 
             case BlockRenderShape.MultiCuboid:
-                AppendMultiCuboidFaces(faces, mapping);
+                AppendMultiCuboidFaces(faces, mapping, atlasTexture, atlasTiles, atlasCoordinatesStartTopLeft);
                 break;
 
             case BlockRenderShape.Stairs:
@@ -468,7 +536,12 @@ public static class BlockItemIconCache
         return faces;
     }
 
-    private static void AppendMultiCuboidFaces(List<IconFace3D> faces, BlockTextureMapping mapping)
+    private static void AppendMultiCuboidFaces(
+        List<IconFace3D> faces,
+        BlockTextureMapping mapping,
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        bool atlasCoordinatesStartTopLeft)
     {
         World world = World.Instance;
         BlockModelCuboid[] cuboids = world != null && world.blockData != null
@@ -487,6 +560,12 @@ public static class BlockItemIconCache
         {
             if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, BlockPlacementAxis.Y, out ShapeBox box))
                 continue;
+
+            if (BlockShapeUtility.TryGetMultiCuboidModelCuboid(mapping, cuboids, i, out BlockModelCuboid cuboid))
+            {
+                AddVisibleBoxFaces(faces, box.min, box.max, cuboid, mapping, atlasTexture, atlasTiles, atlasCoordinatesStartTopLeft);
+                continue;
+            }
 
             AddVisibleBoxFaces(faces, box.min, box.max);
         }
@@ -536,22 +615,28 @@ public static class BlockItemIconCache
         for (int i = 0; i < faces.Count; i++)
         {
             IconFace3D face = faces[i];
-            if (!TryResolveFaceTexture(
-                    face.textureSlot,
-                    topPixels,
-                    topWidth,
-                    topHeight,
-                    frontPixels,
-                    frontWidth,
-                    frontHeight,
-                    rightPixels,
-                    rightWidth,
-                    rightHeight,
-                    out Color32[] sourcePixels,
-                    out int sourceWidth,
-                    out int sourceHeight))
+            Color32[] sourcePixels = face.sourcePixels;
+            int sourceWidth = face.sourceWidth;
+            int sourceHeight = face.sourceHeight;
+            if (sourcePixels == null || sourceWidth <= 0 || sourceHeight <= 0)
             {
-                continue;
+                if (!TryResolveFaceTexture(
+                        face.textureSlot,
+                        topPixels,
+                        topWidth,
+                        topHeight,
+                        frontPixels,
+                        frontWidth,
+                        frontHeight,
+                        rightPixels,
+                        rightWidth,
+                        rightHeight,
+                        out sourcePixels,
+                        out sourceWidth,
+                        out sourceHeight))
+                {
+                    continue;
+                }
             }
 
             FaceVertex[] projectedVertices = new FaceVertex[face.vertices.Length];
@@ -720,12 +805,128 @@ public static class BlockItemIconCache
             MakeVertex(right3, new Vector2(0f, 0f)));
     }
 
+    private static void AddVisibleBoxFaces(
+        List<IconFace3D> faces,
+        Vector3 min,
+        Vector3 max,
+        BlockModelCuboid cuboid,
+        BlockTextureMapping mapping,
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        bool atlasCoordinatesStartTopLeft)
+    {
+        Vector3 top0 = new Vector3(min.x, max.y, min.z);
+        Vector3 top1 = new Vector3(max.x, max.y, min.z);
+        Vector3 top2 = new Vector3(max.x, max.y, max.z);
+        Vector3 top3 = new Vector3(min.x, max.y, max.z);
+        AddVisibleBoxFace(
+            faces,
+            cuboid,
+            mapping,
+            atlasTexture,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft,
+            BlockFace.Top,
+            IconTextureSlot.Top,
+            TopShade,
+            MakeVertex(top0, new Vector2(0f, 0f)),
+            MakeVertex(top1, new Vector2(1f, 0f)),
+            MakeVertex(top2, new Vector2(1f, 1f)),
+            MakeVertex(top3, new Vector2(0f, 1f)));
+
+        Vector3 front0 = new Vector3(min.x, max.y, max.z);
+        Vector3 front1 = new Vector3(max.x, max.y, max.z);
+        Vector3 front2 = new Vector3(max.x, min.y, max.z);
+        Vector3 front3 = new Vector3(min.x, min.y, max.z);
+        AddVisibleBoxFace(
+            faces,
+            cuboid,
+            mapping,
+            atlasTexture,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft,
+            BlockFace.Front,
+            IconTextureSlot.Front,
+            LeftShade,
+            MakeVertex(front0, new Vector2(0f, 1f)),
+            MakeVertex(front1, new Vector2(1f, 1f)),
+            MakeVertex(front2, new Vector2(1f, 0f)),
+            MakeVertex(front3, new Vector2(0f, 0f)));
+
+        Vector3 right0 = new Vector3(max.x, max.y, min.z);
+        Vector3 right1 = new Vector3(max.x, max.y, max.z);
+        Vector3 right2 = new Vector3(max.x, min.y, max.z);
+        Vector3 right3 = new Vector3(max.x, min.y, min.z);
+        AddVisibleBoxFace(
+            faces,
+            cuboid,
+            mapping,
+            atlasTexture,
+            atlasTiles,
+            atlasCoordinatesStartTopLeft,
+            BlockFace.Right,
+            IconTextureSlot.Right,
+            RightShade,
+            MakeVertex(right0, new Vector2(0f, 1f)),
+            MakeVertex(right1, new Vector2(1f, 1f)),
+            MakeVertex(right2, new Vector2(1f, 0f)),
+            MakeVertex(right3, new Vector2(0f, 0f)));
+    }
+
+    private static void AddVisibleBoxFace(
+        List<IconFace3D> faces,
+        BlockModelCuboid cuboid,
+        BlockTextureMapping mapping,
+        Texture atlasTexture,
+        Vector2Int atlasTiles,
+        bool atlasCoordinatesStartTopLeft,
+        BlockFace face,
+        IconTextureSlot textureSlot,
+        float shade,
+        params IconVertex3D[] vertices)
+    {
+        if (!cuboid.HasFace(face))
+            return;
+
+        if (TryExtractFacePixels(
+                atlasTexture,
+                atlasTiles,
+                cuboid,
+                mapping,
+                face,
+                atlasCoordinatesStartTopLeft,
+                out Color32[] facePixels,
+                out int faceWidth,
+                out int faceHeight))
+        {
+            AddFace(faces, textureSlot, shade, facePixels, faceWidth, faceHeight, vertices);
+            return;
+        }
+
+        AddFace(faces, textureSlot, shade, vertices);
+    }
+
     private static void AddFace(List<IconFace3D> faces, IconTextureSlot textureSlot, float shade, params IconVertex3D[] vertices)
     {
         if (faces == null || vertices == null || vertices.Length < 3)
             return;
 
         faces.Add(new IconFace3D(textureSlot, shade, vertices));
+    }
+
+    private static void AddFace(
+        List<IconFace3D> faces,
+        IconTextureSlot textureSlot,
+        float shade,
+        Color32[] sourcePixels,
+        int sourceWidth,
+        int sourceHeight,
+        params IconVertex3D[] vertices)
+    {
+        if (faces == null || vertices == null || vertices.Length < 3)
+            return;
+
+        faces.Add(new IconFace3D(textureSlot, shade, vertices, sourcePixels, sourceWidth, sourceHeight));
     }
 
     private static IconVertex3D MakeVertex(Vector3 position, Vector2 uv)

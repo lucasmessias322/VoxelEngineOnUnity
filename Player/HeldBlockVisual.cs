@@ -10,6 +10,7 @@ public class HeldBlockVisual : MonoBehaviour
     private const string BlockVisualName = "BlockVisual";
     private const string FlatItemVisualName = "FlatItemVisual";
     private const string HeldPrefabRootName = "HeldPrefabRoot";
+    private const int MaxGeneratedItemPixels = 4096;
 
     private enum HeldVisualKind
     {
@@ -44,6 +45,10 @@ public class HeldBlockVisual : MonoBehaviour
     [Header("Flat Item Rendering")]
     [Tooltip("Material usado para renderizar itens planos na mao. A textura do item sera aplicada por renderer em runtime.")]
     [SerializeField] private Material flatItemMaterial;
+    [Tooltip("Quando ligado, itens 2D usam uma extrusao fina por alpha, parecida com o modelo generated do Minecraft.")]
+    [SerializeField] private bool useGeneratedItemDepth = true;
+    [Min(0.001f)] [SerializeField] private float generatedItemThickness = 0.0625f;
+    [Range(0f, 1f)] [SerializeField] private float generatedItemAlphaThreshold = 0.1f;
 
     [Header("Player Arm")]
     [Tooltip("Renderer da malha do braco do player. Apenas a mesh sera ativada/desativada.")]
@@ -53,6 +58,7 @@ public class HeldBlockVisual : MonoBehaviour
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
+    private readonly Dictionary<Item, Mesh> spriteFlatItemMeshCache = new Dictionary<Item, Mesh>();
 
     private GameObject followRoot;
     private GameObject visualRoot;
@@ -63,6 +69,7 @@ public class HeldBlockVisual : MonoBehaviour
     private MeshFilter flatItemMeshFilter;
     private MeshRenderer flatItemMeshRenderer;
     private MaterialPropertyBlock flatItemPropertyBlock;
+    private Material runtimeFlatItemMaterial;
     private GameObject heldPrefabInstance;
     private GameObject heldPrefabVisualObject;
     private GameObject heldPrefabSource;
@@ -116,6 +123,10 @@ public class HeldBlockVisual : MonoBehaviour
         DestroyCachedMeshes(blockMeshCache);
         blockMaterialIndexCache.Clear();
         DestroyCachedMeshes(atlasFlatItemMeshCache);
+        DestroyCachedMeshes(spriteFlatItemMeshCache);
+
+        if (runtimeFlatItemMaterial != null)
+            Destroy(runtimeFlatItemMaterial);
 
         ClearHeldPrefabInstance();
 
@@ -485,7 +496,8 @@ public class HeldBlockVisual : MonoBehaviour
 
     private bool HasFlatItemVisual(Item selectedItem)
     {
-        return selectedItem != null && HasAtlasFlatItem(selectedItem);
+        return selectedItem != null &&
+               (HasDirectFlatItemSprite(selectedItem) || HasAtlasFlatItem(selectedItem));
     }
 
     private bool ShowBlock(BlockType blockType)
@@ -669,6 +681,19 @@ public class HeldBlockVisual : MonoBehaviour
         return atlasData.HasMapping(item);
     }
 
+    private bool HasDirectFlatItemSprite(Item item)
+    {
+        return TryGetDirectFlatItemSprite(item, out _);
+    }
+
+    private static bool TryGetDirectFlatItemSprite(Item item, out Sprite sprite)
+    {
+        sprite = null;
+        return item != null &&
+               item.inventoryIconMode != InventoryIconMode.IsometricBlockOnly &&
+               ItemIconResolver.TryGetDirectSprite(item, out sprite);
+    }
+
     private bool TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData)
     {
         atlasData = itemAtlasData;
@@ -684,16 +709,29 @@ public class HeldBlockVisual : MonoBehaviour
         if (item == null)
             return null;
 
+        if (TryGetDirectFlatItemSprite(item, out Sprite directSprite))
+        {
+            Mesh spriteMesh = GetOrCreateSpriteFlatItemMesh(item, directSprite);
+            if (spriteMesh != null && directSprite.texture != null)
+            {
+                renderTexture = directSprite.texture;
+                return spriteMesh;
+            }
+        }
+
         if (TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData) &&
             atlasData.TryGetUvRect(item, out Rect atlasUvRect, applyInset: false) &&
             atlasData.TryGetAspect(item, out float atlasAspect))
         {
-            Mesh atlasMesh = GetOrCreateAtlasFlatItemMesh(item, atlasUvRect, atlasAspect);
-            if (atlasMesh == null)
-                return null;
-
             if (atlasData.TryGetTexture(out Texture2D atlasTexture) && atlasTexture != null)
             {
+                Rect atlasPixelRect = default;
+                atlasData.TryGetPixelRect(item, out atlasPixelRect, applyInset: false);
+
+                Mesh atlasMesh = GetOrCreateAtlasFlatItemMesh(item, atlasTexture, atlasPixelRect, atlasUvRect, atlasAspect);
+                if (atlasMesh == null)
+                    return null;
+
                 renderTexture = atlasTexture;
                 return atlasMesh;
             }
@@ -715,10 +753,10 @@ public class HeldBlockVisual : MonoBehaviour
             return atlasMaterial;
         }
 
-        return null;
+        return GetOrCreateRuntimeFlatItemMaterial();
     }
 
-    private Mesh GetOrCreateAtlasFlatItemMesh(Item item, Rect uvRect, float aspect)
+    private Mesh GetOrCreateAtlasFlatItemMesh(Item item, Texture2D texture, Rect pixelRect, Rect uvRect, float aspect)
     {
         if (item == null)
             return null;
@@ -726,13 +764,344 @@ public class HeldBlockVisual : MonoBehaviour
         if (atlasFlatItemMeshCache.TryGetValue(item, out Mesh cachedMesh) && cachedMesh != null)
             return cachedMesh;
 
-        Mesh mesh = BuildFlatItemMesh(aspect, uvRect);
+        Mesh mesh = BuildPreferredFlatItemMesh(texture, pixelRect, uvRect, aspect);
         if (mesh == null)
             return null;
 
         mesh.name = $"HeldFlatItemAtlas_{item.name}";
         atlasFlatItemMeshCache[item] = mesh;
         return mesh;
+    }
+
+    private Mesh GetOrCreateSpriteFlatItemMesh(Item item, Sprite sprite)
+    {
+        if (item == null || sprite == null)
+            return null;
+
+        if (spriteFlatItemMeshCache.TryGetValue(item, out Mesh cachedMesh) && cachedMesh != null)
+            return cachedMesh;
+
+        if (!TryGetSpriteUvRect(sprite, out Rect uvRect))
+            return null;
+
+        Rect pixelRect = sprite.textureRect;
+        float aspect = Mathf.Max(0.01f, pixelRect.width / Mathf.Max(1f, pixelRect.height));
+        Mesh mesh = BuildPreferredFlatItemMesh(sprite.texture, pixelRect, uvRect, aspect);
+        if (mesh == null)
+            return null;
+
+        mesh.name = $"HeldFlatItemSprite_{item.name}";
+        spriteFlatItemMeshCache[item] = mesh;
+        return mesh;
+    }
+
+    private static bool TryGetSpriteUvRect(Sprite sprite, out Rect uvRect)
+    {
+        uvRect = default;
+        if (sprite == null || sprite.texture == null)
+            return false;
+
+        Rect textureRect = sprite.textureRect;
+        Texture texture = sprite.texture;
+        if (texture.width <= 0 || texture.height <= 0 || textureRect.width <= 0f || textureRect.height <= 0f)
+            return false;
+
+        uvRect = new Rect(
+            textureRect.x / texture.width,
+            textureRect.y / texture.height,
+            textureRect.width / texture.width,
+            textureRect.height / texture.height);
+        return true;
+    }
+
+    private Mesh BuildPreferredFlatItemMesh(Texture2D texture, Rect pixelRect, Rect uvRect, float aspect)
+    {
+        if (useGeneratedItemDepth)
+        {
+            Mesh generatedMesh = BuildGeneratedItemMesh(texture, pixelRect, uvRect, aspect);
+            if (generatedMesh != null)
+                return generatedMesh;
+        }
+
+        return BuildFlatItemMesh(aspect, uvRect);
+    }
+
+    private Mesh BuildGeneratedItemMesh(Texture2D texture, Rect pixelRect, Rect uvRect, float aspect)
+    {
+        if (texture == null)
+            return null;
+
+        int textureWidth = texture.width;
+        int textureHeight = texture.height;
+        if (textureWidth <= 0 || textureHeight <= 0)
+            return null;
+
+        int pixelX = Mathf.Clamp(Mathf.RoundToInt(pixelRect.xMin), 0, Mathf.Max(0, textureWidth - 1));
+        int pixelY = Mathf.Clamp(Mathf.RoundToInt(pixelRect.yMin), 0, Mathf.Max(0, textureHeight - 1));
+        int pixelWidth = Mathf.Clamp(Mathf.RoundToInt(pixelRect.width), 1, textureWidth - pixelX);
+        int pixelHeight = Mathf.Clamp(Mathf.RoundToInt(pixelRect.height), 1, textureHeight - pixelY);
+        if (pixelWidth <= 0 || pixelHeight <= 0)
+            return null;
+
+        if (pixelWidth * pixelHeight > MaxGeneratedItemPixels)
+            return null;
+
+        if (!TryGetTexturePixels(texture, out Color32[] texturePixels))
+            return null;
+
+        byte alphaThreshold = (byte)Mathf.Clamp(Mathf.RoundToInt(generatedItemAlphaThreshold * 255f), 0, 255);
+        bool[] opaqueMask = new bool[pixelWidth * pixelHeight];
+        bool hasOpaquePixels = false;
+
+        for (int y = 0; y < pixelHeight; y++)
+        {
+            int sourceY = pixelY + y;
+            int sourceRow = sourceY * textureWidth;
+            int targetRow = y * pixelWidth;
+            for (int x = 0; x < pixelWidth; x++)
+            {
+                Color32 pixel = texturePixels[sourceRow + pixelX + x];
+                bool isOpaque = pixel.a > alphaThreshold;
+                opaqueMask[targetRow + x] = isOpaque;
+                hasOpaquePixels |= isOpaque;
+            }
+        }
+
+        if (!hasOpaquePixels)
+            return null;
+
+        float fullWidth = Mathf.Max(0.01f, aspect);
+        float fullHeight = 1f;
+        float halfWidth = fullWidth * 0.5f;
+        float halfHeight = fullHeight * 0.5f;
+        float pixelWorldWidth = fullWidth / pixelWidth;
+        float pixelWorldHeight = fullHeight / pixelHeight;
+        float halfThickness = Mathf.Max(0.001f, generatedItemThickness) * 0.5f;
+        float pixelUvWidth = uvRect.width / pixelWidth;
+        float pixelUvHeight = uvRect.height / pixelHeight;
+
+        List<Vector3> vertices = new List<Vector3>(4096);
+        List<Vector3> normals = new List<Vector3>(4096);
+        List<Vector2> uvs = new List<Vector2>(4096);
+        List<int> triangles = new List<int>(6144);
+
+        AddFrontBackItemFaces(vertices, normals, uvs, triangles, halfWidth, halfHeight, halfThickness, uvRect);
+
+        for (int y = 0; y < pixelHeight; y++)
+        {
+            int row = y * pixelWidth;
+            for (int x = 0; x < pixelWidth; x++)
+            {
+                if (!opaqueMask[row + x])
+                    continue;
+
+                float x0 = -halfWidth + x * pixelWorldWidth;
+                float x1 = x0 + pixelWorldWidth;
+                float y0 = -halfHeight + y * pixelWorldHeight;
+                float y1 = y0 + pixelWorldHeight;
+                Rect pixelUv = new Rect(
+                    uvRect.xMin + x * pixelUvWidth,
+                    uvRect.yMin + y * pixelUvHeight,
+                    pixelUvWidth,
+                    pixelUvHeight);
+
+                if (!IsMaskOpaque(opaqueMask, pixelWidth, pixelHeight, x - 1, y))
+                {
+                    AddQuad(
+                        vertices, normals, uvs, triangles,
+                        new Vector3(x0, y0, -halfThickness),
+                        new Vector3(x0, y1, -halfThickness),
+                        new Vector3(x0, y1, halfThickness),
+                        new Vector3(x0, y0, halfThickness),
+                        Vector3.left,
+                        pixelUv,
+                        flipWinding: false);
+                }
+
+                if (!IsMaskOpaque(opaqueMask, pixelWidth, pixelHeight, x + 1, y))
+                {
+                    AddQuad(
+                        vertices, normals, uvs, triangles,
+                        new Vector3(x1, y0, halfThickness),
+                        new Vector3(x1, y1, halfThickness),
+                        new Vector3(x1, y1, -halfThickness),
+                        new Vector3(x1, y0, -halfThickness),
+                        Vector3.right,
+                        pixelUv,
+                        flipWinding: false);
+                }
+
+                if (!IsMaskOpaque(opaqueMask, pixelWidth, pixelHeight, x, y + 1))
+                {
+                    AddQuad(
+                        vertices, normals, uvs, triangles,
+                        new Vector3(x0, y1, halfThickness),
+                        new Vector3(x0, y1, -halfThickness),
+                        new Vector3(x1, y1, -halfThickness),
+                        new Vector3(x1, y1, halfThickness),
+                        Vector3.up,
+                        pixelUv,
+                        flipWinding: false);
+                }
+
+                if (!IsMaskOpaque(opaqueMask, pixelWidth, pixelHeight, x, y - 1))
+                {
+                    AddQuad(
+                        vertices, normals, uvs, triangles,
+                        new Vector3(x0, y0, -halfThickness),
+                        new Vector3(x0, y0, halfThickness),
+                        new Vector3(x1, y0, halfThickness),
+                        new Vector3(x1, y0, -halfThickness),
+                        Vector3.down,
+                        pixelUv,
+                        flipWinding: false);
+                }
+            }
+        }
+
+        Mesh mesh = new Mesh
+        {
+            indexFormat = IndexFormat.UInt32
+        };
+        mesh.SetVertices(vertices);
+        mesh.SetNormals(normals);
+        mesh.SetUVs(0, uvs);
+        mesh.SetTriangles(triangles, 0, true);
+        mesh.RecalculateBounds();
+        return mesh;
+    }
+
+    private static bool TryGetTexturePixels(Texture2D texture, out Color32[] pixels)
+    {
+        pixels = null;
+        if (texture == null)
+            return false;
+
+        try
+        {
+            pixels = texture.GetPixels32();
+            return pixels != null && pixels.Length == texture.width * texture.height;
+        }
+        catch (UnityException)
+        {
+            return false;
+        }
+    }
+
+    private static bool IsMaskOpaque(bool[] mask, int width, int height, int x, int y)
+    {
+        if (mask == null || x < 0 || y < 0 || x >= width || y >= height)
+            return false;
+
+        return mask[y * width + x];
+    }
+
+    private static void AddFrontBackItemFaces(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<int> triangles,
+        float halfWidth,
+        float halfHeight,
+        float halfThickness,
+        Rect uvRect)
+    {
+        AddQuad(
+            vertices, normals, uvs, triangles,
+            new Vector3(-halfWidth, -halfHeight, halfThickness),
+            new Vector3(-halfWidth, halfHeight, halfThickness),
+            new Vector3(halfWidth, halfHeight, halfThickness),
+            new Vector3(halfWidth, -halfHeight, halfThickness),
+            Vector3.forward,
+            uvRect,
+            flipWinding: false);
+
+        AddQuad(
+            vertices, normals, uvs, triangles,
+            new Vector3(halfWidth, -halfHeight, -halfThickness),
+            new Vector3(halfWidth, halfHeight, -halfThickness),
+            new Vector3(-halfWidth, halfHeight, -halfThickness),
+            new Vector3(-halfWidth, -halfHeight, -halfThickness),
+            Vector3.back,
+            uvRect,
+            flipWinding: false);
+    }
+
+    private static void AddQuad(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uvs,
+        List<int> triangles,
+        Vector3 v0,
+        Vector3 v1,
+        Vector3 v2,
+        Vector3 v3,
+        Vector3 normal,
+        Rect uvRect,
+        bool flipWinding)
+    {
+        int start = vertices.Count;
+        vertices.Add(v0);
+        vertices.Add(v1);
+        vertices.Add(v2);
+        vertices.Add(v3);
+
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+        normals.Add(normal);
+
+        uvs.Add(new Vector2(uvRect.xMin, uvRect.yMin));
+        uvs.Add(new Vector2(uvRect.xMin, uvRect.yMax));
+        uvs.Add(new Vector2(uvRect.xMax, uvRect.yMax));
+        uvs.Add(new Vector2(uvRect.xMax, uvRect.yMin));
+
+        if (flipWinding)
+        {
+            triangles.Add(start + 0);
+            triangles.Add(start + 2);
+            triangles.Add(start + 1);
+            triangles.Add(start + 0);
+            triangles.Add(start + 3);
+            triangles.Add(start + 2);
+            return;
+        }
+
+        triangles.Add(start + 0);
+        triangles.Add(start + 1);
+        triangles.Add(start + 2);
+        triangles.Add(start + 0);
+        triangles.Add(start + 2);
+        triangles.Add(start + 3);
+    }
+
+    private Material GetOrCreateRuntimeFlatItemMaterial()
+    {
+        if (runtimeFlatItemMaterial != null)
+            return runtimeFlatItemMaterial;
+
+        Shader shader = Shader.Find("Sprites/Default");
+        if (shader == null)
+            shader = Shader.Find("Unlit/Transparent");
+        if (shader == null)
+            shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+            return null;
+
+        runtimeFlatItemMaterial = new Material(shader)
+        {
+            name = "HeldFlatItemRuntimeMaterial",
+            hideFlags = HideFlags.HideAndDontSave,
+            renderQueue = (int)RenderQueue.Transparent
+        };
+
+        if (runtimeFlatItemMaterial.HasProperty("_Surface"))
+            runtimeFlatItemMaterial.SetFloat("_Surface", 1f);
+
+        if (runtimeFlatItemMaterial.HasProperty("_Cull"))
+            runtimeFlatItemMaterial.SetFloat("_Cull", (float)CullMode.Off);
+
+        return runtimeFlatItemMaterial;
     }
 
     private static Mesh BuildFlatItemMesh(float aspect, Rect uvRect)

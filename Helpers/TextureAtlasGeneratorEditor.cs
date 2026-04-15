@@ -37,13 +37,6 @@ public class TextureAtlasGeneratorEditor : Editor
             }
         }
 
-        if (GUILayout.Button("Migrar Legacy -> Fonte Ativa"))
-        {
-            RecordGeneratorTargets(generator, "Fill textureEntries From Legacy");
-            generator.FillTextureEntriesFromLegacy();
-            MarkGeneratorTargetsDirty(generator);
-        }
-
         if (GUILayout.Button("Aplicar Preset Minecraft Moderno"))
         {
             RecordGeneratorTargets(generator, "Apply Modern Minecraft Atlas Preset");

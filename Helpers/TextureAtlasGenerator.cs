@@ -30,9 +30,6 @@ public class TextureAtlasGenerator : MonoBehaviour
     public string resourceNamespace = AtlasKeyUtility.DefaultNamespace;
     public string blockPathPrefix = AtlasKeyUtility.DefaultBlockPathPrefix;
 
-    [Header("Legacy entries (auto ID: block/<name>)")]
-    public List<Texture2D> blockTextures = new List<Texture2D>();
-
     [Header("Dynamic Atlas")]
     [Min(1)] public int initialAtlasSize = 512;
     [Min(1)] public int maxAtlasSize = 4096;
@@ -216,34 +213,6 @@ public class TextureAtlasGenerator : MonoBehaviour
             usedIds,
             preferTextureEntriesForLegacy);
 
-        if (blockTextures != null)
-        {
-            for (int i = 0; i < blockTextures.Count; i++)
-            {
-                Texture2D texture = blockTextures[i];
-                if (texture == null)
-                    continue;
-
-                string baseId = $"block/{texture.name.ToLowerInvariant()}";
-                string id = baseId;
-                int suffix = 1;
-                while (!usedIds.Add(id))
-                {
-                    suffix++;
-                    id = $"{baseId}_{suffix}";
-                }
-
-                entries.Add(new AtlasTextureEntry
-                {
-                    id = id,
-                    texture = texture
-                });
-
-                if (!preferTextureEntriesForLegacy)
-                    legacyEntryOrder.Add(id);
-            }
-        }
-
         return entries;
     }
 
@@ -278,56 +247,6 @@ public class TextureAtlasGenerator : MonoBehaviour
         }
 
         return blockType.ToString();
-    }
-
-    [ContextMenu("Fill textureEntries From Legacy blockTextures")]
-    public void FillTextureEntriesFromLegacy()
-    {
-        if (blockTextures == null || blockTextures.Count == 0)
-        {
-            Debug.LogWarning("TextureAtlasGenerator: legacy blockTextures is empty.");
-            return;
-        }
-
-        List<AtlasTextureEntry> writableEntries = GetWritableTextureEntries();
-        writableEntries.Clear();
-
-        HashSet<string> usedIds = new HashSet<string>(StringComparer.Ordinal);
-        int addedCount = 0;
-
-        for (int i = 0; i < blockTextures.Count; i++)
-        {
-            Texture2D texture = blockTextures[i];
-            if (texture == null)
-                continue;
-
-            string baseId = $"block/{texture.name.ToLowerInvariant()}";
-            string id = baseId;
-            int suffix = 1;
-            while (!usedIds.Add(id))
-            {
-                suffix++;
-                id = $"{baseId}_{suffix}";
-            }
-
-            writableEntries.Add(new AtlasTextureEntry
-            {
-                id = id,
-                texture = texture
-            });
-            addedCount++;
-        }
-
-#if UNITY_EDITOR
-        if (textureDatabase != null)
-            UnityEditor.EditorUtility.SetDirty(textureDatabase);
-        UnityEditor.EditorUtility.SetDirty(this);
-#endif
-
-        string target = textureDatabase != null
-            ? $"database '{textureDatabase.name}'"
-            : "embedded textureEntries";
-        Debug.Log($"TextureAtlasGenerator: migrated {addedCount} entries from legacy blockTextures to {target}.");
     }
 
     [ContextMenu("Move Embedded textureEntries To Database")]
