@@ -1853,6 +1853,8 @@ internal static class BlockbenchMultiCuboidImporter
         if (changedAtlasGenerator)
         {
             EditorUtility.SetDirty(context.atlasGenerator);
+            if (context.atlasGenerator.textureDatabase != null)
+                EditorUtility.SetDirty(context.atlasGenerator.textureDatabase);
             context.atlasGenerator.GenerateAtlas();
 
             foreach (FaceTextureRequest request in context.faceTextureRequests.Values)
@@ -1943,15 +1945,12 @@ internal static class BlockbenchMultiCuboidImporter
         if (CanRetireLegacyBlockTextures(generator))
             generator.blockTextures.Clear();
 
-        if (generator.textureEntries == null)
-            generator.textureEntries = new List<AtlasTextureEntry>();
+        generator.GetWritableTextureEntries();
     }
 
     private static bool ShouldUseTextureEntries(TextureAtlasGenerator generator)
     {
-        return generator != null &&
-               generator.textureEntries != null &&
-               generator.textureEntries.Exists(entry => entry != null && entry.texture != null);
+        return generator != null && generator.HasConfiguredTextureEntries();
     }
 
     private static bool CanRetireLegacyBlockTextures(TextureAtlasGenerator generator)
@@ -1959,7 +1958,8 @@ internal static class BlockbenchMultiCuboidImporter
         if (generator == null || generator.blockTextures == null || generator.blockTextures.Count == 0)
             return false;
 
-        if (generator.textureEntries == null || generator.textureEntries.Count == 0)
+        List<AtlasTextureEntry> configuredEntries = generator.GetAllTextureEntriesSnapshot();
+        if (configuredEntries == null || configuredEntries.Count == 0)
             return false;
 
         for (int i = 0; i < generator.blockTextures.Count; i++)
@@ -1969,9 +1969,9 @@ internal static class BlockbenchMultiCuboidImporter
                 continue;
 
             bool foundMatch = false;
-            for (int e = 0; e < generator.textureEntries.Count; e++)
+            for (int e = 0; e < configuredEntries.Count; e++)
             {
-                AtlasTextureEntry entry = generator.textureEntries[e];
+                AtlasTextureEntry entry = configuredEntries[e];
                 if (entry == null ||
                     entry.texture == null ||
                     entry.useSourceRect ||
@@ -2099,13 +2099,14 @@ internal static class BlockbenchMultiCuboidImporter
         if (generator == null || request == null || texture == null)
             return -1;
 
-        if (generator.textureEntries == null)
-            generator.textureEntries = new List<AtlasTextureEntry>();
+        List<AtlasTextureEntry> writableEntries = generator.GetWritableTextureEntries();
+        if (writableEntries == null)
+            return -1;
 
         int entryIndex = -1;
-        for (int i = 0; i < generator.textureEntries.Count; i++)
+        for (int i = 0; i < writableEntries.Count; i++)
         {
-            AtlasTextureEntry existingEntry = generator.textureEntries[i];
+            AtlasTextureEntry existingEntry = writableEntries[i];
             if (existingEntry == null || !string.Equals(existingEntry.id, request.entryId, StringComparison.Ordinal))
                 continue;
 
@@ -2114,14 +2115,14 @@ internal static class BlockbenchMultiCuboidImporter
             existingEntry.sampledUvRect = new Vector4(request.u0, request.v0, request.u1, request.v1);
             existingEntry.useSourceRect = true;
             existingEntry.sourceRect = sourceRect;
-            generator.textureEntries[i] = existingEntry;
+            writableEntries[i] = existingEntry;
             entryIndex = i;
             break;
         }
 
         if (entryIndex < 0)
         {
-            generator.textureEntries.Add(new AtlasTextureEntry
+            writableEntries.Add(new AtlasTextureEntry
             {
                 id = request.entryId,
                 texture = texture,
@@ -2130,17 +2131,18 @@ internal static class BlockbenchMultiCuboidImporter
                 useSourceRect = true,
                 sourceRect = sourceRect
             });
-            entryIndex = generator.textureEntries.Count - 1;
+            entryIndex = writableEntries.Count - 1;
         }
 
+        List<AtlasTextureEntry> configuredEntries = generator.GetAllTextureEntriesSnapshot();
         int legacyIndex = 0;
-        for (int i = 0; i < generator.textureEntries.Count; i++)
+        for (int i = 0; i < configuredEntries.Count; i++)
         {
-            AtlasTextureEntry current = generator.textureEntries[i];
+            AtlasTextureEntry current = configuredEntries[i];
             if (current == null || current.texture == null)
                 continue;
 
-            if (i == entryIndex)
+            if (string.Equals(current.id, request.entryId, StringComparison.Ordinal))
                 return legacyIndex;
 
             legacyIndex++;

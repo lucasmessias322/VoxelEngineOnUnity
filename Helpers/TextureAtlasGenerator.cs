@@ -18,7 +18,11 @@ public class TextureAtlasGenerator : MonoBehaviour
         public Rect uv;
     }
 
-    [Header("Entries (with ID)")]
+    [Header("Entries Database")]
+    [Tooltip("Fonte principal dos AtlasTextureEntry. Quando atribuida, novas entradas sao salvas neste asset.")]
+    public TextureAtlasDatabaseSO textureDatabase;
+
+    [HideInInspector]
     public List<AtlasTextureEntry> textureEntries = new List<AtlasTextureEntry>();
 
     [Header("BlockType key mode")]
@@ -59,6 +63,7 @@ public class TextureAtlasGenerator : MonoBehaviour
     public Texture2D GeneratedAtlas => generatedAtlas;
     public IReadOnlyDictionary<string, Rect> UvMap => uvMap;
     public IReadOnlyDictionary<BlockType, Rect> BlockTypeUvMap => blockTypeUvMap;
+    public bool UsesTextureDatabase => textureDatabase != null;
 
     private void Start()
     {
@@ -185,42 +190,20 @@ public class TextureAtlasGenerator : MonoBehaviour
         List<AtlasTextureEntry> entries = new List<AtlasTextureEntry>();
         legacyEntryOrder = new List<string>();
         HashSet<string> usedIds = new HashSet<string>(StringComparer.Ordinal);
-        bool preferTextureEntriesForLegacy =
-            textureEntries != null &&
-            textureEntries.Exists(entry => entry != null && entry.texture != null);
+        bool preferTextureEntriesForLegacy = HasConfiguredTextureEntries();
 
-        if (textureEntries != null)
-        {
-            for (int i = 0; i < textureEntries.Count; i++)
-            {
-                AtlasTextureEntry entry = textureEntries[i];
-                if (entry == null || entry.texture == null)
-                    continue;
-
-                string id = (entry.id ?? string.Empty).Trim();
-                if (string.IsNullOrEmpty(id))
-                    id = $"block/{entry.texture.name.ToLowerInvariant()}";
-
-                if (!usedIds.Add(id))
-                {
-                    Debug.LogWarning($"TextureAtlasGenerator: duplicate ID ignored: '{id}'.");
-                    continue;
-                }
-
-                entries.Add(new AtlasTextureEntry
-                {
-                    id = id,
-                    texture = entry.texture,
-                    useSourceRect = entry.useSourceRect,
-                    sourceRect = entry.sourceRect,
-                    useUvSampling = entry.useUvSampling,
-                    sampledUvRect = entry.sampledUvRect
-                });
-
-                if (preferTextureEntriesForLegacy)
-                    legacyEntryOrder.Add(id);
-            }
-        }
+        AppendTextureEntries(
+            textureDatabase != null ? textureDatabase.entries : null,
+            entries,
+            legacyEntryOrder,
+            usedIds,
+            preferTextureEntriesForLegacy);
+        AppendTextureEntries(
+            textureEntries,
+            entries,
+            legacyEntryOrder,
+            usedIds,
+            preferTextureEntriesForLegacy);
 
         if (blockTextures != null)
         {
@@ -289,16 +272,14 @@ public class TextureAtlasGenerator : MonoBehaviour
     [ContextMenu("Fill textureEntries From Legacy blockTextures")]
     public void FillTextureEntriesFromLegacy()
     {
-        if (textureEntries == null)
-            textureEntries = new List<AtlasTextureEntry>();
-        else
-            textureEntries.Clear();
-
         if (blockTextures == null || blockTextures.Count == 0)
         {
             Debug.LogWarning("TextureAtlasGenerator: legacy blockTextures is empty.");
             return;
         }
+
+        List<AtlasTextureEntry> writableEntries = GetWritableTextureEntries();
+        writableEntries.Clear();
 
         HashSet<string> usedIds = new HashSet<string>(StringComparer.Ordinal);
         int addedCount = 0;
@@ -318,7 +299,7 @@ public class TextureAtlasGenerator : MonoBehaviour
                 id = $"{baseId}_{suffix}";
             }
 
-            textureEntries.Add(new AtlasTextureEntry
+            writableEntries.Add(new AtlasTextureEntry
             {
                 id = id,
                 texture = texture
@@ -327,10 +308,79 @@ public class TextureAtlasGenerator : MonoBehaviour
         }
 
 #if UNITY_EDITOR
+        if (textureDatabase != null)
+            UnityEditor.EditorUtility.SetDirty(textureDatabase);
         UnityEditor.EditorUtility.SetDirty(this);
 #endif
 
-        Debug.Log($"TextureAtlasGenerator: migrated {addedCount} entries from legacy blockTextures to textureEntries.");
+        string target = textureDatabase != null
+            ? $"database '{textureDatabase.name}'"
+            : "embedded textureEntries";
+        Debug.Log($"TextureAtlasGenerator: migrated {addedCount} entries from legacy blockTextures to {target}.");
+    }
+
+    [ContextMenu("Move Embedded textureEntries To Database")]
+    public void MoveEmbeddedTextureEntriesToDatabase()
+    {
+        if (textureDatabase == null)
+        {
+            Debug.LogWarning("TextureAtlasGenerator: assign a TextureAtlasDatabaseSO before moving embedded entries.");
+            return;
+        }
+
+        if (textureEntries == null || textureEntries.Count == 0)
+        {
+            Debug.LogWarning("TextureAtlasGenerator: no embedded textureEntries were found to move.");
+            return;
+        }
+
+        List<AtlasTextureEntry> databaseEntries = textureDatabase.GetOrCreateEntries();
+        HashSet<string> usedIds = new HashSet<string>(StringComparer.Ordinal);
+        for (int i = 0; i < databaseEntries.Count; i++)
+        {
+            AtlasTextureEntry existing = databaseEntries[i];
+            if (existing == null || existing.texture == null)
+                continue;
+
+            string existingId = NormalizeEntryId(existing.id, existing.texture);
+            if (!string.IsNullOrEmpty(existingId))
+                usedIds.Add(existingId);
+        }
+
+        List<AtlasTextureEntry> remainingEmbeddedEntries = new List<AtlasTextureEntry>();
+        int movedCount = 0;
+        int skippedCount = 0;
+
+        for (int i = 0; i < textureEntries.Count; i++)
+        {
+            AtlasTextureEntry copy = CreateNormalizedEntryCopy(textureEntries[i]);
+            if (copy == null)
+            {
+                remainingEmbeddedEntries.Add(textureEntries[i]);
+                continue;
+            }
+
+            if (!usedIds.Add(copy.id))
+            {
+                remainingEmbeddedEntries.Add(textureEntries[i]);
+                skippedCount++;
+                continue;
+            }
+
+            databaseEntries.Add(copy);
+            movedCount++;
+        }
+
+        textureEntries = remainingEmbeddedEntries;
+
+#if UNITY_EDITOR
+        UnityEditor.EditorUtility.SetDirty(textureDatabase);
+        UnityEditor.EditorUtility.SetDirty(this);
+#endif
+
+        Debug.Log(
+            $"TextureAtlasGenerator: moved {movedCount} embedded entries to database '{textureDatabase.name}'. " +
+            $"Skipped {skippedCount} duplicate entries.");
     }
 
     [ContextMenu("Apply Modern Minecraft Preset")]
@@ -410,5 +460,108 @@ public class TextureAtlasGenerator : MonoBehaviour
 #endif
 
         Debug.Log($"TextureAtlasGenerator: atlas saved to '{normalizedPath}'.");
+    }
+
+    public List<AtlasTextureEntry> GetWritableTextureEntries()
+    {
+        if (textureDatabase != null)
+            return textureDatabase.GetOrCreateEntries();
+
+        if (textureEntries == null)
+            textureEntries = new List<AtlasTextureEntry>();
+
+        return textureEntries;
+    }
+
+    public List<AtlasTextureEntry> GetAllTextureEntriesSnapshot()
+    {
+        List<AtlasTextureEntry> entries = new List<AtlasTextureEntry>();
+
+        if (textureDatabase != null && textureDatabase.entries != null)
+        {
+            for (int i = 0; i < textureDatabase.entries.Count; i++)
+                entries.Add(textureDatabase.entries[i]);
+        }
+
+        if (textureEntries != null)
+        {
+            for (int i = 0; i < textureEntries.Count; i++)
+                entries.Add(textureEntries[i]);
+        }
+
+        return entries;
+    }
+
+    public bool HasConfiguredTextureEntries()
+    {
+        return HasValidTextureEntries(textureDatabase != null ? textureDatabase.entries : null) ||
+               HasValidTextureEntries(textureEntries);
+    }
+
+    public bool HasEmbeddedTextureEntries()
+    {
+        return HasValidTextureEntries(textureEntries);
+    }
+
+    private void AppendTextureEntries(
+        List<AtlasTextureEntry> sourceEntries,
+        List<AtlasTextureEntry> targetEntries,
+        List<string> legacyEntryOrder,
+        HashSet<string> usedIds,
+        bool appendToLegacyOrder)
+    {
+        if (sourceEntries == null)
+            return;
+
+        for (int i = 0; i < sourceEntries.Count; i++)
+        {
+            AtlasTextureEntry copy = CreateNormalizedEntryCopy(sourceEntries[i]);
+            if (copy == null)
+                continue;
+
+            if (!usedIds.Add(copy.id))
+            {
+                Debug.LogWarning($"TextureAtlasGenerator: duplicate ID ignored: '{copy.id}'.");
+                continue;
+            }
+
+            targetEntries.Add(copy);
+            if (appendToLegacyOrder)
+                legacyEntryOrder.Add(copy.id);
+        }
+    }
+
+    private static AtlasTextureEntry CreateNormalizedEntryCopy(AtlasTextureEntry source)
+    {
+        if (source == null || source.texture == null)
+            return null;
+
+        string id = NormalizeEntryId(source.id, source.texture);
+        if (string.IsNullOrEmpty(id))
+            return null;
+
+        return new AtlasTextureEntry
+        {
+            id = id,
+            texture = source.texture,
+            useSourceRect = source.useSourceRect,
+            sourceRect = source.sourceRect,
+            useUvSampling = source.useUvSampling,
+            sampledUvRect = source.sampledUvRect
+        };
+    }
+
+    private static string NormalizeEntryId(string id, Texture2D texture)
+    {
+        string safeId = (id ?? string.Empty).Trim();
+        if (string.IsNullOrEmpty(safeId) && texture != null)
+            safeId = $"block/{texture.name.ToLowerInvariant()}";
+
+        return safeId;
+    }
+
+    private static bool HasValidTextureEntries(List<AtlasTextureEntry> entries)
+    {
+        return entries != null && entries.Exists(entry => entry != null && entry.texture != null);
     }
 }
