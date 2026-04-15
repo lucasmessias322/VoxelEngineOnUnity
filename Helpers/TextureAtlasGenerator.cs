@@ -210,7 +210,11 @@ public class TextureAtlasGenerator : MonoBehaviour
                 entries.Add(new AtlasTextureEntry
                 {
                     id = id,
-                    texture = entry.texture
+                    texture = entry.texture,
+                    useSourceRect = entry.useSourceRect,
+                    sourceRect = entry.sourceRect,
+                    useUvSampling = entry.useUvSampling,
+                    sampledUvRect = entry.sampledUvRect
                 });
 
                 if (preferTextureEntriesForLegacy)
@@ -305,7 +309,7 @@ public class TextureAtlasGenerator : MonoBehaviour
             if (texture == null)
                 continue;
 
-            string baseId = $"block/{AtlasKeyUtility.NormalizePathSegment(texture.name)}";
+            string baseId = $"block/{texture.name.ToLowerInvariant()}";
             string id = baseId;
             int suffix = 1;
             while (!usedIds.Add(id))

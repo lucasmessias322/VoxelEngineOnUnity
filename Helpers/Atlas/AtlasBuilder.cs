@@ -9,6 +9,8 @@ public sealed class AtlasBuilder
         public string id;
         public Texture2D texture;
         public Color32[] pixels;
+        public int width;
+        public int height;
         public bool ownsTextureCopy;
     }
 
@@ -87,9 +89,28 @@ public sealed class AtlasBuilder
                 throw new InvalidOperationException($"Nao foi possivel ler a textura '{sourceEntry.texture.name}' (ID '{id}').");
 
             Color32[] pixels;
+            int entryWidth;
+            int entryHeight;
             try
             {
-                pixels = readableTexture.GetPixels32();
+                Color32[] sourcePixels = readableTexture.GetPixels32();
+                if (sourceEntry.useUvSampling)
+                {
+                    pixels = ExtractPixelsByUvSampling(
+                        sourcePixels,
+                        readableTexture.width,
+                        readableTexture.height,
+                        sourceEntry.sampledUvRect,
+                        out entryWidth,
+                        out entryHeight);
+                }
+                else
+                {
+                    RectInt sourceRect = ResolveSourceRect(sourceEntry, readableTexture);
+                    pixels = ExtractPixels(sourcePixels, readableTexture.width, readableTexture.height, sourceRect);
+                    entryWidth = sourceRect.width;
+                    entryHeight = sourceRect.height;
+                }
             }
             catch (Exception ex)
             {
@@ -105,6 +126,8 @@ public sealed class AtlasBuilder
                 id = id,
                 texture = readableTexture,
                 pixels = pixels,
+                width = entryWidth,
+                height = entryHeight,
                 ownsTextureCopy = ownsCopy
             });
         }
@@ -113,6 +136,90 @@ public sealed class AtlasBuilder
             throw new ArgumentException("Nenhuma entrada valida foi informada para construir o atlas.");
 
         return prepared;
+    }
+
+    private static RectInt ResolveSourceRect(AtlasTextureEntry entry, Texture2D texture)
+    {
+        if (entry == null || texture == null || !entry.useSourceRect)
+            return new RectInt(0, 0, texture != null ? texture.width : 0, texture != null ? texture.height : 0);
+
+        RectInt requestedRect = entry.sourceRect;
+        if (requestedRect.width <= 0 || requestedRect.height <= 0)
+        {
+            throw new InvalidOperationException(
+                $"A entrada '{entry.id}' usa sourceRect invalido ({requestedRect.width}x{requestedRect.height}).");
+        }
+
+        int safeXMin = Mathf.Clamp(requestedRect.xMin, 0, texture.width - 1);
+        int safeYMin = Mathf.Clamp(requestedRect.yMin, 0, texture.height - 1);
+        int safeXMax = Mathf.Clamp(requestedRect.xMax, safeXMin + 1, texture.width);
+        int safeYMax = Mathf.Clamp(requestedRect.yMax, safeYMin + 1, texture.height);
+        return new RectInt(
+            safeXMin,
+            safeYMin,
+            safeXMax - safeXMin,
+            safeYMax - safeYMin);
+    }
+
+    private static Color32[] ExtractPixels(
+        Color32[] sourcePixels,
+        int sourceWidth,
+        int sourceHeight,
+        RectInt sourceRect)
+    {
+        if (sourcePixels == null)
+            return Array.Empty<Color32>();
+
+        if (sourceRect.x == 0 &&
+            sourceRect.y == 0 &&
+            sourceRect.width == sourceWidth &&
+            sourceRect.height == sourceHeight)
+        {
+            return sourcePixels;
+        }
+
+        Color32[] result = new Color32[sourceRect.width * sourceRect.height];
+        for (int y = 0; y < sourceRect.height; y++)
+        {
+            int sourceRowStart = (sourceRect.y + y) * sourceWidth + sourceRect.x;
+            int resultRowStart = y * sourceRect.width;
+            Array.Copy(sourcePixels, sourceRowStart, result, resultRowStart, sourceRect.width);
+        }
+
+        return result;
+    }
+
+    private static Color32[] ExtractPixelsByUvSampling(
+        Color32[] sourcePixels,
+        int sourceWidth,
+        int sourceHeight,
+        Vector4 sampledUvRect,
+        out int outputWidth,
+        out int outputHeight)
+    {
+        outputWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.z - sampledUvRect.x)));
+        outputHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.w - sampledUvRect.y)));
+
+        Color32[] targetPixels = new Color32[outputWidth * outputHeight];
+        for (int y = 0; y < outputHeight; y++)
+        {
+            float localVBottom = (y + 0.5f) / outputHeight;
+            float localVTop = 1f - localVBottom;
+
+            for (int x = 0; x < outputWidth; x++)
+            {
+                float localU = (x + 0.5f) / outputWidth;
+                float sampleU = Mathf.Lerp(sampledUvRect.x, sampledUvRect.z, localU);
+                float sampleVFromTop = Mathf.Lerp(sampledUvRect.y, sampledUvRect.w, localVTop);
+
+                int pixelX = Mathf.Clamp(Mathf.FloorToInt(sampleU), 0, sourceWidth - 1);
+                int pixelYFromTop = Mathf.Clamp(Mathf.FloorToInt(sampleVFromTop), 0, sourceHeight - 1);
+                int pixelY = sourceHeight - 1 - pixelYFromTop;
+                targetPixels[y * outputWidth + x] = sourcePixels[pixelY * sourceWidth + pixelX];
+            }
+        }
+
+        return targetPixels;
     }
 
     private static Texture2D EnsureReadable(Texture2D source, out bool ownsCopy)
@@ -176,9 +283,8 @@ public sealed class AtlasBuilder
         int largestSide = 1;
         for (int i = 0; i < entries.Count; i++)
         {
-            Texture2D texture = entries[i].texture;
-            int paddedWidth = texture.width + (paddingPixels * 2);
-            int paddedHeight = texture.height + (paddingPixels * 2);
+            int paddedWidth = entries[i].width + (paddingPixels * 2);
+            int paddedHeight = entries[i].height + (paddingPixels * 2);
             largestSide = Mathf.Max(largestSide, paddedWidth, paddedHeight);
         }
 
@@ -190,12 +296,11 @@ public sealed class AtlasBuilder
         List<TexturePacker.Input> packInputs = new List<TexturePacker.Input>(entries.Count);
         for (int i = 0; i < entries.Count; i++)
         {
-            Texture2D texture = entries[i].texture;
             packInputs.Add(new TexturePacker.Input
             {
                 id = entries[i].id,
-                width = texture.width + (paddingPixels * 2),
-                height = texture.height + (paddingPixels * 2)
+                width = entries[i].width + (paddingPixels * 2),
+                height = entries[i].height + (paddingPixels * 2)
             });
         }
 
@@ -230,15 +335,14 @@ public sealed class AtlasBuilder
         for (int i = 0; i < preparedEntries.Count; i++)
         {
             PreparedEntry entry = preparedEntries[i];
-            Texture2D texture = entry.texture;
             TexturePacker.PackedItem packed = packedLookup[entry.id];
 
             RectInt paddedRect = packed.rect;
             RectInt pixelRect = new RectInt(
                 paddedRect.x + settings.paddingPixels,
                 paddedRect.y + settings.paddingPixels,
-                texture.width,
-                texture.height);
+                entry.width,
+                entry.height);
 
             atlas.SetPixels32(pixelRect.x, pixelRect.y, pixelRect.width, pixelRect.height, entry.pixels);
             ExtrudePadding(

@@ -922,6 +922,8 @@ internal static class BlockbenchMultiCuboidImporter
         public string displayName;
         public Vector2Int size;
         public Texture2D texture;
+        public string assetPath;
+        public bool destroyTextureOnCleanup = true;
     }
 
     private sealed class FaceTextureRequest
@@ -929,7 +931,6 @@ internal static class BlockbenchMultiCuboidImporter
         public string key;
         public string hash;
         public string entryId;
-        public string assetPath;
         public BlockbenchTextureSource source;
         public float u0;
         public float v0;
@@ -1188,8 +1189,15 @@ internal static class BlockbenchMultiCuboidImporter
         if (string.IsNullOrWhiteSpace(candidate))
             return false;
 
-        if (!TryLoadTextureFromCandidate(candidate, context.modelPath, out Texture2D texture))
+        if (!TryLoadTextureFromCandidate(
+                candidate,
+                context.modelPath,
+                out Texture2D texture,
+                out string assetPath,
+                out bool destroyTextureOnCleanup))
+        {
             return false;
+        }
 
         Vector2Int size = texture != null
             ? new Vector2Int(texture.width, texture.height)
@@ -1205,14 +1213,23 @@ internal static class BlockbenchMultiCuboidImporter
             key = string.IsNullOrWhiteSpace(key) ? displayName : key.Trim(),
             displayName = string.IsNullOrWhiteSpace(displayName) ? key : displayName.Trim(),
             size = size,
-            texture = texture
+            texture = texture,
+            assetPath = assetPath,
+            destroyTextureOnCleanup = destroyTextureOnCleanup
         };
         return true;
     }
 
-    private static bool TryLoadTextureFromCandidate(string candidate, string modelPath, out Texture2D texture)
+    private static bool TryLoadTextureFromCandidate(
+        string candidate,
+        string modelPath,
+        out Texture2D texture,
+        out string assetPath,
+        out bool destroyTextureOnCleanup)
     {
         texture = null;
+        assetPath = null;
+        destroyTextureOnCleanup = true;
         if (string.IsNullOrWhiteSpace(candidate))
             return false;
 
@@ -1240,6 +1257,19 @@ internal static class BlockbenchMultiCuboidImporter
             if (!TryResolveTextureFilePath(trimmed, modelPath, out string resolvedPath))
                 return false;
 
+            if (TryConvertAbsolutePathToAssetPath(resolvedPath, out string existingAssetPath))
+            {
+                AssetDatabase.ImportAsset(existingAssetPath, ImportAssetOptions.ForceUpdate);
+                Texture2D existingAssetTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(existingAssetPath);
+                if (existingAssetTexture != null)
+                {
+                    texture = existingAssetTexture;
+                    assetPath = existingAssetPath;
+                    destroyTextureOnCleanup = false;
+                    return true;
+                }
+            }
+
             data = File.ReadAllBytes(resolvedPath);
         }
 
@@ -1262,6 +1292,28 @@ internal static class BlockbenchMultiCuboidImporter
 
         texture.filterMode = FilterMode.Point;
         texture.wrapMode = TextureWrapMode.Clamp;
+        return true;
+    }
+
+    private static bool TryConvertAbsolutePathToAssetPath(string absolutePath, out string assetPath)
+    {
+        assetPath = null;
+        if (string.IsNullOrWhiteSpace(absolutePath))
+            return false;
+
+        string fullAssetsPath = Path.GetFullPath(Application.dataPath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        string fullCandidatePath = Path.GetFullPath(absolutePath)
+            .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+
+        if (!fullCandidatePath.StartsWith(fullAssetsPath, StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        string relativePath = fullCandidatePath.Substring(fullAssetsPath.Length)
+            .TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
+            .Replace(Path.DirectorySeparatorChar, '/')
+            .Replace(Path.AltDirectorySeparatorChar, '/');
+        assetPath = string.IsNullOrEmpty(relativePath) ? "Assets" : $"Assets/{relativePath}";
         return true;
     }
 
@@ -1640,7 +1692,7 @@ internal static class BlockbenchMultiCuboidImporter
         HashSet<Texture2D> destroyedTextures = new HashSet<Texture2D>();
         foreach (BlockbenchTextureSource source in context.textureSources.Values)
         {
-            if (source?.texture == null)
+            if (source?.texture == null || !source.destroyTextureOnCleanup)
                 continue;
 
             if (!destroyedTextures.Add(source.texture))
@@ -1749,7 +1801,7 @@ internal static class BlockbenchMultiCuboidImporter
             return;
         }
 
-        bool useTextureEntries = ShouldUseTextureEntries(context.atlasGenerator);
+        EnsureTextureEntriesEnabled(context.atlasGenerator);
         bool changedAtlasGenerator = false;
 
         foreach (FaceTextureRequest request in context.faceTextureRequests.Values)
@@ -1758,13 +1810,19 @@ internal static class BlockbenchMultiCuboidImporter
                 continue;
 
             EnsureFaceTextureIdentity(blockType, request);
-            Texture2D croppedTexture = CreateOrUpdateCroppedTextureAsset(request);
-            if (croppedTexture == null)
+            Texture2D sourceTexture = EnsureSourceTextureAsset(blockType, request.source);
+            if (sourceTexture == null)
                 continue;
 
-            int legacyIndex = useTextureEntries
-                ? RegisterTextureEntry(context.atlasGenerator, request, croppedTexture)
-                : RegisterLegacyTexture(context.atlasGenerator, croppedTexture);
+            if (!TryBuildRequestSourceRect(request, out RectInt sourceRect))
+            {
+                context.AddWarning(
+                    "invalid_face_uv",
+                    "Algumas faces usam UV invalido ou fora da textura-fonte; essas regioes precisam de ajuste manual.");
+                continue;
+            }
+
+            int legacyIndex = RegisterTextureEntry(context.atlasGenerator, request, sourceTexture, sourceRect);
             if (legacyIndex < 0)
                 continue;
 
@@ -1796,6 +1854,18 @@ internal static class BlockbenchMultiCuboidImporter
         {
             EditorUtility.SetDirty(context.atlasGenerator);
             context.atlasGenerator.GenerateAtlas();
+
+            foreach (FaceTextureRequest request in context.faceTextureRequests.Values)
+            {
+                if (request == null || string.IsNullOrWhiteSpace(request.entryId))
+                    continue;
+
+                if (context.atlasGenerator.TryGetUv(request.entryId, out Rect uvRect))
+                {
+                    request.uvRectData = BlockAtlasUvUtility.RectToUvRectData(uvRect);
+                    request.hasAssignedUvRect = true;
+                }
+            }
 
             if (context.world != null)
             {
@@ -1856,13 +1926,25 @@ internal static class BlockbenchMultiCuboidImporter
             return;
 
         string safeBlockName = AtlasKeyUtility.NormalizePathSegment(blockType.ToString());
-        string safeSourceName = AtlasKeyUtility.NormalizePathSegment(
-            request.source != null && !string.IsNullOrWhiteSpace(request.source.displayName)
-                ? request.source.displayName
-                : "face");
-        string fileName = $"{safeSourceName}_{request.hash}.png";
         request.entryId ??= $"blockbench/{safeBlockName}/{request.hash}";
-        request.assetPath ??= $"Assets/Generated/BlockbenchImports/{safeBlockName}/{fileName}";
+    }
+
+    private static void EnsureTextureEntriesEnabled(TextureAtlasGenerator generator)
+    {
+        if (generator == null)
+            return;
+
+        if (!ShouldUseTextureEntries(generator))
+        {
+            if (generator.blockTextures != null && generator.blockTextures.Exists(texture => texture != null))
+                generator.FillTextureEntriesFromLegacy();
+        }
+
+        if (CanRetireLegacyBlockTextures(generator))
+            generator.blockTextures.Clear();
+
+        if (generator.textureEntries == null)
+            generator.textureEntries = new List<AtlasTextureEntry>();
     }
 
     private static bool ShouldUseTextureEntries(TextureAtlasGenerator generator)
@@ -1872,7 +1954,147 @@ internal static class BlockbenchMultiCuboidImporter
                generator.textureEntries.Exists(entry => entry != null && entry.texture != null);
     }
 
-    private static int RegisterTextureEntry(TextureAtlasGenerator generator, FaceTextureRequest request, Texture2D texture)
+    private static bool CanRetireLegacyBlockTextures(TextureAtlasGenerator generator)
+    {
+        if (generator == null || generator.blockTextures == null || generator.blockTextures.Count == 0)
+            return false;
+
+        if (generator.textureEntries == null || generator.textureEntries.Count == 0)
+            return false;
+
+        for (int i = 0; i < generator.blockTextures.Count; i++)
+        {
+            Texture2D legacyTexture = generator.blockTextures[i];
+            if (legacyTexture == null)
+                continue;
+
+            bool foundMatch = false;
+            for (int e = 0; e < generator.textureEntries.Count; e++)
+            {
+                AtlasTextureEntry entry = generator.textureEntries[e];
+                if (entry == null ||
+                    entry.texture == null ||
+                    entry.useSourceRect ||
+                    entry.useUvSampling)
+                {
+                    continue;
+                }
+
+                if (ReferenceEquals(entry.texture, legacyTexture))
+                {
+                    foundMatch = true;
+                    break;
+                }
+            }
+
+            if (!foundMatch)
+                return false;
+        }
+
+        return true;
+    }
+
+    private static Texture2D EnsureSourceTextureAsset(BlockType blockType, BlockbenchTextureSource source)
+    {
+        if (source == null || source.texture == null)
+            return null;
+
+        if (!string.IsNullOrWhiteSpace(source.assetPath))
+        {
+            Texture2D existingAssetTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(source.assetPath);
+            if (existingAssetTexture != null)
+            {
+                ReplaceSourceTextureWithAsset(source, existingAssetTexture);
+                return existingAssetTexture;
+            }
+        }
+
+        EnsureSourceTextureIdentity(blockType, source);
+        if (string.IsNullOrWhiteSpace(source.assetPath))
+            return source.texture;
+
+        string fullPath = ToProjectAbsolutePath(source.assetPath);
+        string directory = Path.GetDirectoryName(fullPath);
+        if (!string.IsNullOrEmpty(directory))
+            Directory.CreateDirectory(directory);
+
+        File.WriteAllBytes(fullPath, source.texture.EncodeToPNG());
+        AssetDatabase.ImportAsset(source.assetPath, ImportAssetOptions.ForceUpdate);
+        ConfigureImportedTextureAsset(source.assetPath);
+        Texture2D importedAssetTexture = AssetDatabase.LoadAssetAtPath<Texture2D>(source.assetPath);
+        if (importedAssetTexture == null)
+            return source.texture;
+
+        ReplaceSourceTextureWithAsset(source, importedAssetTexture);
+        return importedAssetTexture;
+    }
+
+    private static void EnsureSourceTextureIdentity(BlockType blockType, BlockbenchTextureSource source)
+    {
+        if (source == null || !string.IsNullOrWhiteSpace(source.assetPath))
+            return;
+
+        string safeBlockName = AtlasKeyUtility.NormalizePathSegment(blockType.ToString());
+        string safeSourceName = AtlasKeyUtility.NormalizePathSegment(
+            !string.IsNullOrWhiteSpace(source.displayName) ? source.displayName : source.key);
+        string identityHash = Hash128.Compute(
+            $"{source.key}|{source.displayName}|{source.size.x}|{source.size.y}").ToString();
+        source.assetPath = $"Assets/Generated/BlockbenchImports/{safeBlockName}/textures/{safeSourceName}_{identityHash}.png";
+    }
+
+    private static void ReplaceSourceTextureWithAsset(BlockbenchTextureSource source, Texture2D assetTexture)
+    {
+        if (source == null || assetTexture == null)
+            return;
+
+        Texture2D previousTexture = source.texture;
+        bool shouldDestroyPrevious =
+            source.destroyTextureOnCleanup &&
+            previousTexture != null &&
+            !ReferenceEquals(previousTexture, assetTexture);
+
+        source.texture = assetTexture;
+        source.size = new Vector2Int(assetTexture.width, assetTexture.height);
+        source.destroyTextureOnCleanup = false;
+
+        if (shouldDestroyPrevious)
+            UnityEngine.Object.DestroyImmediate(previousTexture);
+    }
+
+    private static bool TryBuildRequestSourceRect(FaceTextureRequest request, out RectInt sourceRect)
+    {
+        sourceRect = default;
+        if (request == null || request.source == null)
+            return false;
+
+        int sourceWidth = request.source.size.x;
+        int sourceHeight = request.source.size.y;
+        if (sourceWidth <= 0 || sourceHeight <= 0)
+            return false;
+
+        float minU = Mathf.Min(request.u0, request.u1);
+        float maxU = Mathf.Max(request.u0, request.u1);
+        float minV = Mathf.Min(request.v0, request.v1);
+        float maxV = Mathf.Max(request.v0, request.v1);
+
+        int xMin = Mathf.Clamp(Mathf.FloorToInt(minU + 0.0001f), 0, sourceWidth - 1);
+        int xMax = Mathf.Clamp(Mathf.CeilToInt(maxU - 0.0001f), xMin + 1, sourceWidth);
+        int yMinFromTop = Mathf.Clamp(Mathf.FloorToInt(minV + 0.0001f), 0, sourceHeight - 1);
+        int yMaxFromTop = Mathf.Clamp(Mathf.CeilToInt(maxV - 0.0001f), yMinFromTop + 1, sourceHeight);
+
+        sourceRect = new RectInt(
+            xMin,
+            sourceHeight - yMaxFromTop,
+            xMax - xMin,
+            yMaxFromTop - yMinFromTop);
+        return sourceRect.width > 0 && sourceRect.height > 0;
+    }
+
+    private static int RegisterTextureEntry(
+        TextureAtlasGenerator generator,
+        FaceTextureRequest request,
+        Texture2D texture,
+        RectInt sourceRect)
     {
         if (generator == null || request == null || texture == null)
             return -1;
@@ -1888,6 +2110,10 @@ internal static class BlockbenchMultiCuboidImporter
                 continue;
 
             existingEntry.texture = texture;
+            existingEntry.useUvSampling = true;
+            existingEntry.sampledUvRect = new Vector4(request.u0, request.v0, request.u1, request.v1);
+            existingEntry.useSourceRect = true;
+            existingEntry.sourceRect = sourceRect;
             generator.textureEntries[i] = existingEntry;
             entryIndex = i;
             break;
@@ -1898,7 +2124,11 @@ internal static class BlockbenchMultiCuboidImporter
             generator.textureEntries.Add(new AtlasTextureEntry
             {
                 id = request.entryId,
-                texture = texture
+                texture = texture,
+                useUvSampling = true,
+                sampledUvRect = new Vector4(request.u0, request.v0, request.u1, request.v1),
+                useSourceRect = true,
+                sourceRect = sourceRect
             });
             entryIndex = generator.textureEntries.Count - 1;
         }
@@ -1978,31 +2208,6 @@ internal static class BlockbenchMultiCuboidImporter
         return true;
     }
 
-    private static Texture2D CreateOrUpdateCroppedTextureAsset(FaceTextureRequest request)
-    {
-        Texture2D bakedTexture = BakeFaceTexture(request);
-        if (bakedTexture == null)
-            return null;
-
-        try
-        {
-            string assetPath = request.assetPath;
-            string fullPath = ToProjectAbsolutePath(assetPath);
-            string directory = Path.GetDirectoryName(fullPath);
-            if (!string.IsNullOrEmpty(directory))
-                Directory.CreateDirectory(directory);
-
-            File.WriteAllBytes(fullPath, bakedTexture.EncodeToPNG());
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
-            ConfigureImportedTextureAsset(assetPath);
-            return AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
-        }
-        finally
-        {
-            UnityEngine.Object.DestroyImmediate(bakedTexture);
-        }
-    }
-
     private static void ConfigureImportedTextureAsset(string assetPath)
     {
         if (!(AssetImporter.GetAtPath(assetPath) is TextureImporter importer))
@@ -2035,48 +2240,6 @@ internal static class BlockbenchMultiCuboidImporter
 
         if (changed)
             importer.SaveAndReimport();
-    }
-
-    private static Texture2D BakeFaceTexture(FaceTextureRequest request)
-    {
-        if (request == null || request.source == null || request.source.texture == null)
-            return null;
-
-        Texture2D source = request.source.texture;
-        int outputWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(request.u1 - request.u0)));
-        int outputHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(request.v1 - request.v0)));
-        Color32[] sourcePixels = source.GetPixels32();
-        Color32[] targetPixels = new Color32[outputWidth * outputHeight];
-        int sourceWidth = Mathf.Max(1, source.width);
-        int sourceHeight = Mathf.Max(1, source.height);
-
-        for (int y = 0; y < outputHeight; y++)
-        {
-            float localVBottom = (y + 0.5f) / outputHeight;
-            float localVTop = 1f - localVBottom;
-
-            for (int x = 0; x < outputWidth; x++)
-            {
-                float localU = (x + 0.5f) / outputWidth;
-                float sampleU = Mathf.Lerp(request.u0, request.u1, localU);
-                float sampleVFromTop = Mathf.Lerp(request.v0, request.v1, localVTop);
-
-                int pixelX = Mathf.Clamp(Mathf.FloorToInt(sampleU), 0, sourceWidth - 1);
-                int pixelYFromTop = Mathf.Clamp(Mathf.FloorToInt(sampleVFromTop), 0, sourceHeight - 1);
-                int pixelY = sourceHeight - 1 - pixelYFromTop;
-                targetPixels[y * outputWidth + x] = sourcePixels[pixelY * sourceWidth + pixelX];
-            }
-        }
-
-        Texture2D baked = new Texture2D(outputWidth, outputHeight, TextureFormat.RGBA32, false, false)
-        {
-            name = Path.GetFileNameWithoutExtension(request.assetPath),
-            filterMode = FilterMode.Point,
-            wrapMode = TextureWrapMode.Clamp
-        };
-        baked.SetPixels32(targetPixels);
-        baked.Apply(false, false);
-        return baked;
     }
 
     private static string ToProjectAbsolutePath(string assetPath)
@@ -2731,7 +2894,7 @@ internal static class BlockbenchMultiCuboidImporter
         {
             builder.Append("Texturas do Blockbench viraram ");
             builder.Append(context.importedTextureCount);
-            builder.Append(" recorte(s) reservados no atlas");
+            builder.Append(" entrada(s) reservadas no atlas");
             if (context.atlasGenerator != null)
             {
                 builder.Append(" via ");

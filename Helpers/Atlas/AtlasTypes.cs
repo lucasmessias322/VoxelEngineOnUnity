@@ -7,6 +7,10 @@ public sealed class AtlasTextureEntry
 {
     public string id = "block/unknown";
     public Texture2D texture;
+    public bool useSourceRect;
+    public RectInt sourceRect;
+    public bool useUvSampling;
+    public Vector4 sampledUvRect;
 }
 
 [Serializable]
