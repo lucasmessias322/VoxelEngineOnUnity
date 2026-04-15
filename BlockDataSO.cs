@@ -240,6 +240,113 @@ public sealed class BlockMultiCuboidDefinition
     public List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>();
 }
 
+[System.Serializable]
+public sealed class BlockFaceTextureEntryIdSet
+{
+    public string top;
+    public string bottom;
+    public string right;
+    public string left;
+    public string front;
+    public string back;
+
+    public bool TryGet(BlockFace face, out string entryId)
+    {
+        entryId = Sanitize(Get(face));
+        return !string.IsNullOrEmpty(entryId);
+    }
+
+    public string Get(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Top: return top;
+            case BlockFace.Bottom: return bottom;
+            case BlockFace.Right: return right;
+            case BlockFace.Left: return left;
+            case BlockFace.Front: return front;
+            case BlockFace.Back: return back;
+            default: return string.Empty;
+        }
+    }
+
+    public bool Set(BlockFace face, string entryId)
+    {
+        string sanitized = Sanitize(entryId);
+        string current = Sanitize(Get(face));
+        if (string.Equals(current, sanitized, System.StringComparison.Ordinal))
+            return false;
+
+        switch (face)
+        {
+            case BlockFace.Top:
+                top = sanitized;
+                return true;
+            case BlockFace.Bottom:
+                bottom = sanitized;
+                return true;
+            case BlockFace.Right:
+                right = sanitized;
+                return true;
+            case BlockFace.Left:
+                left = sanitized;
+                return true;
+            case BlockFace.Front:
+                front = sanitized;
+                return true;
+            case BlockFace.Back:
+                back = sanitized;
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    public bool HasAny()
+    {
+        return
+            !string.IsNullOrEmpty(Sanitize(top)) ||
+            !string.IsNullOrEmpty(Sanitize(bottom)) ||
+            !string.IsNullOrEmpty(Sanitize(right)) ||
+            !string.IsNullOrEmpty(Sanitize(left)) ||
+            !string.IsNullOrEmpty(Sanitize(front)) ||
+            !string.IsNullOrEmpty(Sanitize(back));
+    }
+
+    public BlockFaceTextureEntryIdSet Clone()
+    {
+        return new BlockFaceTextureEntryIdSet
+        {
+            top = Sanitize(top),
+            bottom = Sanitize(bottom),
+            right = Sanitize(right),
+            left = Sanitize(left),
+            front = Sanitize(front),
+            back = Sanitize(back)
+        };
+    }
+
+    private static string Sanitize(string entryId)
+    {
+        return string.IsNullOrWhiteSpace(entryId) ? string.Empty : entryId.Trim();
+    }
+}
+
+[System.Serializable]
+public sealed class BlockTextureEntryIdMapping
+{
+    public BlockType blockType;
+    public BlockFaceTextureEntryIdSet entryIds = new BlockFaceTextureEntryIdSet();
+}
+
+[System.Serializable]
+public sealed class BlockCuboidTextureEntryIdMapping
+{
+    public BlockType blockType;
+    public int cuboidIndex;
+    public BlockFaceTextureEntryIdSet entryIds = new BlockFaceTextureEntryIdSet();
+}
+
 public static class WirePlacementUtility
 {
     public const byte SideWest = 16;
@@ -439,10 +546,12 @@ public class BlockDataSO : ScriptableObject
     [Tooltip("Quando ligado, tile (0,0) representa a linha de cima do atlas.")]
     public bool atlasCoordinatesStartTopLeft = true;
     public List<BlockTextureMapping> blockTextures = new List<BlockTextureMapping>();
+    [SerializeField, HideInInspector] private List<BlockTextureEntryIdMapping> blockTextureEntryIds = new List<BlockTextureEntryIdMapping>();
 
     [Header("Multi Cubos")]
     [Tooltip("Modelos por blocos compostos por varios cuboides 0..1. Use renderShape = MultiCuboid no bloco, ou preencha uma entrada aqui para ativar automaticamente.")]
     public List<BlockMultiCuboidDefinition> multiCuboidShapes = new List<BlockMultiCuboidDefinition>();
+    [SerializeField, HideInInspector] private List<BlockCuboidTextureEntryIdMapping> multiCuboidTextureEntryIds = new List<BlockCuboidTextureEntryIdMapping>();
 
     [System.NonSerialized]
     public BlockTextureMapping[] mappings;
@@ -461,6 +570,71 @@ public class BlockDataSO : ScriptableObject
     private void OnValidate()
     {
         SyncDirectionalSideMappings();
+    }
+
+    public bool TryGetTextureEntryId(BlockType blockType, BlockFace face, out string entryId)
+    {
+        entryId = string.Empty;
+        BlockTextureEntryIdMapping record = FindBlockTextureEntryIdMapping(blockType);
+        return record != null &&
+               record.entryIds != null &&
+               record.entryIds.TryGet(face, out entryId);
+    }
+
+    public bool SetTextureEntryId(BlockType blockType, BlockFace face, string entryId)
+    {
+        string sanitized = SanitizeTextureEntryId(entryId);
+        BlockTextureEntryIdMapping record = FindOrCreateBlockTextureEntryIdMapping(blockType, createIfMissing: !string.IsNullOrEmpty(sanitized));
+        if (record == null || record.entryIds == null)
+            return false;
+
+        bool changed = record.entryIds.Set(face, sanitized);
+        CleanupTextureEntryIdMappings();
+        return changed;
+    }
+
+    public bool TryGetCuboidTextureEntryId(BlockType blockType, int cuboidIndex, BlockFace face, out string entryId)
+    {
+        entryId = string.Empty;
+        BlockCuboidTextureEntryIdMapping record = FindBlockCuboidTextureEntryIdMapping(blockType, cuboidIndex);
+        return record != null &&
+               record.entryIds != null &&
+               record.entryIds.TryGet(face, out entryId);
+    }
+
+    public bool SetCuboidTextureEntryId(BlockType blockType, int cuboidIndex, BlockFace face, string entryId)
+    {
+        string sanitized = SanitizeTextureEntryId(entryId);
+        BlockCuboidTextureEntryIdMapping record = FindOrCreateBlockCuboidTextureEntryIdMapping(
+            blockType,
+            cuboidIndex,
+            createIfMissing: !string.IsNullOrEmpty(sanitized));
+        if (record == null || record.entryIds == null)
+            return false;
+
+        bool changed = record.entryIds.Set(face, sanitized);
+        CleanupCuboidTextureEntryIdMappings();
+        return changed;
+    }
+
+    public bool ClearCuboidTextureEntryIds(BlockType blockType)
+    {
+        if (multiCuboidTextureEntryIds == null || multiCuboidTextureEntryIds.Count == 0)
+            return false;
+
+        bool changed = false;
+
+        for (int i = multiCuboidTextureEntryIds.Count - 1; i >= 0; i--)
+        {
+            BlockCuboidTextureEntryIdMapping record = multiCuboidTextureEntryIds[i];
+            if (record == null || record.blockType == blockType)
+            {
+                multiCuboidTextureEntryIds.RemoveAt(i);
+                changed = true;
+            }
+        }
+
+        return changed;
     }
 
     /// <summary>
@@ -586,6 +760,99 @@ public class BlockDataSO : ScriptableObject
             Mathf.Clamp01(value.x),
             Mathf.Clamp01(value.y),
             Mathf.Clamp01(value.z));
+    }
+
+    private BlockTextureEntryIdMapping FindBlockTextureEntryIdMapping(BlockType blockType)
+    {
+        if (blockTextureEntryIds == null)
+            return null;
+
+        for (int i = 0; i < blockTextureEntryIds.Count; i++)
+        {
+            BlockTextureEntryIdMapping record = blockTextureEntryIds[i];
+            if (record != null && record.blockType == blockType)
+                return record;
+        }
+
+        return null;
+    }
+
+    private BlockTextureEntryIdMapping FindOrCreateBlockTextureEntryIdMapping(BlockType blockType, bool createIfMissing)
+    {
+        BlockTextureEntryIdMapping record = FindBlockTextureEntryIdMapping(blockType);
+        if (record != null || !createIfMissing)
+            return record;
+
+        if (blockTextureEntryIds == null)
+            blockTextureEntryIds = new List<BlockTextureEntryIdMapping>();
+
+        record = new BlockTextureEntryIdMapping { blockType = blockType };
+        blockTextureEntryIds.Add(record);
+        return record;
+    }
+
+    private BlockCuboidTextureEntryIdMapping FindBlockCuboidTextureEntryIdMapping(BlockType blockType, int cuboidIndex)
+    {
+        if (multiCuboidTextureEntryIds == null)
+            return null;
+
+        for (int i = 0; i < multiCuboidTextureEntryIds.Count; i++)
+        {
+            BlockCuboidTextureEntryIdMapping record = multiCuboidTextureEntryIds[i];
+            if (record != null && record.blockType == blockType && record.cuboidIndex == cuboidIndex)
+                return record;
+        }
+
+        return null;
+    }
+
+    private BlockCuboidTextureEntryIdMapping FindOrCreateBlockCuboidTextureEntryIdMapping(BlockType blockType, int cuboidIndex, bool createIfMissing)
+    {
+        BlockCuboidTextureEntryIdMapping record = FindBlockCuboidTextureEntryIdMapping(blockType, cuboidIndex);
+        if (record != null || !createIfMissing)
+            return record;
+
+        if (multiCuboidTextureEntryIds == null)
+            multiCuboidTextureEntryIds = new List<BlockCuboidTextureEntryIdMapping>();
+
+        record = new BlockCuboidTextureEntryIdMapping
+        {
+            blockType = blockType,
+            cuboidIndex = cuboidIndex
+        };
+        multiCuboidTextureEntryIds.Add(record);
+        return record;
+    }
+
+    private void CleanupTextureEntryIdMappings()
+    {
+        if (blockTextureEntryIds == null)
+            return;
+
+        for (int i = blockTextureEntryIds.Count - 1; i >= 0; i--)
+        {
+            BlockTextureEntryIdMapping record = blockTextureEntryIds[i];
+            if (record == null || record.entryIds == null || !record.entryIds.HasAny())
+                blockTextureEntryIds.RemoveAt(i);
+        }
+    }
+
+    private void CleanupCuboidTextureEntryIdMappings()
+    {
+        if (multiCuboidTextureEntryIds == null)
+            return;
+
+        for (int i = multiCuboidTextureEntryIds.Count - 1; i >= 0; i--)
+        {
+            BlockCuboidTextureEntryIdMapping record = multiCuboidTextureEntryIds[i];
+            if (record == null || record.entryIds == null || !record.entryIds.HasAny())
+                multiCuboidTextureEntryIds.RemoveAt(i);
+        }
+    }
+
+    private static string SanitizeTextureEntryId(string entryId)
+    {
+        return string.IsNullOrWhiteSpace(entryId) ? string.Empty : entryId.Trim();
     }
 
     private static int GetMaxBlockTypeValue()

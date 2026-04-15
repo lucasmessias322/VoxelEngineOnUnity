@@ -37,6 +37,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 
     [Header("Model")]
     public List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>();
+    [SerializeField, HideInInspector] private List<BlockFaceTextureEntryIdSet> cuboidTextureEntryIds = new List<BlockFaceTextureEntryIdSet>();
 
     private bool rebuildingVisuals;
     private Material previewMaterial;
@@ -92,6 +93,8 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
                 cuboids.Add(SanitizeCuboid(definition.cuboids[i], snapToGrid, snapStep));
         }
 
+        LoadCuboidTextureEntryIdsFromBlockData();
+
         RebuildVisuals();
         return definition != null;
     }
@@ -116,6 +119,22 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         EnsureCuboidList();
         for (int i = 0; i < cuboids.Count; i++)
             definition.cuboids.Add(SanitizeCuboid(cuboids[i], snapToGrid, snapStep));
+
+        blockData.ClearCuboidTextureEntryIds(blockType);
+        EnsureCuboidTextureEntryIdList();
+        for (int i = 0; i < cuboidTextureEntryIds.Count; i++)
+        {
+            BlockFaceTextureEntryIdSet entryIds = cuboidTextureEntryIds[i];
+            if (entryIds == null)
+                continue;
+
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Top);
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Bottom);
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Right);
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Left);
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Front);
+            SaveCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Back);
+        }
 
         EnsureMappingUsesMultiCuboid();
         blockData.InitializeDictionary();
@@ -165,12 +184,14 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public int AddCuboid(BlockModelCuboid cuboid)
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
 
 #if UNITY_EDITOR
         Undo.RecordObject(this, "Add Workbench Cuboid");
 #endif
 
         cuboids.Add(SanitizeCuboid(cuboid, snapToGrid, snapStep));
+        cuboidTextureEntryIds.Add(new BlockFaceTextureEntryIdSet());
         RebuildVisuals();
         SelectCuboid(cuboids.Count - 1);
         return cuboids.Count - 1;
@@ -179,16 +200,21 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public void ReplaceCuboids(IEnumerable<BlockModelCuboid> importedCuboids, int selectedIndex = 0)
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
 
 #if UNITY_EDITOR
         Undo.RecordObject(this, "Import Blockbench Model");
 #endif
 
         cuboids.Clear();
+        cuboidTextureEntryIds.Clear();
         if (importedCuboids != null)
         {
             foreach (BlockModelCuboid cuboid in importedCuboids)
+            {
                 cuboids.Add(SanitizeCuboid(cuboid, snapToGrid, snapStep));
+                cuboidTextureEntryIds.Add(new BlockFaceTextureEntryIdSet());
+            }
         }
 
         RebuildVisuals();
@@ -204,6 +230,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public void DuplicateSelectedCuboid()
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
         int selectedIndex = GetSelectedCuboidIndex();
         if (selectedIndex < 0 && cuboids.Count > 0)
             selectedIndex = cuboids.Count - 1;
@@ -216,6 +243,11 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 #endif
 
         cuboids.Insert(selectedIndex + 1, cuboids[selectedIndex]);
+        cuboidTextureEntryIds.Insert(
+            selectedIndex + 1,
+            cuboidTextureEntryIds[selectedIndex] != null
+                ? cuboidTextureEntryIds[selectedIndex].Clone()
+                : new BlockFaceTextureEntryIdSet());
         RebuildVisuals();
         SelectCuboid(selectedIndex + 1);
     }
@@ -223,6 +255,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public void RemoveSelectedCuboid()
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
         int selectedIndex = GetSelectedCuboidIndex();
         if (selectedIndex < 0 || selectedIndex >= cuboids.Count)
             return;
@@ -232,6 +265,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
 #endif
 
         cuboids.RemoveAt(selectedIndex);
+        cuboidTextureEntryIds.RemoveAt(selectedIndex);
         RebuildVisuals();
         SelectCuboid(Mathf.Clamp(selectedIndex - 1, 0, cuboids.Count - 1));
     }
@@ -239,12 +273,14 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public void ClearCuboids()
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
 
 #if UNITY_EDITOR
         Undo.RecordObject(this, "Clear Multi Cuboid Workbench");
 #endif
 
         cuboids.Clear();
+        cuboidTextureEntryIds.Clear();
         RebuildVisuals();
 
 #if UNITY_EDITOR
@@ -302,6 +338,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     public void SetCuboid(int index, BlockModelCuboid cuboid)
     {
         EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
         if (index < 0 || index >= cuboids.Count)
             return;
 
@@ -309,6 +346,39 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         Transform child = GetChildTransform(index);
         if (child != null)
             ApplyCuboidToChild(index, child);
+    }
+
+    public bool TryGetCuboidTextureEntryId(int index, BlockFace face, out string entryId)
+    {
+        EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
+
+        entryId = string.Empty;
+        if (index < 0 || index >= cuboidTextureEntryIds.Count)
+            return false;
+
+        BlockFaceTextureEntryIdSet entryIds = cuboidTextureEntryIds[index];
+        return entryIds != null && entryIds.TryGet(face, out entryId);
+    }
+
+    public void SetCuboidTextureEntryId(int index, BlockFace face, string entryId)
+    {
+        EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
+        if (index < 0 || index >= cuboidTextureEntryIds.Count)
+            return;
+
+        cuboidTextureEntryIds[index].Set(face, entryId);
+    }
+
+    public void ClearCuboidTextureEntryIds(int index)
+    {
+        EnsureCuboidList();
+        EnsureCuboidTextureEntryIdList();
+        if (index < 0 || index >= cuboidTextureEntryIds.Count)
+            return;
+
+        cuboidTextureEntryIds[index] = new BlockFaceTextureEntryIdSet();
     }
 
     public int GetSelectedCuboidIndex()
@@ -495,6 +565,65 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
     {
         if (cuboids == null)
             cuboids = new List<BlockModelCuboid>();
+
+        EnsureCuboidTextureEntryIdList();
+    }
+
+    private void EnsureCuboidTextureEntryIdList()
+    {
+        if (cuboidTextureEntryIds == null)
+            cuboidTextureEntryIds = new List<BlockFaceTextureEntryIdSet>();
+
+        while (cuboidTextureEntryIds.Count < cuboids.Count)
+            cuboidTextureEntryIds.Add(new BlockFaceTextureEntryIdSet());
+
+        while (cuboidTextureEntryIds.Count > cuboids.Count)
+            cuboidTextureEntryIds.RemoveAt(cuboidTextureEntryIds.Count - 1);
+
+        for (int i = 0; i < cuboidTextureEntryIds.Count; i++)
+        {
+            if (cuboidTextureEntryIds[i] == null)
+                cuboidTextureEntryIds[i] = new BlockFaceTextureEntryIdSet();
+        }
+    }
+
+    private void LoadCuboidTextureEntryIdsFromBlockData()
+    {
+        EnsureCuboidTextureEntryIdList();
+        for (int i = 0; i < cuboidTextureEntryIds.Count; i++)
+            cuboidTextureEntryIds[i] = new BlockFaceTextureEntryIdSet();
+
+        if (blockData == null)
+            return;
+
+        for (int i = 0; i < cuboids.Count; i++)
+        {
+            BlockFaceTextureEntryIdSet entryIds = cuboidTextureEntryIds[i];
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Top);
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Bottom);
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Right);
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Left);
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Front);
+            LoadCuboidTextureEntryId(blockType, i, entryIds, BlockFace.Back);
+        }
+    }
+
+    private void LoadCuboidTextureEntryId(BlockType targetBlockType, int cuboidIndex, BlockFaceTextureEntryIdSet entryIds, BlockFace face)
+    {
+        if (entryIds == null || blockData == null)
+            return;
+
+        if (blockData.TryGetCuboidTextureEntryId(targetBlockType, cuboidIndex, face, out string entryId))
+            entryIds.Set(face, entryId);
+    }
+
+    private void SaveCuboidTextureEntryId(BlockType targetBlockType, int cuboidIndex, BlockFaceTextureEntryIdSet entryIds, BlockFace face)
+    {
+        if (entryIds == null || blockData == null)
+            return;
+
+        if (entryIds.TryGet(face, out string entryId))
+            blockData.SetCuboidTextureEntryId(targetBlockType, cuboidIndex, face, entryId);
     }
 
     private BlockMultiCuboidDefinition FindDefinition()

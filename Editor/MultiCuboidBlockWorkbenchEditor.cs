@@ -180,6 +180,35 @@ public sealed class MultiCuboidBlockWorkbenchEditor : Editor
             SaveTextureMapping(workbench, mapping);
         }
 
+        EditorGUILayout.Space(4f);
+        EditorGUILayout.LabelField("Entry IDs por face", EditorStyles.miniBoldLabel);
+        EditorGUILayout.HelpBox(
+            "Quando um entryId valido existe no atlas, ele tem prioridade sobre o tile legado e mantem o bloco estavel mesmo se a ordem do atlas mudar.",
+            MessageType.None);
+
+        EditorGUI.BeginChangeCheck();
+        string topEntryId = EditorGUILayout.DelayedTextField("Top entryId", GetBaseTextureEntryId(workbench, BlockFace.Top));
+        string bottomEntryId = EditorGUILayout.DelayedTextField("Bottom entryId", GetBaseTextureEntryId(workbench, BlockFace.Bottom));
+        string rightEntryId = EditorGUILayout.DelayedTextField("Right +X entryId", GetBaseTextureEntryId(workbench, BlockFace.Right));
+        string leftEntryId = EditorGUILayout.DelayedTextField("Left -X entryId", GetBaseTextureEntryId(workbench, BlockFace.Left));
+        string frontEntryId = EditorGUILayout.DelayedTextField("Front +Z entryId", GetBaseTextureEntryId(workbench, BlockFace.Front));
+        string backEntryId = EditorGUILayout.DelayedTextField("Back -Z entryId", GetBaseTextureEntryId(workbench, BlockFace.Back));
+        if (EditorGUI.EndChangeCheck())
+        {
+            SaveBaseTextureEntryIds(
+                workbench,
+                ref mapping,
+                new BlockFaceTextureEntryIdSet
+                {
+                    top = topEntryId,
+                    bottom = bottomEntryId,
+                    right = rightEntryId,
+                    left = leftEntryId,
+                    front = frontEntryId,
+                    back = backEntryId
+                });
+        }
+
         using (new EditorGUILayout.HorizontalScope())
         {
             if (GUILayout.Button("Top em todas"))
@@ -383,9 +412,183 @@ public sealed class MultiCuboidBlockWorkbenchEditor : Editor
         mapping.back = ClampTile(workbench, mapping.back);
         mapping.side = mapping.right;
         mapping.materialIndex = Mathf.Max(0, mapping.materialIndex);
+        SyncAllMappingFaceUvRects(workbench, ref mapping);
 
         workbench.SetTextureMapping(mapping);
         MultiCuboidWorkbenchEditorGui.MarkWorkbenchDirty(workbench);
+    }
+
+    internal static string GetBaseTextureEntryId(MultiCuboidBlockWorkbench workbench, BlockFace face)
+    {
+        if (workbench == null || workbench.blockData == null)
+            return string.Empty;
+
+        return workbench.blockData.TryGetTextureEntryId(workbench.blockType, face, out string entryId)
+            ? entryId
+            : string.Empty;
+    }
+
+    private static void SaveBaseTextureEntryIds(
+        MultiCuboidBlockWorkbench workbench,
+        ref BlockTextureMapping mapping,
+        BlockFaceTextureEntryIdSet entryIds)
+    {
+        if (workbench == null || workbench.blockData == null || entryIds == null)
+            return;
+
+        Undo.RecordObject(workbench.blockData, "Edit Block Texture Entry IDs");
+
+        bool changed = false;
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Top, entryIds.top);
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Bottom, entryIds.bottom);
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Right, entryIds.right);
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Left, entryIds.left);
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Front, entryIds.front);
+        changed |= SaveBaseTextureEntryId(workbench, BlockFace.Back, entryIds.back);
+
+        if (!changed)
+            return;
+
+        SaveTextureMapping(workbench, mapping);
+    }
+
+    private static bool SaveBaseTextureEntryId(MultiCuboidBlockWorkbench workbench, BlockFace face, string entryId)
+    {
+        return workbench != null &&
+               workbench.blockData != null &&
+               workbench.blockData.SetTextureEntryId(workbench.blockType, face, entryId);
+    }
+
+    internal static void SyncAllMappingFaceUvRects(MultiCuboidBlockWorkbench workbench, ref BlockTextureMapping mapping)
+    {
+        TextureAtlasGenerator generator = ResolveLoadedAtlasGenerator(workbench);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Top, GetBaseTextureEntryId(workbench, BlockFace.Top), ref mapping);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Bottom, GetBaseTextureEntryId(workbench, BlockFace.Bottom), ref mapping);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Right, GetBaseTextureEntryId(workbench, BlockFace.Right), ref mapping);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Left, GetBaseTextureEntryId(workbench, BlockFace.Left), ref mapping);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Front, GetBaseTextureEntryId(workbench, BlockFace.Front), ref mapping);
+        ApplyResolvedMappingEntryIdUv(workbench, generator, BlockFace.Back, GetBaseTextureEntryId(workbench, BlockFace.Back), ref mapping);
+    }
+
+    internal static void ApplyResolvedMappingEntryIdUv(
+        MultiCuboidBlockWorkbench workbench,
+        TextureAtlasGenerator generator,
+        BlockFace face,
+        string entryId,
+        ref BlockTextureMapping mapping)
+    {
+        if (TryResolveAtlasEntryIdUv(workbench, generator, entryId, out Rect entryUv) ||
+            TryResolveLegacyTileUv(workbench, generator, mapping.GetTileCoord(face), out entryUv))
+        {
+            mapping.SetUvRectData(face, BlockAtlasUvUtility.RectToUvRectData(entryUv));
+            return;
+        }
+
+        if (workbench == null || workbench.blockData == null)
+            return;
+
+        mapping.SetUvRectData(
+            face,
+            BlockAtlasUvUtility.BuildLegacyUvRectData(
+                ClampTile(workbench, mapping.GetTileCoord(face)),
+                GetAtlasTileGridSize(workbench.blockData),
+                workbench.blockData.atlasCoordinatesStartTopLeft));
+    }
+
+    internal static bool TryResolveAtlasEntryIdUv(
+        MultiCuboidBlockWorkbench workbench,
+        TextureAtlasGenerator generator,
+        string entryId,
+        out Rect uvRect)
+    {
+        uvRect = default;
+        if (string.IsNullOrWhiteSpace(entryId))
+            return false;
+
+        generator ??= ResolveLoadedAtlasGenerator(workbench);
+        return generator != null && generator.TryGetUv(entryId.Trim(), out uvRect);
+    }
+
+    internal static bool TryResolveLegacyTileUv(
+        MultiCuboidBlockWorkbench workbench,
+        TextureAtlasGenerator generator,
+        Vector2Int tile,
+        out Rect uvRect)
+    {
+        uvRect = default;
+        if (workbench == null || workbench.blockData == null)
+            return false;
+
+        generator ??= ResolveLoadedAtlasGenerator(workbench);
+        if (generator != null &&
+            generator.TryGetLegacyTileUv(
+                ClampTile(workbench, tile),
+                GetAtlasTileGridSize(workbench.blockData),
+                workbench.blockData.atlasCoordinatesStartTopLeft,
+                out uvRect))
+        {
+            return true;
+        }
+
+        uvRect = BlockAtlasUvUtility.UvRectDataToRect(
+            BlockAtlasUvUtility.BuildLegacyUvRectData(
+                ClampTile(workbench, tile),
+                GetAtlasTileGridSize(workbench.blockData),
+                workbench.blockData.atlasCoordinatesStartTopLeft));
+        return true;
+    }
+
+    internal static TextureAtlasGenerator ResolveLoadedAtlasGenerator(MultiCuboidBlockWorkbench workbench)
+    {
+        if (workbench == null)
+            return null;
+
+#if UNITY_2023_1_OR_NEWER
+        TextureAtlasGenerator[] generators = UnityEngine.Object.FindObjectsByType<TextureAtlasGenerator>(FindObjectsInactive.Include);
+#else
+        TextureAtlasGenerator[] generators = UnityEngine.Object.FindObjectsOfType<TextureAtlasGenerator>(true);
+#endif
+
+        TextureAtlasGenerator bestGenerator = null;
+        int bestScore = int.MinValue;
+        Scene targetScene = workbench.gameObject.scene;
+
+        for (int i = 0; i < generators.Length; i++)
+        {
+            TextureAtlasGenerator candidate = generators[i];
+            if (candidate == null)
+                continue;
+
+            int score = 0;
+            if (candidate.gameObject.scene == targetScene)
+                score += 1000;
+            if (candidate.UsesTextureDatabase)
+                score += 200;
+            if (candidate.HasConfiguredTextureEntries())
+                score += 120;
+            if (candidate.GeneratedAtlas != null)
+                score += 80;
+            if (candidate.enabled)
+                score += 20;
+
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestGenerator = candidate;
+            }
+        }
+
+        return bestGenerator;
+    }
+
+    private static Vector2Int GetAtlasTileGridSize(BlockDataSO blockData)
+    {
+        if (blockData == null)
+            return Vector2Int.one;
+
+        return new Vector2Int(
+            Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.x)),
+            Mathf.Max(1, Mathf.RoundToInt(blockData.atlasSize.y)));
     }
 
     private static int ResolvePlacementRotationMode(BlockTextureMapping mapping)
@@ -504,7 +707,7 @@ internal static class MultiCuboidWorkbenchEditorGui
         BlockCuboidFaceMask faces = (BlockCuboidFaceMask)EditorGUILayout.EnumFlagsField("Faces", cuboid.EffectiveFaces);
         bool changed = EditorGUI.EndChangeCheck();
 
-        DrawCuboidTextureFields(workbench, ref cuboid, ref changed);
+        DrawCuboidTextureFields(workbench, index, ref cuboid, ref changed);
 
         using (new EditorGUILayout.HorizontalScope())
         {
@@ -595,7 +798,7 @@ internal static class MultiCuboidWorkbenchEditorGui
         MarkWorkbenchDirty(workbench);
     }
 
-    private static void DrawCuboidTextureFields(MultiCuboidBlockWorkbench workbench, ref BlockModelCuboid cuboid, ref bool changed)
+    private static void DrawCuboidTextureFields(MultiCuboidBlockWorkbench workbench, int index, ref BlockModelCuboid cuboid, ref bool changed)
     {
         EditorGUILayout.Space(4f);
         EditorGUILayout.LabelField("Textura por face", EditorStyles.miniBoldLabel);
@@ -616,6 +819,13 @@ internal static class MultiCuboidWorkbenchEditorGui
         if (fieldsChanged)
         {
             cuboid.textureOverrideFaces = overrideFaces & BlockCuboidFaceMask.All;
+            TextureAtlasGenerator generator = MultiCuboidBlockWorkbenchEditor.ResolveLoadedAtlasGenerator(workbench);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Top);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Bottom);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Right);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Left);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Front);
+            ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Back);
             changed = true;
         }
 
@@ -632,6 +842,20 @@ internal static class MultiCuboidWorkbenchEditorGui
                     cuboid.textureLeft = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, mapping.left);
                     cuboid.textureFront = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, mapping.front);
                     cuboid.textureBack = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, mapping.back);
+                    Undo.RecordObject(workbench, "Copy Cuboid Texture Entry IDs From Block");
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Top, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Top));
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Bottom, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Bottom));
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Right, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Right));
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Left, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Left));
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Front, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Front));
+                    workbench.SetCuboidTextureEntryId(index, BlockFace.Back, MultiCuboidBlockWorkbenchEditor.GetBaseTextureEntryId(workbench, BlockFace.Back));
+                    TextureAtlasGenerator generator = MultiCuboidBlockWorkbenchEditor.ResolveLoadedAtlasGenerator(workbench);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Top);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Bottom);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Right);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Left);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Front);
+                    ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Back);
                     changed = true;
                 }
             }
@@ -639,6 +863,14 @@ internal static class MultiCuboidWorkbenchEditorGui
             if (GUILayout.Button("Limpar overrides"))
             {
                 cuboid.textureOverrideFaces = BlockCuboidFaceMask.None;
+                cuboid.SetOverrideUvRectData(BlockFace.Top, Vector4.zero);
+                cuboid.SetOverrideUvRectData(BlockFace.Bottom, Vector4.zero);
+                cuboid.SetOverrideUvRectData(BlockFace.Right, Vector4.zero);
+                cuboid.SetOverrideUvRectData(BlockFace.Left, Vector4.zero);
+                cuboid.SetOverrideUvRectData(BlockFace.Front, Vector4.zero);
+                cuboid.SetOverrideUvRectData(BlockFace.Back, Vector4.zero);
+                Undo.RecordObject(workbench, "Clear Cuboid Texture Entry IDs");
+                workbench.ClearCuboidTextureEntryIds(index);
                 changed = true;
             }
         }
@@ -660,13 +892,95 @@ internal static class MultiCuboidWorkbenchEditorGui
                 cuboid.textureLeft = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, textureLeft);
                 cuboid.textureFront = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, textureFront);
                 cuboid.textureBack = MultiCuboidBlockWorkbenchEditor.ClampTile(workbench, textureBack);
+                TextureAtlasGenerator generator = MultiCuboidBlockWorkbenchEditor.ResolveLoadedAtlasGenerator(workbench);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Top);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Bottom);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Right);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Left);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Front);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Back);
+                changed = true;
+            }
+        }
+
+        using (new EditorGUI.DisabledScope(cuboid.EffectiveTextureOverrideFaces == BlockCuboidFaceMask.None))
+        {
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("Entry IDs do cuboide", EditorStyles.miniBoldLabel);
+
+            EditorGUI.BeginChangeCheck();
+            string topEntryId = EditorGUILayout.DelayedTextField("Top entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Top));
+            string bottomEntryId = EditorGUILayout.DelayedTextField("Bottom entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Bottom));
+            string rightEntryId = EditorGUILayout.DelayedTextField("Right +X entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Right));
+            string leftEntryId = EditorGUILayout.DelayedTextField("Left -X entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Left));
+            string frontEntryId = EditorGUILayout.DelayedTextField("Front +Z entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Front));
+            string backEntryId = EditorGUILayout.DelayedTextField("Back -Z entryId", GetCuboidTextureEntryId(workbench, index, BlockFace.Back));
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(workbench, "Edit Cuboid Texture Entry IDs");
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Top, topEntryId);
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Bottom, bottomEntryId);
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Right, rightEntryId);
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Left, leftEntryId);
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Front, frontEntryId);
+                SetCuboidTextureEntryId(workbench, index, BlockFace.Back, backEntryId);
+
+                TextureAtlasGenerator generator = MultiCuboidBlockWorkbenchEditor.ResolveLoadedAtlasGenerator(workbench);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Top);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Bottom);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Right);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Left);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Front);
+                ApplyCuboidFaceUvRect(workbench, index, generator, ref cuboid, BlockFace.Back);
                 changed = true;
             }
         }
 
         EditorGUILayout.HelpBox(
-            "Faces marcadas usam o tile deste cuboide. Faces desmarcadas continuam usando o mapping global do bloco.",
+            "Faces marcadas usam o tile deste cuboide. Se houver entryId na face, ele tem prioridade; faces desmarcadas continuam usando o mapping global do bloco.",
             MessageType.None);
+    }
+
+    private static string GetCuboidTextureEntryId(MultiCuboidBlockWorkbench workbench, int index, BlockFace face)
+    {
+        return workbench != null && workbench.TryGetCuboidTextureEntryId(index, face, out string entryId)
+            ? entryId
+            : string.Empty;
+    }
+
+    private static void SetCuboidTextureEntryId(MultiCuboidBlockWorkbench workbench, int index, BlockFace face, string entryId)
+    {
+        if (workbench == null)
+            return;
+
+        workbench.SetCuboidTextureEntryId(index, face, entryId);
+    }
+
+    private static void ApplyCuboidFaceUvRect(
+        MultiCuboidBlockWorkbench workbench,
+        int index,
+        TextureAtlasGenerator generator,
+        ref BlockModelCuboid cuboid,
+        BlockFace face)
+    {
+        if (!cuboid.HasTextureOverride(face))
+            return;
+
+        if (MultiCuboidBlockWorkbenchEditor.TryResolveAtlasEntryIdUv(
+                workbench,
+                generator,
+                GetCuboidTextureEntryId(workbench, index, face),
+                out Rect entryUv))
+        {
+            cuboid.SetOverrideUvRectData(face, BlockAtlasUvUtility.RectToUvRectData(entryUv));
+            return;
+        }
+
+        BlockTextureMapping fallbackMapping = default;
+        workbench.TryGetTextureMapping(out fallbackMapping);
+        Vector2Int tile = cuboid.GetTileCoord(face, fallbackMapping);
+        if (MultiCuboidBlockWorkbenchEditor.TryResolveLegacyTileUv(workbench, generator, tile, out Rect legacyUv))
+            cuboid.SetOverrideUvRectData(face, BlockAtlasUvUtility.RectToUvRectData(legacyUv));
     }
 
     public static void DrawSceneOverlay(MultiCuboidBlockWorkbench workbench)
@@ -913,6 +1227,7 @@ internal static class BlockbenchMultiCuboidImporter
         public BlockModelCuboid cuboid;
         public Dictionary<BlockFace, Vector2Int> faceTiles = new Dictionary<BlockFace, Vector2Int>();
         public Dictionary<BlockFace, Vector4> faceUvRects = new Dictionary<BlockFace, Vector4>();
+        public Dictionary<BlockFace, string> faceEntryIds = new Dictionary<BlockFace, string>();
         public Dictionary<BlockFace, string> faceTextureRequests = new Dictionary<BlockFace, string>();
     }
 
@@ -1025,13 +1340,21 @@ internal static class BlockbenchMultiCuboidImporter
             bool hasExistingMapping = workbench.TryGetTextureMapping(out BlockTextureMapping existingMapping);
             BlockTextureMapping? existingMappingValue = hasExistingMapping ? existingMapping : (BlockTextureMapping?)null;
             Dictionary<BlockFace, Vector2Int> baseTiles = BuildBaseTiles(importedCuboids, existingMappingValue);
-            Dictionary<BlockFace, Vector4> baseUvRects = BuildBaseUvRects(importedCuboids, baseTiles, existingMappingValue);
-            List<BlockModelCuboid> cuboids = BuildCuboids(importedCuboids, baseTiles);
+            Dictionary<BlockFace, string> baseEntryIds = BuildBaseEntryIds(workbench, importedCuboids);
+            Dictionary<BlockFace, Vector4> baseUvRects = BuildBaseUvRects(importedCuboids, baseTiles, baseEntryIds, existingMappingValue);
+            List<BlockModelCuboid> cuboids = BuildCuboids(importedCuboids, baseTiles, baseEntryIds);
 
             workbench.ReplaceCuboids(cuboids);
 
             bool appliedTextureMapping = ApplyTextureMapping(workbench, baseTiles, baseUvRects, existingMappingValue);
-            string message = BuildSummary(path, cuboids.Count, context, appliedTextureMapping, workbench.blockData != null);
+            bool appliedBaseEntryIds = ApplyBaseTextureEntryIds(workbench, baseEntryIds);
+            bool appliedCuboidEntryIds = ApplyImportedCuboidTextureEntryIds(workbench, importedCuboids, baseTiles, baseEntryIds);
+            string message = BuildSummary(
+                path,
+                cuboids.Count,
+                context,
+                appliedTextureMapping || appliedBaseEntryIds || appliedCuboidEntryIds,
+                workbench.blockData != null);
 
             Debug.Log(message, workbench);
             EditorUtility.DisplayDialog("Importar Blockbench", message, "OK");
@@ -1801,6 +2124,17 @@ internal static class BlockbenchMultiCuboidImporter
             return;
         }
 
+        if (context.blockData != null &&
+            context.atlasGenerator != null &&
+            VoxelAtlasCompatibility.CaptureStableEntryIds(
+                context.atlasGenerator,
+                context.blockData,
+                context.atlasTiles,
+                context.blockData.atlasCoordinatesStartTopLeft))
+        {
+            EditorUtility.SetDirty(context.blockData);
+        }
+
         EnsureTextureEntriesEnabled(context.atlasGenerator);
         bool changedAtlasGenerator = false;
 
@@ -1915,6 +2249,8 @@ internal static class BlockbenchMultiCuboidImporter
                     continue;
 
                 cuboid.faceTiles[pair.Key] = request.tile;
+                if (!string.IsNullOrWhiteSpace(request.entryId))
+                    cuboid.faceEntryIds[pair.Key] = request.entryId;
                 if (request.hasAssignedUvRect)
                     cuboid.faceUvRects[pair.Key] = request.uvRectData;
                 context.importedFaceCount++;
@@ -2729,6 +3065,7 @@ internal static class BlockbenchMultiCuboidImporter
     private static Dictionary<BlockFace, Vector4> BuildBaseUvRects(
         List<ImportedCuboidData> importedCuboids,
         Dictionary<BlockFace, Vector2Int> baseTiles,
+        Dictionary<BlockFace, string> baseEntryIds,
         BlockTextureMapping? existingMapping)
     {
         Dictionary<BlockFace, Vector4> baseUvRects = new Dictionary<BlockFace, Vector4>();
@@ -2736,6 +3073,27 @@ internal static class BlockbenchMultiCuboidImporter
         for (int i = 0; i < SupportedFaces.Length; i++)
         {
             BlockFace face = SupportedFaces[i];
+
+            if (baseEntryIds.TryGetValue(face, out string baseEntryId) && !string.IsNullOrWhiteSpace(baseEntryId))
+            {
+                for (int c = 0; c < importedCuboids.Count; c++)
+                {
+                    ImportedCuboidData imported = importedCuboids[c];
+                    if (!imported.faceEntryIds.TryGetValue(face, out string importedEntryId) ||
+                        !string.Equals(importedEntryId, baseEntryId, StringComparison.Ordinal) ||
+                        !imported.faceUvRects.TryGetValue(face, out Vector4 importedUvRect) ||
+                        !BlockAtlasUvUtility.IsValidUvRectData(importedUvRect))
+                    {
+                        continue;
+                    }
+
+                    baseUvRects[face] = importedUvRect;
+                    break;
+                }
+            }
+
+            if (baseUvRects.ContainsKey(face))
+                continue;
 
             if (baseTiles.TryGetValue(face, out Vector2Int baseTile))
             {
@@ -2769,6 +3127,45 @@ internal static class BlockbenchMultiCuboidImporter
         return baseUvRects;
     }
 
+    private static Dictionary<BlockFace, string> BuildBaseEntryIds(
+        MultiCuboidBlockWorkbench workbench,
+        List<ImportedCuboidData> importedCuboids)
+    {
+        Dictionary<BlockFace, string> baseEntryIds = new Dictionary<BlockFace, string>();
+
+        for (int i = 0; i < SupportedFaces.Length; i++)
+        {
+            BlockFace face = SupportedFaces[i];
+            Dictionary<string, int> counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            for (int c = 0; c < importedCuboids.Count; c++)
+            {
+                if (!importedCuboids[c].faceEntryIds.TryGetValue(face, out string entryId) ||
+                    string.IsNullOrWhiteSpace(entryId))
+                {
+                    continue;
+                }
+
+                counts.TryGetValue(entryId, out int currentCount);
+                counts[entryId] = currentCount + 1;
+            }
+
+            string preferredEntryId = string.Empty;
+            if (workbench != null && workbench.blockData != null)
+                workbench.blockData.TryGetTextureEntryId(workbench.blockType, face, out preferredEntryId);
+
+            if (counts.Count > 0)
+            {
+                baseEntryIds[face] = ResolveMostCommonEntryId(counts, preferredEntryId);
+                continue;
+            }
+
+            if (!string.IsNullOrWhiteSpace(preferredEntryId))
+                baseEntryIds[face] = preferredEntryId;
+        }
+
+        return baseEntryIds;
+    }
+
     private static Vector2Int ResolveMostCommonTile(Dictionary<Vector2Int, int> counts, Vector2Int? preferredTile)
     {
         Vector2Int bestTile = Vector2Int.zero;
@@ -2794,9 +3191,38 @@ internal static class BlockbenchMultiCuboidImporter
         return bestTile;
     }
 
+    private static string ResolveMostCommonEntryId(Dictionary<string, int> counts, string preferredEntryId)
+    {
+        string bestEntryId = string.Empty;
+        int bestCount = int.MinValue;
+        bool found = false;
+
+        foreach (KeyValuePair<string, int> pair in counts)
+        {
+            bool betterCount = !found || pair.Value > bestCount;
+            bool preferredTie =
+                !string.IsNullOrWhiteSpace(preferredEntryId) &&
+                pair.Value == bestCount &&
+                string.Equals(pair.Key, preferredEntryId, StringComparison.Ordinal);
+            bool lexicalTie =
+                pair.Value == bestCount &&
+                string.CompareOrdinal(pair.Key, bestEntryId) < 0;
+
+            if (betterCount || preferredTie || lexicalTie)
+            {
+                bestEntryId = pair.Key;
+                bestCount = pair.Value;
+                found = true;
+            }
+        }
+
+        return bestEntryId;
+    }
+
     private static List<BlockModelCuboid> BuildCuboids(
         List<ImportedCuboidData> importedCuboids,
-        Dictionary<BlockFace, Vector2Int> baseTiles)
+        Dictionary<BlockFace, Vector2Int> baseTiles,
+        Dictionary<BlockFace, string> baseEntryIds)
     {
         List<BlockModelCuboid> cuboids = new List<BlockModelCuboid>(importedCuboids.Count);
         for (int i = 0; i < importedCuboids.Count; i++)
@@ -2807,7 +3233,7 @@ internal static class BlockbenchMultiCuboidImporter
 
             foreach (KeyValuePair<BlockFace, Vector2Int> pair in imported.faceTiles)
             {
-                if (!baseTiles.TryGetValue(pair.Key, out Vector2Int baseTile) || baseTile == pair.Value)
+                if (IsImportedFaceUsingBaseTexture(imported, pair.Key, baseTiles, baseEntryIds))
                     continue;
 
                 cuboid.textureOverrideFaces |= GetFaceMask(pair.Key);
@@ -2823,6 +3249,140 @@ internal static class BlockbenchMultiCuboidImporter
         }
 
         return cuboids;
+    }
+
+    private static bool ApplyBaseTextureEntryIds(
+        MultiCuboidBlockWorkbench workbench,
+        Dictionary<BlockFace, string> baseEntryIds)
+    {
+        if (workbench == null || workbench.blockData == null || baseEntryIds == null || baseEntryIds.Count == 0)
+            return false;
+
+        bool willChange = false;
+        for (int i = 0; i < SupportedFaces.Length; i++)
+        {
+            BlockFace face = SupportedFaces[i];
+            if (!baseEntryIds.TryGetValue(face, out string entryId) || string.IsNullOrWhiteSpace(entryId))
+                continue;
+
+            if (!workbench.blockData.TryGetTextureEntryId(workbench.blockType, face, out string currentId) ||
+                !string.Equals(currentId, entryId, StringComparison.Ordinal))
+            {
+                willChange = true;
+                break;
+            }
+        }
+
+        if (!willChange)
+            return false;
+
+        Undo.RecordObject(workbench.blockData, "Update Block Texture Entry IDs");
+        bool changed = false;
+        for (int i = 0; i < SupportedFaces.Length; i++)
+        {
+            BlockFace face = SupportedFaces[i];
+            if (!baseEntryIds.TryGetValue(face, out string entryId) || string.IsNullOrWhiteSpace(entryId))
+                continue;
+
+            changed |= workbench.blockData.SetTextureEntryId(workbench.blockType, face, entryId);
+        }
+
+        if (!changed)
+            return false;
+
+        EditorUtility.SetDirty(workbench.blockData);
+        AssetDatabase.SaveAssets();
+        return true;
+    }
+
+    private static bool ApplyImportedCuboidTextureEntryIds(
+        MultiCuboidBlockWorkbench workbench,
+        List<ImportedCuboidData> importedCuboids,
+        Dictionary<BlockFace, Vector2Int> baseTiles,
+        Dictionary<BlockFace, string> baseEntryIds)
+    {
+        if (workbench == null)
+            return false;
+
+        bool changed = false;
+        int cuboidCount = workbench.CuboidCount;
+
+        for (int i = 0; i < cuboidCount; i++)
+        {
+            ImportedCuboidData imported = i < importedCuboids.Count ? importedCuboids[i] : null;
+            for (int faceIndex = 0; faceIndex < SupportedFaces.Length; faceIndex++)
+            {
+                BlockFace face = SupportedFaces[faceIndex];
+                string desiredEntryId = string.Empty;
+                if (imported != null &&
+                    imported.faceEntryIds.TryGetValue(face, out string importedEntryId) &&
+                    !string.IsNullOrWhiteSpace(importedEntryId) &&
+                    !IsImportedFaceUsingBaseTexture(imported, face, baseTiles, baseEntryIds))
+                {
+                    desiredEntryId = importedEntryId.Trim();
+                }
+
+                workbench.TryGetCuboidTextureEntryId(i, face, out string currentEntryId);
+                currentEntryId = string.IsNullOrWhiteSpace(currentEntryId) ? string.Empty : currentEntryId.Trim();
+                if (!string.Equals(currentEntryId, desiredEntryId, StringComparison.Ordinal))
+                {
+                    changed = true;
+                    break;
+                }
+            }
+
+            if (changed)
+                break;
+        }
+
+        if (!changed)
+            return false;
+
+        Undo.RecordObject(workbench, "Update Workbench Cuboid Texture Entry IDs");
+        for (int i = 0; i < cuboidCount; i++)
+            workbench.ClearCuboidTextureEntryIds(i);
+
+        for (int i = 0; i < importedCuboids.Count; i++)
+        {
+            ImportedCuboidData imported = importedCuboids[i];
+            foreach (KeyValuePair<BlockFace, string> pair in imported.faceEntryIds)
+            {
+                if (string.IsNullOrWhiteSpace(pair.Value) ||
+                    IsImportedFaceUsingBaseTexture(imported, pair.Key, baseTiles, baseEntryIds))
+                {
+                    continue;
+                }
+
+                workbench.SetCuboidTextureEntryId(i, pair.Key, pair.Value);
+            }
+        }
+
+        MultiCuboidWorkbenchEditorGui.MarkWorkbenchDirty(workbench);
+        return true;
+    }
+
+    private static bool IsImportedFaceUsingBaseTexture(
+        ImportedCuboidData imported,
+        BlockFace face,
+        Dictionary<BlockFace, Vector2Int> baseTiles,
+        Dictionary<BlockFace, string> baseEntryIds)
+    {
+        if (imported == null)
+            return true;
+
+        if (baseEntryIds != null &&
+            baseEntryIds.TryGetValue(face, out string baseEntryId) &&
+            !string.IsNullOrWhiteSpace(baseEntryId) &&
+            imported.faceEntryIds.TryGetValue(face, out string importedEntryId) &&
+            !string.IsNullOrWhiteSpace(importedEntryId))
+        {
+            return string.Equals(baseEntryId, importedEntryId, StringComparison.Ordinal);
+        }
+
+        return baseTiles != null &&
+               baseTiles.TryGetValue(face, out Vector2Int baseTile) &&
+               imported.faceTiles.TryGetValue(face, out Vector2Int importedTile) &&
+               importedTile == baseTile;
     }
 
     private static bool ApplyTextureMapping(

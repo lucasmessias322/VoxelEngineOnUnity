@@ -96,6 +96,13 @@ public class TextureAtlasGenerator : MonoBehaviour
     public bool TryGetLegacyTileUv(Vector2Int tileCoord, Vector2Int legacyGridSize, bool atlasOriginTopLeft, out Rect uvRect)
     {
         uvRect = default;
+        return TryGetLegacyTileId(tileCoord, legacyGridSize, atlasOriginTopLeft, out string id) &&
+               uvMap.TryGetValue(id, out uvRect);
+    }
+
+    public bool TryGetLegacyTileId(Vector2Int tileCoord, Vector2Int legacyGridSize, bool atlasOriginTopLeft, out string id)
+    {
+        id = string.Empty;
         if (generatedLegacyEntryOrder == null || generatedLegacyEntryOrder.Count == 0)
             return false;
 
@@ -111,8 +118,12 @@ public class TextureAtlasGenerator : MonoBehaviour
         if (legacyIndex < 0 || legacyIndex >= generatedLegacyEntryOrder.Count)
             return false;
 
-        string id = generatedLegacyEntryOrder[legacyIndex];
-        return !string.IsNullOrWhiteSpace(id) && uvMap.TryGetValue(id, out uvRect);
+        string resolvedId = generatedLegacyEntryOrder[legacyIndex];
+        if (string.IsNullOrWhiteSpace(resolvedId))
+            return false;
+
+        id = resolvedId.Trim();
+        return true;
     }
 
     public void GenerateAtlas()
