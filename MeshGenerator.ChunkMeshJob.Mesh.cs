@@ -163,11 +163,30 @@ public static partial class MeshGenerator
                                 light1 = (byte)math.max((int)light1, (int)faceLight);
                                 light2 = (byte)math.max((int)light2, (int)faceLight);
                                 light3 = (byte)math.max((int)light3, (int)faceLight);
+                                byte placementAxis = GetBlockPlacementAxisValue(idx);
+                                BlockPlacementAxis resolvedPlacementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+                                BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(currentMapping, faceType, resolvedPlacementAxis);
+                                BlockPlacementAxis uvPlacementAxis = ResolveUvPlacementAxis(currentMapping, resolvedPlacementAxis);
+                                BlockFace uvSamplingFace = ResolveUvSamplingFace(currentMapping, faceType, sampledFace);
+                                bool tint = currentMapping.GetTint(sampledFace);
+                                bool useGrassSideOverlay =
+                                    current == BlockType.Grass &&
+                                    sampledFace != BlockFace.Top &&
+                                    sampledFace != BlockFace.Bottom;
+                                ResolveAtlasRect(
+                                    currentMapping,
+                                    sampledFace,
+                                    invAtlasTilesX,
+                                    invAtlasTilesY,
+                                    out Vector2 atlasUv,
+                                    out Vector2 atlasSize);
+                                byte renderBucket = ClassifyFaceRenderBucket(current, currentMapping);
+                                uint mergeKey = BuildFaceMergeKey(current, renderBucket, uvPlacementAxis, uvSamplingFace, tint, useGrassSideOverlay);
+                                ulong uvRectKey = BuildUvRectKey(atlasUv, atlasSize);
                                 ushort surfaceY0 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 0, 0, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 ushort surfaceY1 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 1, 0, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 ushort surfaceY2 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 1, 1, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 ushort surfaceY3 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 0, 1, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                byte placementAxis = GetBlockPlacementAxisValue(idx);
 
                                 mask[maskIndex] = new GreedyFaceData
                                 {
@@ -175,6 +194,8 @@ public static partial class MeshGenerator
                                     placementAxis = placementAxis,
                                     valid = 1,
                                     faceLight = faceLight,
+                                    mergeKey = mergeKey,
+                                    uvRectKey = uvRectKey,
                                     surfaceY0 = surfaceY0,
                                     surfaceY1 = surfaceY1,
                                     surfaceY2 = surfaceY2,

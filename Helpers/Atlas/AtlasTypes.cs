@@ -20,6 +20,7 @@ public struct AtlasBuildSettings
     [Min(1)] public int maxSize;
     [Min(0)] public int paddingPixels;
     public bool generateMipmaps;
+    public bool generateMipmapsPerTile;
     public TextureFormat format;
     public FilterMode filterMode;
     public TextureWrapMode wrapMode;
@@ -34,6 +35,7 @@ public struct AtlasBuildSettings
                 maxSize = 4096,
                 paddingPixels = 2,
                 generateMipmaps = true,
+                generateMipmapsPerTile = false,
                 format = TextureFormat.RGBA32,
                 filterMode = FilterMode.Point,
                 wrapMode = TextureWrapMode.Clamp

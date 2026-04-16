@@ -11,6 +11,30 @@ public class TextureAtlasGeneratorEditor : Editor
 
         TextureAtlasGenerator generator = (TextureAtlasGenerator)target;
 
+        if (generator.generateMipmaps && !generator.saveToFile)
+        {
+            EditorGUILayout.HelpBox(
+                "As configuracoes avancadas de mipmap do atlas salvo (Box, Preserve Coverage, Alpha Cutoff e Replicate Border) so entram em efeito quando Save To File estiver ativo.",
+                MessageType.Info);
+        }
+
+        if (generator.generateMipmaps && generator.generateMipmapsPerTile)
+        {
+            EditorGUILayout.HelpBox(
+                "Generate Mipmaps Per Tile ainda esta experimental neste projeto. Se aparecer grade escura ou artefatos, desligue essa opcao e aumente o paddingPixels do atlas.",
+                MessageType.Warning);
+        }
+
+        if (generator.generateMipmaps &&
+            generator.saveToFile &&
+            generator.preserveMipMapCoverage &&
+            generator.mipMapAlphaCutoff > 0.7f)
+        {
+            EditorGUILayout.HelpBox(
+                "Mip Map Alpha Cutoff muito alto pode deixar folhas e outros materiais alpha-clip agressivos demais a distancia. Para foliage, prefira algo perto do cutoff do shader, normalmente entre 0.4 e 0.6.",
+                MessageType.Warning);
+        }
+
         if (generator.textureDatabase == null)
         {
             EditorGUILayout.HelpBox(
@@ -46,7 +70,9 @@ public class TextureAtlasGeneratorEditor : Editor
 
         if (GUILayout.Button("Gerar Agora"))
         {
+            RecordGeneratorTargets(generator, "Generate Texture Atlas");
             generator.GenerateAtlas();
+            MarkGeneratorTargetsDirty(generator);
         }
     }
 

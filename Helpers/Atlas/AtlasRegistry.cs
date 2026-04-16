@@ -12,6 +12,7 @@ public sealed class AtlasRegistry : MonoBehaviour
         [Min(1)] public int maxAtlasSize = 4096;
         [Min(0)] public int paddingPixels = 2;
         public bool generateMipmaps = true;
+        public bool generateMipmapsPerTile = false;
         public TextureFormat atlasFormat = TextureFormat.RGBA32;
         public FilterMode filterMode = FilterMode.Point;
         public TextureWrapMode wrapMode = TextureWrapMode.Clamp;
@@ -27,6 +28,7 @@ public sealed class AtlasRegistry : MonoBehaviour
                 maxSize = maxAtlasSize,
                 paddingPixels = paddingPixels,
                 generateMipmaps = generateMipmaps,
+                generateMipmapsPerTile = generateMipmapsPerTile,
                 format = atlasFormat,
                 filterMode = filterMode,
                 wrapMode = wrapMode

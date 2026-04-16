@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using UnityEngine;
+#if UNITY_EDITOR
+using UnityEditor;
+#endif
 
 public class TextureAtlasGenerator : MonoBehaviour
 {
@@ -9,6 +12,12 @@ public class TextureAtlasGenerator : MonoBehaviour
     {
         EnumName = 0,
         MinecraftResourceLocation = 1
+    }
+
+    public enum SavedAtlasMipMapFilter
+    {
+        Box = 0,
+        Kaiser = 1
     }
 
     [Serializable]
@@ -39,6 +48,29 @@ public class TextureAtlasGenerator : MonoBehaviour
     public FilterMode filterMode = FilterMode.Point;
     public TextureWrapMode wrapMode = TextureWrapMode.Clamp;
 
+    [Header("Saved Atlas Mipmaps")]
+    [Tooltip("Quando o atlas for salvo como asset, define o filtro usado na geracao dos mipmaps importados.")]
+    public SavedAtlasMipMapFilter mipMapFiltering = SavedAtlasMipMapFilter.Box;
+    [Tooltip("Preserva a cobertura do alpha nos mipmaps do atlas salvo.")]
+    public bool preserveMipMapCoverage = true;
+    [Range(0f, 1f)]
+    [Tooltip("Alpha cutoff usado quando Preserve Coverage estiver ativo. Para materiais alpha-clip, o ideal e combinar com o cutoff do shader; foliage costuma funcionar melhor entre 0.4 e 0.6.")]
+    public float mipMapAlphaCutoff = 0.5f;
+    [Tooltip("Replica a borda no atlas salvo ao gerar os mipmaps importados.")]
+    public bool replicateMipMapBorder = false;
+
+    [Header("Runtime Mipmaps")]
+    [Tooltip("Experimental: gera os mipmaps do atlas por tile para evitar bleeding entre blocos no atlas runtime.")]
+    public bool generateMipmapsPerTile = false;
+
+    [Header("Shader Sampling")]
+    [Min(0f)]
+    [Tooltip("Inset em pixels aplicado no sampling do atlas nos shaders voxel para reduzir bleeding e bordas pretas com mipmaps.")]
+    public float shaderPaddingPixels = 1f;
+    [Min(0f)]
+    [Tooltip("Inset extra em pixels aplicado automaticamente a materiais com Alpha Clip, como folhas, para reduzir bleeding de tiles vizinhos nos mipmaps.")]
+    public float alphaClipShaderPaddingPixels = 2f;
+
     [Header("Runtime")]
     public bool generateOnStart = false;
     public Renderer targetRenderer;
@@ -66,6 +98,13 @@ public class TextureAtlasGenerator : MonoBehaviour
     {
         if (generateOnStart)
             GenerateAtlas();
+    }
+
+    private void OnValidate()
+    {
+        mipMapAlphaCutoff = Mathf.Clamp01(mipMapAlphaCutoff);
+        shaderPaddingPixels = Mathf.Max(0f, shaderPaddingPixels);
+        alphaClipShaderPaddingPixels = Mathf.Max(shaderPaddingPixels, alphaClipShaderPaddingPixels);
     }
 
     public bool TryGetUv(string id, out Rect uvRect)
@@ -139,6 +178,7 @@ public class TextureAtlasGenerator : MonoBehaviour
             maxSize = maxAtlasSize,
             paddingPixels = paddingPixels,
             generateMipmaps = generateMipmaps,
+            generateMipmapsPerTile = generateMipmapsPerTile,
             format = atlasFormat,
             filterMode = filterMode,
             wrapMode = wrapMode
@@ -183,10 +223,22 @@ public class TextureAtlasGenerator : MonoBehaviour
 
         BuildBlockTypeLookupFromUvMap();
 
-        ApplyAtlasToTargets(generatedAtlas);
-
+        Texture2D atlasToApply = generatedAtlas;
         if (saveToFile && generatedAtlas != null)
-            SaveAtlasToDisk(generatedAtlas);
+        {
+            Texture2D importedAtlas = SaveAtlasToDisk(generatedAtlas);
+#if UNITY_EDITOR
+            if (!Application.isPlaying &&
+                !generateMipmapsPerTile &&
+                importedAtlas != null)
+            {
+                atlasToApply = importedAtlas;
+            }
+#endif
+        }
+
+        generatedAtlas = atlasToApply;
+        ApplyAtlasToTargets(generatedAtlas);
 
         Debug.Log(
             $"TextureAtlasGenerator: built {generatedAtlas.width}x{generatedAtlas.height} atlas " +
@@ -321,11 +373,18 @@ public class TextureAtlasGenerator : MonoBehaviour
         blockPathPrefix = AtlasKeyUtility.DefaultBlockPathPrefix;
         initialAtlasSize = 1024;
         maxAtlasSize = 4096;
-        paddingPixels = 2;
+        paddingPixels = 8;
         generateMipmaps = true;
         atlasFormat = TextureFormat.RGBA32;
         filterMode = FilterMode.Point;
         wrapMode = TextureWrapMode.Clamp;
+        mipMapFiltering = SavedAtlasMipMapFilter.Box;
+        preserveMipMapCoverage = true;
+        mipMapAlphaCutoff = 0.5f;
+        replicateMipMapBorder = false;
+        generateMipmapsPerTile = false;
+        shaderPaddingPixels = 1f;
+        alphaClipShaderPaddingPixels = 2f;
         generateOnStart = true;
         saveToFile = false;
         targetTextureProperty = "_Atlas";
@@ -353,7 +412,28 @@ public class TextureAtlasGenerator : MonoBehaviour
         }
     }
 
-    private static void AssignTexture(Material material, Texture2D texture, string preferredProperty)
+    public float ComputeShaderPaddingUv(Texture texture)
+    {
+        return ComputeShaderPaddingUv(texture, null);
+    }
+
+    public float ComputeShaderPaddingUv(Texture texture, Material material)
+    {
+        if (texture == null)
+            return 0f;
+
+        int referenceSize = Mathf.Max(texture.width, texture.height);
+        if (referenceSize <= 0)
+            return 0f;
+
+        float paddingPixels = Mathf.Max(0f, shaderPaddingPixels);
+        if (UsesAlphaClip(material))
+            paddingPixels = Mathf.Max(paddingPixels, alphaClipShaderPaddingPixels);
+
+        return paddingPixels / referenceSize;
+    }
+
+    private void AssignTexture(Material material, Texture2D texture, string preferredProperty)
     {
         if (material == null || texture == null)
             return;
@@ -370,26 +450,55 @@ public class TextureAtlasGenerator : MonoBehaviour
             material.SetTexture("_MainTex", texture);
         else
             material.mainTexture = texture;
+
+        if (material.HasProperty("_PaddingUV"))
+            material.SetFloat("_PaddingUV", ComputeShaderPaddingUv(texture, material));
+
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+            EditorUtility.SetDirty(material);
+#endif
     }
 
-    private void SaveAtlasToDisk(Texture2D atlas)
+    private Texture2D SaveAtlasToDisk(Texture2D atlas)
     {
         if (atlas == null || string.IsNullOrWhiteSpace(savePath))
-            return;
+            return atlas;
 
         string normalizedPath = savePath.Replace('\\', '/');
-        string directory = Path.GetDirectoryName(normalizedPath);
+        string absolutePath = ResolveAbsoluteSavePath(normalizedPath);
+        string directory = Path.GetDirectoryName(absolutePath);
         if (!string.IsNullOrEmpty(directory))
             Directory.CreateDirectory(directory);
 
         byte[] pngData = atlas.EncodeToPNG();
-        File.WriteAllBytes(normalizedPath, pngData);
+        File.WriteAllBytes(absolutePath, pngData);
 
 #if UNITY_EDITOR
-        UnityEditor.AssetDatabase.Refresh();
+        string assetPath = TryGetAssetPath(absolutePath);
+        if (!string.IsNullOrEmpty(assetPath))
+        {
+            AssetDatabase.ImportAsset(
+                assetPath,
+                ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+            ConfigureSavedAtlasImporter(assetPath);
+
+            Texture2D importedAtlas = AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+            if (importedAtlas != null)
+            {
+                EditorUtility.SetDirty(this);
+                Debug.Log($"TextureAtlasGenerator: atlas saved to '{assetPath}'.");
+                return importedAtlas;
+            }
+        }
+        else
+        {
+            AssetDatabase.Refresh(ImportAssetOptions.ForceSynchronousImport);
+        }
 #endif
 
         Debug.Log($"TextureAtlasGenerator: atlas saved to '{normalizedPath}'.");
+        return atlas;
     }
 
     public List<AtlasTextureEntry> GetWritableTextureEntries()
@@ -494,4 +603,90 @@ public class TextureAtlasGenerator : MonoBehaviour
     {
         return entries != null && entries.Exists(entry => entry != null && entry.texture != null);
     }
+
+    private static bool UsesAlphaClip(Material material)
+    {
+        return material != null &&
+               material.HasProperty("_AlphaClip") &&
+               material.GetFloat("_AlphaClip") > 0.5f;
+    }
+
+    private static string ResolveAbsoluteSavePath(string normalizedPath)
+    {
+        if (Path.IsPathRooted(normalizedPath))
+            return Path.GetFullPath(normalizedPath);
+
+        string projectRoot = Directory.GetParent(Application.dataPath)?.FullName ?? Application.dataPath;
+        return Path.GetFullPath(Path.Combine(projectRoot, normalizedPath));
+    }
+
+#if UNITY_EDITOR
+    private void ConfigureSavedAtlasImporter(string assetPath)
+    {
+        if (!(AssetImporter.GetAtPath(assetPath) is TextureImporter importer))
+            return;
+
+        bool changed = false;
+
+        if (importer.filterMode != filterMode)
+        {
+            importer.filterMode = filterMode;
+            changed = true;
+        }
+
+        if (importer.wrapMode != wrapMode)
+        {
+            importer.wrapMode = wrapMode;
+            changed = true;
+        }
+
+        if (importer.mipmapEnabled != generateMipmaps)
+        {
+            importer.mipmapEnabled = generateMipmaps;
+            changed = true;
+        }
+
+        TextureImporterMipFilter targetMipFilter = mipMapFiltering == SavedAtlasMipMapFilter.Kaiser
+            ? TextureImporterMipFilter.KaiserFilter
+            : TextureImporterMipFilter.BoxFilter;
+        if (importer.mipmapFilter != targetMipFilter)
+        {
+            importer.mipmapFilter = targetMipFilter;
+            changed = true;
+        }
+
+        if (importer.mipMapsPreserveCoverage != preserveMipMapCoverage)
+        {
+            importer.mipMapsPreserveCoverage = preserveMipMapCoverage;
+            changed = true;
+        }
+
+        float safeAlphaCutoff = Mathf.Clamp01(mipMapAlphaCutoff);
+        if (!Mathf.Approximately(importer.alphaTestReferenceValue, safeAlphaCutoff))
+        {
+            importer.alphaTestReferenceValue = safeAlphaCutoff;
+            changed = true;
+        }
+
+        if (importer.borderMipmap != replicateMipMapBorder)
+        {
+            importer.borderMipmap = replicateMipMapBorder;
+            changed = true;
+        }
+
+        if (changed)
+            importer.SaveAndReimport();
+    }
+
+    private static string TryGetAssetPath(string absolutePath)
+    {
+        string normalizedAbsolutePath = Path.GetFullPath(absolutePath).Replace('\\', '/');
+        string normalizedAssetsPath = Path.GetFullPath(Application.dataPath).Replace('\\', '/');
+        if (!normalizedAbsolutePath.StartsWith(normalizedAssetsPath, StringComparison.OrdinalIgnoreCase))
+            return string.Empty;
+
+        string relativePath = normalizedAbsolutePath.Substring(normalizedAssetsPath.Length).TrimStart('/');
+        return string.IsNullOrEmpty(relativePath) ? "Assets" : $"Assets/{relativePath}";
+    }
+#endif
 }

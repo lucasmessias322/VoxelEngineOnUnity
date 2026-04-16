@@ -1966,6 +1966,8 @@ public partial class World : MonoBehaviour
             if (material == null)
                 continue;
 
+            float atlasPaddingUv = ResolveAtlasShaderPaddingUv(atlasTexture, material);
+
             if (material.HasProperty("_Atlas"))
                 material.SetTexture("_Atlas", atlasTexture);
             else if (material.HasProperty("_BaseMap"))
@@ -1978,8 +1980,33 @@ public partial class World : MonoBehaviour
             if (material.HasProperty("_AtlasOriginTopLeft"))
                 material.SetFloat("_AtlasOriginTopLeft", 0f);
             if (material.HasProperty("_PaddingUV"))
-                material.SetFloat("_PaddingUV", 0f);
+                material.SetFloat("_PaddingUV", atlasPaddingUv);
         }
+    }
+
+    private float ResolveAtlasShaderPaddingUv(Texture atlasTexture, Material material)
+    {
+        if (atlasTexture == null)
+            return 0f;
+
+        TextureAtlasGenerator generator = ResolveBlockAtlasGenerator();
+        if (generator != null)
+            return generator.ComputeShaderPaddingUv(atlasTexture, material);
+
+        int referenceSize = Mathf.Max(atlasTexture.width, atlasTexture.height);
+        if (referenceSize <= 0)
+            return 0f;
+
+        // Fallback conservador quando o atlas vem de fora do generator.
+        float fallbackPaddingPixels = 1f;
+        if (material != null &&
+            material.HasProperty("_AlphaClip") &&
+            material.GetFloat("_AlphaClip") > 0.5f)
+        {
+            fallbackPaddingPixels = 2f;
+        }
+
+        return fallbackPaddingPixels / referenceSize;
     }
 
     private void OnEnable()

@@ -85,6 +85,8 @@ public static partial class MeshGenerator
             public byte placementAxis;
             public byte valid;
             public byte faceLight;
+            public uint mergeKey;
+            public ulong uvRectKey;
             public ushort surfaceY0;
             public ushort surfaceY1;
             public ushort surfaceY2;
@@ -378,8 +380,8 @@ public static partial class MeshGenerator
         {
             return HasFace(a) &&
                    HasFace(b) &&
-                   a.blockId == b.blockId &&
-                   a.placementAxis == b.placementAxis &&
+                   a.mergeKey == b.mergeKey &&
+                   a.uvRectKey == b.uvRectKey &&
                    a.faceLight == b.faceLight;
         }
 
@@ -466,6 +468,46 @@ public static partial class MeshGenerator
             }
 
             return sampledFace;
+        }
+
+        private static byte ClassifyFaceRenderBucket(BlockType blockType, BlockTextureMapping mapping)
+        {
+            if (FluidBlockUtility.IsWater(blockType))
+                return 2;
+
+            return mapping.isTransparent ? (byte)1 : (byte)0;
+        }
+
+        private static uint BuildFaceMergeKey(
+            BlockType blockType,
+            byte renderBucket,
+            BlockPlacementAxis uvPlacementAxis,
+            BlockFace uvSamplingFace,
+            bool tint,
+            bool useGrassSideOverlay)
+        {
+            if (renderBucket == 2)
+                return 0x80000000u | (uint)blockType;
+
+            return (uint)renderBucket |
+                   ((uint)(byte)BlockPlacementRotationUtility.SanitizeAxis(uvPlacementAxis) << 8) |
+                   ((uint)(byte)uvSamplingFace << 16) |
+                   ((tint ? 1u : 0u) << 24) |
+                   ((useGrassSideOverlay ? 1u : 0u) << 25);
+        }
+
+        private static ushort EncodeUvRectComponent(float value)
+        {
+            int scaled = (int)math.round(math.saturate(value) * UvRectEncodeScale);
+            return (ushort)math.clamp(scaled, 0, ushort.MaxValue);
+        }
+
+        private static ulong BuildUvRectKey(Vector2 atlasOrigin, Vector2 atlasSize)
+        {
+            return (ulong)EncodeUvRectComponent(atlasOrigin.x) |
+                   ((ulong)EncodeUvRectComponent(atlasOrigin.y) << 16) |
+                   ((ulong)EncodeUvRectComponent(atlasSize.x) << 32) |
+                   ((ulong)EncodeUvRectComponent(atlasSize.y) << 48);
         }
 
         private static Vector3 ToCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)

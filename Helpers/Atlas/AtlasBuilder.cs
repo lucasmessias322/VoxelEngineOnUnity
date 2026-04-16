@@ -365,8 +365,186 @@ public sealed class AtlasBuilder
             result.paddedPixelRectMap[entry.id] = paddedRect;
         }
 
-        atlas.Apply(settings.generateMipmaps, false);
+        if (settings.generateMipmaps && settings.generateMipmapsPerTile)
+            BuildPerTileMipmaps(atlas, preparedEntries, packedLookup, settings);
+
+        atlas.Apply(settings.generateMipmaps && !settings.generateMipmapsPerTile, false);
         return result;
+    }
+
+    private static void BuildPerTileMipmaps(
+        Texture2D atlas,
+        List<PreparedEntry> preparedEntries,
+        Dictionary<string, TexturePacker.PackedItem> packedLookup,
+        AtlasBuildSettings settings)
+    {
+        if (atlas == null || preparedEntries == null || preparedEntries.Count == 0)
+            return;
+
+        int mipCount = atlas.mipmapCount;
+        if (mipCount <= 1)
+            return;
+
+        int atlasSize = atlas.width;
+        for (int mipLevel = 1; mipLevel < mipCount; mipLevel++)
+        {
+            int mipAtlasSize = Mathf.Max(1, atlasSize >> mipLevel);
+            Color32[] mipPixels = new Color32[mipAtlasSize * mipAtlasSize];
+            float scale = 1f / (1 << mipLevel);
+
+            for (int i = 0; i < preparedEntries.Count; i++)
+            {
+                PreparedEntry entry = preparedEntries[i];
+                if (!packedLookup.TryGetValue(entry.id, out TexturePacker.PackedItem packed))
+                    continue;
+
+                RectInt basePaddedRect = packed.rect;
+                RectInt basePixelRect = new RectInt(
+                    basePaddedRect.x + settings.paddingPixels,
+                    basePaddedRect.y + settings.paddingPixels,
+                    entry.width,
+                    entry.height);
+
+                RectInt mipPixelRect = ScaleRectForMip(basePixelRect, scale, mipAtlasSize, mipAtlasSize);
+                if (mipPixelRect.width <= 0 || mipPixelRect.height <= 0)
+                    continue;
+
+                Color32[] scaledPixels = DownsamplePixelsBox(
+                    entry.pixels,
+                    entry.width,
+                    entry.height,
+                    mipPixelRect.width,
+                    mipPixelRect.height);
+
+                WritePixels(
+                    mipPixels,
+                    mipAtlasSize,
+                    mipAtlasSize,
+                    mipPixelRect.x,
+                    mipPixelRect.y,
+                    mipPixelRect.width,
+                    mipPixelRect.height,
+                    scaledPixels);
+
+                int mipPadding = Mathf.Max(1, Mathf.CeilToInt(settings.paddingPixels * scale));
+                ExtrudePadding(
+                    mipPixels,
+                    mipAtlasSize,
+                    mipAtlasSize,
+                    scaledPixels,
+                    mipPixelRect.x,
+                    mipPixelRect.y,
+                    mipPixelRect.width,
+                    mipPixelRect.height,
+                    mipPadding);
+            }
+
+            atlas.SetPixels32(mipPixels, mipLevel);
+        }
+    }
+
+    private static RectInt ScaleRectForMip(RectInt rect, float scale, int atlasWidth, int atlasHeight)
+    {
+        int xMin = Mathf.Clamp(Mathf.FloorToInt(rect.xMin * scale), 0, atlasWidth - 1);
+        int yMin = Mathf.Clamp(Mathf.FloorToInt(rect.yMin * scale), 0, atlasHeight - 1);
+        int xMax = Mathf.Clamp(Mathf.CeilToInt(rect.xMax * scale), xMin + 1, atlasWidth);
+        int yMax = Mathf.Clamp(Mathf.CeilToInt(rect.yMax * scale), yMin + 1, atlasHeight);
+
+        return new RectInt(
+            xMin,
+            yMin,
+            xMax - xMin,
+            yMax - yMin);
+    }
+
+    private static Color32[] DownsamplePixelsBox(
+        Color32[] sourcePixels,
+        int sourceWidth,
+        int sourceHeight,
+        int targetWidth,
+        int targetHeight)
+    {
+        if (sourcePixels == null || sourcePixels.Length == 0 || sourceWidth <= 0 || sourceHeight <= 0)
+            return Array.Empty<Color32>();
+
+        if (sourceWidth == targetWidth && sourceHeight == targetHeight)
+            return sourcePixels;
+
+        Color32[] result = new Color32[targetWidth * targetHeight];
+        for (int y = 0; y < targetHeight; y++)
+        {
+            int sourceYMin = Mathf.Clamp(Mathf.FloorToInt((float)(y * sourceHeight) / targetHeight), 0, sourceHeight - 1);
+            int sourceYMax = Mathf.Clamp(Mathf.CeilToInt((float)((y + 1) * sourceHeight) / targetHeight), sourceYMin + 1, sourceHeight);
+
+            for (int x = 0; x < targetWidth; x++)
+            {
+                int sourceXMin = Mathf.Clamp(Mathf.FloorToInt((float)(x * sourceWidth) / targetWidth), 0, sourceWidth - 1);
+                int sourceXMax = Mathf.Clamp(Mathf.CeilToInt((float)((x + 1) * sourceWidth) / targetWidth), sourceXMin + 1, sourceWidth);
+
+                int sumR = 0;
+                int sumG = 0;
+                int sumB = 0;
+                int sumA = 0;
+                int count = 0;
+
+                for (int sy = sourceYMin; sy < sourceYMax; sy++)
+                {
+                    int rowStart = sy * sourceWidth;
+                    for (int sx = sourceXMin; sx < sourceXMax; sx++)
+                    {
+                        Color32 color = sourcePixels[rowStart + sx];
+                        sumR += color.r;
+                        sumG += color.g;
+                        sumB += color.b;
+                        sumA += color.a;
+                        count++;
+                    }
+                }
+
+                if (count <= 0)
+                    continue;
+
+                result[y * targetWidth + x] = new Color32(
+                    (byte)(sumR / count),
+                    (byte)(sumG / count),
+                    (byte)(sumB / count),
+                    (byte)(sumA / count));
+            }
+        }
+
+        return result;
+    }
+
+    private static void WritePixels(
+        Color32[] targetPixels,
+        int targetWidth,
+        int targetHeight,
+        int dstX,
+        int dstY,
+        int width,
+        int height,
+        Color32[] sourcePixels)
+    {
+        if (targetPixels == null || sourcePixels == null || width <= 0 || height <= 0)
+            return;
+
+        for (int y = 0; y < height; y++)
+        {
+            int targetY = dstY + y;
+            if (targetY < 0 || targetY >= targetHeight)
+                continue;
+
+            int targetRowStart = targetY * targetWidth;
+            int sourceRowStart = y * width;
+            for (int x = 0; x < width; x++)
+            {
+                int targetX = dstX + x;
+                if (targetX < 0 || targetX >= targetWidth)
+                    continue;
+
+                targetPixels[targetRowStart + targetX] = sourcePixels[sourceRowStart + x];
+            }
+        }
     }
 
     private static void ExtrudePadding(
@@ -421,6 +599,76 @@ public sealed class AtlasBuilder
                 atlas.SetPixel(dstX + width - 1 + px, dstY + height - 1 + py, topRight);
             }
         }
+    }
+
+    private static void ExtrudePadding(
+        Color32[] atlasPixels,
+        int atlasWidth,
+        int atlasHeight,
+        Color32[] sourcePixels,
+        int dstX,
+        int dstY,
+        int width,
+        int height,
+        int padding)
+    {
+        if (atlasPixels == null || sourcePixels == null || width <= 0 || height <= 0 || padding <= 0)
+            return;
+
+        for (int y = 0; y < height; y++)
+        {
+            int rowStart = y * width;
+            Color32 left = sourcePixels[rowStart];
+            Color32 right = sourcePixels[rowStart + width - 1];
+
+            for (int p = 1; p <= padding; p++)
+            {
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX - p, dstY + y, left);
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX + width - 1 + p, dstY + y, right);
+            }
+        }
+
+        for (int x = 0; x < width; x++)
+        {
+            Color32 bottom = sourcePixels[x];
+            Color32 top = sourcePixels[(height - 1) * width + x];
+
+            for (int p = 1; p <= padding; p++)
+            {
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX + x, dstY - p, bottom);
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX + x, dstY + height - 1 + p, top);
+            }
+        }
+
+        Color32 bottomLeft = sourcePixels[0];
+        Color32 bottomRight = sourcePixels[width - 1];
+        Color32 topLeft = sourcePixels[(height - 1) * width];
+        Color32 topRight = sourcePixels[(height - 1) * width + (width - 1)];
+
+        for (int px = 1; px <= padding; px++)
+        {
+            for (int py = 1; py <= padding; py++)
+            {
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX - px, dstY - py, bottomLeft);
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX + width - 1 + px, dstY - py, bottomRight);
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX - px, dstY + height - 1 + py, topLeft);
+                SetPixelSafe(atlasPixels, atlasWidth, atlasHeight, dstX + width - 1 + px, dstY + height - 1 + py, topRight);
+            }
+        }
+    }
+
+    private static void SetPixelSafe(
+        Color32[] atlasPixels,
+        int atlasWidth,
+        int atlasHeight,
+        int x,
+        int y,
+        Color32 color)
+    {
+        if (atlasPixels == null || x < 0 || y < 0 || x >= atlasWidth || y >= atlasHeight)
+            return;
+
+        atlasPixels[y * atlasWidth + x] = color;
     }
 
     private static void CleanupPreparedEntries(List<PreparedEntry> preparedEntries)
