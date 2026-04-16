@@ -62,7 +62,8 @@ public class BlockSelector : MonoBehaviour
             out Vector3 hitPoint,
             out BlockType hitType,
             out bool isBillboard,
-            out Vector3Int billboardGroundPos))
+            out Vector3Int billboardGroundPos,
+            false))
         {
             currentBlock = blockPos;
             CurrentHitNormal = hitNormal;
@@ -234,6 +235,35 @@ public class BlockSelector : MonoBehaviour
         return false;
     }
 
+    public bool TryGetPlacementTarget(
+        out Vector3Int blockPos,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint,
+        out BlockType blockType,
+        out bool isBillboard)
+    {
+        blockPos = default;
+        hitNormal = default;
+        hitPoint = default;
+        blockType = BlockType.Air;
+        isBillboard = false;
+
+        if (cam == null || World.Instance == null)
+            return false;
+
+        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+        return TryRaycastVoxel(
+            ray,
+            reach,
+            out blockPos,
+            out hitNormal,
+            out hitPoint,
+            out blockType,
+            out isBillboard,
+            out _,
+            true);
+    }
+
     private bool TryRaycastVoxel(
         Ray ray,
         float maxDistance,
@@ -242,7 +272,8 @@ public class BlockSelector : MonoBehaviour
         out Vector3 hitPoint,
         out BlockType hitType,
         out bool isBillboardHit,
-        out Vector3Int billboardGroundPos)
+        out Vector3Int billboardGroundPos,
+        bool ignoreLiquidsForPlacement)
     {
         hitBlock = default;
         hitNormal = Vector3Int.zero;
@@ -283,7 +314,8 @@ public class BlockSelector : MonoBehaviour
         for (int i = 0; i < maxSteps && traveled <= maxDistance; i++)
         {
             bool hasLoadedBlock = world.TryGetLoadedBlockAt(voxel, out BlockType blockType);
-            if (blockType != BlockType.Air)
+            bool ignoreLiquidHit = ignoreLiquidsForPlacement && world.IsLiquidBlock(blockType);
+            if (blockType != BlockType.Air && !ignoreLiquidHit)
             {
                 if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal, out Vector3 customPoint))
                 {

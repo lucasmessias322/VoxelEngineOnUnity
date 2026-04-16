@@ -8,6 +8,7 @@ public static class BlockItemIconCache
     private const float TopShade = 1f;
 
     private static readonly Dictionary<BlockType, Sprite> Cache = new Dictionary<BlockType, Sprite>();
+    private static readonly Dictionary<int, Texture2D> ReadableAtlasCopies = new Dictionary<int, Texture2D>();
     private static int cachedBlockDataInstanceId;
     private static int cachedAtlasTextureInstanceId;
     private static Vector2Int cachedAtlasTiles = Vector2Int.zero;
@@ -350,6 +351,9 @@ public static class BlockItemIconCache
         if (atlasTexture is Texture2D readableAtlas && readableAtlas.isReadable)
             return TryExtractFromReadableTexture(readableAtlas, pixelRect.x, pixelRect.y, tileWidth, tileHeight, out tilePixels);
 
+        if (TryGetReadableAtlasCopy(atlasTexture, out Texture2D readableAtlasCopy))
+            return TryExtractFromReadableTexture(readableAtlasCopy, pixelRect.x, pixelRect.y, tileWidth, tileHeight, out tilePixels);
+
         return TryExtractFromGpu(atlasTexture, pixelRect, out tilePixels);
     }
 
@@ -568,6 +572,67 @@ public static class BlockItemIconCache
             }
 
             AddVisibleBoxFaces(faces, box.min, box.max);
+        }
+    }
+
+    private static bool TryGetReadableAtlasCopy(Texture atlasTexture, out Texture2D readableAtlas)
+    {
+        readableAtlas = null;
+        if (atlasTexture == null || atlasTexture.width <= 0 || atlasTexture.height <= 0)
+            return false;
+
+        int atlasTextureInstanceId = atlasTexture.GetInstanceID();
+        if (ReadableAtlasCopies.TryGetValue(atlasTextureInstanceId, out Texture2D cachedCopy) && cachedCopy != null)
+        {
+            readableAtlas = cachedCopy;
+            return true;
+        }
+
+        Texture2D createdCopy = CreateReadableAtlasCopy(atlasTexture);
+        if (createdCopy == null)
+            return false;
+
+        ReadableAtlasCopies[atlasTextureInstanceId] = createdCopy;
+        readableAtlas = createdCopy;
+        return true;
+    }
+
+    private static Texture2D CreateReadableAtlasCopy(Texture atlasTexture)
+    {
+        if (atlasTexture == null || atlasTexture.width <= 0 || atlasTexture.height <= 0)
+            return null;
+
+        RenderTexture rt = RenderTexture.GetTemporary(
+            atlasTexture.width,
+            atlasTexture.height,
+            0,
+            RenderTextureFormat.ARGB32,
+            RenderTextureReadWrite.Default);
+        rt.filterMode = FilterMode.Point;
+
+        RenderTexture previous = RenderTexture.active;
+        try
+        {
+            Graphics.Blit(atlasTexture, rt);
+            RenderTexture.active = rt;
+
+            Texture2D readable = new Texture2D(atlasTexture.width, atlasTexture.height, TextureFormat.RGBA32, false, false);
+            readable.name = atlasTexture.name + "_ReadableIconCopy";
+            readable.filterMode = FilterMode.Point;
+            readable.wrapMode = TextureWrapMode.Clamp;
+            readable.hideFlags = HideFlags.HideAndDontSave;
+            readable.ReadPixels(new Rect(0f, 0f, atlasTexture.width, atlasTexture.height), 0, 0, false);
+            readable.Apply(false, false);
+            return readable;
+        }
+        catch
+        {
+            return null;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
         }
     }
 
@@ -1255,5 +1320,10 @@ public static class BlockItemIconCache
         }
 
         Cache.Clear();
+
+        foreach (KeyValuePair<int, Texture2D> pair in ReadableAtlasCopies)
+            DestroyTempTexture(pair.Value);
+
+        ReadableAtlasCopies.Clear();
     }
 }

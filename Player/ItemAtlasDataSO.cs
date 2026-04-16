@@ -4,6 +4,8 @@ using UnityEngine;
 [CreateAssetMenu(fileName = "ItemAtlasDataSO", menuName = "ScriptableObjects/ItemAtlasDataSO", order = 2)]
 public class ItemAtlasDataSO : ScriptableObject
 {
+    private const int MinimumRuntimePaddingPixels = 2;
+
     [Header("Atlas")]
     public Vector2Int atlasSize = new Vector2Int(4, 4);
     public Texture2D atlasTexture;
@@ -375,7 +377,8 @@ public class ItemAtlasDataSO : ScriptableObject
     private AtlasBuildSettings BuildRuntimeAtlasSettings()
     {
         AtlasBuildSettings settings = AtlasBuildSettings.Default;
-        settings.paddingPixels = Mathf.Max(0, paddingPixels);
+        settings.paddingPixels = Mathf.Max(MinimumRuntimePaddingPixels, paddingPixels);
+        settings.wrapMode = TextureWrapMode.Clamp;
 
         Texture2D referenceTexture = atlasTexture;
         if (referenceTexture == null && atlasMaterial != null)
@@ -398,8 +401,9 @@ public class ItemAtlasDataSO : ScriptableObject
             settings.maxSize = Mathf.Max(settings.initialSize, referenceSize);
             settings.generateMipmaps = referenceTexture.mipmapCount > 1;
             settings.filterMode = referenceTexture.filterMode;
-            settings.wrapMode = referenceTexture.wrapMode;
         }
+
+        settings.generateMipmapsPerTile = settings.generateMipmaps;
 
         return settings;
     }

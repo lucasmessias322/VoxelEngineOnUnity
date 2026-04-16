@@ -1709,16 +1709,26 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             CancelBreak();
 
-            if (!selector.TryGetSelectedBlock(out Vector3Int targetBlock, out Vector3Int hitNormal))
-                return;
+            Vector3Int targetBlock;
+            Vector3Int hitNormal;
+            Vector3 hitPoint;
+            BlockType targetType;
+            bool isBillboardTarget;
+            if (!selector.TryGetPlacementTarget(out targetBlock, out hitNormal, out hitPoint, out targetType, out isBillboardTarget))
+            {
+                if (!selector.TryGetSelectedBlock(out targetBlock, out hitNormal))
+                    return;
 
-            BlockType targetType = World.Instance.GetBlockAt(targetBlock);
+                targetType = World.Instance.GetBlockAt(targetBlock);
+                hitPoint = selector != null ? selector.CurrentHitPoint : targetBlock + Vector3.one * 0.5f;
+                isBillboardTarget = selector != null && selector.IsBillboardHit;
+            }
 
             BlockType selectedBlockType = placeBlockType;
             if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
                 return;
 
-            bool replaceTarget = selector.IsBillboardHit || IsLiquid(targetType);
+            bool replaceTarget = isBillboardTarget || IsLiquid(targetType);
 
             // Billboard e liquidos: substitui exatamente a celula alvo (estilo Minecraft).
             Vector3Int placePos = replaceTarget ? targetBlock : targetBlock + hitNormal;
@@ -1730,7 +1740,6 @@ public class PlayerBlockBreaker : MonoBehaviour
             BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
 
             Vector3 lookForward = ResolvePlacementLookForward();
-            Vector3 hitPoint = selector != null ? selector.CurrentHitPoint : targetBlock + Vector3.one * 0.5f;
             BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
                 placedBlockType,
                 hitNormal,

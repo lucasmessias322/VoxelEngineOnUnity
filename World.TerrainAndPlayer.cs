@@ -677,6 +677,7 @@ public partial class World : MonoBehaviour
     private readonly Queue<WaterUpdateCandidate> queuedWaterUpdates = new Queue<WaterUpdateCandidate>();
     private readonly HashSet<Vector3Int> queuedWaterUpdateSet = new HashSet<Vector3Int>();
     private readonly HashSet<Vector3Int> persistentWaterSources = new HashSet<Vector3Int>();
+    private readonly HashSet<Vector3Int> waterSlopeVisited = new HashSet<Vector3Int>();
 
     private static readonly Vector3Int[] WaterNeighborOffsets =
     {
@@ -752,22 +753,25 @@ public partial class World : MonoBehaviour
         if (!currentIsWater && !CanWaterOccupy(current))
             return false;
 
+        BlockType desiredState = GetDesiredWaterState(worldPos, current, currentIsWater);
+        return SetWaterStateIfNeeded(worldPos, current, desiredState);
+    }
+
+    private BlockType GetDesiredWaterState(Vector3Int worldPos, BlockType current, bool currentIsWater)
+    {
         if (IsFixedWaterSource(worldPos))
-            return SetWaterStateIfNeeded(worldPos, current, BlockType.Water);
+            return BlockType.Water;
 
         if (TryGetWaterStateFromAbove(worldPos, out BlockType fallingState))
-            return SetWaterStateIfNeeded(worldPos, current, fallingState);
+            return fallingState;
 
         if (ShouldBecomeInfiniteWaterSource(worldPos))
-            return SetWaterStateIfNeeded(worldPos, current, BlockType.Water);
+            return BlockType.Water;
 
         if (TryGetHorizontalWaterState(worldPos, out BlockType flowingState))
-            return SetWaterStateIfNeeded(worldPos, current, flowingState);
+            return flowingState;
 
-        if (!currentIsWater)
-            return false;
-
-        return SetWaterStateIfNeeded(worldPos, current, BlockType.Air);
+        return currentIsWater ? BlockType.Air : current;
     }
 
     private bool TryGetWaterStateFromAbove(Vector3Int worldPos, out BlockType state)
@@ -779,8 +783,10 @@ public partial class World : MonoBehaviour
             return false;
         }
 
-        int distance = FluidBlockUtility.GetWaterDistance(above);
-        state = FluidBlockUtility.GetWaterBlockType(distance, true);
+        // Em Minecraft, quando a agua cai para um nivel inferior ela volta a
+        // se comportar como uma nova coluna de queda, podendo espalhar mais
+        // alguns blocos quando encontra apoio novamente.
+        state = FluidBlockUtility.GetWaterBlockType(0, true);
         return true;
     }
 
@@ -792,12 +798,7 @@ public partial class World : MonoBehaviour
         for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
         {
             Vector3Int sourcePos = worldPos + HorizontalWaterOffsets[i];
-            if (!WouldWaterFlowFromTo(sourcePos, worldPos))
-                continue;
-
-            BlockType sourceType = GetBlockAt(sourcePos);
-            int candidateDistance = FluidBlockUtility.GetWaterDistance(sourceType) + 1;
-            if (candidateDistance > FluidBlockUtility.MaxWaterDistance)
+            if (!TryGetHorizontalWaterContribution(sourcePos, worldPos, out int candidateDistance))
                 continue;
 
             if (candidateDistance < bestDistance)
@@ -817,23 +818,51 @@ public partial class World : MonoBehaviour
         return true;
     }
 
-    private bool WouldWaterFlowFromTo(Vector3Int sourcePos, Vector3Int targetPos)
+    private bool TryGetHorizontalWaterContribution(Vector3Int sourcePos, Vector3Int targetPos, out int candidateDistance)
     {
+        candidateDistance = int.MaxValue;
+
         BlockType sourceType = GetBlockAt(sourcePos);
-        if (!FluidBlockUtility.IsWater(sourceType))
+        if (!CanWaterSpreadHorizontallyFrom(sourcePos, sourceType))
             return false;
 
         BlockType targetType = GetBlockAt(targetPos);
         if (!CanWaterOccupy(targetType) && !FluidBlockUtility.IsWater(targetType))
             return false;
 
-        if (CanWaterFlowDownInto(GetBlockAt(sourcePos + Vector3Int.down)))
-            return false;
-
         int directionIndex = GetHorizontalDirectionIndex(targetPos - sourcePos);
         if (directionIndex < 0)
             return false;
 
+        if (!IsOptimalWaterSpreadDirection(sourcePos, directionIndex))
+            return false;
+
+        candidateDistance = FluidBlockUtility.GetWaterDistance(sourceType) + 1;
+        return candidateDistance <= FluidBlockUtility.MaxWaterDistance;
+    }
+
+    private bool CanWaterSpreadHorizontallyFrom(Vector3Int sourcePos, BlockType sourceType)
+    {
+        if (!FluidBlockUtility.IsWater(sourceType))
+            return false;
+
+        if (FluidBlockUtility.GetWaterDistance(sourceType) >= FluidBlockUtility.MaxWaterDistance)
+            return false;
+
+        BlockType below = GetBlockAt(sourcePos + Vector3Int.down);
+        if (CanWaterFlowDownInto(below))
+            return false;
+
+        // Falling columns should only spill at the bottom-most blocked cell, not from
+        // every segment in the column.
+        if (FluidBlockUtility.IsFallingWater(sourceType) && FluidBlockUtility.IsWater(below))
+            return false;
+
+        return true;
+    }
+
+    private bool IsOptimalWaterSpreadDirection(Vector3Int sourcePos, int directionIndex)
+    {
         GetOptimalWaterFlowCosts(sourcePos, out int rightCost, out int leftCost, out int forwardCost, out int backCost, out int bestCost);
         if (bestCost == int.MaxValue)
             return false;
@@ -878,7 +907,11 @@ public partial class World : MonoBehaviour
         if (CanWaterFlowDownInto(GetBlockAt(targetPos + Vector3Int.down)))
             return 0;
 
-        return GetWaterSlopeDistance(targetPos, 1, GetOppositeHorizontalDirection(directionIndex));
+        waterSlopeVisited.Clear();
+        waterSlopeVisited.Add(targetPos);
+        int bestDistance = GetWaterSlopeDistance(targetPos, 1, GetOppositeHorizontalDirection(directionIndex));
+        waterSlopeVisited.Clear();
+        return bestDistance;
     }
 
     private int GetWaterSlopeDistance(Vector3Int origin, int depth, int blockedDirection)
@@ -895,16 +928,27 @@ public partial class World : MonoBehaviour
                 continue;
 
             Vector3Int nextPos = origin + HorizontalWaterOffsets[i];
-            BlockType nextType = GetBlockAt(nextPos);
-            if (!CanWaterOccupy(nextType))
+            if (!waterSlopeVisited.Add(nextPos))
                 continue;
 
+            BlockType nextType = GetBlockAt(nextPos);
+            if (!CanWaterOccupy(nextType))
+            {
+                waterSlopeVisited.Remove(nextPos);
+                continue;
+            }
+
             if (CanWaterFlowDownInto(GetBlockAt(nextPos + Vector3Int.down)))
+            {
+                waterSlopeVisited.Remove(nextPos);
                 return depth;
+            }
 
             int candidate = GetWaterSlopeDistance(nextPos, depth + 1, GetOppositeHorizontalDirection(i));
             if (candidate < bestDistance)
                 bestDistance = candidate;
+
+            waterSlopeVisited.Remove(nextPos);
         }
 
         return bestDistance;
