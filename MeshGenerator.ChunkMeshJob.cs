@@ -85,7 +85,10 @@ public static partial class MeshGenerator
             public byte placementAxis;
             public byte valid;
             public byte faceLight;
-            public byte surfaceHeight;
+            public ushort surfaceY0;
+            public ushort surfaceY1;
+            public ushort surfaceY2;
+            public ushort surfaceY3;
             public byte ao0;
             public byte ao1;
             public byte ao2;
@@ -377,14 +380,15 @@ public static partial class MeshGenerator
                    HasFace(b) &&
                    a.blockId == b.blockId &&
                    a.placementAxis == b.placementAxis &&
-                   a.faceLight == b.faceLight &&
-                   a.surfaceHeight == b.surfaceHeight;
+                   a.faceLight == b.faceLight;
         }
 
         private static bool CanMergeAlongU(in GreedyFaceData left, in GreedyFaceData right)
         {
             // Merge only when the shared edge keeps the same AO signature.
             return HasSameSurface(left, right) &&
+                   left.surfaceY1 == right.surfaceY0 &&
+                   left.surfaceY2 == right.surfaceY3 &&
                    left.ao1 == right.ao0 &&
                    left.ao2 == right.ao3 &&
                    left.light1 == right.light0 &&
@@ -394,6 +398,8 @@ public static partial class MeshGenerator
         private static bool CanMergeAlongV(in GreedyFaceData bottom, in GreedyFaceData top)
         {
             return HasSameSurface(bottom, top) &&
+                   bottom.surfaceY3 == top.surfaceY0 &&
+                   bottom.surfaceY2 == top.surfaceY1 &&
                    bottom.ao3 == top.ao0 &&
                    bottom.ao2 == top.ao1 &&
                    bottom.light3 == top.light0 &&
@@ -640,6 +646,90 @@ public static partial class MeshGenerator
             return true;
         }
 
+        private static ushort GetRectVertexSurfaceY(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            int localX,
+            int localY)
+        {
+            int cellX = localX == width ? startI + width - 1 : startI + localX;
+            int cellY = localY == height ? startJ + height - 1 : startJ + localY;
+            GreedyFaceData face = mask[cellX + cellY * sizeU];
+
+            if (localX == width)
+                return localY == height ? face.surfaceY2 : face.surfaceY1;
+
+            return localY == height ? face.surfaceY3 : face.surfaceY0;
+        }
+
+        private static bool MatchesQuadInterpolationForSurfaceY(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            bool flipTriangle)
+        {
+            if (width <= 0 || height <= 0)
+                return false;
+
+            long scale = (long)width * height;
+            long surface00 = GetRectVertexSurfaceY(mask, sizeU, startI, startJ, width, height, 0, 0);
+            long surface10 = GetRectVertexSurfaceY(mask, sizeU, startI, startJ, width, height, width, 0);
+            long surface11 = GetRectVertexSurfaceY(mask, sizeU, startI, startJ, width, height, width, height);
+            long surface01 = GetRectVertexSurfaceY(mask, sizeU, startI, startJ, width, height, 0, height);
+
+            for (int y = 0; y <= height; y++)
+            {
+                for (int x = 0; x <= width; x++)
+                {
+                    long actual = GetRectVertexSurfaceY(mask, sizeU, startI, startJ, width, height, x, y);
+                    long expectedScaled;
+
+                    if (!flipTriangle)
+                    {
+                        if (x * height >= y * width)
+                        {
+                            expectedScaled = surface00 * scale +
+                                             (surface10 - surface00) * x * height +
+                                             (surface11 - surface10) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = surface00 * scale +
+                                             (surface11 - surface01) * x * height +
+                                             (surface01 - surface00) * y * width;
+                        }
+                    }
+                    else
+                    {
+                        if (x * height + y * width <= scale)
+                        {
+                            expectedScaled = surface00 * scale +
+                                             (surface10 - surface00) * x * height +
+                                             (surface01 - surface00) * y * width;
+                        }
+                        else
+                        {
+                            expectedScaled = surface11 * scale +
+                                             (surface10 - surface11) * width * (height - y) +
+                                             (surface01 - surface11) * height * (width - x);
+                        }
+                    }
+
+                    if (actual * scale != expectedScaled)
+                        return false;
+                }
+            }
+
+            return true;
+        }
+
         private static bool TryGetRepresentableRectFlip(
             NativeArray<GreedyFaceData> mask,
             int sizeU,
@@ -650,9 +740,11 @@ public static partial class MeshGenerator
             out bool flipTriangle)
         {
             bool noFlipMatches =
+                MatchesQuadInterpolationForSurfaceY(mask, sizeU, startI, startJ, width, height, false) &&
                 MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, false) &&
                 MatchesQuadInterpolationForLight(mask, sizeU, startI, startJ, width, height, false);
             bool flipMatches =
+                MatchesQuadInterpolationForSurfaceY(mask, sizeU, startI, startJ, width, height, true) &&
                 MatchesQuadInterpolationForAO(mask, sizeU, startI, startJ, width, height, true) &&
                 MatchesQuadInterpolationForLight(mask, sizeU, startI, startJ, width, height, true);
 

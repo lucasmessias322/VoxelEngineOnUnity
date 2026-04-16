@@ -163,6 +163,10 @@ public static partial class MeshGenerator
                                 light1 = (byte)math.max((int)light1, (int)faceLight);
                                 light2 = (byte)math.max((int)light2, (int)faceLight);
                                 light3 = (byte)math.max((int)light3, (int)faceLight);
+                                ushort surfaceY0 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 0, 0, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort surfaceY1 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 1, 0, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort surfaceY2 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 1, 1, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort surfaceY3 = GetFaceVertexSurfaceYEncoded(current, x, y, z, u, v, axis, normalSign, 0, 1, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 byte placementAxis = GetBlockPlacementAxisValue(idx);
 
                                 mask[maskIndex] = new GreedyFaceData
@@ -171,7 +175,10 @@ public static partial class MeshGenerator
                                     placementAxis = placementAxis,
                                     valid = 1,
                                     faceLight = faceLight,
-                                    surfaceHeight = 0,
+                                    surfaceY0 = surfaceY0,
+                                    surfaceY1 = surfaceY1,
+                                    surfaceY2 = surfaceY2,
+                                    surfaceY3 = surfaceY3,
                                     ao0 = ao0,
                                     ao1 = ao1,
                                     ao2 = ao2,
@@ -196,13 +203,12 @@ public static partial class MeshGenerator
                                     continue;
                                 }
 
-                                bool isWaterFace = FluidBlockUtility.IsWater((BlockType)startFace.blockId);
                                 int w = 1;
-                                while (!isWaterFace && i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
+                                while (i + w < maxU && CanMergeAlongU(mask[i + w - 1 + j * sizeU], mask[i + w + j * sizeU]))
                                     w++;
 
                                 int h = 1;
-                                while (!isWaterFace && j + h < maxV)
+                                while (j + h < maxV)
                                 {
                                     bool canGrow = true;
                                     for (int k = 0; k < w; k++)
@@ -273,10 +279,11 @@ public static partial class MeshGenerator
                                 byte light1 = bottomRightFace.light1;
                                 byte light2 = topRightFace.light2;
                                 byte light3 = topLeftFace.light3;
+                                float surfaceY0 = DecodeSurfaceY(bottomLeftFace.surfaceY0);
+                                float surfaceY1 = DecodeSurfaceY(bottomRightFace.surfaceY1);
+                                float surfaceY2 = DecodeSurfaceY(topRightFace.surfaceY2);
+                                float surfaceY3 = DecodeSurfaceY(topLeftFace.surfaceY3);
                                 int baseBlockY = u == 1 ? i : v == 1 ? j : n;
-                                int blockX = u == 0 ? i : v == 0 ? j : n;
-                                int blockY = u == 1 ? i : v == 1 ? j : n;
-                                int blockZ = u == 2 ? i : v == 2 ? j : n;
 
                                 int vIndex = GetCurrentSubchunkLocalVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
@@ -312,11 +319,8 @@ public static partial class MeshGenerator
                                     int cornerVOffset = dv > 0 ? 1 : 0;
 
                                     float px = (u == 0 ? rawU : v == 0 ? rawV : posD) - border;
-                                    float py = (u == 1 ? rawU : v == 1 ? rawV : posD);
                                     float pz = (u == 2 ? rawU : v == 2 ? rawV : posD) - border;
-
-                                    if (FluidBlockUtility.IsWater(bt) && py > baseBlockY + 0.5f)
-                                        py = baseBlockY + GetWaterVertexHeight01(bt, blockX, blockY, blockZ, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                    float py = l == 0 ? surfaceY0 : (l == 1 ? surfaceY1 : (l == 2 ? surfaceY2 : surfaceY3));
 
                                     Vector2 uvCoord = ComputePlacementAwareUv(
                                         u,
@@ -391,6 +395,51 @@ public static partial class MeshGenerator
 
             mask.Dispose();
         }
+
+        private ushort GetFaceVertexSurfaceYEncoded(
+            BlockType blockType,
+            int x,
+            int y,
+            int z,
+            int u,
+            int v,
+            int axis,
+            int normalSign,
+            int cornerUOffset,
+            int cornerVOffset,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            float surfaceY = y + GetCubeFaceVertexRelativeY(u, v, normalSign, cornerUOffset, cornerVOffset);
+            if (FluidBlockUtility.IsWater(blockType) && surfaceY > y + 0.5f)
+                surfaceY = y + GetWaterVertexHeight01(blockType, x, y, z, axis, normalSign, cornerUOffset, cornerVOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            return EncodeSurfaceY(surfaceY);
+        }
+
+        private static float GetCubeFaceVertexRelativeY(int u, int v, int normalSign, int cornerUOffset, int cornerVOffset)
+        {
+            if (u == 1)
+                return cornerUOffset;
+
+            if (v == 1)
+                return cornerVOffset;
+
+            return normalSign > 0 ? 1f : 0f;
+        }
+
+        private static ushort EncodeSurfaceY(float surfaceY)
+        {
+            int scaled = (int)math.round(math.max(0f, surfaceY) * SurfaceHeightEncodeScale);
+            return (ushort)math.clamp(scaled, 0, ushort.MaxValue);
+        }
+
+        private static float DecodeSurfaceY(ushort encodedSurfaceY)
+        {
+            return encodedSurfaceY / SurfaceHeightEncodeScale;
+        }
+
         private bool IsOccluder(int x, int y, int z, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (!TryGetResolvedVoxelIndex(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
