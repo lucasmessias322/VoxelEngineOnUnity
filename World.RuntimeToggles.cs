@@ -85,7 +85,7 @@ public partial class World
             return;
 
         foreach (var kv in activeChunks)
-            RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
+            RequestFullChunkRebuild(kv.Key, false);
     }
 
     private void RefreshSimulationDistanceState(Vector2Int simulationCenter)

@@ -9,6 +9,7 @@ public partial class World : MonoBehaviour
     private struct PendingMesh
     {
         public JobHandle handle;
+        public bool jobCompleted;
         public NativeList<MeshGenerator.PackedChunkVertex> vertices;
         public NativeList<int> opaqueTriangles;
         public NativeList<int> waterTriangles;
@@ -32,6 +33,8 @@ public partial class World : MonoBehaviour
     private struct PendingData
     {
         public JobHandle handle;
+        public JobHandle terrainHandle;
+        public JobHandle lightingHandle;
         public NativeArray<int> heightCache;
         public NativeArray<byte> blockTypes;
         public NativeArray<byte> blockPlacementAxes;
@@ -57,6 +60,20 @@ public partial class World : MonoBehaviour
         public int dirtySubchunkMask;
         public bool rebuildColliders;
         public bool postOverrideRefreshScheduled;
+        public bool terrainStageCompleted;
+        public bool lightingStageCompleted;
+    }
+
+    private struct PendingChunkDataBufferReturn
+    {
+        public JobHandle handle;
+        public NativeArray<int> heightCache;
+        public NativeArray<byte> blockTypes;
+        public NativeArray<byte> blockPlacementAxes;
+        public NativeArray<byte> knownVoxelData;
+        public NativeArray<bool> solids;
+        public NativeArray<byte> light;
+        public NativeArray<bool> subchunkNonEmpty;
     }
 
     private struct PendingColliderBuild

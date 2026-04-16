@@ -10,6 +10,15 @@ public partial class World
         return (1 << Chunk.SubchunksPerColumn) - 1;
     }
 
+    private static int GetSubchunkBitForWorldY(int worldY)
+    {
+        if (worldY < 0 || worldY >= Chunk.SizeY)
+            return 0;
+
+        int subchunkIndex = Mathf.Clamp(worldY / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
+        return 1 << subchunkIndex;
+    }
+
     private static int SanitizeDirtySubchunkMask(int dirtySubchunkMask)
     {
         return dirtySubchunkMask & GetFullSubchunkMask();
@@ -33,6 +42,49 @@ public partial class World
         return mask;
     }
 
+    private int GetDirtySubchunkMaskForBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        int mask = GetDirtySubchunkMaskForWorldY(worldPos.y);
+
+        if (BlockCanAffectAdjacentVerticalSubchunks(previousType) ||
+            BlockCanAffectAdjacentVerticalSubchunks(newType))
+        {
+            mask |= GetSubchunkBitForWorldY(worldPos.y - 1);
+            mask |= GetSubchunkBitForWorldY(worldPos.y + 1);
+        }
+
+        return SanitizeDirtySubchunkMask(mask);
+    }
+
+    private bool BlockCanAffectAdjacentVerticalSubchunks(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
+            return false;
+
+        if (FluidBlockUtility.IsWater(blockType) ||
+            TorchPlacementUtility.IsTorchLike(blockType) ||
+            blockType == BlockType.wire ||
+            blockType == BlockType.Leaves ||
+            IsTreeLogBlock(blockType))
+        {
+            return true;
+        }
+
+        if (blockData == null || blockData.mappings == null)
+            return false;
+
+        int blockIndex = (int)blockType;
+        if (blockIndex < 0 || blockIndex >= blockData.mappings.Length)
+            return false;
+
+        BlockTextureMapping mapping = blockData.mappings[blockIndex];
+        return BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube ||
+               mapping.isLiquid ||
+               mapping.isTransparent ||
+               mapping.isLightSource ||
+               mapping.lightEmission > 0;
+    }
+
     private static void AddDirtySubchunkMask(Dictionary<Vector2Int, int> dirtyMasks, Vector2Int coord, int dirtySubchunkMask)
     {
         dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
@@ -45,9 +97,9 @@ public partial class World
             dirtyMasks[coord] = dirtySubchunkMask;
     }
 
-    private void RequestChunkRebuild(Vector2Int coord)
+    private void RequestFullChunkRebuild(Vector2Int coord, bool rebuildColliders = true)
     {
-        RequestChunkRebuild(coord, GetFullSubchunkMask(), true);
+        RequestChunkRebuild(coord, GetFullSubchunkMask(), rebuildColliders);
     }
 
     private void RequestChunkRebuild(Vector2Int coord, int dirtySubchunkMask)
@@ -170,8 +222,12 @@ public partial class World
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
-            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
+            chunkLightData = MeshGenerator.RentByteBuffer(
+                hasGlobalLightColumns ? voxelSizeX * Chunk.SizeY * voxelSizeZ : 0,
+                hasGlobalLightColumns);
+            if (hasGlobalLightColumns)
+                InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
 
         MeshGenerator.ScheduleDataJob(
@@ -204,6 +260,8 @@ public partial class World
             chunkLightData,
             chunk.voxelData,
             out JobHandle dataHandle,
+            out JobHandle terrainDataHandle,
+            out JobHandle lightingHandle,
             out NativeArray<int> heightCache,
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
@@ -231,6 +289,8 @@ public partial class World
         pendingDataJobs.Add(new PendingData
         {
             handle = dataHandle,
+            terrainHandle = terrainDataHandle,
+            lightingHandle = lightingHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
             blockPlacementAxes = blockPlacementAxes,
@@ -252,7 +312,9 @@ public partial class World
             subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
-            rebuildColliders = rebuildColliders
+            rebuildColliders = rebuildColliders,
+            terrainStageCompleted = false,
+            lightingStageCompleted = false
         });
         pendingJobPrioritiesDirty = true;
 
@@ -265,6 +327,12 @@ public partial class World
         for (int i = 0; i < pendingMeshes.Count; i++)
         {
             if (pendingMeshes[i].coord == coord)
+                return true;
+        }
+
+        for (int i = 0; i < pendingMeshBuildRequests.Count; i++)
+        {
+            if (pendingMeshBuildRequests[i].coord == coord)
                 return true;
         }
 
@@ -293,12 +361,57 @@ public partial class World
         if (chunk == null || IsChunkJobPending(coord))
             return;
 
-        chunk.CompleteTrackedJob();
+        if (chunk.jobScheduled && !IsChunkJobCompletedWithoutBlocking(chunk))
+        {
+            EnqueueChunkJobTrackingRefresh(coord);
+            return;
+        }
+
+        if (chunk.jobScheduled)
+            chunk.CompleteTrackedJob();
+
         chunk.jobScheduled = false;
         chunk.currentJob = default;
 
         if (chunk.state == Chunk.ChunkState.MeshReady)
             chunk.state = Chunk.ChunkState.Active;
+    }
+
+    private void EnqueueChunkJobTrackingRefresh(Vector2Int coord)
+    {
+        if (queuedChunkJobTrackingRefreshSet.Add(coord))
+            queuedChunkJobTrackingRefreshes.Enqueue(coord);
+    }
+
+    private void ProcessQueuedChunkJobTrackingRefreshes()
+    {
+        if (queuedChunkJobTrackingRefreshes.Count == 0)
+            return;
+
+        int attempts = queuedChunkJobTrackingRefreshes.Count;
+        int processed = 0;
+        int perFrameLimit = Mathf.Max(1, maxDataCompletionsPerFrame + maxLightingCompletionsPerFrame + maxMeshAppliesPerFrame);
+
+        while (processed < perFrameLimit && attempts-- > 0 && queuedChunkJobTrackingRefreshes.Count > 0)
+        {
+            Vector2Int coord = queuedChunkJobTrackingRefreshes.Dequeue();
+            queuedChunkJobTrackingRefreshSet.Remove(coord);
+
+            if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+                continue;
+
+            if (IsChunkJobPending(coord))
+                continue;
+
+            if (chunk.jobScheduled && !IsChunkJobCompletedWithoutBlocking(chunk))
+            {
+                EnqueueChunkJobTrackingRefresh(coord);
+                continue;
+            }
+
+            RefreshChunkJobTracking(coord, chunk);
+            processed++;
+        }
     }
 
     internal void CompletePendingJobsForChunk(Chunk chunk)
@@ -327,6 +440,17 @@ public partial class World
             DisposeDataJobResources(ref pendingData);
             RemovePendingDataJobAtSwapBack(i);
         }
+
+        for (int i = pendingMeshBuildRequests.Count - 1; i >= 0; i--)
+        {
+            PendingData pendingData = pendingMeshBuildRequests[i];
+            if (!ReferenceEquals(pendingData.chunk, chunk))
+                continue;
+
+            pendingData.handle.Complete();
+            DisposeDataJobResources(ref pendingData);
+            RemovePendingMeshBuildRequestAtSwapBack(i);
+        }
     }
 
     private void RemovePendingDataJobAtSwapBack(int index)
@@ -352,6 +476,19 @@ public partial class World
             pendingMeshes[index] = pendingMeshes[last];
 
         pendingMeshes.RemoveAt(last);
+        pendingJobPrioritiesDirty = true;
+    }
+
+    private void RemovePendingMeshBuildRequestAtSwapBack(int index)
+    {
+        int last = pendingMeshBuildRequests.Count - 1;
+        if (index < 0 || index > last)
+            return;
+
+        if (index != last)
+            pendingMeshBuildRequests[index] = pendingMeshBuildRequests[last];
+
+        pendingMeshBuildRequests.RemoveAt(last);
         pendingJobPrioritiesDirty = true;
     }
 }

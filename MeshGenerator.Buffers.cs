@@ -26,6 +26,13 @@ public static partial class MeshGenerator
     private static readonly Dictionary<int, Stack<NativeArray<byte>>> pooledTempByteArrays = new Dictionary<int, Stack<NativeArray<byte>>>();
     private static readonly Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>> pooledTempDensitySettingsArrays = new Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>>();
     private static readonly Dictionary<int, Stack<NativeArray<TerrainColumnContext>>> pooledTempColumnContextArrays = new Dictionary<int, Stack<NativeArray<TerrainColumnContext>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<byte>>> pooledChunkByteArrays = new Dictionary<int, Stack<NativeArray<byte>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<bool>>> pooledChunkBoolArrays = new Dictionary<int, Stack<NativeArray<bool>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<int>>> pooledChunkIntArrays = new Dictionary<int, Stack<NativeArray<int>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<ulong>>> pooledChunkUlongArrays = new Dictionary<int, Stack<NativeArray<ulong>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<SubchunkMeshRange>>> pooledSubchunkRangeArrays = new Dictionary<int, Stack<NativeArray<SubchunkMeshRange>>>();
+    private static readonly Dictionary<int, Stack<NativeList<PackedChunkVertex>>> pooledMeshVertexLists = new Dictionary<int, Stack<NativeList<PackedChunkVertex>>>();
+    private static readonly Dictionary<int, Stack<NativeList<int>>> pooledMeshIndexLists = new Dictionary<int, Stack<NativeList<int>>>();
 
     public struct DataJobTempBuffers
     {
@@ -55,6 +62,13 @@ public static partial class MeshGenerator
         DisposePooledNativeArrays(pooledTempByteArrays);
         DisposePooledNativeArrays(pooledTempDensitySettingsArrays);
         DisposePooledNativeArrays(pooledTempColumnContextArrays);
+        DisposePooledNativeArrays(pooledChunkByteArrays);
+        DisposePooledNativeArrays(pooledChunkBoolArrays);
+        DisposePooledNativeArrays(pooledChunkIntArrays);
+        DisposePooledNativeArrays(pooledChunkUlongArrays);
+        DisposePooledNativeArrays(pooledSubchunkRangeArrays);
+        DisposePooledNativeLists(pooledMeshVertexLists);
+        DisposePooledNativeLists(pooledMeshIndexLists);
     }
 
     private static DataJobTempBuffers RentDataJobTempBuffers(int totalVoxels, int totalHeightPoints)
@@ -76,9 +90,80 @@ public static partial class MeshGenerator
         buffers = default;
     }
 
+    public static NativeArray<byte> RentByteBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledChunkByteArrays, length, clearMemory);
+    }
+
+    public static NativeArray<bool> RentBoolBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledChunkBoolArrays, length, clearMemory);
+    }
+
+    public static NativeArray<int> RentIntBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledChunkIntArrays, length, clearMemory);
+    }
+
+    public static NativeArray<ulong> RentUlongBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledChunkUlongArrays, length, clearMemory);
+    }
+
+    public static NativeArray<SubchunkMeshRange> RentSubchunkRangeBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledSubchunkRangeArrays, length, clearMemory);
+    }
+
+    public static void ReturnByteBuffer(ref NativeArray<byte> array)
+    {
+        ReturnPooledNativeArray(pooledChunkByteArrays, ref array);
+    }
+
+    public static void ReturnBoolBuffer(ref NativeArray<bool> array)
+    {
+        ReturnPooledNativeArray(pooledChunkBoolArrays, ref array);
+    }
+
+    public static void ReturnIntBuffer(ref NativeArray<int> array)
+    {
+        ReturnPooledNativeArray(pooledChunkIntArrays, ref array);
+    }
+
+    public static void ReturnUlongBuffer(ref NativeArray<ulong> array)
+    {
+        ReturnPooledNativeArray(pooledChunkUlongArrays, ref array);
+    }
+
+    public static void ReturnSubchunkRangeBuffer(ref NativeArray<SubchunkMeshRange> array)
+    {
+        ReturnPooledNativeArray(pooledSubchunkRangeArrays, ref array);
+    }
+
+    public static NativeList<PackedChunkVertex> RentMeshVertexList(int minCapacity)
+    {
+        return RentPooledNativeList(pooledMeshVertexLists, minCapacity);
+    }
+
+    public static NativeList<int> RentMeshIndexList(int minCapacity)
+    {
+        return RentPooledNativeList(pooledMeshIndexLists, minCapacity);
+    }
+
+    public static void ReturnMeshVertexList(ref NativeList<PackedChunkVertex> list)
+    {
+        ReturnPooledNativeList(pooledMeshVertexLists, ref list);
+    }
+
+    public static void ReturnMeshIndexList(ref NativeList<int> list)
+    {
+        ReturnPooledNativeList(pooledMeshIndexLists, ref list);
+    }
+
     private static NativeArray<T> RentPooledNativeArray<T>(
         Dictionary<int, Stack<NativeArray<T>>> pool,
-        int length) where T : struct
+        int length,
+        bool clearMemory = false) where T : struct
     {
         if (length <= 0)
             return new NativeArray<T>(0, Allocator.Persistent);
@@ -89,14 +174,21 @@ public static partial class MeshGenerator
             {
                 NativeArray<T> candidate = stack.Pop();
                 if (candidate.IsCreated && candidate.Length == length)
+                {
+                    if (clearMemory)
+                        ClearNativeArray(candidate);
                     return candidate;
+                }
 
                 if (candidate.IsCreated)
                     candidate.Dispose();
             }
         }
 
-        return new NativeArray<T>(length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        return new NativeArray<T>(
+            length,
+            Allocator.Persistent,
+            clearMemory ? NativeArrayOptions.ClearMemory : NativeArrayOptions.UninitializedMemory);
     }
 
     private static void ReturnPooledNativeArray<T>(
@@ -131,6 +223,72 @@ public static partial class MeshGenerator
         array = default;
     }
 
+    private static NativeList<T> RentPooledNativeList<T>(
+        Dictionary<int, Stack<NativeList<T>>> pool,
+        int minCapacity) where T : unmanaged
+    {
+        minCapacity = math.max(1, minCapacity);
+        int bestCapacity = -1;
+        foreach (KeyValuePair<int, Stack<NativeList<T>>> pair in pool)
+        {
+            if (pair.Key < minCapacity || pair.Value.Count == 0)
+                continue;
+
+            if (bestCapacity < 0 || pair.Key < bestCapacity)
+                bestCapacity = pair.Key;
+        }
+
+        if (bestCapacity >= 0 && pool.TryGetValue(bestCapacity, out Stack<NativeList<T>> stack))
+        {
+            while (stack.Count > 0)
+            {
+                NativeList<T> candidate = stack.Pop();
+                if (candidate.IsCreated && candidate.Capacity >= minCapacity)
+                {
+                    candidate.Clear();
+                    return candidate;
+                }
+
+                if (candidate.IsCreated)
+                    candidate.Dispose();
+            }
+        }
+
+        return new NativeList<T>(minCapacity, Allocator.Persistent);
+    }
+
+    private static void ReturnPooledNativeList<T>(
+        Dictionary<int, Stack<NativeList<T>>> pool,
+        ref NativeList<T> list) where T : unmanaged
+    {
+        if (!list.IsCreated)
+        {
+            list = default;
+            return;
+        }
+
+        list.Clear();
+        int capacity = math.max(1, list.Capacity);
+        if (!pool.TryGetValue(capacity, out Stack<NativeList<T>> stack))
+        {
+            stack = new Stack<NativeList<T>>(TempGenerationPoolMaxArraysPerSize);
+            pool[capacity] = stack;
+        }
+
+        if (stack.Count >= TempGenerationPoolMaxArraysPerSize)
+            list.Dispose();
+        else
+            stack.Push(list);
+
+        list = default;
+    }
+
+    private static void ClearNativeArray<T>(NativeArray<T> array) where T : struct
+    {
+        for (int i = 0; i < array.Length; i++)
+            array[i] = default;
+    }
+
     private static void DisposePooledNativeArrays<T>(Dictionary<int, Stack<NativeArray<T>>> pool) where T : struct
     {
         foreach (KeyValuePair<int, Stack<NativeArray<T>>> pair in pool)
@@ -141,6 +299,22 @@ public static partial class MeshGenerator
                 NativeArray<T> array = stack.Pop();
                 if (array.IsCreated)
                     array.Dispose();
+            }
+        }
+
+        pool.Clear();
+    }
+
+    private static void DisposePooledNativeLists<T>(Dictionary<int, Stack<NativeList<T>>> pool) where T : unmanaged
+    {
+        foreach (KeyValuePair<int, Stack<NativeList<T>>> pair in pool)
+        {
+            Stack<NativeList<T>> stack = pair.Value;
+            while (stack.Count > 0)
+            {
+                NativeList<T> list = stack.Pop();
+                if (list.IsCreated)
+                    list.Dispose();
             }
         }
 

@@ -69,13 +69,13 @@ public static partial class MeshGenerator
     )
     {
         // 1. AlocaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Âµes das Listas de Mesh (Output)
-        vertices = new NativeList<PackedChunkVertex>(4096, Allocator.Persistent);
-        opaqueTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        waterTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        transparentTriangles = new NativeList<int>(4096 * 3, Allocator.Persistent);
-        billboardTriangles = new NativeList<int>(2048 * 3, Allocator.Persistent);
-        subchunkRanges = new NativeArray<SubchunkMeshRange>(SubchunksPerColumn, Allocator.Persistent);
-        subchunkVisibilityMasks = new NativeArray<ulong>(SubchunksPerColumn, Allocator.Persistent);
+        vertices = RentMeshVertexList(4096);
+        opaqueTriangles = RentMeshIndexList(4096 * 3);
+        waterTriangles = RentMeshIndexList(4096 * 3);
+        transparentTriangles = RentMeshIndexList(4096 * 3);
+        billboardTriangles = RentMeshIndexList(2048 * 3);
+        subchunkRanges = RentSubchunkRangeBuffer(SubchunksPerColumn);
+        subchunkVisibilityMasks = RentUlongBuffer(SubchunksPerColumn);
 
         // ==========================================
         // JOB 2: GeraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o da Malha (Mesh)

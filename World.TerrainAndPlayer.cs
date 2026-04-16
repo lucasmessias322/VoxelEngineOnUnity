@@ -146,7 +146,7 @@ public partial class World : MonoBehaviour
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
 
-        int terrainDirtySubchunkMask = GetDirtySubchunkMaskForWorldY(worldPos.y);
+        int terrainDirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, current, type);
         int chunksToRebuildCount = 0;
         AddUniqueChunkCoordToBuffer(chunkCoord, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
 

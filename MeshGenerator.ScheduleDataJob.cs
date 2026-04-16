@@ -42,6 +42,8 @@ public static partial class MeshGenerator
         NativeArray<byte> lightData,
         NativeArray<byte> chunkVoxelSnapshot,
         out JobHandle dataHandle,
+        out JobHandle terrainDataHandle,
+        out JobHandle lightingHandle,
         out NativeArray<int> heightCache,
         out NativeArray<byte> blockTypes,
         out NativeArray<bool> solids,
@@ -60,11 +62,8 @@ public static partial class MeshGenerator
         // Em cenas pesadas essa chain pode durar mais de 4 frames, entÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o os buffers
         // intermediÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¡rios abaixo nÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â£o podem usar TempJob.
         lightBorderSize = math.max(lightBorderSize, dataBorderSize);
-        subchunkNonEmpty = new NativeArray<bool>(SubchunksPerColumn, Allocator.Persistent);
-        subchunkColliderOccupancy = new NativeArray<ulong>(
-            SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk,
-            Allocator.Persistent,
-            NativeArrayOptions.ClearMemory);
+        subchunkNonEmpty = RentBoolBuffer(SubchunksPerColumn);
+        subchunkColliderOccupancy = RentUlongBuffer(SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk);
 
         int dataHeightSize = SizeX + 2 * dataBorderSize;
         int dataTotalHeightPoints = dataHeightSize * dataHeightSize;
@@ -88,11 +87,11 @@ public static partial class MeshGenerator
         int voxelPlaneSize = dataVoxelPlaneSize;
         int totalVoxels = dataTotalVoxels;
 
-        heightCache = new NativeArray<int>(dataTotalHeightPoints, Allocator.Persistent);
-        blockTypes = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
-        solids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
+        heightCache = RentIntBuffer(dataTotalHeightPoints);
+        blockTypes = RentByteBuffer(dataTotalVoxels);
+        solids = RentBoolBuffer(dataTotalVoxels);
         NativeArray<bool> baseTerrainSolids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
-        light = new NativeArray<byte>(dataTotalVoxels, Allocator.Persistent);
+        light = RentByteBuffer(dataTotalVoxels);
         lightOpacityData = default;
         NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
         tempBuffers = RentDataJobTempBuffers(dataTotalVoxels, dataTotalHeightPoints);
@@ -359,10 +358,12 @@ public static partial class MeshGenerator
             if (useDataSharedSpaghettiCarveMask)
                 dataHandle = JobHandle.CombineDependencies(dataHandle, dataDisposePrefilledSpaghettiColumnsHandle);
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsHandle);
+            terrainDataHandle = dataHandle;
+            lightingHandle = dataHandle;
             return;
         }
 
-        lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
+        lightOpacityData = RentByteBuffer(lightTotalVoxels);
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
         var lightHeightJob = new HeightmapJob
         {
@@ -588,10 +589,12 @@ public static partial class MeshGenerator
             outputOffsetZ = lightBorderSize - dataBorderSize,
             SizeY = SizeY
         };
-        dataHandle = JobHandle.CombineDependencies(
-            lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle)),
-            buildChunkSnapshotHandle);
-        dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsAfterLightingHandle);
+        terrainDataHandle = JobHandle.CombineDependencies(
+            finalChunkDataHandle,
+            buildChunkSnapshotHandle,
+            disposeBaseTerrainSolidsAfterLightingHandle);
+        lightingHandle = lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle));
+        dataHandle = JobHandle.CombineDependencies(terrainDataHandle, lightingHandle);
     }
 
     private static bool TryScheduleSharedSpaghettiCarveMask(

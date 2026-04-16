@@ -117,7 +117,7 @@ public partial class World : MonoBehaviour
 
     public static World Instance { get; private set; }
     public const int MinRenderDistance = 2;
-    public const int MaxRenderDistance = 24;
+    public const int MaxRenderDistance = 32;
     internal bool IsShuttingDown => isShuttingDown;
 
     private bool isShuttingDown;
@@ -288,6 +288,9 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Quantidade maxima de chunks com dados/luz prontos que podem agendar jobs de mesh por frame.")]
+    [Min(1)]
+    public int maxMeshSchedulesPerFrame = 1;
     [Tooltip("Quantidade maxima de subchunks que podem reconstruir collider por frame.")]
     [Min(1)]
     public int maxColliderBuildsPerFrame = 1;
@@ -297,13 +300,42 @@ public partial class World : MonoBehaviour
     [Tooltip("Quantidade maxima de jobs de dados concluidos e processados por frame.")]
     [Min(1)]
     public int maxDataCompletionsPerFrame = 2;
+    [Tooltip("Quantidade maxima de jobs de iluminacao concluidos e processados por frame.")]
+    [Min(1)]
+    public int maxLightingCompletionsPerFrame = 2;
     public float frameTimeBudgetMS = 4f;
     [Tooltip("Orcamento total (ms) para os processos do Update. Use 0 para desativar o limite.")]
     [Min(0f)]
     public float updateWorkBudgetMS = 6f;
+    [Tooltip("Orcamento (ms) para agendar novos jobs de dados de chunk. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float chunkDataScheduleBudgetMS = 0.75f;
+    [Tooltip("Orcamento (ms) para concluir a etapa de dados/terreno sem bloquear o frame. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float chunkDataCompletionBudgetMS = 1f;
+    [Tooltip("Orcamento (ms) para concluir a etapa de iluminacao e preparar o chunk para mesh. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float chunkLightingCompletionBudgetMS = 1f;
+    [Tooltip("Orcamento (ms) para agendar jobs de mesh a partir de chunks prontos. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float chunkMeshScheduleBudgetMS = 1f;
+    [Tooltip("Orcamento (ms) para aplicar meshes concluidas na main thread/GPU. Use 0 para sem limite.")]
+    [Min(0f)]
+    public float chunkMeshApplyBudgetMS = 1.5f;
     [Tooltip("Limite de jobs de geraÃ§Ã£o de dados (inclui iluminaÃ§Ã£o) simultÃ¢neos para evitar queda brusca de FPS.")]
     [Min(1)]
     public int maxPendingDataJobs = 2;
+    [Tooltip("Quando ativo, novos chunks nao iniciam geracao enquanto houver mesh pronta esperando ApplyMeshData.")]
+    public bool pauseChunkSchedulingWhenMeshesReady = true;
+    [Tooltip("Quantidade de meshes prontas que podem ficar esperando ApplyMeshData antes de pausar novas geracoes. Use 0 para pausar com qualquer mesh pronta.")]
+    [Min(0)]
+    public int maxReadyMeshApplyBacklog = 0;
+    [Tooltip("Quantidade maxima de chunks com dados/luz prontos aguardando agendamento de mesh antes de pausar novas geracoes.")]
+    [Min(1)]
+    public int maxMeshBuildRequestBacklog = 2;
+    [Tooltip("Quantidade maxima de jobs de mesh em voo/aguardando apply antes de pausar novas geracoes.")]
+    [Min(1)]
+    public int maxPendingMeshJobBacklog = 8;
     [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
     [Min(1)]
     public int maxChunkRebuildsPerFrame = 1;
@@ -434,11 +466,15 @@ public partial class World : MonoBehaviour
     private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
     private List<PendingData> pendingDataJobs = new List<PendingData>();
+    private List<PendingData> pendingMeshBuildRequests = new List<PendingData>();
+    private readonly List<PendingChunkDataBufferReturn> pendingChunkDataBufferReturns = new List<PendingChunkDataBufferReturn>(64);
     private readonly List<Chunk> retiredChunksAwaitingRecycle = new List<Chunk>(64);
     private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>();
     private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
     private readonly Dictionary<Vector2Int, bool> queuedChunkRebuildRequiresCollider = new Dictionary<Vector2Int, bool>();
+    private readonly Queue<Vector2Int> queuedChunkJobTrackingRefreshes = new Queue<Vector2Int>();
+    private readonly HashSet<Vector2Int> queuedChunkJobTrackingRefreshSet = new HashSet<Vector2Int>();
     private readonly Queue<Vector3Int> queuedColliderBuilds = new Queue<Vector3Int>();
     private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>();
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
@@ -818,6 +854,48 @@ public partial class World : MonoBehaviour
         return count;
     }
 
+    private int CountReadyPendingMeshes()
+    {
+        int count = 0;
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            PendingMesh pendingMesh = pendingMeshes[i];
+            if (pendingMesh.jobCompleted || pendingMesh.handle.IsCompleted)
+                count++;
+        }
+
+        return count;
+    }
+
+    private int CountPendingMeshBuildRequestsInRenderDistance(Vector2Int center)
+    {
+        int count = 0;
+        for (int i = 0; i < pendingMeshBuildRequests.Count; i++)
+        {
+            if (IsCoordInsideRenderDistance(pendingMeshBuildRequests[i].coord, center))
+                count++;
+        }
+
+        return count;
+    }
+
+    private bool ShouldPauseChunkDataScheduling(Vector2Int center)
+    {
+        int readyMeshBacklog = CountReadyPendingMeshes();
+        if (pauseChunkSchedulingWhenMeshesReady && readyMeshBacklog > Mathf.Max(0, maxReadyMeshApplyBacklog))
+            return true;
+
+        int meshBuildBacklogLimit = Mathf.Max(1, maxMeshBuildRequestBacklog);
+        if (CountPendingMeshBuildRequestsInRenderDistance(center) > meshBuildBacklogLimit)
+            return true;
+
+        int meshJobBacklogLimit = Mathf.Max(1, maxPendingMeshJobBacklog);
+        if (CountPendingMeshesInRenderDistance(center) > meshJobBacklogLimit)
+            return true;
+
+        return false;
+    }
+
     private void RefreshPendingChunkPriorities()
     {
         for (int i = 0; i < pendingChunks.Count; i++)
@@ -847,6 +925,14 @@ public partial class World : MonoBehaviour
                 pendingDataDistanceComparison = ComparePendingDataByDistance;
 
             pendingDataJobs.Sort(pendingDataDistanceComparison);
+        }
+
+        if (pendingMeshBuildRequests.Count > 1)
+        {
+            if (pendingDataDistanceComparison == null)
+                pendingDataDistanceComparison = ComparePendingDataByDistance;
+
+            pendingMeshBuildRequests.Sort(pendingDataDistanceComparison);
         }
 
         if (pendingMeshes.Count > 1)
@@ -936,7 +1022,7 @@ public partial class World : MonoBehaviour
 
             chunk.InitializeSubchunks(Material, resolved);
             chunk.UpdateWorldBounds();
-            RequestChunkRebuild(kv.Key, GetFullSubchunkMask(), false);
+            RequestFullChunkRebuild(kv.Key, false);
         }
     }
 
@@ -1357,7 +1443,7 @@ public partial class World : MonoBehaviour
 
     private static NativeArray<byte> CreateDefaultPlacementAxisArray(int length)
     {
-        return new NativeArray<byte>(length, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+        return MeshGenerator.RentByteBuffer(length, true);
     }
 
     private static void ApplyPlacementAxesFromBlockEdits(
@@ -1731,7 +1817,7 @@ public partial class World : MonoBehaviour
             loadedChunkCoordsBuffer.Add(kv.Key);
 
         for (int i = 0; i < loadedChunkCoordsBuffer.Count; i++)
-            RequestChunkRebuild(loadedChunkCoordsBuffer[i]);
+            RequestFullChunkRebuild(loadedChunkCoordsBuffer[i]);
     }
 
     private void Start()
@@ -1920,6 +2006,14 @@ public partial class World : MonoBehaviour
         }
         pendingDataJobs.Clear();
 
+        for (int i = 0; i < pendingMeshBuildRequests.Count; i++)
+        {
+            PendingData pd = pendingMeshBuildRequests[i];
+            pd.handle.Complete();
+            DisposeDataJobResources(ref pd);
+        }
+        pendingMeshBuildRequests.Clear();
+
         for (int i = 0; i < pendingMeshes.Count; i++)
         {
             PendingMesh pm = pendingMeshes[i];
@@ -1927,6 +2021,8 @@ public partial class World : MonoBehaviour
             DisposePendingMesh(pm);
         }
         pendingMeshes.Clear();
+
+        CompletePendingChunkDataBufferReturns();
 
         foreach (var kv in activeChunks)
         {
@@ -1978,10 +2074,15 @@ public partial class World : MonoBehaviour
             RefreshSimulationDistanceStateIfNeeded();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
-            ProcessPendingColliderBuilds();
+            ProcessChunkQueue(GetRemainingUpdateBudgetSeconds(updateFrameStartTime, updateBudgetSeconds));
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
-            ProcessChunkQueue(GetRemainingUpdateBudgetSeconds(updateFrameStartTime, updateBudgetSeconds));
+            ProcessQueuedChunkJobTrackingRefreshes();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessPendingColliderBuilds();
+
+        ProcessPendingChunkDataBufferReturns();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             UpdateSectionOcclusionVisibility();
@@ -2034,7 +2135,7 @@ public partial class World : MonoBehaviour
             return;
 
         foreach (Vector2Int coord in activeChunks.Keys)
-            RequestChunkRebuild(coord);
+            RequestFullChunkRebuild(coord);
     }
 
     private void HandleBiomeDefinitionChanged(BiomeDefinitionSO changedDefinition)
@@ -2065,7 +2166,7 @@ public partial class World : MonoBehaviour
             return;
 
         foreach (Vector2Int coord in activeChunks.Keys)
-            RequestChunkRebuild(coord);
+            RequestFullChunkRebuild(coord);
     }
 
     private void ApplyTerrainLayerProfileIfAssigned()
@@ -2156,34 +2257,170 @@ public partial class World : MonoBehaviour
 
     private void ProcessChunkQueue(float budgetSecondsOverride = -1f)
     {
-        float frameStartTime = Time.realtimeSinceStartup;
-        float budgetSeconds = frameTimeBudgetMS / 1000f;
-        if (budgetSecondsOverride > 0f)
-            budgetSeconds = Mathf.Min(budgetSeconds, budgetSecondsOverride);
-        budgetSeconds = Mathf.Max(0.0001f, budgetSeconds);
+        float pipelineStartTime = Time.realtimeSinceStartup;
+        float pipelineBudgetSeconds = GetBudgetSeconds(frameTimeBudgetMS);
+        if (budgetSecondsOverride >= 0f && !float.IsPositiveInfinity(budgetSecondsOverride))
+        {
+            pipelineBudgetSeconds = pipelineBudgetSeconds > 0f
+                ? Mathf.Min(pipelineBudgetSeconds, budgetSecondsOverride)
+                : budgetSecondsOverride;
+        }
+
         PrioritizePendingJobsByDistance();
 
+        if (HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds))
+            ProcessPendingChunkRequests(pipelineStartTime, pipelineBudgetSeconds);
+
+        if (HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds))
+            ProcessCompletedDataStage(pipelineStartTime, pipelineBudgetSeconds);
+
+        if (HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds))
+            ProcessCompletedLightingStage(pipelineStartTime, pipelineBudgetSeconds);
+
+        if (HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds))
+            ProcessPendingMeshScheduleStage(pipelineStartTime, pipelineBudgetSeconds);
+
+        if (HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds))
+            ProcessCompletedMeshApplyStage(pipelineStartTime, pipelineBudgetSeconds);
+    }
+
+    private static float GetBudgetSeconds(float budgetMS)
+    {
+        return budgetMS > 0f ? budgetMS / 1000f : 0f;
+    }
+
+    private static bool HasPipelineAndStageBudgetRemaining(
+        float pipelineStartTime,
+        float pipelineBudgetSeconds,
+        float stageStartTime,
+        float stageBudgetSeconds)
+    {
+        return HasUpdateBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds) &&
+               HasUpdateBudgetRemaining(stageStartTime, stageBudgetSeconds);
+    }
+
+    private void ProcessPendingChunkRequests(float pipelineStartTime, float pipelineBudgetSeconds)
+    {
+        if (pendingChunks.Count == 0)
+            return;
+
+        float stageStartTime = Time.realtimeSinceStartup;
+        float stageBudgetSeconds = GetBudgetSeconds(chunkDataScheduleBudgetMS);
+        int processed = 0;
+        int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
+        Vector2Int currentChunkCoord = GetCurrentPlayerChunkCoord();
+        if (ShouldPauseChunkDataScheduling(currentChunkCoord))
+            return;
+
+        int pendingDataInRange = CountPendingDataJobsInRenderDistance(currentChunkCoord);
+        int pendingMeshBuildsInRange = CountPendingMeshBuildRequestsInRenderDistance(currentChunkCoord);
+        int pendingMeshesInRange = CountPendingMeshesInRenderDistance(currentChunkCoord);
+        int realPending = pendingDataInRange +
+                          pendingMeshBuildsInRange +
+                          Mathf.CeilToInt(pendingMeshesInRange / (float)subchunksPerChunk);
+        int hardPendingDataLimit = Mathf.Max(maxPendingDataJobs, maxPendingDataJobs * 3);
+        bool jobsCongested = realPending > maxChunksPerFrame * 4;
+
+        if (jobsCongested)
+            return;
+
+        while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
+        {
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
+
+            if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
+                break;
+
+            var item = pendingChunks[0];
+            pendingChunks.RemoveAt(0);
+
+            if (activeChunks.ContainsKey(item.coord) || IsChunkJobPending(item.coord))
+                continue;
+
+            RequestChunk(item.coord);
+            pendingDataInRange++;
+            processed++;
+        }
+    }
+
+    private void ProcessCompletedDataStage(float pipelineStartTime, float pipelineBudgetSeconds)
+    {
+        if (pendingDataJobs.Count == 0)
+            return;
+
+        float stageStartTime = Time.realtimeSinceStartup;
+        float stageBudgetSeconds = GetBudgetSeconds(chunkDataCompletionBudgetMS);
         int dataProcessedThisFrame = 0;
         int dataCompletionsLimit = Mathf.Max(1, maxDataCompletionsPerFrame);
-
-        // === STAGE 1: DATA JOBS (voxel generation) ===
         int i = 0;
+
         while (i < pendingDataJobs.Count)
         {
-            if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds) break;
-            if (dataProcessedThisFrame >= dataCompletionsLimit) break;
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
+            if (dataProcessedThisFrame >= dataCompletionsLimit)
+                break;
 
             var pd = pendingDataJobs[i];
-            if (!pd.handle.IsCompleted)
+            if (pd.terrainStageCompleted)
             {
                 i++;
                 continue;
             }
 
-            // Complete and process
-            pd.handle.Complete();
+            if (!pd.terrainHandle.IsCompleted)
+            {
+                i++;
+                continue;
+            }
+
+            pd.terrainHandle.Complete();
             MeshGenerator.ReleaseDataJobTempBuffers(ref pd.tempBuffers);
+            pd.terrainStageCompleted = true;
+            pendingDataJobs[i] = pd;
             dataProcessedThisFrame++;
+            i++;
+        }
+    }
+
+    private void ProcessCompletedLightingStage(float pipelineStartTime, float pipelineBudgetSeconds)
+    {
+        if (pendingDataJobs.Count == 0)
+            return;
+
+        float stageStartTime = Time.realtimeSinceStartup;
+        float stageBudgetSeconds = GetBudgetSeconds(chunkLightingCompletionBudgetMS);
+        int lightingProcessedThisFrame = 0;
+        int lightingCompletionsLimit = Mathf.Max(1, maxLightingCompletionsPerFrame);
+        int i = 0;
+
+        while (i < pendingDataJobs.Count)
+        {
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
+            if (lightingProcessedThisFrame >= lightingCompletionsLimit)
+                break;
+
+            var pd = pendingDataJobs[i];
+            if (!pd.terrainStageCompleted)
+            {
+                i++;
+                continue;
+            }
+
+            if (!pd.lightingStageCompleted)
+            {
+                if (!pd.lightingHandle.IsCompleted)
+                {
+                    i++;
+                    continue;
+                }
+
+                pd.lightingHandle.Complete();
+                pd.lightingStageCompleted = true;
+                lightingProcessedThisFrame++;
+            }
 
             bool completedPostOverrideRefresh = pd.postOverrideRefreshScheduled;
             if (completedPostOverrideRefresh)
@@ -2225,7 +2462,8 @@ public partial class World : MonoBehaviour
                     activeChunk.hasVoxelSnapshot = true;
                     activeChunk.UpdateLightSnapshot(pd.light, pd.borderSize);
 
-                    ScheduleSubchunkMeshJobs(ref pd, activeChunk);
+                    pendingMeshBuildRequests.Add(pd);
+                    pendingJobPrioritiesDirty = true;
                 }
             }
             else
@@ -2238,22 +2476,78 @@ public partial class World : MonoBehaviour
             if (hasActiveChunk)
                 RefreshChunkJobTracking(pd.coord, activeChunk);
         }
+    }
 
-        // === STAGE 2: MESH JOBS (apply to GPU) ===
-        i = 0;
+    private void ProcessPendingMeshScheduleStage(float pipelineStartTime, float pipelineBudgetSeconds)
+    {
+        if (pendingMeshBuildRequests.Count == 0)
+            return;
+
+        float stageStartTime = Time.realtimeSinceStartup;
+        float stageBudgetSeconds = GetBudgetSeconds(chunkMeshScheduleBudgetMS);
+        int processed = 0;
+        int perFrameLimit = Mathf.Max(1, maxMeshSchedulesPerFrame);
+        int i = 0;
+
+        while (i < pendingMeshBuildRequests.Count)
+        {
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
+            if (processed >= perFrameLimit)
+                break;
+
+            PendingData pd = pendingMeshBuildRequests[i];
+            bool hasActiveChunk = activeChunks.TryGetValue(pd.coord, out Chunk activeChunk);
+            bool canScheduleMesh = hasActiveChunk &&
+                                   activeChunk.generation == pd.expectedGen &&
+                                   !HasQueuedChunkRebuild(pd.coord);
+
+            if (canScheduleMesh)
+                ScheduleSubchunkMeshJobs(ref pd, activeChunk);
+            else
+                DisposeDataJobResources(ref pd);
+
+            pendingMeshBuildRequests[i] = pd;
+            RemovePendingMeshBuildRequestAtSwapBack(i);
+            processed++;
+
+            if (hasActiveChunk)
+                RefreshChunkJobTracking(pd.coord, activeChunk);
+        }
+    }
+
+    private void ProcessCompletedMeshApplyStage(float pipelineStartTime, float pipelineBudgetSeconds)
+    {
+        if (pendingMeshes.Count == 0)
+            return;
+
+        float stageStartTime = Time.realtimeSinceStartup;
+        float stageBudgetSeconds = GetBudgetSeconds(chunkMeshApplyBudgetMS);
+        int i = 0;
+
         while (i < pendingMeshes.Count)
         {
-            if (Time.realtimeSinceStartup - frameStartTime > budgetSeconds) break;
-            if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame) break;
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
+            if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame)
+                break;
 
             var pm = pendingMeshes[i];
-            if (!pm.handle.IsCompleted)
+            if (!pm.jobCompleted)
             {
-                i++;
-                continue;
+                if (!pm.handle.IsCompleted)
+                {
+                    i++;
+                    continue;
+                }
+
+                pm.handle.Complete();
+                pm.jobCompleted = true;
+                pendingMeshes[i] = pm;
             }
 
-            pm.handle.Complete();
+            if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
+                break;
 
             bool hasActiveChunk = activeChunks.TryGetValue(pm.coord, out Chunk activeChunk);
             bool canApplyMesh = hasActiveChunk &&
@@ -2367,7 +2661,7 @@ public partial class World : MonoBehaviour
 
     private static NativeArray<byte> CreateFullyKnownVoxelMask(int length)
     {
-        NativeArray<byte> knownVoxelData = new NativeArray<byte>(length, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> knownVoxelData = MeshGenerator.RentByteBuffer(length);
         for (int i = 0; i < knownVoxelData.Length; i++)
             knownVoxelData[i] = 1;
 
@@ -2376,7 +2670,7 @@ public partial class World : MonoBehaviour
 
     private static NativeArray<byte> CreateKnownVoxelPlaceholder()
     {
-        NativeArray<byte> knownVoxelData = new NativeArray<byte>(1, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> knownVoxelData = MeshGenerator.RentByteBuffer(1);
         knownVoxelData[0] = 1;
         return knownVoxelData;
     }
@@ -2470,7 +2764,7 @@ public partial class World : MonoBehaviour
         int voxelSizeX = Chunk.SizeX + 2 * pd.borderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * pd.borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> dirtyColumns = new NativeArray<byte>(voxelSizeX * voxelSizeZ, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+        NativeArray<byte> dirtyColumns = MeshGenerator.RentByteBuffer(voxelSizeX * voxelSizeZ, true);
 
         var overrideRefreshJob = new PostApplyCurrentOverridesJob
         {
@@ -2492,9 +2786,13 @@ public partial class World : MonoBehaviour
         };
 
         pd.handle = overrideRefreshJob.Schedule();
+        pd.terrainHandle = pd.handle;
+        pd.lightingHandle = pd.handle;
         pd.postCompletionOverrides = currentOverrides;
         pd.postCompletionDirtyColumns = dirtyColumns;
         pd.postOverrideRefreshScheduled = true;
+        pd.terrainStageCompleted = false;
+        pd.lightingStageCompleted = false;
 
         chunk.currentJob = pd.handle;
         chunk.jobScheduled = true;
@@ -2631,7 +2929,7 @@ public partial class World : MonoBehaviour
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
         activeChunk.UpdateSubchunkColliderOccupancy(pd.subchunkColliderOccupancy, dirtySubchunkMask);
-        SafeDisposeNativeArray(ref pd.subchunkColliderOccupancy);
+        MeshGenerator.ReturnUlongBuffer(ref pd.subchunkColliderOccupancy);
         suppressedGrassBillboardInt3Buffer.Clear();
         CollectSuppressedGrassBillboardsForChunk(pd.coord, suppressedGrassBillboardInt3Buffer);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedGrassBillboardInt3Buffer.Count, Allocator.Persistent);
@@ -2740,6 +3038,7 @@ public partial class World : MonoBehaviour
                 pendingMeshes.Add(new PendingMesh
                 {
                     handle = meshHandle,
+                    jobCompleted = false,
                     vertices = vertices,
                     opaqueTriangles = opaqueTriangles,
                     transparentTriangles = transparentTriangles,
@@ -2752,10 +3051,10 @@ public partial class World : MonoBehaviour
                     subchunkVisibilityMasks = subchunkVisibilityMasks,
                     dirtySubchunkMask = scheduledSubchunkMask,
                     visualSliceIndex = sliceIndex,
-                    heightCache = pd.heightCache,
-                    blockTypes = pd.blockTypes,
-                    solids = pd.solids,
-                    light = pd.light,
+                    heightCache = default,
+                    blockTypes = default,
+                    solids = default,
+                    light = default,
                     suppressedBillboards = default,
                     buildColliders = pd.rebuildColliders
                 });
@@ -2763,25 +3062,14 @@ public partial class World : MonoBehaviour
             }
         }
 
-        var disposeJob = new MeshGenerator.DisposeChunkDataJob
-        {
-            heightCache = pd.heightCache,
-            blockTypes = pd.blockTypes,
-            blockPlacementAxes = pd.blockPlacementAxes,
-            knownVoxelData = pd.knownVoxelData,
-            solids = pd.solids,
-            light = pd.light,
-            subchunkNonEmpty = pd.subchunkNonEmpty
-        };
-        JobHandle dataDisposeHandle = disposeJob.Schedule(combinedMeshHandle);
-
         var disposeSuppressedBillboardsJob = new MeshGenerator.DisposeSuppressedBillboardsJob
         {
             suppressedGrassBillboards = nativeSuppressedBillboards
         };
         JobHandle suppressedDisposeHandle = disposeSuppressedBillboardsJob.Schedule(combinedMeshHandle);
 
-        activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, dataDisposeHandle, suppressedDisposeHandle);
+        QueueChunkDataBufferReturn(combinedMeshHandle, ref pd);
+        activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, suppressedDisposeHandle);
     }
 
     private void CollectSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord, List<int3> output)
@@ -2968,6 +3256,12 @@ public partial class World : MonoBehaviour
                 return true;
         }
 
+        for (int i = 0; i < pendingMeshBuildRequests.Count; i++)
+        {
+            if (ReferenceEquals(pendingMeshBuildRequests[i].chunk, chunk))
+                return true;
+        }
+
         return false;
     }
 
@@ -3060,36 +3354,7 @@ public partial class World : MonoBehaviour
             RefreshPendingChunkPriorities();
         }
 
-        // Processa alguns itens da fila por frame
-        if (pendingChunks.Count > 0)
-        {
-            int processed = 0;
-            int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
-            int pendingDataInRange = CountPendingDataJobsInRenderDistance(currentChunkCoord);
-            int pendingMeshesInRange = CountPendingMeshesInRenderDistance(currentChunkCoord);
-            int realPending = pendingDataInRange + Mathf.CeilToInt(pendingMeshesInRange / (float)subchunksPerChunk);
-            int hardPendingDataLimit = Mathf.Max(maxPendingDataJobs, maxPendingDataJobs * 3);
-            bool jobsCongested = realPending > maxChunksPerFrame * 4;
-
-            if (!jobsCongested)
-            {
-                while (processed < maxChunksPerFrame && pendingChunks.Count > 0)
-                {
-                    if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
-                        break;
-
-                    var item = pendingChunks[0];
-                    pendingChunks.RemoveAt(0);
-
-                    if (!activeChunks.ContainsKey(item.coord))
-                    {
-                        RequestChunk(item.coord);
-                        pendingDataInRange++;
-                        processed++;
-                    }
-                }
-            }
-        }
+        // O scheduler central consome pendingChunks com orcamento proprio em ProcessChunkQueue.
     }
 
     private void RequestChunk(Vector2Int coord)
@@ -3166,8 +3431,12 @@ public partial class World : MonoBehaviour
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = new NativeArray<byte>(voxelSizeX * Chunk.SizeY * voxelSizeZ, Allocator.Persistent);
-            InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
+            chunkLightData = MeshGenerator.RentByteBuffer(
+                hasGlobalLightColumns ? voxelSizeX * Chunk.SizeY * voxelSizeZ : 0,
+                hasGlobalLightColumns);
+            if (hasGlobalLightColumns)
+                InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
         if (chunk.jobScheduled)
         {
@@ -3196,6 +3465,8 @@ public partial class World : MonoBehaviour
             chunkLightData,
             chunk.voxelData,
             out JobHandle dataHandle,
+            out JobHandle terrainDataHandle,
+            out JobHandle lightingHandle,
             out NativeArray<int> heightCache,
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
@@ -3223,6 +3494,8 @@ public partial class World : MonoBehaviour
         pendingDataJobs.Add(new PendingData
         {
             handle = dataHandle,
+            terrainHandle = terrainDataHandle,
+            lightingHandle = lightingHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
             blockPlacementAxes = blockPlacementAxes,
@@ -3244,7 +3517,9 @@ public partial class World : MonoBehaviour
             subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = GetFullSubchunkMask(),
-            rebuildColliders = enableBlockColliders
+            rebuildColliders = enableBlockColliders,
+            terrainStageCompleted = false,
+            lightingStageCompleted = false
         });
         pendingJobPrioritiesDirty = true;
 
@@ -3284,21 +3559,18 @@ public partial class World : MonoBehaviour
 
         EnsureNativeGenerationCaches();
 
-        NativeArray<int> heightCache = new NativeArray<int>(copyTotalHeightPoints, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> blockTypes = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<int> heightCache = MeshGenerator.RentIntBuffer(copyTotalHeightPoints);
+        NativeArray<byte> blockTypes = MeshGenerator.RentByteBuffer(copyTotalVoxels);
         NativeArray<byte> blockPlacementAxes = CreateDefaultPlacementAxisArray(copyTotalVoxels);
-        NativeArray<byte> knownVoxelData = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<bool> solids = new NativeArray<bool>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> light = new NativeArray<byte>(copyTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<bool> subchunkNonEmpty = new NativeArray<bool>(Chunk.SubchunksPerColumn, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<ulong> subchunkColliderOccupancy = new NativeArray<ulong>(
-            Chunk.SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk,
-            Allocator.Persistent,
-            NativeArrayOptions.ClearMemory);
+        NativeArray<byte> knownVoxelData = MeshGenerator.RentByteBuffer(copyTotalVoxels);
+        NativeArray<bool> solids = MeshGenerator.RentBoolBuffer(copyTotalVoxels);
+        NativeArray<byte> light = MeshGenerator.RentByteBuffer(copyTotalVoxels);
+        NativeArray<bool> subchunkNonEmpty = MeshGenerator.RentBoolBuffer(Chunk.SubchunksPerColumn);
+        NativeArray<ulong> subchunkColliderOccupancy = MeshGenerator.RentUlongBuffer(Chunk.SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk);
         NativeArray<byte> lightOpacityData = default;
         NativeArray<byte> blockLightData = default;
-        NativeArray<byte> snapshotVoxelData = new NativeArray<byte>(snapshotChunkCount * FastRebuildChunkVoxelCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-        NativeArray<byte> snapshotLoadedChunks = new NativeArray<byte>(snapshotChunkCount, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> snapshotVoxelData = MeshGenerator.RentByteBuffer(snapshotChunkCount * FastRebuildChunkVoxelCount);
+        NativeArray<byte> snapshotLoadedChunks = MeshGenerator.RentByteBuffer(snapshotChunkCount);
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
 
         CaptureFastRebuildSnapshot(coord, snapshotChunkRadius, snapshotVoxelData, snapshotLoadedChunks);
@@ -3316,9 +3588,11 @@ public partial class World : MonoBehaviour
             copyVoxelPlaneSize);
         if (enableVoxelLighting)
         {
-            lightOpacityData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-            blockLightData = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent);
-            InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
+            lightOpacityData = MeshGenerator.RentByteBuffer(lightTotalVoxels);
+            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
+            blockLightData = MeshGenerator.RentByteBuffer(hasGlobalLightColumns ? lightTotalVoxels : 0, hasGlobalLightColumns);
+            if (hasGlobalLightColumns)
+                InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
         }
 
         var copyPopulateJob = new FastRebuildPopulateBlocksJob
@@ -3437,6 +3711,8 @@ public partial class World : MonoBehaviour
         pendingDataJobs.Add(new PendingData
         {
             handle = visualDataHandle,
+            terrainHandle = deriveDataHandle,
+            lightingHandle = visualDataHandle,
             heightCache = heightCache,
             blockTypes = blockTypes,
             blockPlacementAxes = blockPlacementAxes,
@@ -3458,7 +3734,9 @@ public partial class World : MonoBehaviour
             subchunkColliderOccupancy = subchunkColliderOccupancy,
             subchunkNonEmpty = subchunkNonEmpty,
             dirtySubchunkMask = dirtySubchunkMask,
-            rebuildColliders = rebuildColliders
+            rebuildColliders = rebuildColliders,
+            terrainStageCompleted = false,
+            lightingStageCompleted = false
         });
         pendingJobPrioritiesDirty = true;
 
