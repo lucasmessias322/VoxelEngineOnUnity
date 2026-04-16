@@ -11,6 +11,8 @@ public static class SpaghettiCaveNoiseUtility
 {
     private const float DoubleNoiseWarp = 1.0181269f;
     private const float NoiseOffsetMagnitude = 2048f;
+    private const float SpaghettiElevationNoiseMagnitude = 8f;
+    private const float SpaghettiMinThicknessMod = -1.3f;
 
     public struct DoubleSimplexNoiseSampler
     {
@@ -71,6 +73,23 @@ public static class SpaghettiCaveNoiseUtility
         return new float2(carveDensity + densityBias, entrancesDensity + densityBias);
     }
 
+    public static float SampleCarveDensity(
+        in SpaghettiCaveNoiseSampler sampler,
+        float worldX,
+        float worldY,
+        float worldZ,
+        float densityBias)
+    {
+        float roughness = SampleRoughness(in sampler, worldX, worldY, worldZ);
+        float spaghettiDensity = SampleSpaghetti2d(in sampler, worldX, worldY, worldZ) + roughness;
+        float biasedSpaghettiDensity = spaghettiDensity + densityBias;
+        if (biasedSpaghettiDensity < 0f)
+            return biasedSpaghettiDensity;
+
+        float entrancesDensity = SampleEntrances(in sampler, worldX, worldY, worldZ, roughness);
+        return math.min(spaghettiDensity, entrancesDensity) + densityBias;
+    }
+
     private static DoubleSimplexNoiseSampler CreateDoubleSimplexNoiseSampler(
         int worldSeed,
         int noiseSalt,
@@ -92,12 +111,16 @@ public static class SpaghettiCaveNoiseUtility
 
     private static float SampleSpaghetti2d(in SpaghettiCaveNoiseSampler sampler, float worldX, float worldY, float worldZ)
     {
+        float elevationGradient = SampleYClampedGradient(worldY, -64f, 320f, 8f, -40f);
+        float minElevationBand = math.max(0f, math.abs(elevationGradient) - SpaghettiElevationNoiseMagnitude);
+        if (minElevationBand + SpaghettiMinThicknessMod >= 1f)
+            return 1f;
+
         float modulator = SampleDoubleSimplexNoise(in sampler.spaghetti2dModulator, worldX, worldY, worldZ);
         float thicknessMod = -0.95f - 0.35f * SampleDoubleSimplexNoise(in sampler.spaghetti2dThickness, worldX, worldY, worldZ);
         float weirdScaled = SampleWeirdScaledSampler(in sampler.spaghetti2dWeirdScaled, worldX, worldY, worldZ, modulator, false);
         float elevationNoise = SampleDoubleSimplexNoise(in sampler.spaghetti2dElevation, worldX, worldY, worldZ);
-        float elevationGradient = SampleYClampedGradient(worldY, -64f, 320f, 8f, -40f);
-        float elevationBand = math.abs(elevationNoise * 8f + elevationGradient);
+        float elevationBand = math.abs(elevationNoise * SpaghettiElevationNoiseMagnitude + elevationGradient);
 
         float longitudinal = weirdScaled + 0.083f * thicknessMod;
         float elevationTerm = Cube(elevationBand + thicknessMod);

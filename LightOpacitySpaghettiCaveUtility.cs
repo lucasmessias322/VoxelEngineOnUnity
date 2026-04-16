@@ -134,8 +134,8 @@ public static class LightOpacitySpaghettiCaveUtility
                             float centerWorldX = chunkMinX - border + (localX0 + localX1) * 0.5f + 0.5f;
                             float centerWorldY = (voxelY0 + voxelY1) * 0.5f + 0.5f;
                             float centerWorldZ = chunkMinZ - border + (localZ0 + localZ1) * 0.5f + 0.5f;
-                            float2 centerDensity = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, centerWorldX, centerWorldY, centerWorldZ, densityBias);
-                            if (centerDensity.x >= 0f)
+                            float centerDensity = SpaghettiCaveNoiseUtility.SampleCarveDensity(in caveNoiseSampler, centerWorldX, centerWorldY, centerWorldZ, densityBias);
+                            if (centerDensity >= 0f)
                                 continue;
 
                             requiresExactCellSampling = true;
@@ -164,20 +164,31 @@ public static class LightOpacitySpaghettiCaveUtility
 
                                 for (int voxelY = voxelY0; voxelY <= maxVoxelYForColumn; voxelY++, voxelIndex += voxelSizeX)
                                 {
-                                    float2 density;
+                                    float carveDensity;
                                     if (requiresExactCellSampling)
                                     {
-                                        density = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, worldX, voxelY + 0.5f, worldZ, densityBias);
+                                        if (voxelY > regularMaxY)
+                                        {
+                                            float2 density = SpaghettiCaveNoiseUtility.SampleDensityPair(in caveNoiseSampler, worldX, voxelY + 0.5f, worldZ, densityBias);
+                                            if (density.y >= 0f)
+                                                continue;
+                                            carveDensity = density.x;
+                                        }
+                                        else
+                                        {
+                                            carveDensity = SpaghettiCaveNoiseUtility.SampleCarveDensity(in caveNoiseSampler, worldX, voxelY + 0.5f, worldZ, densityBias);
+                                        }
                                     }
                                     else
                                     {
                                         float ty = (voxelY - voxelY0) / (float)ySpan;
-                                        density = TrilinearInterpolate(d000, d100, d010, d110, d001, d101, d011, d111, tx, ty, tz);
+                                        float2 density = TrilinearInterpolate(d000, d100, d010, d110, d001, d101, d011, d111, tx, ty, tz);
+                                        if (voxelY > regularMaxY && density.y >= 0f)
+                                            continue;
+                                        carveDensity = density.x;
                                     }
 
-                                    if (voxelY > regularMaxY && density.y >= 0f)
-                                        continue;
-                                    if (density.x >= 0f)
+                                    if (carveDensity >= 0f)
                                         continue;
 
                                     carveMask[voxelIndex] = 1;

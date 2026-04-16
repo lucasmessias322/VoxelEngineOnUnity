@@ -14,7 +14,7 @@ public static partial class MeshGenerator
     private const int SizeZ = Chunk.SizeZ;
     private const float DefaultAOCurveExponent = 1.12f;
     private const float WireSurfaceBlockOffset = .5f / 16f;
-    private const int SpaghettiCarveMaskCacheMaxEntries = 24;
+    private const int SpaghettiCarveMaskCacheMaxEntries = 64;
     private const int TempGenerationPoolMaxArraysPerSize = 8;
 
     private const int SubchunksPerColumn = Chunk.SubchunksPerColumn;

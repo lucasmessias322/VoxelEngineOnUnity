@@ -116,6 +116,8 @@ public partial class World : MonoBehaviour
     #region Singleton
 
     public static World Instance { get; private set; }
+    public const int MinRenderDistance = 2;
+    public const int MaxRenderDistance = 24;
     internal bool IsShuttingDown => isShuttingDown;
 
     private bool isShuttingDown;
@@ -666,6 +668,18 @@ public partial class World : MonoBehaviour
     private int GetEffectiveSimulationDistance()
     {
         return Mathf.Clamp(simulationDistance, 0, Mathf.Max(0, renderDistance));
+    }
+
+    public void SetRenderDistance(int value)
+    {
+        int clampedDistance = Mathf.Clamp(value, MinRenderDistance, MaxRenderDistance);
+        if (renderDistance == clampedDistance)
+            return;
+
+        renderDistance = clampedDistance;
+        simulationDistance = Mathf.Clamp(simulationDistance, 0, renderDistance);
+        _lastChunkCoord = new Vector2Int(int.MinValue, int.MinValue);
+        pendingJobPrioritiesDirty = true;
     }
 
     private static bool IsCoordInsideCircularDistance(Vector2Int coord, Vector2Int center, int distanceInChunks)

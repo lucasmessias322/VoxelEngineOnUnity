@@ -239,10 +239,53 @@ public static partial class MeshGenerator
         if (!enableVoxelLighting)
         {
             // Caminho mais barato: sem voxel lighting nao precisamos do segundo volume de opacidade.
+            JobHandle dataSpaghettiCarveMaskHandle = default;
+            JobHandle dataSpaghettiMaskCacheStoreHandle = default;
+            JobHandle dataDisposePrefilledSpaghettiColumnsHandle = default;
+            bool useDataSharedSpaghettiCarveMask = false;
+            if (spaghettiCaveSettings.enabled)
+            {
+                if (sharedSpaghettiCarveMask.IsCreated)
+                    sharedSpaghettiCarveMask.Dispose();
+
+                useDataSharedSpaghettiCarveMask = TryScheduleSharedSpaghettiCarveMask(
+                    coord,
+                    noiseLayers,
+                    baseHeight,
+                    globalOffsetX,
+                    globalOffsetZ,
+                    biomeNoiseSettings,
+                    oreSeed,
+                    spaghettiCaveSettings,
+                    heightCache,
+                    heightHandle,
+                    dataBorderSize,
+                    dataVoxelSizeX,
+                    dataVoxelSizeZ,
+                    dataVoxelPlaneSize,
+                    dataTotalVoxels,
+                    out sharedSpaghettiCarveMask,
+                    out dataSpaghettiCarveMaskHandle,
+                    out dataSpaghettiMaskCacheStoreHandle,
+                    out dataDisposePrefilledSpaghettiColumnsHandle);
+
+                if (useDataSharedSpaghettiCarveMask)
+                {
+                    baseChunkDataJob.spaghettiCarveMask = sharedSpaghettiCarveMask;
+                    baseChunkDataJob.spaghettiCarveMaskVoxelSizeX = dataVoxelSizeX;
+                    baseChunkDataJob.spaghettiCarveMaskVoxelPlaneSize = dataVoxelPlaneSize;
+                    baseChunkDataJob.spaghettiCarveMaskOffsetX = 0;
+                    baseChunkDataJob.spaghettiCarveMaskOffsetZ = 0;
+                }
+            }
+
+            JobHandle caveDependency = JobHandle.CombineDependencies(surfaceMaterialHandle, copyBaseTerrainSolidsHandle);
+            if (useDataSharedSpaghettiCarveMask)
+                caveDependency = JobHandle.CombineDependencies(caveDependency, dataSpaghettiCarveMaskHandle);
+
             var caveChunkDataJob = baseChunkDataJob;
             caveChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Caves;
-            caveChunkDataHandle = caveChunkDataJob.Schedule(
-                JobHandle.CombineDependencies(surfaceMaterialHandle, copyBaseTerrainSolidsHandle));
+            caveChunkDataHandle = caveChunkDataJob.Schedule(caveDependency);
 
             var oreChunkDataJob = baseChunkDataJob;
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
@@ -306,10 +349,15 @@ public static partial class MeshGenerator
             {
                 values = sharedSpaghettiCarveMask
             };
-            JobHandle disposeEmptySpaghettiCarveMaskHandle = disposeEmptySpaghettiCarveMaskJob.Schedule(finalChunkDataHandle);
+            JobHandle disposeSpaghettiCarveMaskDependency = useDataSharedSpaghettiCarveMask
+                ? JobHandle.CombineDependencies(finalChunkDataHandle, dataSpaghettiMaskCacheStoreHandle)
+                : finalChunkDataHandle;
+            JobHandle disposeEmptySpaghettiCarveMaskHandle = disposeEmptySpaghettiCarveMaskJob.Schedule(disposeSpaghettiCarveMaskDependency);
 
             dataHandle = snapshotHandle;
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeEmptySpaghettiCarveMaskHandle);
+            if (useDataSharedSpaghettiCarveMask)
+                dataHandle = JobHandle.CombineDependencies(dataHandle, dataDisposePrefilledSpaghettiColumnsHandle);
             dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsHandle);
             return;
         }
@@ -329,10 +377,7 @@ public static partial class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
-        bool useSharedSpaghettiCarveMask = LightOpacitySpaghettiCaveUtility.ShouldApply(
-            dataBorderSize,
-            lightBorderSize,
-            spaghettiCaveSettings);
+        bool useSharedSpaghettiCarveMask = spaghettiCaveSettings.enabled;
         JobHandle spaghettiCarveMaskHandle = default;
         JobHandle disposePrefilledSpaghettiColumnsHandle = default;
         JobHandle spaghettiMaskCacheStoreHandle = default;
@@ -340,63 +385,38 @@ public static partial class MeshGenerator
         {
             // A mesma mascara e compartilhada entre terreno e opacidade para que
             // cavernas e iluminacao concordem exatamente nas bordas.
-            sharedSpaghettiCarveMask.Dispose();
-            sharedSpaghettiCarveMask = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
-            int spaghettiSettingsHash = ComputeSpaghettiCarveMaskSettingsHash(oreSeed, lightBorderSize, spaghettiCaveSettings);
-            NativeArray<byte> prefilledSpaghettiColumns = new NativeArray<byte>(lightVoxelSizeX * lightVoxelSizeZ, Allocator.Persistent, NativeArrayOptions.ClearMemory);
-            int prefilledColumnCount = PrefillSpaghettiCarveMaskFromNeighborCache(
+            if (sharedSpaghettiCarveMask.IsCreated)
+                sharedSpaghettiCarveMask.Dispose();
+
+            useSharedSpaghettiCarveMask = TryScheduleSharedSpaghettiCarveMask(
                 coord,
-                spaghettiSettingsHash,
-                sharedSpaghettiCarveMask,
-                prefilledSpaghettiColumns,
-                lightVoxelSizeX,
-                lightVoxelSizeZ,
-                lightVoxelPlaneSize,
-                lightBorderSize);
-
-            var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
-            {
-                coord = coord,
-                heightCache = lightHeightCache,
-                carveMask = sharedSpaghettiCarveMask,
-                prefilledColumns = prefilledSpaghettiColumns,
-                prefilledColumnsStride = lightVoxelSizeX,
-                borderSize = lightBorderSize,
-                oreSeed = oreSeed,
-                spaghettiCaveSettings = spaghettiCaveSettings
-            };
-            spaghettiCarveMaskHandle = prefilledColumnCount < prefilledSpaghettiColumns.Length
-                ? buildSpaghettiCaveCarveMaskJob.Schedule(lightHeightHandle)
-                : lightHeightHandle;
-
-            var disposePrefilledSpaghettiColumnsJob = new DisposeByteArrayJob
-            {
-                values = prefilledSpaghettiColumns
-            };
-            disposePrefilledSpaghettiColumnsHandle = disposePrefilledSpaghettiColumnsJob.Schedule(spaghettiCarveMaskHandle);
-
-            NativeArray<byte> cachedMaskCopy = new NativeArray<byte>(lightTotalVoxels, Allocator.Persistent, NativeArrayOptions.UninitializedMemory);
-            var copySpaghettiMaskToCacheJob = new CopyByteArrayJob
-            {
-                source = sharedSpaghettiCarveMask,
-                destination = cachedMaskCopy
-            };
-            spaghettiMaskCacheStoreHandle = copySpaghettiMaskToCacheJob.Schedule(lightTotalVoxels, 128, spaghettiCarveMaskHandle);
-            StoreSpaghettiCarveMaskNeighborCacheEntry(
-                coord,
-                cachedMaskCopy,
-                spaghettiMaskCacheStoreHandle,
-                lightVoxelSizeX,
-                lightVoxelSizeZ,
-                lightVoxelPlaneSize,
+                noiseLayers,
+                baseHeight,
+                globalOffsetX,
+                globalOffsetZ,
+                biomeNoiseSettings,
+                oreSeed,
+                spaghettiCaveSettings,
+                lightHeightCache,
+                lightHeightHandle,
                 lightBorderSize,
-                spaghettiSettingsHash);
+                lightVoxelSizeX,
+                lightVoxelSizeZ,
+                lightVoxelPlaneSize,
+                lightTotalVoxels,
+                out sharedSpaghettiCarveMask,
+                out spaghettiCarveMaskHandle,
+                out spaghettiMaskCacheStoreHandle,
+                out disposePrefilledSpaghettiColumnsHandle);
 
-            baseChunkDataJob.spaghettiCarveMask = sharedSpaghettiCarveMask;
-            baseChunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
-            baseChunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
-            baseChunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
-            baseChunkDataJob.spaghettiCarveMaskOffsetZ = lightBorderSize - dataBorderSize;
+            if (useSharedSpaghettiCarveMask)
+            {
+                baseChunkDataJob.spaghettiCarveMask = sharedSpaghettiCarveMask;
+                baseChunkDataJob.spaghettiCarveMaskVoxelSizeX = lightVoxelSizeX;
+                baseChunkDataJob.spaghettiCarveMaskVoxelPlaneSize = lightVoxelPlaneSize;
+                baseChunkDataJob.spaghettiCarveMaskOffsetX = lightBorderSize - dataBorderSize;
+                baseChunkDataJob.spaghettiCarveMaskOffsetZ = lightBorderSize - dataBorderSize;
+            }
         }
 
         JobHandle caveChunkDependency = useSharedSpaghettiCarveMask
@@ -572,5 +592,126 @@ public static partial class MeshGenerator
             lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle)),
             buildChunkSnapshotHandle);
         dataHandle = JobHandle.CombineDependencies(dataHandle, disposeBaseTerrainSolidsAfterLightingHandle);
+    }
+
+    private static bool TryScheduleSharedSpaghettiCarveMask(
+        Vector2Int coord,
+        NativeArray<NoiseLayer> noiseLayers,
+        int baseHeight,
+        float globalOffsetX,
+        float globalOffsetZ,
+        BiomeNoiseSettings biomeNoiseSettings,
+        int oreSeed,
+        SpaghettiCaveSettings spaghettiCaveSettings,
+        NativeArray<int> heightCache,
+        JobHandle heightHandle,
+        int borderSize,
+        int voxelSizeX,
+        int voxelSizeZ,
+        int voxelPlaneSize,
+        int totalVoxels,
+        out NativeArray<byte> carveMask,
+        out JobHandle carveMaskHandle,
+        out JobHandle cacheStoreHandle,
+        out JobHandle disposePrefilledColumnsHandle)
+    {
+        carveMask = default;
+        carveMaskHandle = default;
+        cacheStoreHandle = default;
+        disposePrefilledColumnsHandle = default;
+
+        if (!spaghettiCaveSettings.enabled ||
+            !heightCache.IsCreated ||
+            borderSize <= 0 ||
+            voxelSizeX <= 0 ||
+            voxelSizeZ <= 0 ||
+            voxelPlaneSize <= 0 ||
+            totalVoxels <= 0)
+        {
+            carveMask = new NativeArray<byte>(0, Allocator.Persistent);
+            return false;
+        }
+
+        carveMask = new NativeArray<byte>(totalVoxels, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+        int spaghettiSettingsHash = ComputeSpaghettiCarveMaskSettingsHash(
+            oreSeed,
+            borderSize,
+            in spaghettiCaveSettings,
+            noiseLayers,
+            baseHeight,
+            globalOffsetX,
+            globalOffsetZ,
+            in biomeNoiseSettings);
+
+        if (TryGetReusableSpaghettiCarveMaskCacheEntry(
+                coord,
+                spaghettiSettingsHash,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                borderSize,
+                out SpaghettiCarveMaskCacheEntry cachedEntry))
+        {
+            NativeArray<byte>.Copy(cachedEntry.mask, carveMask, totalVoxels);
+            return true;
+        }
+
+        NativeArray<byte> prefilledSpaghettiColumns = new NativeArray<byte>(
+            voxelSizeX * voxelSizeZ,
+            Allocator.Persistent,
+            NativeArrayOptions.ClearMemory);
+        int prefilledColumnCount = PrefillSpaghettiCarveMaskFromNeighborCache(
+            coord,
+            spaghettiSettingsHash,
+            carveMask,
+            prefilledSpaghettiColumns,
+            voxelSizeX,
+            voxelSizeZ,
+            voxelPlaneSize,
+            borderSize);
+
+        if (prefilledColumnCount < prefilledSpaghettiColumns.Length)
+        {
+            var buildSpaghettiCaveCarveMaskJob = new BuildSpaghettiCaveCarveMaskJob
+            {
+                coord = coord,
+                heightCache = heightCache,
+                carveMask = carveMask,
+                prefilledColumns = prefilledSpaghettiColumns,
+                prefilledColumnsStride = voxelSizeX,
+                borderSize = borderSize,
+                oreSeed = oreSeed,
+                spaghettiCaveSettings = spaghettiCaveSettings
+            };
+            carveMaskHandle = buildSpaghettiCaveCarveMaskJob.Schedule(heightHandle);
+        }
+
+        var disposePrefilledSpaghettiColumnsJob = new DisposeByteArrayJob
+        {
+            values = prefilledSpaghettiColumns
+        };
+        disposePrefilledColumnsHandle = disposePrefilledSpaghettiColumnsJob.Schedule(carveMaskHandle);
+
+        NativeArray<byte> cachedMaskCopy = new NativeArray<byte>(
+            totalVoxels,
+            Allocator.Persistent,
+            NativeArrayOptions.UninitializedMemory);
+        var copySpaghettiMaskToCacheJob = new CopyByteArrayJob
+        {
+            source = carveMask,
+            destination = cachedMaskCopy
+        };
+        cacheStoreHandle = copySpaghettiMaskToCacheJob.Schedule(totalVoxels, 128, carveMaskHandle);
+        StoreSpaghettiCarveMaskNeighborCacheEntry(
+            coord,
+            cachedMaskCopy,
+            cacheStoreHandle,
+            voxelSizeX,
+            voxelSizeZ,
+            voxelPlaneSize,
+            borderSize,
+            spaghettiSettingsHash);
+
+        return true;
     }
 }

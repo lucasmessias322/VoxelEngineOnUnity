@@ -190,6 +190,66 @@ public static partial class MeshGenerator
         }
     }
 
+    private static int ComputeSpaghettiCarveMaskSettingsHash(
+        int oreSeed,
+        int borderSize,
+        in SpaghettiCaveSettings settings,
+        NativeArray<NoiseLayer> noiseLayers,
+        int baseHeight,
+        float offsetX,
+        float offsetZ,
+        in BiomeNoiseSettings biomeNoiseSettings)
+    {
+        unchecked
+        {
+            int hash = ComputeSpaghettiCarveMaskSettingsHash(oreSeed, borderSize, in settings);
+            AddHash(ref hash, baseHeight);
+            AddHash(ref hash, math.asint(offsetX));
+            AddHash(ref hash, math.asint(offsetZ));
+            AddHash(ref hash, biomeNoiseSettings.GetHashCode());
+
+            int layerCount = noiseLayers.IsCreated ? noiseLayers.Length : 0;
+            AddHash(ref hash, layerCount);
+            for (int i = 0; i < layerCount; i++)
+                AddNoiseLayerHash(ref hash, noiseLayers[i]);
+
+            return hash;
+        }
+    }
+
+    private static void AddNoiseLayerHash(ref int hash, in NoiseLayer layer)
+    {
+        unchecked
+        {
+            AddHash(ref hash, layer.enabled ? 1 : 0);
+            AddHash(ref hash, (int)layer.role);
+            AddHash(ref hash, math.asint(layer.scale));
+            AddHash(ref hash, math.asint(layer.amplitude));
+            AddHash(ref hash, layer.octaves);
+            AddHash(ref hash, math.asint(layer.persistence));
+            AddHash(ref hash, math.asint(layer.lacunarity));
+            AddHash(ref hash, math.asint(layer.offset.x));
+            AddHash(ref hash, math.asint(layer.offset.y));
+            AddHash(ref hash, math.asint(layer.maxAmp));
+            AddHash(ref hash, math.asint(layer.redistributionModifier));
+            AddHash(ref hash, math.asint(layer.exponent));
+            AddHash(ref hash, math.asint(layer.ridgeFactor));
+            AddHash(ref hash, math.asint(layer.domainWarpStrength));
+            AddHash(ref hash, math.asint(layer.domainWarpScale));
+            AddHash(ref hash, layer.domainWarpOctaves);
+            AddHash(ref hash, math.asint(layer.domainWarpGain));
+            AddHash(ref hash, math.asint(layer.domainWarpLacunarity));
+        }
+    }
+
+    private static void AddHash(ref int hash, int value)
+    {
+        unchecked
+        {
+            hash = (hash * 31) + value;
+        }
+    }
+
     private static bool TryGetReusableSpaghettiCarveMaskCacheEntry(
         Vector2Int coord,
         int expectedSettingsHash,
