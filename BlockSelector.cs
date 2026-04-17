@@ -4,6 +4,8 @@ using Unity.Mathematics;
 [RequireComponent(typeof(LineRenderer))]
 public class BlockSelector : MonoBehaviour
 {
+    private const float BoundsEpsilon = 0.0001f;
+
     public Camera cam;
     public float reach = 6f;
     public BlockType CurrentBlock { get; private set; } = BlockType.Air;
@@ -357,6 +359,25 @@ public class BlockSelector : MonoBehaviour
                 }
             }
 
+            if (TryHitOverflowingNeighborMultiCuboid(
+                    ray,
+                    maxDistance,
+                    voxel,
+                    lastNormal,
+                    out Vector3Int overflowBlock,
+                    out BlockType overflowType,
+                    out Vector3Int overflowNormal,
+                    out Vector3 overflowPoint))
+            {
+                hitBlock = overflowBlock;
+                hitType = overflowType;
+                hitNormal = overflowNormal;
+                hitPoint = overflowPoint;
+                isBillboardHit = false;
+                billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
+                return true;
+            }
+
             if (hasLoadedBlock &&
                 TryHitGrassBillboardInVoxel(
                     ray,
@@ -499,8 +520,32 @@ public class BlockSelector : MonoBehaviour
         out Vector3Int hitNormal,
         out Vector3 hitPoint)
     {
+        return TryHitMultiCuboidBlock(
+            ray,
+            maxDistance,
+            voxel,
+            mapping,
+            placementAxis,
+            lastNormal,
+            out hitNormal,
+            out hitPoint,
+            out _);
+    }
+
+    private bool TryHitMultiCuboidBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint,
+        out float hitDistance)
+    {
         hitNormal = Vector3Int.zero;
         hitPoint = Vector3.zero;
+        hitDistance = float.PositiveInfinity;
 
         World world = World.Instance;
         if (world == null || world.blockData == null)
@@ -510,7 +555,7 @@ public class BlockSelector : MonoBehaviour
         if (boxCount <= 0)
         {
             Bounds fallbackBounds = BlockShapeUtility.GetWorldBounds(voxel, mapping.blockType, mapping, placementAxis);
-            return TryHitShapeBox(ray, maxDistance, fallbackBounds, lastNormal, out _, out hitNormal, out hitPoint);
+            return TryHitShapeBox(ray, maxDistance, fallbackBounds, lastNormal, out hitDistance, out hitNormal, out hitPoint);
         }
 
         float bestDistance = float.PositiveInfinity;
@@ -532,7 +577,118 @@ public class BlockSelector : MonoBehaviour
             hit = true;
         }
 
+        hitDistance = bestDistance;
         return hit;
+    }
+
+    private bool TryHitOverflowingNeighborMultiCuboid(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        Vector3Int lastNormal,
+        out Vector3Int hitBlock,
+        out BlockType hitType,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        hitBlock = default;
+        hitType = BlockType.Air;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        Vector3Int searchRadius = world.blockData.runtimeMultiCuboidOverflowSearchRadius;
+        if (searchRadius == Vector3Int.zero)
+            return false;
+
+        Bounds voxelBounds = new Bounds(voxel + Vector3.one * 0.5f, Vector3.one);
+        float bestDistance = float.PositiveInfinity;
+        bool foundHit = false;
+
+        for (int y = -searchRadius.y; y <= searchRadius.y; y++)
+        {
+            for (int z = -searchRadius.z; z <= searchRadius.z; z++)
+            {
+                for (int x = -searchRadius.x; x <= searchRadius.x; x++)
+                {
+                    Vector3Int candidatePos = voxel + new Vector3Int(x, y, z);
+                    if (candidatePos == voxel)
+                        continue;
+
+                    if (!world.TryGetLoadedBlockAt(candidatePos, out BlockType candidateType) ||
+                        candidateType == BlockType.Air ||
+                        world.IsLiquidBlock(candidateType))
+                    {
+                        continue;
+                    }
+
+                    BlockTextureMapping? mappingResult = world.blockData.GetMapping(candidateType);
+                    if (mappingResult == null)
+                        continue;
+
+                    BlockTextureMapping mapping = mappingResult.Value;
+                    if (BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.MultiCuboid)
+                        continue;
+
+                    BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(candidatePos, candidateType);
+                    if (!BlockShapeUtility.TryGetMultiCuboidBounds(
+                            candidatePos,
+                            mapping,
+                            world.blockData.runtimeMultiCuboidBoxes,
+                            placementAxis,
+                            candidateType,
+                            out Bounds candidateBounds))
+                    {
+                        continue;
+                    }
+
+                    if (!DoesBoundsOverflowOriginVoxel(candidateBounds, candidatePos) ||
+                        !candidateBounds.Intersects(voxelBounds))
+                    {
+                        continue;
+                    }
+
+                    if (!TryHitMultiCuboidBlock(
+                            ray,
+                            maxDistance,
+                            candidatePos,
+                            mapping,
+                            placementAxis,
+                            lastNormal,
+                            out Vector3Int candidateNormal,
+                            out Vector3 candidatePoint,
+                            out float candidateDistance) ||
+                        candidateDistance >= bestDistance)
+                    {
+                        continue;
+                    }
+
+                    bestDistance = candidateDistance;
+                    hitBlock = candidatePos;
+                    hitType = candidateType;
+                    hitNormal = candidateNormal;
+                    hitPoint = candidatePoint;
+                    foundHit = true;
+                }
+            }
+        }
+
+        return foundHit;
+    }
+
+    private static bool DoesBoundsOverflowOriginVoxel(Bounds bounds, Vector3Int originVoxel)
+    {
+        Vector3 originMin = originVoxel;
+        Vector3 originMax = originMin + Vector3.one;
+        return bounds.min.x < originMin.x - BoundsEpsilon ||
+               bounds.min.y < originMin.y - BoundsEpsilon ||
+               bounds.min.z < originMin.z - BoundsEpsilon ||
+               bounds.max.x > originMax.x + BoundsEpsilon ||
+               bounds.max.y > originMax.y + BoundsEpsilon ||
+               bounds.max.z > originMax.z + BoundsEpsilon;
     }
 
     private bool TryHitPlaneBlock(

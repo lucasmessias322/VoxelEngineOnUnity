@@ -1034,9 +1034,6 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             max = SnapVector(max, snapStep);
         }
 
-        min = Clamp01(min);
-        max = Clamp01(max);
-
         EnsureAxisSize(ref min.x, ref max.x);
         EnsureAxisSize(ref min.y, ref max.y);
         EnsureAxisSize(ref min.z, ref max.z);
@@ -1064,24 +1061,9 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         if (max - min >= MinCuboidSize)
             return;
 
-        float center = Mathf.Clamp01((min + max) * 0.5f);
+        float center = (min + max) * 0.5f;
         min = center - MinCuboidSize * 0.5f;
         max = center + MinCuboidSize * 0.5f;
-
-        if (min < 0f)
-        {
-            max -= min;
-            min = 0f;
-        }
-
-        if (max > 1f)
-        {
-            min -= max - 1f;
-            max = 1f;
-        }
-
-        min = Mathf.Clamp01(min);
-        max = Mathf.Clamp01(max);
     }
 
     private static Vector3 SnapVector(Vector3 value, float step)
@@ -1091,11 +1073,6 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
             Mathf.Round(value.x / step) * step,
             Mathf.Round(value.y / step) * step,
             Mathf.Round(value.z / step) * step);
-    }
-
-    private static Vector3 Clamp01(Vector3 value)
-    {
-        return new Vector3(Mathf.Clamp01(value.x), Mathf.Clamp01(value.y), Mathf.Clamp01(value.z));
     }
 
     private static Vector3 Abs(Vector3 value)

@@ -165,7 +165,7 @@ public sealed class MultiCuboidBlockEditorWindow : EditorWindow
         showVoxelBounds = EditorGUILayout.ToggleLeft("Limite 1x1", showVoxelBounds, GUILayout.Width(90f));
         EditorGUILayout.EndHorizontal();
 
-        EditorGUILayout.HelpBox("Coordenadas locais usam 0..1. Um bloco como bigorna e apenas uma lista de caixas pequenas dentro desse voxel.", MessageType.None);
+        EditorGUILayout.HelpBox("Coordenadas locais usam o espaco do bloco e podem sair de 0..1. Isso permite modelos que avancam para mais de um voxel.", MessageType.None);
         EditorGUILayout.EndVertical();
     }
 
@@ -448,16 +448,12 @@ public sealed class MultiCuboidBlockEditorWindow : EditorWindow
 
     private static BlockModelCuboid SanitizeCuboid(BlockModelCuboid cuboid)
     {
-        Vector3 min = Clamp01(Vector3.Min(cuboid.min, cuboid.max));
-        Vector3 max = Clamp01(Vector3.Max(cuboid.min, cuboid.max));
+        Vector3 min = Vector3.Min(cuboid.min, cuboid.max);
+        Vector3 max = Vector3.Max(cuboid.min, cuboid.max);
 
-        if (max.x - min.x < MinCuboidSize) max.x = Mathf.Min(1f, min.x + MinCuboidSize);
-        if (max.y - min.y < MinCuboidSize) max.y = Mathf.Min(1f, min.y + MinCuboidSize);
-        if (max.z - min.z < MinCuboidSize) max.z = Mathf.Min(1f, min.z + MinCuboidSize);
-
-        if (max.x <= min.x) min.x = Mathf.Max(0f, max.x - MinCuboidSize);
-        if (max.y <= min.y) min.y = Mathf.Max(0f, max.y - MinCuboidSize);
-        if (max.z <= min.z) min.z = Mathf.Max(0f, max.z - MinCuboidSize);
+        if (max.x - min.x < MinCuboidSize) max.x = min.x + MinCuboidSize;
+        if (max.y - min.y < MinCuboidSize) max.y = min.y + MinCuboidSize;
+        if (max.z - min.z < MinCuboidSize) max.z = min.z + MinCuboidSize;
 
         BlockModelCuboid sanitized = new BlockModelCuboid
         {
@@ -482,18 +478,10 @@ public sealed class MultiCuboidBlockEditorWindow : EditorWindow
     private Vector3 SnapVector(Vector3 value)
     {
         float step = Mathf.Max(0.001f, snapStep);
-        return Clamp01(new Vector3(
+        return new Vector3(
             Mathf.Round(value.x / step) * step,
             Mathf.Round(value.y / step) * step,
-            Mathf.Round(value.z / step) * step));
-    }
-
-    private static Vector3 Clamp01(Vector3 value)
-    {
-        return new Vector3(
-            Mathf.Clamp01(value.x),
-            Mathf.Clamp01(value.y),
-            Mathf.Clamp01(value.z));
+            Mathf.Round(value.z / step) * step);
     }
 
     private void DrawPreview(Rect rect, BlockMultiCuboidDefinition definition)

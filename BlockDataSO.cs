@@ -29,10 +29,10 @@ public enum BlockCuboidFaceMask : byte
 [System.Serializable]
 public struct BlockModelCuboid
 {
-    [Tooltip("Canto minimo local do cuboide dentro do voxel (0..1).")]
+    [Tooltip("Canto minimo local do cuboide no espaco do bloco. Pode sair de 0..1 para modelos maiores que um voxel.")]
     public Vector3 min;
 
-    [Tooltip("Canto maximo local do cuboide dentro do voxel (0..1).")]
+    [Tooltip("Canto maximo local do cuboide no espaco do bloco. Pode sair de 0..1 para modelos maiores que um voxel.")]
     public Vector3 max;
 
     [Tooltip("Rotacao local em graus ao redor do centro do cuboide.")]
@@ -549,7 +549,7 @@ public class BlockDataSO : ScriptableObject
     [SerializeField, HideInInspector] private List<BlockTextureEntryIdMapping> blockTextureEntryIds = new List<BlockTextureEntryIdMapping>();
 
     [Header("Multi Cubos")]
-    [Tooltip("Modelos por blocos compostos por varios cuboides 0..1. Use renderShape = MultiCuboid no bloco, ou preencha uma entrada aqui para ativar automaticamente.")]
+    [Tooltip("Modelos por blocos compostos por varios cuboides no espaco local do bloco. Coordenadas podem sair de 0..1 para suportar blocos maiores.")]
     public List<BlockMultiCuboidDefinition> multiCuboidShapes = new List<BlockMultiCuboidDefinition>();
     [SerializeField, HideInInspector] private List<BlockCuboidTextureEntryIdMapping> multiCuboidTextureEntryIds = new List<BlockCuboidTextureEntryIdMapping>();
 
@@ -558,6 +558,9 @@ public class BlockDataSO : ScriptableObject
 
     [System.NonSerialized]
     public BlockModelCuboid[] runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
+
+    [System.NonSerialized]
+    public Vector3Int runtimeMultiCuboidOverflowSearchRadius = Vector3Int.zero;
 
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
@@ -796,6 +799,7 @@ public class BlockDataSO : ScriptableObject
         if (mappings == null)
         {
             runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
+            runtimeMultiCuboidOverflowSearchRadius = Vector3Int.zero;
             return;
         }
 
@@ -810,6 +814,7 @@ public class BlockDataSO : ScriptableObject
         if (multiCuboidShapes == null || multiCuboidShapes.Count == 0)
         {
             runtimeMultiCuboidBoxes = System.Array.Empty<BlockModelCuboid>();
+            runtimeMultiCuboidOverflowSearchRadius = Vector3Int.zero;
             return;
         }
 
@@ -848,12 +853,70 @@ public class BlockDataSO : ScriptableObject
         runtimeMultiCuboidBoxes = cuboids.Count > 0
             ? cuboids.ToArray()
             : System.Array.Empty<BlockModelCuboid>();
+        runtimeMultiCuboidOverflowSearchRadius = ComputeMultiCuboidOverflowSearchRadius();
+    }
+
+    private Vector3Int ComputeMultiCuboidOverflowSearchRadius()
+    {
+        if (mappings == null || runtimeMultiCuboidBoxes == null || runtimeMultiCuboidBoxes.Length == 0)
+            return Vector3Int.zero;
+
+        int radiusX = 0;
+        int radiusY = 0;
+        int radiusZ = 0;
+
+        for (int i = 0; i < mappings.Length; i++)
+        {
+            BlockTextureMapping mapping = mappings[i];
+            if (BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.MultiCuboid)
+                continue;
+
+            AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.Y, ref radiusX, ref radiusY, ref radiusZ);
+            if (!mapping.usePlacementAxisRotation)
+                continue;
+
+            AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.X, ref radiusX, ref radiusY, ref radiusZ);
+            AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.XNegative, ref radiusX, ref radiusY, ref radiusZ);
+            AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.ZNegative, ref radiusX, ref radiusY, ref radiusZ);
+        }
+
+        return new Vector3Int(radiusX, radiusY, radiusZ);
+    }
+
+    private void AccumulateMultiCuboidOverflowSearchRadius(
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        ref int radiusX,
+        ref int radiusY,
+        ref int radiusZ)
+    {
+        if (!BlockShapeUtility.TryGetMultiCuboidBounds(
+                Vector3Int.zero,
+                mapping,
+                runtimeMultiCuboidBoxes,
+                placementAxis,
+                mapping.blockType,
+                out Bounds bounds))
+        {
+            return;
+        }
+
+        float negativeOverflowX = Mathf.Max(0f, -bounds.min.x);
+        float negativeOverflowY = Mathf.Max(0f, -bounds.min.y);
+        float negativeOverflowZ = Mathf.Max(0f, -bounds.min.z);
+        float positiveOverflowX = Mathf.Max(0f, bounds.max.x - 1f);
+        float positiveOverflowY = Mathf.Max(0f, bounds.max.y - 1f);
+        float positiveOverflowZ = Mathf.Max(0f, bounds.max.z - 1f);
+
+        radiusX = Mathf.Max(radiusX, Mathf.CeilToInt(Mathf.Max(negativeOverflowX, positiveOverflowX)));
+        radiusY = Mathf.Max(radiusY, Mathf.CeilToInt(Mathf.Max(negativeOverflowY, positiveOverflowY)));
+        radiusZ = Mathf.Max(radiusZ, Mathf.CeilToInt(Mathf.Max(negativeOverflowZ, positiveOverflowZ)));
     }
 
     private static bool TrySanitizeModelCuboid(BlockModelCuboid source, out BlockModelCuboid sanitized)
     {
-        Vector3 min = Clamp01(source.min);
-        Vector3 max = Clamp01(source.max);
+        Vector3 min = Vector3.Min(source.min, source.max);
+        Vector3 max = Vector3.Max(source.min, source.max);
 
         bool valid =
             max.x > min.x + 0.0001f &&
@@ -2252,8 +2315,8 @@ public static class BlockShapeUtility
 
     private static bool TrySanitizeShapeBox(Vector3 sourceMin, Vector3 sourceMax, out ShapeBox box)
     {
-        Vector3 min = Clamp01(sourceMin);
-        Vector3 max = Clamp01(sourceMax);
+        Vector3 min = Vector3.Min(sourceMin, sourceMax);
+        Vector3 max = Vector3.Max(sourceMin, sourceMax);
         bool valid =
             max.x > min.x + BoundsEpsilon &&
             max.y > min.y + BoundsEpsilon &&

@@ -51,7 +51,7 @@ public sealed class MultiCuboidBlockWorkbenchEditor : Editor
         serializedObject.Update();
         EditorGUILayout.LabelField("Multi Cuboid Workbench", EditorStyles.boldLabel);
         EditorGUILayout.HelpBox(
-            "Edite os cuboides direto no Scene View. Selecione um Cuboid_XX e use Move/Rotate/Scale da Unity; a bancada converte isso para coordenadas 0..1 do bloco.",
+            "Edite os cuboides direto no Scene View. Selecione um Cuboid_XX e use Move/Rotate/Scale da Unity; a bancada usa coordenadas locais do bloco e aceita valores fora de 0..1 para modelos maiores.",
             MessageType.Info);
 
         EditorGUI.BeginChangeCheck();
@@ -681,8 +681,8 @@ internal static class MultiCuboidWorkbenchEditorGui
         EditorGUILayout.LabelField($"Cuboide #{index + 1}", EditorStyles.boldLabel);
 
         EditorGUI.BeginChangeCheck();
-        Vector3 min = EditorGUILayout.Vector3Field("Min 0..1", cuboid.min);
-        Vector3 max = EditorGUILayout.Vector3Field("Max 0..1", cuboid.max);
+        Vector3 min = EditorGUILayout.Vector3Field("Min local", cuboid.min);
+        Vector3 max = EditorGUILayout.Vector3Field("Max local", cuboid.max);
         Vector3 rotation = EditorGUILayout.Vector3Field("Rotacao", cuboid.eulerRotation);
         BlockCuboidFaceMask faces = (BlockCuboidFaceMask)EditorGUILayout.EnumFlagsField("Faces", cuboid.EffectiveFaces);
         bool changed = EditorGUI.EndChangeCheck();
