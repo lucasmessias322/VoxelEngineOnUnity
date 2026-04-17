@@ -55,6 +55,21 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private Renderer playerArmRenderer;
     [SerializeField] private bool hideArmMeshWhenHolding = true;
 
+    [Header("First-Person Mining Motion")]
+    [Tooltip("Root que move o braco e o item juntos na visao de primeira pessoa. Se vazio, usa o pai do Hand Anchor.")]
+    [SerializeField] private Transform firstPersonRigRoot;
+    [SerializeField] private PlayerBlockBreaker blockBreaker;
+    [SerializeField] private FPSController fpsController;
+    [SerializeField] private bool enableMiningMotion = true;
+    [SerializeField, Min(0f)] private float miningMotionBlendSpeed = 18f;
+    [SerializeField, Min(0.01f)] private float miningSwingFrequency = 4.75f;
+    [SerializeField] private Vector3 miningLocalPositionOffset = new Vector3(0.035f, -0.08f, 0.045f);
+    [SerializeField] private Vector3 miningLocalEulerAngles = new Vector3(-24f, 10f, 12f);
+    [SerializeField] private bool enablePlaceMotion = true;
+    [SerializeField, Min(0.01f)] private float placeSwingDuration = 0.18f;
+    [SerializeField] private Vector3 placeLocalPositionOffset = new Vector3(0.022f, -0.055f, 0.035f);
+    [SerializeField] private Vector3 placeLocalEulerAngles = new Vector3(-18f, 8f, 10f);
+
     private readonly Dictionary<BlockType, Mesh> blockMeshCache = new Dictionary<BlockType, Mesh>();
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
@@ -77,10 +92,19 @@ public class HeldBlockVisual : MonoBehaviour
     private BlockType shownBlockType = BlockType.Air;
     private HeldVisualKind shownVisualKind;
     private bool isVisible;
+    private Transform capturedMiningRigRoot;
+    private Vector3 miningRigIdleLocalPosition;
+    private Quaternion miningRigIdleLocalRotation = Quaternion.identity;
+    private bool miningRigPoseCaptured;
+    private float miningMotionWeight;
+    private float miningSwingTimer;
+    private int lastSeenPlaceActionVersion = -1;
+    private float placeSwingElapsed = float.PositiveInfinity;
 
     private void Awake()
     {
         ResolveReferences();
+        CaptureMiningRigPose(force: true);
         EnsureVisualObject();
         UpdateFollowRootTransform();
         ApplyViewTransform(null, HeldVisualKind.None);
@@ -93,16 +117,19 @@ public class HeldBlockVisual : MonoBehaviour
         EnsureVisualObject();
         UpdateFollowRootTransform();
         RefreshHeldBlock(forceRefresh: false);
+        ApplyMiningMotion();
     }
 
     [ContextMenu("Refresh Held Visual")]
     public void RefreshNow()
     {
         ResolveReferences();
+        CaptureMiningRigPose(force: true);
         EnsureVisualObject();
         UpdateFollowRootTransform();
         ApplyViewTransform(null, HeldVisualKind.None);
         RefreshHeldBlock(forceRefresh: true);
+        ApplyMiningMotion();
     }
 
     private void OnValidate()
@@ -110,15 +137,19 @@ public class HeldBlockVisual : MonoBehaviour
         if (!Application.isPlaying)
             return;
 
+        ResolveReferences();
+        CaptureMiningRigPose(force: capturedMiningRigRoot != firstPersonRigRoot);
         ApplyViewTransform(shownItem, shownVisualKind);
         UpdateFollowRootTransform();
         ApplyRendererSettings();
         UpdateArmMeshVisibility(isVisible);
         RefreshHeldBlock(forceRefresh: true);
+        ApplyMiningMotion();
     }
 
     private void OnDestroy()
     {
+        RestoreMiningRigPose();
         UpdateArmMeshVisibility(false);
         DestroyCachedMeshes(blockMeshCache);
         blockMaterialIndexCache.Clear();
@@ -142,6 +173,7 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void OnDisable()
     {
+        RestoreMiningRigPose();
         if (followRoot != null)
             followRoot.SetActive(false);
 
@@ -150,6 +182,8 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void OnEnable()
     {
+        ResolveReferences();
+        CaptureMiningRigPose(force: true);
         if (followRoot != null)
             followRoot.SetActive(true);
 
@@ -166,6 +200,18 @@ public class HeldBlockVisual : MonoBehaviour
 
         if (handAnchor == null)
             handAnchor = transform;
+
+        if (fpsController == null)
+            fpsController = FindAnyObjectByType<FPSController>();
+
+        if (blockBreaker == null)
+            blockBreaker = FindAnyObjectByType<PlayerBlockBreaker>();
+
+        if (firstPersonRigRoot == null && handAnchor != null)
+            firstPersonRigRoot = handAnchor.parent;
+
+        if (miningRigPoseCaptured && capturedMiningRigRoot != firstPersonRigRoot)
+            CaptureMiningRigPose(force: true);
     }
 
     private void EnsureVisualObject()
@@ -1193,6 +1239,143 @@ public class HeldBlockVisual : MonoBehaviour
         bool shouldShowArmMesh = !hideArmMeshWhenHolding || !isHoldingSomething;
         if (playerArmRenderer.enabled != shouldShowArmMesh)
             playerArmRenderer.enabled = shouldShowArmMesh;
+    }
+
+    private void CaptureMiningRigPose(bool force = false)
+    {
+        if (firstPersonRigRoot == null)
+            return;
+
+        if (!force && miningRigPoseCaptured && capturedMiningRigRoot == firstPersonRigRoot)
+            return;
+
+        if (miningRigPoseCaptured && capturedMiningRigRoot != null && capturedMiningRigRoot != firstPersonRigRoot)
+            RestoreMiningRigPose();
+
+        capturedMiningRigRoot = firstPersonRigRoot;
+        miningRigIdleLocalPosition = firstPersonRigRoot.localPosition;
+        miningRigIdleLocalRotation = firstPersonRigRoot.localRotation;
+        miningRigPoseCaptured = true;
+        miningMotionWeight = 0f;
+        miningSwingTimer = 0f;
+        placeSwingElapsed = float.PositiveInfinity;
+
+        if (blockBreaker != null)
+            lastSeenPlaceActionVersion = blockBreaker.PlaceActionVersion;
+    }
+
+    private void RestoreMiningRigPose()
+    {
+        if (!miningRigPoseCaptured || capturedMiningRigRoot == null)
+            return;
+
+        capturedMiningRigRoot.localPosition = miningRigIdleLocalPosition;
+        capturedMiningRigRoot.localRotation = miningRigIdleLocalRotation;
+        miningMotionWeight = 0f;
+        miningSwingTimer = 0f;
+        placeSwingElapsed = float.PositiveInfinity;
+    }
+
+    private void ApplyMiningMotion()
+    {
+        if (!enableMiningMotion)
+        {
+            RestoreMiningRigPose();
+            return;
+        }
+
+        if (firstPersonRigRoot == null)
+            return;
+
+        CaptureMiningRigPose();
+        UpdatePlaceMotionTrigger();
+
+        float blendFactor = miningMotionBlendSpeed <= 0f
+            ? 1f
+            : 1f - Mathf.Exp(-miningMotionBlendSpeed * Time.deltaTime);
+
+        bool allowFirstPersonMotion = fpsController == null || !fpsController.IsThirdPerson();
+        bool shouldAnimate = allowFirstPersonMotion && blockBreaker != null && blockBreaker.IsBreakInProgress;
+
+        float targetWeight = shouldAnimate ? 1f : 0f;
+        miningMotionWeight = blendFactor >= 1f
+            ? targetWeight
+            : Mathf.Lerp(miningMotionWeight, targetWeight, blendFactor);
+
+        if (shouldAnimate)
+        {
+            miningSwingTimer += Time.deltaTime * miningSwingFrequency;
+        }
+        else if (miningMotionWeight <= 0.001f)
+        {
+            miningSwingTimer = 0f;
+        }
+
+        float phase = miningSwingTimer * Mathf.PI * 2f;
+        float swing = 0.5f - (0.5f * Mathf.Cos(phase));
+        float sway = Mathf.Sin(phase);
+        float progressMultiplier = shouldAnimate && blockBreaker != null
+            ? Mathf.Lerp(0.9f, 1f, blockBreaker.BreakProgressNormalized)
+            : 1f;
+        float miningWeight = miningMotionWeight * progressMultiplier;
+
+        float placeWeight = 0f;
+        if (enablePlaceMotion && allowFirstPersonMotion && placeSwingElapsed < float.PositiveInfinity)
+        {
+            placeSwingElapsed += Time.deltaTime;
+            float placeDuration = Mathf.Max(0.01f, placeSwingDuration);
+            float normalizedPlaceTime = Mathf.Clamp01(placeSwingElapsed / placeDuration);
+            placeWeight = Mathf.Sin(normalizedPlaceTime * Mathf.PI);
+
+            if (normalizedPlaceTime >= 1f)
+                placeSwingElapsed = float.PositiveInfinity;
+        }
+        else if (!enablePlaceMotion || !allowFirstPersonMotion)
+        {
+            placeSwingElapsed = float.PositiveInfinity;
+        }
+
+        Vector3 targetPosition = miningRigIdleLocalPosition + new Vector3(
+            miningLocalPositionOffset.x * sway * miningWeight,
+            miningLocalPositionOffset.y * swing * miningWeight,
+            miningLocalPositionOffset.z * swing * miningWeight);
+        targetPosition += placeLocalPositionOffset * placeWeight;
+
+        Quaternion miningRotation = Quaternion.Euler(
+            miningLocalEulerAngles.x * swing * miningWeight,
+            miningLocalEulerAngles.y * sway * miningWeight,
+            miningLocalEulerAngles.z * sway * miningWeight);
+        Quaternion placeRotation = Quaternion.Euler(
+            placeLocalEulerAngles.x * placeWeight,
+            placeLocalEulerAngles.y * placeWeight,
+            placeLocalEulerAngles.z * placeWeight);
+        Quaternion targetRotation = miningRigIdleLocalRotation * miningRotation * placeRotation;
+
+        firstPersonRigRoot.localPosition = blendFactor >= 1f
+            ? targetPosition
+            : Vector3.Lerp(firstPersonRigRoot.localPosition, targetPosition, blendFactor);
+        firstPersonRigRoot.localRotation = blendFactor >= 1f
+            ? targetRotation
+            : Quaternion.Slerp(firstPersonRigRoot.localRotation, targetRotation, blendFactor);
+    }
+
+    private void UpdatePlaceMotionTrigger()
+    {
+        if (blockBreaker == null)
+            return;
+
+        int currentPlaceActionVersion = blockBreaker.PlaceActionVersion;
+        if (lastSeenPlaceActionVersion < 0)
+        {
+            lastSeenPlaceActionVersion = currentPlaceActionVersion;
+            return;
+        }
+
+        if (currentPlaceActionVersion == lastSeenPlaceActionVersion)
+            return;
+
+        lastSeenPlaceActionVersion = currentPlaceActionVersion;
+        placeSwingElapsed = 0f;
     }
 
     private void ClearShownState()

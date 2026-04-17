@@ -97,6 +97,11 @@ public class PlayerBlockBreaker : MonoBehaviour
     private bool breakingIsBillboard;
     private float breakProgress01;
     private int lastCrackStage = -1;
+    private int placeActionVersion;
+
+    public bool IsBreakInProgress => breakingBlock.x != int.MinValue;
+    public float BreakProgressNormalized => Mathf.Clamp01(breakProgress01);
+    public int PlaceActionVersion => placeActionVersion;
 
     void Awake()
     {
@@ -1777,6 +1782,11 @@ public class PlayerBlockBreaker : MonoBehaviour
             else
             {
                 World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
+            }
+
+            unchecked
+            {
+                placeActionVersion++;
             }
 
             if (placeBlockClip != null)
