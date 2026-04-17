@@ -145,6 +145,7 @@ public partial class World : MonoBehaviour
         HandlePlayerPlacedLogBlockChange(worldPos, current, type, placedByPlayer);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
+        torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
 
         int terrainDirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, current, type);
         int chunksToRebuildCount = 0;

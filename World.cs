@@ -121,6 +121,7 @@ public partial class World : MonoBehaviour
     internal bool IsShuttingDown => isShuttingDown;
 
     private bool isShuttingDown;
+    private TorchFireParticleController torchFireParticleController;
 
     private void Awake()
     {
@@ -139,6 +140,7 @@ public partial class World : MonoBehaviour
 
         EnsureShaderFallbackBuffersBound();
         EnsureLoadingBootstrapExists();
+        EnsureTorchFireParticleControllerExists();
     }
 
     #endregion
@@ -189,6 +191,10 @@ public partial class World : MonoBehaviour
 
     [Header("Block Data")]
     public BlockDataSO blockData;
+
+    [Header("Torch Effects")]
+    [Tooltip("Prefab opcional com um ou mais ParticleSystems para o fogo das tochas. Se vazio, o efeito e gerado por codigo.")]
+    public GameObject torchFireEffectPrefab;
 
     [Header("Sea Settings")]
     public int seaLevel = 62;
@@ -2149,6 +2155,13 @@ public partial class World : MonoBehaviour
         MarkBiomeCachesDirty();
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
         MeshGenerator.ClearDataJobTempBufferPool();
+    }
+
+    private void EnsureTorchFireParticleControllerExists()
+    {
+        torchFireParticleController = GetComponent<TorchFireParticleController>();
+        if (torchFireParticleController == null)
+            torchFireParticleController = gameObject.AddComponent<TorchFireParticleController>();
     }
 
     private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)

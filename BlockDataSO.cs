@@ -788,6 +788,7 @@ public class BlockDataSO : ScriptableObject
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
         BuildMultiCuboidRuntimeData();
+
     }
 
     private void BuildMultiCuboidRuntimeData()
@@ -1023,6 +1024,47 @@ public class BlockDataSO : ScriptableObject
         EnsureFallbackMapping(BlockType.WallTorchWest, template);
         EnsureFallbackMapping(BlockType.WallTorchSouth, template);
         EnsureFallbackMapping(BlockType.WallTorchNorth, template);
+    }
+
+    private void NormalizeTorchRuntimeMapping(
+        BlockType blockType,
+        Vector4 topUvRectData,
+        Vector4 bottomUvRectData,
+        Vector4 sideUvRectData)
+    {
+        int index = (int)blockType;
+        if (index < 0 || index >= mappings.Length)
+            return;
+
+        BlockTextureMapping mapping = mappings[index];
+        mapping.blockType = blockType;
+        mapping.renderShape = BlockRenderShape.Cuboid;
+        mapping.isFlat = false;
+        mapping.shapeMin = new Vector3(7f / 16f, 0f, 7f / 16f);
+        mapping.shapeMax = new Vector3(9f / 16f, 10f / 16f, 9f / 16f);
+        mapping.multiCuboidStartIndex = 0;
+        mapping.multiCuboidCount = 0;
+        mapping.SetUvRectData(BlockFace.Top, topUvRectData);
+        mapping.SetUvRectData(BlockFace.Bottom, bottomUvRectData);
+        mapping.SetUvRectData(BlockFace.Right, sideUvRectData);
+        mapping.SetUvRectData(BlockFace.Left, sideUvRectData);
+        mapping.SetUvRectData(BlockFace.Front, sideUvRectData);
+        mapping.SetUvRectData(BlockFace.Back, sideUvRectData);
+        mappings[index] = mapping;
+    }
+
+    private static Rect GetTorchSubRect(
+        Rect baseUvRect,
+        float minXNormalized,
+        float minYNormalized,
+        float widthNormalized,
+        float heightNormalized)
+    {
+        float xMin = baseUvRect.xMin + baseUvRect.width * minXNormalized;
+        float yMin = baseUvRect.yMin + baseUvRect.height * minYNormalized;
+        float xMax = xMin + baseUvRect.width * widthNormalized;
+        float yMax = yMin + baseUvRect.height * heightNormalized;
+        return Rect.MinMaxRect(xMin, yMin, xMax, yMax);
     }
 
     private void PopulateWaterFallbackMappings()
@@ -1919,40 +1961,40 @@ public static class BlockShapeUtility
         switch (axis)
         {
             case BlockPlacementAxis.X:
-            {
-                float x = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
-                p0 = new Vector3(x, min.x, min.z);
-                p1 = new Vector3(x, max.x, min.z);
-                p2 = new Vector3(x, max.x, max.z);
-                p3 = new Vector3(x, min.x, max.z);
-                sampledFace = BlockFace.Right;
-                normal = Vector3.right;
-                return;
-            }
+                {
+                    float x = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
+                    p0 = new Vector3(x, min.x, min.z);
+                    p1 = new Vector3(x, max.x, min.z);
+                    p2 = new Vector3(x, max.x, max.z);
+                    p3 = new Vector3(x, min.x, max.z);
+                    sampledFace = BlockFace.Right;
+                    normal = Vector3.right;
+                    return;
+                }
 
             case BlockPlacementAxis.Z:
-            {
-                float z = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
-                p0 = new Vector3(min.x, min.z, z);
-                p1 = new Vector3(max.x, min.z, z);
-                p2 = new Vector3(max.x, max.z, z);
-                p3 = new Vector3(min.x, max.z, z);
-                sampledFace = BlockFace.Front;
-                normal = Vector3.forward;
-                return;
-            }
+                {
+                    float z = ResolveSidePlaneCoordinate(hasNegativeSupport, hasPositiveSupport);
+                    p0 = new Vector3(min.x, min.z, z);
+                    p1 = new Vector3(max.x, min.z, z);
+                    p2 = new Vector3(max.x, max.z, z);
+                    p3 = new Vector3(min.x, max.z, z);
+                    sampledFace = BlockFace.Front;
+                    normal = Vector3.forward;
+                    return;
+                }
 
             default:
-            {
-                float y = (min.y + max.y) * 0.5f;
-                p0 = new Vector3(min.x, y, min.z);
-                p1 = new Vector3(min.x, y, max.z);
-                p2 = new Vector3(max.x, y, max.z);
-                p3 = new Vector3(max.x, y, min.z);
-                sampledFace = BlockFace.Top;
-                normal = Vector3.up;
-                return;
-            }
+                {
+                    float y = (min.y + max.y) * 0.5f;
+                    p0 = new Vector3(min.x, y, min.z);
+                    p1 = new Vector3(min.x, y, max.z);
+                    p2 = new Vector3(max.x, y, max.z);
+                    p3 = new Vector3(max.x, y, min.z);
+                    sampledFace = BlockFace.Top;
+                    normal = Vector3.up;
+                    return;
+                }
         }
     }
 
@@ -2000,11 +2042,18 @@ public static class BlockShapeUtility
         BlockModelCuboid[] cuboids,
         int localIndex,
         BlockPlacementAxis placementAxis,
+        BlockType blockType,
         out ShapeBox box)
     {
         box = default;
         if (!TryGetMultiCuboidModelCuboid(mapping, cuboids, localIndex, out BlockModelCuboid cuboid))
             return false;
+
+        if (TorchPlacementUtility.IsWallTorch(blockType))
+        {
+            box = GetWallTorchMultiCuboidBounds(cuboid, blockType);
+            return true;
+        }
 
         ShapeBox sanitized = cuboid.ToShapeBox();
         box = HasCuboidRotation(cuboid)
@@ -2051,6 +2100,7 @@ public static class BlockShapeUtility
         BlockTextureMapping mapping,
         BlockModelCuboid[] cuboids,
         BlockPlacementAxis placementAxis,
+        BlockType blockType,
         out Bounds bounds)
     {
         bounds = default;
@@ -2061,7 +2111,7 @@ public static class BlockShapeUtility
         bool hasBounds = false;
         for (int i = 0; i < count; i++)
         {
-            if (!TryGetMultiCuboidBox(mapping, cuboids, i, placementAxis, out ShapeBox box))
+            if (!TryGetMultiCuboidBox(mapping, cuboids, i, placementAxis, blockType, out ShapeBox box))
                 continue;
 
             Bounds boxBounds = box.ToWorldBounds(blockPos);
@@ -2076,6 +2126,47 @@ public static class BlockShapeUtility
         }
 
         return hasBounds;
+    }
+
+    private static ShapeBox GetWallTorchMultiCuboidBounds(BlockModelCuboid cuboid, BlockType blockType)
+    {
+        ShapeBox box = cuboid.ToShapeBox();
+        Vector3 center = (box.min + box.max) * 0.5f;
+        Quaternion rotation = Quaternion.Euler(cuboid.eulerRotation);
+        bool hasCuboidRotation = HasCuboidRotation(cuboid);
+        Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+        Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+
+        EncapsulateWallTorchMultiCuboidPoint(box.min.x, box.min.y, box.min.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.max.x, box.min.y, box.min.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.min.x, box.max.y, box.min.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.max.x, box.max.y, box.min.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.min.x, box.min.y, box.max.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.max.x, box.min.y, box.max.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.min.x, box.max.y, box.max.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+        EncapsulateWallTorchMultiCuboidPoint(box.max.x, box.max.y, box.max.z, center, rotation, hasCuboidRotation, blockType, ref min, ref max);
+
+        return new ShapeBox(min, max);
+    }
+
+    private static void EncapsulateWallTorchMultiCuboidPoint(
+        float x,
+        float y,
+        float z,
+        Vector3 center,
+        Quaternion rotation,
+        bool hasCuboidRotation,
+        BlockType blockType,
+        ref Vector3 min,
+        ref Vector3 max)
+    {
+        Vector3 point = new Vector3(x, y, z);
+        if (hasCuboidRotation)
+            point = center + rotation * (point - center);
+
+        point = TorchPlacementUtility.TransformVoxelPoint(blockType, point);
+        min = Vector3.Min(min, point);
+        max = Vector3.Max(max, point);
     }
 
     public static ShapeBox TransformShapeBoxForPlacement(

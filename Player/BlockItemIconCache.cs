@@ -562,7 +562,7 @@ public static class BlockItemIconCache
 
         for (int i = 0; i < boxCount; i++)
         {
-            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, BlockPlacementAxis.Y, out ShapeBox box))
+            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, BlockPlacementAxis.Y, mapping.blockType, out ShapeBox box))
                 continue;
 
             if (BlockShapeUtility.TryGetMultiCuboidModelCuboid(mapping, cuboids, i, out BlockModelCuboid cuboid))

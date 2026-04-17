@@ -494,7 +494,7 @@ internal sealed class SubchunkColliderBuilder
 
                             for (int boxIndex = 0; boxIndex < boxCount; boxIndex++)
                             {
-                                if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, blockModelCuboids, boxIndex, multiAxis, out ShapeBox box))
+                                if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, blockModelCuboids, boxIndex, multiAxis, blockType, out ShapeBox box))
                                     colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box);
                             }
 

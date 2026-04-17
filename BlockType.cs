@@ -215,12 +215,12 @@ public static class TorchPlacementUtility
 {
     public const float WallAngleDegrees = 22.5f;
     public const float WallAnchorHeight = 0.22f;
-    public const float WallAnchorOffset = 0.32f;
+    public const float WallAnchorOffset = 0.5f;
+    public const float FireAnchorHeight = 0.78f;
 
     public static bool IsTorchLike(BlockType type)
     {
-        return type == BlockType.glowstone ||
-               type == BlockType.torch ||
+        return type == BlockType.torch ||
                IsWallTorch(type);
     }
 
@@ -230,6 +230,11 @@ public static class TorchPlacementUtility
                type == BlockType.WallTorchWest ||
                type == BlockType.WallTorchSouth ||
                type == BlockType.WallTorchNorth;
+    }
+
+    public static bool IsTorchFireSource(BlockType type)
+    {
+        return type == BlockType.torch || IsWallTorch(type);
     }
 
     public static BlockType GetStandingTorchType(BlockType type)
@@ -367,6 +372,20 @@ public static class TorchPlacementUtility
             0.5f - wallNormal.z * WallAnchorOffset);
 
         return anchor + rotated;
+    }
+
+    public static Vector3 TransformVoxelPoint(BlockType type, Vector3 voxelPoint)
+    {
+        if (!IsWallTorch(type))
+            return voxelPoint;
+
+        Vector3 modelPoint = new Vector3(voxelPoint.x - 0.5f, voxelPoint.y, voxelPoint.z - 0.5f);
+        return TransformModelPoint(type, modelPoint);
+    }
+
+    public static Vector3 GetFireAnchorWorldPosition(Vector3Int blockPos, BlockType type)
+    {
+        return blockPos + TransformVoxelPoint(type, new Vector3(0.5f, FireAnchorHeight, 0.5f));
     }
 
     public static Bounds GetWorldBounds(Vector3Int blockPos, BlockType type, BlockTextureMapping mapping)

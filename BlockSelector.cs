@@ -191,6 +191,7 @@ public class BlockSelector : MonoBehaviour
                     value,
                     world.blockData.runtimeMultiCuboidBoxes,
                     placementAxis,
+                    blockType,
                     out bounds))
                 {
                     return true;
@@ -508,7 +509,7 @@ public class BlockSelector : MonoBehaviour
         int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, world.blockData.runtimeMultiCuboidBoxes);
         if (boxCount <= 0)
         {
-            Bounds fallbackBounds = BlockShapeUtility.GetWorldBounds(voxel, BlockType.Air, mapping, placementAxis);
+            Bounds fallbackBounds = BlockShapeUtility.GetWorldBounds(voxel, mapping.blockType, mapping, placementAxis);
             return TryHitShapeBox(ray, maxDistance, fallbackBounds, lastNormal, out _, out hitNormal, out hitPoint);
         }
 
@@ -516,7 +517,7 @@ public class BlockSelector : MonoBehaviour
         bool hit = false;
         for (int i = 0; i < boxCount; i++)
         {
-            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, out ShapeBox box))
+            if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, mapping.blockType, out ShapeBox box))
                 continue;
 
             if (!TryHitShapeBox(ray, maxDistance, box.ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point))

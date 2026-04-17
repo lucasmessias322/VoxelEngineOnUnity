@@ -1189,6 +1189,7 @@ internal static class BlockbenchMultiCuboidImporter
         public string key;
         public string displayName;
         public Vector2Int size;
+        public Vector2Int uvSize;
         public Texture2D texture;
         public string assetPath;
         public bool destroyTextureOnCleanup = true;
@@ -1355,10 +1356,11 @@ internal static class BlockbenchMultiCuboidImporter
             {
                 foreach (BlockbenchTextureSource source in context.textureSources.Values)
                 {
-                    if (source == null || source.size.x <= 0 || source.size.y <= 0)
+                    Vector2Int fallbackUvSize = GetEffectiveTextureUvSize(source);
+                    if (fallbackUvSize.x <= 0 || fallbackUvSize.y <= 0)
                         continue;
 
-                    context.textureSize = source.size;
+                    context.textureSize = fallbackUvSize;
                     break;
                 }
 
@@ -1370,6 +1372,7 @@ internal static class BlockbenchMultiCuboidImporter
                 }
             }
 
+            ApplyDefaultTextureUvSizes(context);
             return context;
         }
         catch
@@ -1478,17 +1481,25 @@ internal static class BlockbenchMultiCuboidImporter
         Vector2Int size = texture != null
             ? new Vector2Int(texture.width, texture.height)
             : Vector2Int.zero;
+        Vector2Int uvSize = Vector2Int.zero;
+        bool hasExplicitUvSize = false;
 
-        if ((size.x <= 0 || size.y <= 0) && textureObject != null)
-            TryReadNamedVector2(textureObject, "uv_width", "uv_height", out size);
-        if ((size.x <= 0 || size.y <= 0) && textureObject != null)
-            TryReadNamedVector2(textureObject, "width", "height", out size);
+        if (textureObject != null)
+        {
+            hasExplicitUvSize = TryReadNamedVector2(textureObject, "uv_width", "uv_height", out uvSize);
+            if (!hasExplicitUvSize)
+                hasExplicitUvSize = TryReadNamedVector2(textureObject, "width", "height", out uvSize);
+        }
+
+        if ((size.x <= 0 || size.y <= 0) && uvSize.x > 0 && uvSize.y > 0)
+            size = uvSize;
 
         source = new BlockbenchTextureSource
         {
             key = string.IsNullOrWhiteSpace(key) ? displayName : key.Trim(),
             displayName = string.IsNullOrWhiteSpace(displayName) ? key : displayName.Trim(),
             size = size,
+            uvSize = hasExplicitUvSize ? uvSize : Vector2Int.zero,
             texture = texture,
             assetPath = assetPath,
             destroyTextureOnCleanup = destroyTextureOnCleanup
@@ -2026,6 +2037,20 @@ internal static class BlockbenchMultiCuboidImporter
                     return true;
             }
         }
+        else if (root["textures"] is JObject texturesObject)
+        {
+            foreach (JProperty property in texturesObject.Properties())
+            {
+                if (!(property.Value is JObject textureObject))
+                    continue;
+
+                if (TryReadNamedVector2(textureObject, "uv_width", "uv_height", out textureSize))
+                    return true;
+
+                if (TryReadNamedVector2(textureObject, "width", "height", out textureSize))
+                    return true;
+            }
+        }
 
         return false;
     }
@@ -2272,7 +2297,7 @@ internal static class BlockbenchMultiCuboidImporter
         string safeSourceName = AtlasKeyUtility.NormalizePathSegment(
             !string.IsNullOrWhiteSpace(source.displayName) ? source.displayName : source.key);
         string identityHash = Hash128.Compute(
-            $"{source.key}|{source.displayName}|{source.size.x}|{source.size.y}").ToString();
+            $"{source.key}|{source.displayName}|{source.size.x}|{source.size.y}|{source.uvSize.x}|{source.uvSize.y}").ToString();
         source.assetPath = $"Assets/Generated/BlockbenchImports/{safeBlockName}/textures/{safeSourceName}_{identityHash}.png";
     }
 
@@ -2289,6 +2314,8 @@ internal static class BlockbenchMultiCuboidImporter
 
         source.texture = assetTexture;
         source.size = new Vector2Int(assetTexture.width, assetTexture.height);
+        if (source.uvSize.x <= 0 || source.uvSize.y <= 0)
+            source.uvSize = source.size;
         source.destroyTextureOnCleanup = false;
 
         if (shouldDestroyPrevious)
@@ -2298,18 +2325,13 @@ internal static class BlockbenchMultiCuboidImporter
     private static bool TryBuildRequestSourceRect(FaceTextureRequest request, out RectInt sourceRect)
     {
         sourceRect = default;
-        if (request == null || request.source == null)
+        if (!TryGetRequestPixelUvBounds(request, out float minU, out float maxU, out float minV, out float maxV))
             return false;
 
         int sourceWidth = request.source.size.x;
         int sourceHeight = request.source.size.y;
         if (sourceWidth <= 0 || sourceHeight <= 0)
             return false;
-
-        float minU = Mathf.Min(request.u0, request.u1);
-        float maxU = Mathf.Max(request.u0, request.u1);
-        float minV = Mathf.Min(request.v0, request.v1);
-        float maxV = Mathf.Max(request.v0, request.v1);
 
         int xMin = Mathf.Clamp(Mathf.FloorToInt(minU + 0.0001f), 0, sourceWidth - 1);
         int xMax = Mathf.Clamp(Mathf.CeilToInt(maxU - 0.0001f), xMin + 1, sourceWidth);
@@ -2337,6 +2359,9 @@ internal static class BlockbenchMultiCuboidImporter
         if (writableEntries == null)
             return -1;
 
+        if (!TryBuildRequestSampledPixelUvRect(request, out Vector4 sampledPixelUvRect))
+            return -1;
+
         int entryIndex = -1;
         for (int i = 0; i < writableEntries.Count; i++)
         {
@@ -2346,7 +2371,7 @@ internal static class BlockbenchMultiCuboidImporter
 
             existingEntry.texture = texture;
             existingEntry.useUvSampling = true;
-            existingEntry.sampledUvRect = new Vector4(request.u0, request.v0, request.u1, request.v1);
+            existingEntry.sampledUvRect = sampledPixelUvRect;
             existingEntry.useSourceRect = true;
             existingEntry.sourceRect = sourceRect;
             writableEntries[i] = existingEntry;
@@ -2361,7 +2386,7 @@ internal static class BlockbenchMultiCuboidImporter
                 id = request.entryId,
                 texture = texture,
                 useUvSampling = true,
-                sampledUvRect = new Vector4(request.u0, request.v0, request.u1, request.v1),
+                sampledUvRect = sampledPixelUvRect,
                 useSourceRect = true,
                 sourceRect = sourceRect
             });
@@ -2657,7 +2682,78 @@ internal static class BlockbenchMultiCuboidImporter
         }
 
         requestKey = canonicalKey;
-        resolvedTextureSize = source.size;
+        resolvedTextureSize = GetEffectiveTextureUvSize(source);
+        return true;
+    }
+
+    private static void ApplyDefaultTextureUvSizes(ImportContext context)
+    {
+        if (context == null)
+            return;
+
+        foreach (BlockbenchTextureSource source in context.textureSources.Values)
+        {
+            if (source == null || (source.uvSize.x > 0 && source.uvSize.y > 0))
+                continue;
+
+            if (context.textureSize.x > 0 && context.textureSize.y > 0)
+                source.uvSize = context.textureSize;
+            else
+                source.uvSize = source.size;
+        }
+    }
+
+    private static Vector2Int GetEffectiveTextureUvSize(BlockbenchTextureSource source)
+    {
+        if (source == null)
+            return Vector2Int.zero;
+
+        if (source.uvSize.x > 0 && source.uvSize.y > 0)
+            return source.uvSize;
+
+        return source.size;
+    }
+
+    private static bool TryBuildRequestSampledPixelUvRect(FaceTextureRequest request, out Vector4 sampledPixelUvRect)
+    {
+        sampledPixelUvRect = default;
+        if (request == null || request.source == null)
+            return false;
+
+        int sourceWidth = request.source.size.x;
+        int sourceHeight = request.source.size.y;
+        Vector2Int uvCanvasSize = GetEffectiveTextureUvSize(request.source);
+        if (sourceWidth <= 0 || sourceHeight <= 0 || uvCanvasSize.x <= 0 || uvCanvasSize.y <= 0)
+            return false;
+
+        float scaleU = sourceWidth / (float)uvCanvasSize.x;
+        float scaleV = sourceHeight / (float)uvCanvasSize.y;
+        sampledPixelUvRect = new Vector4(
+            request.u0 * scaleU,
+            request.v0 * scaleV,
+            request.u1 * scaleU,
+            request.v1 * scaleV);
+        return true;
+    }
+
+    private static bool TryGetRequestPixelUvBounds(
+        FaceTextureRequest request,
+        out float minU,
+        out float maxU,
+        out float minV,
+        out float maxV)
+    {
+        minU = 0f;
+        maxU = 0f;
+        minV = 0f;
+        maxV = 0f;
+        if (!TryBuildRequestSampledPixelUvRect(request, out Vector4 sampledPixelUvRect))
+            return false;
+
+        minU = Mathf.Min(sampledPixelUvRect.x, sampledPixelUvRect.z);
+        maxU = Mathf.Max(sampledPixelUvRect.x, sampledPixelUvRect.z);
+        minV = Mathf.Min(sampledPixelUvRect.y, sampledPixelUvRect.w);
+        maxV = Mathf.Max(sampledPixelUvRect.y, sampledPixelUvRect.w);
         return true;
     }
 

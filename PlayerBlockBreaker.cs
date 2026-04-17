@@ -1978,7 +1978,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
                 for (int i = 0; i < boxCount; i++)
                 {
-                    if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, out ShapeBox box) &&
+                    if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, blockType, out ShapeBox box) &&
                         testBounds.Intersects(box.ToWorldBounds(blockPos)))
                     {
                         return true;
@@ -2081,6 +2081,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                     value,
                     world.blockData.runtimeMultiCuboidBoxes,
                     placementAxis,
+                    blockType,
                     out Bounds bounds))
                 {
                     return bounds;

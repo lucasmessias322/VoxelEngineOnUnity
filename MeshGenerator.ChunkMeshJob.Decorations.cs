@@ -114,6 +114,7 @@ public static partial class MeshGenerator
                                         AddMultiCuboidShape(
                                             origin,
                                             mapping,
+                                            blockType,
                                             placementAxis,
                                             x,
                                             y,
@@ -1414,6 +1415,7 @@ public static partial class MeshGenerator
         private void AddMultiCuboidShape(
             Vector3 origin,
             BlockTextureMapping mapping,
+            BlockType blockType,
             BlockPlacementAxis placementAxis,
             int voxelX,
             int voxelY,
@@ -1426,6 +1428,21 @@ public static partial class MeshGenerator
             float light01)
         {
             NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+
+            if (IsWallTorch(blockType))
+            {
+                float resolvedLight01 = math.max(light01, mapping.lightEmission / 15f);
+                AddWallTorchMultiCuboidShape(
+                    origin,
+                    mapping,
+                    blockType,
+                    resolvedLight01,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris);
+                return;
+            }
+
             FixedList512Bytes<ShapeBox> shapeBoxes = default;
             FixedList4096Bytes<ShapeFaceRect> faceRects = default;
 
@@ -1497,6 +1514,132 @@ public static partial class MeshGenerator
                     placementAxis,
                     RampShapeVariant.Straight);
             }
+        }
+
+        private void AddWallTorchMultiCuboidShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            int boxCount = GetNativeMultiCuboidBoxCount(mapping);
+            bool appendedAnyCuboid = false;
+            for (int i = 0; i < boxCount; i++)
+            {
+                if (!TryGetNativeMultiCuboid(mapping, i, out BlockModelCuboid cuboid))
+                    continue;
+
+                appendedAnyCuboid = true;
+                AddWallTorchMultiCuboidFaces(origin, mapping, blockType, cuboid, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            }
+
+            if (appendedAnyCuboid)
+                return;
+
+            ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+            AddWallTorchMultiCuboidFaces(
+                origin,
+                mapping,
+                blockType,
+                new BlockModelCuboid(fallbackMin, fallbackMax),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+        }
+
+        private void AddWallTorchMultiCuboidFaces(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            BlockModelCuboid cuboid,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            ShapeBox box = cuboid.ToShapeBox();
+            Vector3 center = (box.min + box.max) * 0.5f;
+            bool hasCuboidRotation = IsModelCuboidRotated(cuboid);
+            quaternion rotation = hasCuboidRotation
+                ? CreateCuboidRotation(cuboid.eulerRotation)
+                : quaternion.identity;
+
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Right, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Left, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Top, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Bottom, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Front, light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddWallTorchMultiCuboidFace(origin, mapping, blockType, cuboid, box, center, rotation, hasCuboidRotation, BlockFace.Back, light01, invAtlasTilesX, invAtlasTilesY, tris);
+        }
+
+        private void AddWallTorchMultiCuboidFace(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            BlockModelCuboid cuboid,
+            ShapeBox box,
+            Vector3 center,
+            quaternion rotation,
+            bool hasCuboidRotation,
+            BlockFace localFace,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            if (!cuboid.HasFace(localFace))
+                return;
+
+            ResolveCuboidFace(box, localFace, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out _);
+            if (hasCuboidRotation)
+            {
+                p0 = RotateCuboidPoint(p0, center, rotation);
+                p1 = RotateCuboidPoint(p1, center, rotation);
+                p2 = RotateCuboidPoint(p2, center, rotation);
+                p3 = RotateCuboidPoint(p3, center, rotation);
+            }
+
+            Vector3 t0 = TransformTorchVoxelPoint(blockType, p0);
+            Vector3 t1 = TransformTorchVoxelPoint(blockType, p1);
+            Vector3 t2 = TransformTorchVoxelPoint(blockType, p2);
+            Vector3 t3 = TransformTorchVoxelPoint(blockType, p3);
+            Vector3 transformedNormal = Vector3.Normalize(Vector3.Cross(t1 - t0, t2 - t0));
+            if (transformedNormal.sqrMagnitude < 0.0001f)
+                transformedNormal = Vector3.up;
+
+            Vector2 uv0 = ResolveShapeProjectedUv(localFace, p0);
+            Vector2 uv1 = ResolveShapeProjectedUv(localFace, p1);
+            Vector2 uv2 = ResolveShapeProjectedUv(localFace, p2);
+            Vector2 uv3 = ResolveShapeProjectedUv(localFace, p3);
+            NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+
+            Vector2Int tile = cuboid.GetTileCoord(localFace, mapping);
+            bool tint = mapping.GetTint(localFace);
+            Vector4 explicitUvRectData = cuboid.TryGetUvRectData(localFace, mapping, out Vector4 cuboidUvRectData)
+                ? cuboidUvRectData
+                : default;
+
+            AddStaticLitCustomQuad(
+                origin + t0,
+                origin + t1,
+                origin + t2,
+                origin + t3,
+                uv0,
+                uv1,
+                uv2,
+                uv3,
+                transformedNormal,
+                tile,
+                tint,
+                explicitUvRectData,
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
         }
 
         private void AddRotatedMultiCuboid(
@@ -1649,6 +1792,11 @@ public static partial class MeshGenerator
         {
             float3 rotated = math.mul(rotation, new float3(direction.x, direction.y, direction.z));
             return new Vector3(rotated.x, rotated.y, rotated.z);
+        }
+
+        private static Vector3 TransformTorchVoxelPoint(BlockType blockType, Vector3 voxelPoint)
+        {
+            return TorchPlacementUtility.TransformVoxelPoint(blockType, voxelPoint);
         }
 
         private static ShapeBox GetRotatedMultiCuboidBounds(
@@ -3118,6 +3266,67 @@ public static partial class MeshGenerator
             float aoCurved = math.pow(aoBase, aoCurve);
             float aoDarkened = 1f - (1f - aoCurved) * math.max(0f, aoStrength);
             return math.max(math.saturate(aoMinLight), math.saturate(aoDarkened));
+        }
+
+        private void AddStaticLitCustomQuad(
+            Vector3 p0,
+            Vector3 p1,
+            Vector3 p2,
+            Vector3 p3,
+            Vector2 uv0,
+            Vector2 uv1,
+            Vector2 uv2,
+            Vector2 uv3,
+            Vector3 normal,
+            Vector2Int tile,
+            bool tint,
+            Vector4 explicitUvRectData,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            bool invertWinding = false)
+        {
+            if (normal.sqrMagnitude < 0.0001f)
+                normal = Vector3.up;
+
+            Vector2 atlasUv;
+            Vector2 atlasSize;
+            if (BlockAtlasUvUtility.IsValidUvRectData(explicitUvRectData))
+            {
+                atlasUv = new Vector2(explicitUvRectData.x, explicitUvRectData.y);
+                atlasSize = new Vector2(explicitUvRectData.z, explicitUvRectData.w);
+            }
+            else
+            {
+                atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+                atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
+            }
+
+            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
+            AddPackedVertex(p0, normal, uv0, atlasUv, extra, atlasSize);
+            AddPackedVertex(p1, normal, uv1, atlasUv, extra, atlasSize);
+            AddPackedVertex(p2, normal, uv2, atlasUv, extra, atlasSize);
+            AddPackedVertex(p3, normal, uv3, atlasUv, extra, atlasSize);
+
+            if (invertWinding)
+            {
+                tris.Add(vIndex + 0);
+                tris.Add(vIndex + 2);
+                tris.Add(vIndex + 1);
+                tris.Add(vIndex + 0);
+                tris.Add(vIndex + 3);
+                tris.Add(vIndex + 2);
+                return;
+            }
+
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 1);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 0);
+            tris.Add(vIndex + 2);
+            tris.Add(vIndex + 3);
         }
 
         private void AddStaticLitShapeBox(
