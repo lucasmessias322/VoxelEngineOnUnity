@@ -24,6 +24,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
         [Header(Lighting)]
         _MinLight("Minimum Light", Range(0.0, 1.0)) = 0.08
+        _VoxelSkyLightMultiplier("Sky Light Multiplier", Range(0.0, 1.0)) = 1.0
         _VoxelLightStrength("Voxel Light Strength", Range(0.0, 2.0)) = 1.0
         _AmbientStrength("Ambient Strength", Range(0.0, 2.0)) = 0.2
         _DirectionalStrength("Main Light Strength", Range(0.0, 2.0)) = 0.45
@@ -128,6 +129,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float _PaddingUV;
             float _EnableRealisticShader;
             float _MinLight;
+            float _VoxelSkyLightMultiplier;
             float _VoxelLightStrength;
             float _AmbientStrength;
             float _DirectionalStrength;
@@ -224,7 +226,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             float2 uv0 : TEXCOORD0;
             float2 uv1 : TEXCOORD1;
             float4 uv2 : TEXCOORD2;
-            float2 uv3 : TEXCOORD3;
+            float4 uv3 : TEXCOORD3;
             uint proceduralVertexID : SV_VertexID;
             uint proceduralInstanceID : SV_InstanceID;
             UNITY_VERTEX_INPUT_INSTANCE_ID
@@ -241,6 +243,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 extra : TEXCOORD5;
             half3 tintColor : TEXCOORD6;
             half subchunkIndex : TEXCOORD7;
+            half blockLight : TEXCOORD8;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -254,6 +257,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 normalWS : TEXCOORD3;
             half subchunkIndex : TEXCOORD4;
             float3 positionWS : TEXCOORD5;
+            half blockLight : TEXCOORD6;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -348,6 +352,11 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
         {
             half yAbs = saturate(abs(normalWS.y));
             return lerp((half)_Sides, (half)_Top, yAbs);
+        }
+
+        half ResolveVoxelLight01(half skyLight, half blockLight)
+        {
+            return max(saturate(blockLight), saturate(skyLight) * (half)_VoxelSkyLightMultiplier);
         }
 
         half ComputeWrappedDiffuse(half3 normalWS, half3 lightDirectionWS)
@@ -688,7 +697,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             normalWS = normalize(normalWS + half3(offsetXZ.x, 0.0, offsetXZ.y) * (half)(0.22 * finalMask));
         }
 
-        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out float2 atlasSize, out half3 extra, out half3 tintColor, out half subchunkIndex)
+        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out float2 atlasSize, out half3 extra, out half3 tintColor, out half subchunkIndex, out half blockLight)
         {
             positionWS = 0.0.xxx;
             normalWS = half3(0.0h, 1.0h, 0.0h);
@@ -698,6 +707,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             extra = half3(1.0h, 0.0h, 1.0h);
             tintColor = half3(1.0h, 1.0h, 1.0h);
             subchunkIndex = 0.0h;
+            blockLight = 0.0h;
 
             if (_UseCompactOpaqueFaces > 0.5)
             {
@@ -780,7 +790,8 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             localUV = input.uv0;
             atlasOrigin = input.uv1;
-            atlasSize = input.uv3;
+            atlasSize = input.uv3.xy;
+            blockLight = saturate((half)input.uv3.z);
             extra = saturate(input.uv2.xyz);
             half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
             half tintMask = saturate(input.uv2.y);
@@ -801,7 +812,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             UNITY_TRANSFER_INSTANCE_ID(input, output);
             UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.atlasSize, output.extra, output.tintColor, output.subchunkIndex);
+            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.atlasSize, output.extra, output.tintColor, output.subchunkIndex, output.blockLight);
             output.positionCS = TransformWorldToHClip(output.positionWS);
             return output;
         }
@@ -820,15 +831,17 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
             if (_EnableRealisticShader <= 0.5)
             {
-                half simpleVoxelLight = saturate(max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength));
+                half voxelLight01 = ResolveVoxelLight01(input.extra.x, input.blockLight);
+                half simpleVoxelLight = saturate(max((half)_MinLight, voxelLight01 * (half)_VoxelLightStrength));
                 half simpleAO = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
                 return half4(albedo * simpleVoxelLight * simpleAO, surface.alpha);
             }
 
             half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
             half faceShade = ComputeFaceShade(normalWS);
-            half voxelLight = max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength);
-            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, input.extra.x, input.positionWS);
+            half voxelLight01 = ResolveVoxelLight01(input.extra.x, input.blockLight);
+            half voxelLight = max((half)_MinLight, voxelLight01 * (half)_VoxelLightStrength);
+            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, voxelLight01, input.positionWS);
             half environmentLight = saturate(shadedVoxelLight);
             half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
             half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS);
@@ -856,7 +869,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 normalWS;
             half3 extra;
             half3 tintColor;
-            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex);
+            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight);
 
             output.positionCS = TransformWorldToHClip(positionWS);
             output.normalWS = normalWS;
@@ -914,7 +927,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 half3 normalWS;
                 half3 extra;
                 half3 tintColor;
-                ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex);
+                ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight);
 
                 #if _CASTING_PUNCTUAL_LIGHT_SHADOW
                     float3 lightDirectionWS = normalize(_LightPosition - positionWS);

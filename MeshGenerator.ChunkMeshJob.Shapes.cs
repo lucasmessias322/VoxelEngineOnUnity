@@ -216,12 +216,12 @@ public static partial class MeshGenerator
             Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z));
             Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z));
 
-            AddStaticLitShapeFace(p100, p110, p111, p101, mapping, BlockFace.Right, mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p001, p011, p010, p000, mapping, BlockFace.Left, mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p011, p111, p110, p010, mapping, BlockFace.Top, mapping.GetTint(BlockFace.Top), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p100, p101, p001, mapping, BlockFace.Bottom, mapping.GetTint(BlockFace.Bottom), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p101, p111, p011, p001, mapping, BlockFace.Front, mapping.GetTint(BlockFace.Front), light01, invAtlasTilesX, invAtlasTilesY, tris);
-            AddStaticLitShapeFace(p000, p010, p110, p100, mapping, BlockFace.Back, mapping.GetTint(BlockFace.Back), light01, invAtlasTilesX, invAtlasTilesY, tris);
+            AddStaticLitShapeFace(p100, p110, p111, p101, mapping, BlockFace.Right, mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
+            AddStaticLitShapeFace(p001, p011, p010, p000, mapping, BlockFace.Left, mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
+            AddStaticLitShapeFace(p011, p111, p110, p010, mapping, BlockFace.Top, mapping.GetTint(BlockFace.Top), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
+            AddStaticLitShapeFace(p000, p100, p101, p001, mapping, BlockFace.Bottom, mapping.GetTint(BlockFace.Bottom), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
+            AddStaticLitShapeFace(p101, p111, p011, p001, mapping, BlockFace.Front, mapping.GetTint(BlockFace.Front), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
+            AddStaticLitShapeFace(p000, p010, p110, p100, mapping, BlockFace.Back, mapping.GetTint(BlockFace.Back), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
         }
 
         private void AddStaticLitShapeFace(
@@ -235,7 +235,8 @@ public static partial class MeshGenerator
             float light01,
             float invAtlasTilesX,
             float invAtlasTilesY,
-            NativeList<int> tris)
+            NativeList<int> tris,
+            float blockLight01 = 0f)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
             Vector3 normal = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
@@ -244,10 +245,11 @@ public static partial class MeshGenerator
 
             ResolveAtlasRect(mapping, face, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
             Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
-            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra, atlasSize);
-            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra, atlasSize);
-            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra, atlasSize);
-            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra, atlasSize);
+            Vector4 atlasAndBlockLight = new Vector4(atlasSize.x, atlasSize.y, math.saturate(blockLight01), 0f);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra, atlasAndBlockLight);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra, atlasAndBlockLight);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra, atlasAndBlockLight);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra, atlasAndBlockLight);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -344,10 +346,11 @@ public static partial class MeshGenerator
                 Vector3Int stepV = (corner == 2 || corner == 3) ? lightStepV : -lightStepV;
                 byte vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
                 if (emission > 0)
-                    vertexLight = (byte)math.max((int)vertexLight, (int)emission);
+                    vertexLight = WithBlockLightAtLeast(vertexLight, emission);
 
                 PackedChunkVertex vertex = vertices[vertexGlobalStart + corner];
-                vertex.uv2 = new Vector4(vertexLight / 15f, tint ? 1f : 0f, 1f, 0f);
+                vertex.uv2 = new Vector4(GetSkyLight01(vertexLight), tint ? 1f : 0f, 1f, 0f);
+                vertex.uv3 = EncodeAtlasSizeWithBlockLight(atlasSize, vertexLight);
                 vertices[vertexGlobalStart + corner] = vertex;
             }
 
@@ -475,11 +478,9 @@ public static partial class MeshGenerator
             return GetResolvedLight01(light[idx]);
         }
 
-        private static float GetResolvedLight01(byte packed)
+        private float GetResolvedLight01(byte packed)
         {
-            byte lightValue = (byte)math.max(
-                (int)LightUtils.GetSkyLight(packed),
-                (int)LightUtils.GetBlockLight(packed));
+            byte lightValue = ResolvePackedLightValue(packed);
             return lightValue / 15f;
         }
 

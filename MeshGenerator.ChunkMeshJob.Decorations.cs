@@ -280,10 +280,7 @@ public static partial class MeshGenerator
                         float billboardHalfWidth = VegetationBillboardUtility.ComputeHalfWidth(variationHash);
                         float centerYOffset = VegetationBillboardUtility.ComputeBaseYOffset(variationHash);
                         byte packed = light[upIdx];
-                        byte billboardLight = (byte)math.max(
-                            (int)LightUtils.GetSkyLight(packed),
-                            (int)LightUtils.GetBlockLight(packed)
-                        );
+                        byte billboardLight = ResolvePackedLightValue(packed);
                         float light01 = billboardLight / 15f;
                         Vector3 center = new Vector3((x - border) + 0.5f + jx, py + centerYOffset, (z - border) + 0.5f + jz);
                         AddBillboardCross(center, billboardHeight, billboardHalfWidth, billboardAtlasUv, billboardAtlasSize, light01, billboardTint);

@@ -7,6 +7,8 @@ public sealed class AtlasTextureEntry
 {
     public string id = "block/unknown";
     public Texture2D texture;
+    [Tooltip("Opcional. Preto = sem brilho; RGB define cor/intensidade emissiva no mesmo recorte da textura principal.")]
+    public Texture2D emissionTexture;
     public bool useSourceRect;
     public RectInt sourceRect;
     public bool useUvSampling;

@@ -119,6 +119,7 @@ public partial class World : MonoBehaviour
     public const int MinRenderDistance = 2;
     public const int MaxRenderDistance = 32;
     internal bool IsShuttingDown => isShuttingDown;
+    public bool ShouldUseEmissiveBlockPointLights => enableRealisticShader && enableEmissiveBlockPointLights;
 
     private bool isShuttingDown;
     private TorchFireParticleController torchFireParticleController;
@@ -351,6 +352,8 @@ public partial class World : MonoBehaviour
     [Header("Features Toggle")]
     [Tooltip("Liga/desliga o caminho de iluminacao realista dos shaders voxel. Quando desligado, usa uma iluminacao voxel simples.")]
     public bool enableRealisticShader = true;
+    [Tooltip("Quando ativo, blocos luminosos proximos podem criar Point Lights realtime. Ainda depende do shader realista estar ligado.")]
+    public bool enableEmissiveBlockPointLights = true;
     public bool enableTrees = true;
     [Tooltip("Quando ativo, quebrar um tronco quebra a arvore inteira de forma gradual (tipo treecapitator).")]
     public bool enableTreeCapitator = true;
@@ -460,6 +463,9 @@ public partial class World : MonoBehaviour
     [Tooltip("Padding horizontal em voxels usado pela propagacao lateral do skylight entre chunks. Valores altos melhoram costuras visuais, mas aumentam o custo do volume de luz. Ignorado quando a luz horizontal esta desligada.")]
     [Min(1)]
     public int sunlightSmoothingPadding = 16;
+    [Tooltip("Multiplicador visual aplicado no shader apenas ao skylight. Nao reconstrói chunks.")]
+    [Range(0f, 1f)]
+    public float voxelSkyLightMultiplier = 1f;
     [Tooltip("Padding horizontal usado pelas etapas caras de geracao detalhada (arvores, cavernas e minerios). Mantido separado do padding de luz para reduzir custo.")]
     [Min(1)]
     public int detailedGenerationPadding = 1;
@@ -505,6 +511,7 @@ public partial class World : MonoBehaviour
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableRealisticShader = true;
+    private bool lastEnableEmissiveBlockPointLights = true;
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
@@ -1857,6 +1864,7 @@ public partial class World : MonoBehaviour
 
         lastEnableBlockColliders = enableBlockColliders;
         lastEnableRealisticShader = enableRealisticShader;
+        lastEnableEmissiveBlockPointLights = enableEmissiveBlockPointLights;
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;

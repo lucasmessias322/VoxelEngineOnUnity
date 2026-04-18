@@ -633,7 +633,7 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         if (!Application.isPlaying || world == null)
             return;
 
-        if (!world.enableRealisticShader)
+        if (!world.ShouldUseEmissiveBlockPointLights)
         {
             ClearAllLights();
             return;
@@ -661,7 +661,7 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         if (!Application.isPlaying || world == null)
             return;
 
-        if (!world.enableRealisticShader)
+        if (!world.ShouldUseEmissiveBlockPointLights)
         {
             RemoveLight(worldPos);
             return;
@@ -793,7 +793,7 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
 
     private void EnsureLight(Vector3Int blockPos, BlockType blockType, byte emission, int priorityIndex)
     {
-        if (world == null || !world.enableRealisticShader)
+        if (world == null || !world.ShouldUseEmissiveBlockPointLights)
             return;
 
         if (!activeLights.TryGetValue(blockPos, out EmissiveLightInstance instance) || instance == null || instance.root == null || instance.light == null)
@@ -899,12 +899,12 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         return position + style.localOffset;
     }
 
-    public void RefreshRealisticShaderState()
+    public void RefreshEmissivePointLightState()
     {
         if (world == null)
             world = GetComponent<World>();
 
-        if (world == null || world.enableRealisticShader)
+        if (world == null || world.ShouldUseEmissiveBlockPointLights)
             return;
 
         ClearAllLights();

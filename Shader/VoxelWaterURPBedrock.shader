@@ -127,7 +127,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             float2 uv0 : TEXCOORD0;
             float2 uv1 : TEXCOORD1;
             float4 uv2 : TEXCOORD2;
-            float2 uv3 : TEXCOORD3;
+            float4 uv3 : TEXCOORD3;
             UNITY_VERTEX_INPUT_INSTANCE_ID
         };
 
@@ -334,7 +334,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             output.localUV = input.uv0;
             output.atlasOrigin = input.uv1;
-            output.atlasSize = input.uv3;
+            output.atlasSize = input.uv3.xy;
             output.extra = saturate(input.uv2.xyz);
 
             ApplyWaterWaves(output.positionWS, output.normalWS);
@@ -387,7 +387,7 @@ Shader "Voxel/URP/Voxel Water Unlit Bedrock"
             output.normalWS = NormalizeNormalPerVertex(normalInputs.normalWS);
             output.localUV = input.uv0;
             output.atlasOrigin = input.uv1;
-            output.atlasSize = input.uv3;
+            output.atlasSize = input.uv3.xy;
             output.extra = saturate(input.uv2.xyz);
 
             ApplyWaterWaves(output.positionWS, output.normalWS);

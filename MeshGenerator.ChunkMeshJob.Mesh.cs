@@ -114,10 +114,7 @@ public static partial class MeshGenerator
                                     ? LightUtils.PackLight(15, 0)
                                     : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
 
-                                byte faceLight = (byte)math.max(
-                                    (int)LightUtils.GetSkyLight(packed),
-                                    (int)LightUtils.GetBlockLight(packed)
-                                );
+                                byte faceLight = packed;
 
                                 int aoPlaneN = n + normalSign;
                                 Vector3Int aoPos = new Vector3Int(
@@ -153,16 +150,16 @@ public static partial class MeshGenerator
                                 if (IsEmissiveBlock(currentMapping))
                                 {
                                     byte emission = currentMapping.lightEmission;
-                                    light0 = (byte)math.max((int)light0, (int)emission);
-                                    light1 = (byte)math.max((int)light1, (int)emission);
-                                    light2 = (byte)math.max((int)light2, (int)emission);
-                                    light3 = (byte)math.max((int)light3, (int)emission);
+                                    light0 = WithBlockLightAtLeast(light0, emission);
+                                    light1 = WithBlockLightAtLeast(light1, emission);
+                                    light2 = WithBlockLightAtLeast(light2, emission);
+                                    light3 = WithBlockLightAtLeast(light3, emission);
                                 }
 
-                                light0 = (byte)math.max((int)light0, (int)faceLight);
-                                light1 = (byte)math.max((int)light1, (int)faceLight);
-                                light2 = (byte)math.max((int)light2, (int)faceLight);
-                                light3 = (byte)math.max((int)light3, (int)faceLight);
+                                light0 = MaxPackedLight(light0, faceLight);
+                                light1 = MaxPackedLight(light1, faceLight);
+                                light2 = MaxPackedLight(light2, faceLight);
+                                light3 = MaxPackedLight(light3, faceLight);
                                 byte placementAxis = GetBlockPlacementAxisValue(idx);
                                 BlockPlacementAxis resolvedPlacementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
                                 BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(currentMapping, faceType, resolvedPlacementAxis);
@@ -354,7 +351,7 @@ public static partial class MeshGenerator
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
                                     byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
-                                    float rawLight = currentLight / 15f;
+                                    float skyLight = GetSkyLight01(currentLight);
                                     float floatTint = tint ? 1f : 0f;
                                     float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
                                     float aoBase = currentAO / 3f;
@@ -366,8 +363,8 @@ public static partial class MeshGenerator
                                         normal,
                                         uvCoord,
                                         atlasUv,
-                                        new Vector4(rawLight, floatTint, floatAO, packedSubchunkAndOverlay),
-                                        atlasSize);
+                                        new Vector4(skyLight, floatTint, floatAO, packedSubchunkAndOverlay),
+                                        EncodeAtlasSizeWithBlockLight(atlasSize, currentLight));
                                 }
 
                                 NativeList<int> tris = FluidBlockUtility.IsWater(bt)
@@ -686,28 +683,29 @@ public static partial class MeshGenerator
 
         private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            int l0 = SampleLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            int l1 = SampleLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            int l2 = SampleLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            int l3 = SampleLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            byte l0 = SamplePackedLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            byte l1 = SamplePackedLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            byte l2 = SamplePackedLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            byte l3 = SamplePackedLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            return (byte)((l0 + l1 + l2 + l3 + 2) / 4);
+            int sky = (LightUtils.GetSkyLight(l0) + LightUtils.GetSkyLight(l1) + LightUtils.GetSkyLight(l2) + LightUtils.GetSkyLight(l3) + 2) / 4;
+            int block = (LightUtils.GetBlockLight(l0) + LightUtils.GetBlockLight(l1) + LightUtils.GetBlockLight(l2) + LightUtils.GetBlockLight(l3) + 2) / 4;
+            return LightUtils.PackLight((byte)sky, (byte)block);
         }
 
-        private int SampleLightValue(Vector3Int pos, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private byte SamplePackedLightValue(Vector3Int pos, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (pos.y < 0)
                 return 0;
             if (pos.y >= SizeY)
-                return 15;
+                return LightUtils.PackLight(15, 0);
 
             int clampedX = math.clamp(pos.x, 0, voxelSizeX - 1);
             int clampedZ = math.clamp(pos.z, 0, voxelSizeZ - 1);
             if (!TryGetResolvedVoxelIndex(clampedX, pos.y, clampedZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out int idx))
-                return 15;
+                return LightUtils.PackLight(15, 0);
 
-            byte packed = light[idx];
-            return math.max((int)LightUtils.GetSkyLight(packed), (int)LightUtils.GetBlockLight(packed));
+            return light[idx];
         }
 
         private static bool IsEmissiveBlock(BlockTextureMapping mapping)

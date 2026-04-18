@@ -102,6 +102,15 @@ public partial class World
         RequestChunkRebuild(coord, GetFullSubchunkMask(), rebuildColliders);
     }
 
+    public void SetVoxelSkyLightMultiplier(float multiplier, bool forceRebuild = false)
+    {
+        multiplier = Mathf.Clamp01(multiplier);
+        if (Mathf.Approximately(voxelSkyLightMultiplier, multiplier))
+            return;
+
+        voxelSkyLightMultiplier = multiplier;
+    }
+
     private void RequestChunkRebuild(Vector2Int coord, int dirtySubchunkMask)
     {
         RequestChunkRebuild(coord, dirtySubchunkMask, true);

@@ -77,11 +77,17 @@ public class TextureAtlasGenerator : MonoBehaviour
     public List<Material> targetMaterials = new List<Material>();
     public string targetTextureProperty = "_Atlas";
 
+    [Header("Emission Atlas")]
+    [Tooltip("Gera um atlas de emissao paralelo usando as emissionTexture das entradas. O layout acompanha o atlas principal.")]
+    public bool generateEmissionAtlas = true;
+    public string targetEmissionTextureProperty = "_EmissionMap";
+
     [Header("Options")]
     public bool saveToFile = false;
     public string savePath = "Assets/AtlasGerado.png";
 
     [SerializeField] private Texture2D generatedAtlas;
+    [SerializeField] private Texture2D generatedEmissionAtlas;
     [SerializeField] private List<AtlasUvEntry> generatedUvEntries = new List<AtlasUvEntry>();
     [SerializeField] private List<string> generatedLegacyEntryOrder = new List<string>();
 
@@ -90,6 +96,7 @@ public class TextureAtlasGenerator : MonoBehaviour
     private readonly Dictionary<BlockType, Rect> blockTypeUvMap = new Dictionary<BlockType, Rect>();
 
     public Texture2D GeneratedAtlas => generatedAtlas;
+    public Texture2D GeneratedEmissionAtlas => generatedEmissionAtlas;
     public IReadOnlyDictionary<string, Rect> UvMap => uvMap;
     public IReadOnlyDictionary<BlockType, Rect> BlockTypeUvMap => blockTypeUvMap;
     public bool UsesTextureDatabase => textureDatabase != null;
@@ -240,6 +247,16 @@ public class TextureAtlasGenerator : MonoBehaviour
         generatedAtlas = atlasToApply;
         ApplyAtlasToTargets(generatedAtlas);
 
+        if (generateEmissionAtlas)
+        {
+            generatedEmissionAtlas = BuildEmissionAtlas(entries, settings);
+            ApplyEmissionAtlasToTargets(generatedEmissionAtlas);
+        }
+        else
+        {
+            generatedEmissionAtlas = null;
+        }
+
         Debug.Log(
             $"TextureAtlasGenerator: built {generatedAtlas.width}x{generatedAtlas.height} atlas " +
             $"with {uvMap.Count} entries and {paddingPixels}px padding.");
@@ -266,6 +283,51 @@ public class TextureAtlasGenerator : MonoBehaviour
             preferTextureEntriesForLegacy);
 
         return entries;
+    }
+
+    private Texture2D BuildEmissionAtlas(List<AtlasTextureEntry> sourceEntries, AtlasBuildSettings settings)
+    {
+        if (sourceEntries == null || sourceEntries.Count == 0)
+            return null;
+
+        if (!HasEmissionTextures(sourceEntries))
+            return null;
+
+        List<AtlasTextureEntry> emissionEntries = new List<AtlasTextureEntry>(sourceEntries.Count);
+        List<Texture2D> temporaryTextures = new List<Texture2D>();
+
+        try
+        {
+            for (int i = 0; i < sourceEntries.Count; i++)
+            {
+                AtlasTextureEntry emissionEntry = CreateEmissionEntry(sourceEntries[i], temporaryTextures);
+                if (emissionEntry != null)
+                    emissionEntries.Add(emissionEntry);
+            }
+
+            if (emissionEntries.Count == 0)
+                return null;
+
+            AtlasBuildResult result = atlasBuilder.Build(emissionEntries, settings);
+            Texture2D emissionAtlas = result.atlasTexture;
+            if (emissionAtlas != null)
+                emissionAtlas.name = generatedAtlas != null ? $"{generatedAtlas.name}_Emission" : "RuntimeAtlas_Emission";
+
+            return emissionAtlas;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"TextureAtlasGenerator: failed to build emission atlas. {ex.Message}");
+            return null;
+        }
+        finally
+        {
+            for (int i = 0; i < temporaryTextures.Count; i++)
+            {
+                if (temporaryTextures[i] != null)
+                    DestroyImmediateSafe(temporaryTextures[i]);
+            }
+        }
     }
 
     private void BuildBlockTypeLookupFromUvMap()
@@ -412,6 +474,25 @@ public class TextureAtlasGenerator : MonoBehaviour
         }
     }
 
+    private void ApplyEmissionAtlasToTargets(Texture2D emissionAtlas)
+    {
+        Renderer rendererToUse = targetRenderer != null ? targetRenderer : GetComponent<Renderer>();
+        if (rendererToUse != null && rendererToUse.sharedMaterial != null)
+            AssignOptionalTexture(rendererToUse.sharedMaterial, emissionAtlas, targetEmissionTextureProperty);
+
+        if (targetMaterials == null)
+            return;
+
+        for (int i = 0; i < targetMaterials.Count; i++)
+        {
+            Material material = targetMaterials[i];
+            if (material == null)
+                continue;
+
+            AssignOptionalTexture(material, emissionAtlas, targetEmissionTextureProperty);
+        }
+    }
+
     public float ComputeShaderPaddingUv(Texture texture)
     {
         return ComputeShaderPaddingUv(texture, null);
@@ -453,6 +534,23 @@ public class TextureAtlasGenerator : MonoBehaviour
 
         if (material.HasProperty("_PaddingUV"))
             material.SetFloat("_PaddingUV", ComputeShaderPaddingUv(texture, material));
+
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+            EditorUtility.SetDirty(material);
+#endif
+    }
+
+    private void AssignOptionalTexture(Material material, Texture2D texture, string preferredProperty)
+    {
+        if (material == null)
+            return;
+
+        string safeProperty = string.IsNullOrWhiteSpace(preferredProperty) ? "_EmissionMap" : preferredProperty.Trim();
+        if (!material.HasProperty(safeProperty))
+            return;
+
+        material.SetTexture(safeProperty, texture);
 
 #if UNITY_EDITOR
         if (!Application.isPlaying)
@@ -583,11 +681,95 @@ public class TextureAtlasGenerator : MonoBehaviour
         {
             id = id,
             texture = source.texture,
+            emissionTexture = source.emissionTexture,
             useSourceRect = source.useSourceRect,
             sourceRect = source.sourceRect,
             useUvSampling = source.useUvSampling,
             sampledUvRect = source.sampledUvRect
         };
+    }
+
+    private static AtlasTextureEntry CreateEmissionEntry(AtlasTextureEntry source, List<Texture2D> temporaryTextures)
+    {
+        if (source == null || source.texture == null || string.IsNullOrWhiteSpace(source.id))
+            return null;
+
+        if (source.emissionTexture != null)
+        {
+            return new AtlasTextureEntry
+            {
+                id = source.id,
+                texture = source.emissionTexture,
+                useSourceRect = source.useSourceRect,
+                sourceRect = source.sourceRect,
+                useUvSampling = source.useUvSampling,
+                sampledUvRect = source.sampledUvRect
+            };
+        }
+
+        ResolveEntryOutputSize(source, out int width, out int height);
+        Texture2D blackTexture = new Texture2D(width, height, TextureFormat.RGBA32, false, false)
+        {
+            name = $"{source.id.Replace('/', '_').Replace(':', '_')}_EmissionBlack",
+            filterMode = FilterMode.Point,
+            wrapMode = TextureWrapMode.Clamp
+        };
+        blackTexture.SetPixels32(new Color32[width * height]);
+        blackTexture.Apply(false, false);
+        temporaryTextures?.Add(blackTexture);
+
+        return new AtlasTextureEntry
+        {
+            id = source.id,
+            texture = blackTexture,
+            useSourceRect = false,
+            useUvSampling = false
+        };
+    }
+
+    private static bool HasEmissionTextures(List<AtlasTextureEntry> entries)
+    {
+        if (entries == null)
+            return false;
+
+        for (int i = 0; i < entries.Count; i++)
+        {
+            if (entries[i] != null && entries[i].emissionTexture != null)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void ResolveEntryOutputSize(AtlasTextureEntry source, out int width, out int height)
+    {
+        if (source != null && source.useUvSampling)
+        {
+            width = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.z - source.sampledUvRect.x)));
+            height = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.w - source.sampledUvRect.y)));
+            return;
+        }
+
+        if (source != null && source.useSourceRect && source.sourceRect.width > 0 && source.sourceRect.height > 0)
+        {
+            width = source.sourceRect.width;
+            height = source.sourceRect.height;
+            return;
+        }
+
+        width = source != null && source.texture != null ? Mathf.Max(1, source.texture.width) : 1;
+        height = source != null && source.texture != null ? Mathf.Max(1, source.texture.height) : 1;
+    }
+
+    private static void DestroyImmediateSafe(UnityEngine.Object target)
+    {
+        if (target == null)
+            return;
+
+        if (Application.isPlaying)
+            UnityEngine.Object.Destroy(target);
+        else
+            UnityEngine.Object.DestroyImmediate(target);
     }
 
     private static string NormalizeEntryId(string id, Texture2D texture)

@@ -165,6 +165,11 @@ public static partial class MeshGenerator
 
         private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector2 uv3)
         {
+            AddPackedVertex(position, normal, uv0, uv1, uv2, new Vector4(uv3.x, uv3.y, 0f, 0f));
+        }
+
+        private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector4 uv3)
+        {
             vertices.Add(new PackedChunkVertex
             {
                 position = position,
@@ -174,6 +179,42 @@ public static partial class MeshGenerator
                 uv2 = uv2,
                 uv3 = uv3
             });
+        }
+
+        private byte ResolvePackedLightValue(byte packedLight)
+        {
+            int skyLight = LightUtils.GetSkyLight(packedLight);
+            int blockLight = LightUtils.GetBlockLight(packedLight);
+            return (byte)math.clamp(math.max(skyLight, blockLight), 0, 15);
+        }
+
+        private static byte MaxPackedLight(byte a, byte b)
+        {
+            int skyLight = math.max((int)LightUtils.GetSkyLight(a), (int)LightUtils.GetSkyLight(b));
+            int blockLight = math.max((int)LightUtils.GetBlockLight(a), (int)LightUtils.GetBlockLight(b));
+            return LightUtils.PackLight((byte)skyLight, (byte)blockLight);
+        }
+
+        private static byte WithBlockLightAtLeast(byte packedLight, byte blockLight)
+        {
+            int sky = LightUtils.GetSkyLight(packedLight);
+            int block = math.max((int)LightUtils.GetBlockLight(packedLight), (int)blockLight);
+            return LightUtils.PackLight((byte)sky, (byte)math.clamp(block, 0, 15));
+        }
+
+        private static float GetSkyLight01(byte packedLight)
+        {
+            return LightUtils.GetSkyLight(packedLight) / 15f;
+        }
+
+        private static float GetBlockLight01(byte packedLight)
+        {
+            return LightUtils.GetBlockLight(packedLight) / 15f;
+        }
+
+        private static Vector4 EncodeAtlasSizeWithBlockLight(Vector2 atlasSize, byte packedLight)
+        {
+            return new Vector4(atlasSize.x, atlasSize.y, GetBlockLight01(packedLight), 0f);
         }
 
         private static void ResolveAtlasRect(
@@ -633,20 +674,34 @@ public static partial class MeshGenerator
             int height,
             bool flipTriangle)
         {
+            return MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, true) &&
+                   MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, false);
+        }
+
+        private static bool MatchesQuadInterpolationForLightChannel(
+            NativeArray<GreedyFaceData> mask,
+            int sizeU,
+            int startI,
+            int startJ,
+            int width,
+            int height,
+            bool flipTriangle,
+            bool skyChannel)
+        {
             if (width <= 0 || height <= 0)
                 return false;
 
             int scale = width * height;
-            int light00 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0);
-            int light10 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0);
-            int light11 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height);
-            int light01 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height);
+            int light00 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0), skyChannel);
+            int light10 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0), skyChannel);
+            int light11 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height), skyChannel);
+            int light01 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height), skyChannel);
 
             for (int y = 0; y <= height; y++)
             {
                 for (int x = 0; x <= width; x++)
                 {
-                    int actual = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, x, y);
+                    int actual = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, x, y), skyChannel);
                     int expectedScaled;
 
                     if (!flipTriangle)
@@ -686,6 +741,16 @@ public static partial class MeshGenerator
             }
 
             return true;
+        }
+
+        private static int GetPackedLightChannel(byte packedLight, bool skyChannel)
+        {
+            return skyChannel ? LightUtils.GetSkyLight(packedLight) : LightUtils.GetBlockLight(packedLight);
+        }
+
+        private static int GetPackedLightBrightness(byte packedLight)
+        {
+            return math.max((int)LightUtils.GetSkyLight(packedLight), (int)LightUtils.GetBlockLight(packedLight));
         }
 
         private static ushort GetRectVertexSurfaceY(
@@ -794,10 +859,10 @@ public static partial class MeshGenerator
             int ao10 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, 0);
             int ao11 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, width, height);
             int ao01 = GetRectVertexAO(mask, sizeU, startI, startJ, width, height, 0, height);
-            int light00 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0);
-            int light10 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0);
-            int light11 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height);
-            int light01 = GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height);
+            int light00 = GetPackedLightBrightness(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0));
+            int light10 = GetPackedLightBrightness(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0));
+            int light11 = GetPackedLightBrightness(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height));
+            int light01 = GetPackedLightBrightness(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height));
             bool heuristicFlip = (ao00 + ao11 + light00 + light11) > (ao10 + ao01 + light10 + light01);
 
             if (noFlipMatches && flipMatches)

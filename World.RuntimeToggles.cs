@@ -47,12 +47,18 @@ public partial class World
 
     private void HandleRealisticShaderToggle()
     {
-        if (lastEnableRealisticShader == enableRealisticShader)
+        bool realisticShaderChanged = lastEnableRealisticShader != enableRealisticShader;
+        bool emissivePointLightsChanged = lastEnableEmissiveBlockPointLights != enableEmissiveBlockPointLights;
+        if (!realisticShaderChanged && !emissivePointLightsChanged)
             return;
 
         lastEnableRealisticShader = enableRealisticShader;
-        RefreshRealisticShaderModeOnRenderers();
-        emissiveBlockLightController?.RefreshRealisticShaderState();
+        lastEnableEmissiveBlockPointLights = enableEmissiveBlockPointLights;
+
+        if (realisticShaderChanged)
+            RefreshRealisticShaderModeOnRenderers();
+
+        emissiveBlockLightController?.RefreshEmissivePointLightState();
     }
 
     private void RefreshRealisticShaderModeOnRenderers()
