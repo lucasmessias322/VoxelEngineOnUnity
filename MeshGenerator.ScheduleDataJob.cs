@@ -14,6 +14,7 @@ public static partial class MeshGenerator
         NativeArray<NoiseLayer> noiseLayers,
         NativeArray<BlockTextureMapping> blockMappings,
         NativeArray<byte> effectiveOpacityByBlock,
+        NativeArray<byte> lightEmissionByBlock,
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
@@ -48,6 +49,7 @@ public static partial class MeshGenerator
         out NativeArray<byte> blockTypes,
         out NativeArray<bool> solids,
         out NativeArray<byte> light,
+        out NativeArray<byte> blockEmissionData,
         out NativeArray<byte> lightOpacityData,
         out NativeArray<bool> subchunkNonEmpty,
         out NativeArray<ulong> subchunkColliderOccupancy,
@@ -92,6 +94,7 @@ public static partial class MeshGenerator
         solids = RentBoolBuffer(dataTotalVoxels);
         NativeArray<bool> baseTerrainSolids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
         light = RentByteBuffer(dataTotalVoxels);
+        blockEmissionData = default;
         lightOpacityData = default;
         NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
         tempBuffers = RentDataJobTempBuffers(dataTotalVoxels, dataTotalHeightPoints);
@@ -363,6 +366,7 @@ public static partial class MeshGenerator
             return;
         }
 
+        blockEmissionData = RentByteBuffer(lightTotalVoxels, true);
         lightOpacityData = RentByteBuffer(lightTotalVoxels);
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
         var lightHeightJob = new HeightmapJob
@@ -571,11 +575,44 @@ public static partial class MeshGenerator
             lightOpacityHandle = opacityOverrideJob.Schedule(lightOpacityHandle);
         }
 
+        var copyGeneratedEmissionJob = new CopyGeneratedEmissionToLightVolumeJob
+        {
+            sourceBlockTypes = blockTypes,
+            lightEmissionByBlock = lightEmissionByBlock,
+            targetBlockEmission = blockEmissionData,
+            sourceVoxelSizeX = dataVoxelSizeX,
+            targetVoxelSizeX = lightVoxelSizeX,
+            targetVoxelPlaneSize = lightVoxelPlaneSize,
+            sourceBorder = dataBorderSize,
+            targetBorder = lightBorderSize
+        };
+        JobHandle blockEmissionHandle = copyGeneratedEmissionJob.Schedule(
+            dataTotalVoxels,
+            128,
+            finalChunkDataHandle);
+        if (blockEdits.IsCreated && blockEdits.Length > 0)
+        {
+            var emissionOverrideJob = new ApplyEmissionOverridesJob
+            {
+                overrides = blockEdits,
+                lightEmissionByBlock = lightEmissionByBlock,
+                blockEmission = blockEmissionData,
+                chunkMinX = coord.x * SizeX,
+                chunkMinZ = coord.y * SizeZ,
+                borderSize = lightBorderSize,
+                voxelSizeX = lightVoxelSizeX,
+                voxelSizeZ = lightVoxelSizeZ,
+                voxelPlaneSize = lightVoxelPlaneSize
+            };
+            blockEmissionHandle = emissionOverrideJob.Schedule(blockEmissionHandle);
+        }
+
         var lightJob = new ChunkLighting.CroppedChunkLightingJob
         {
             opacity = lightOpacityData,
             light = light,
             blockLightData = lightData,
+            blockEmissionData = blockEmissionData,
             enableHorizontalSkylight = enableHorizontalSkylight,
             horizontalSkylightStepLoss = horizontalSkylightStepLoss,
             inputVoxelSizeX = lightVoxelSizeX,
@@ -593,7 +630,7 @@ public static partial class MeshGenerator
             finalChunkDataHandle,
             buildChunkSnapshotHandle,
             disposeBaseTerrainSolidsAfterLightingHandle);
-        lightingHandle = lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle));
+        lightingHandle = lightJob.Schedule(JobHandle.CombineDependencies(finalChunkDataHandle, lightOpacityHandle, blockEmissionHandle));
         dataHandle = JobHandle.CombineDependencies(terrainDataHandle, lightingHandle);
     }
 

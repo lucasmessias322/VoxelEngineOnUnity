@@ -47,6 +47,7 @@ public partial class World : MonoBehaviour
         public Vector2Int coord;
         public int expectedGen;
         public NativeArray<byte> chunkLightData;
+        public NativeArray<byte> blockEmissionData;
         public NativeArray<byte> lightOpacityData;
         public NativeArray<BlockEdit> edits;
         public NativeArray<byte> fastRebuildSnapshotVoxelData;
@@ -470,6 +471,99 @@ public partial class World : MonoBehaviour
 
                 int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
                 opacity[dstIndex] = effectiveOpacityByBlock[edit.type];
+            }
+        }
+    }
+
+    [BurstCompile]
+    private struct FastRebuildPopulateEmissionJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<byte> snapshotVoxelData;
+        [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
+        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
+        public NativeArray<byte> blockEmission;
+        public bool disableWater;
+        public int borderSize;
+        public int voxelSizeX;
+        public int snapshotChunkRadius;
+        public int snapshotChunkDiameter;
+
+        public void Execute(int index)
+        {
+            int x = index % voxelSizeX;
+            int temp = index / voxelSizeX;
+            int y = temp % Chunk.SizeY;
+            int z = temp / Chunk.SizeY;
+
+            int relX = x - borderSize;
+            int relZ = z - borderSize;
+            int chunkOffsetX = FloorDiv(relX, Chunk.SizeX);
+            int chunkOffsetZ = FloorDiv(relZ, Chunk.SizeZ);
+            int localX = relX - chunkOffsetX * Chunk.SizeX;
+            int localZ = relZ - chunkOffsetZ * Chunk.SizeZ;
+
+            int slotX = chunkOffsetX + snapshotChunkRadius;
+            int slotZ = chunkOffsetZ + snapshotChunkRadius;
+            if (slotX < 0 || slotX >= snapshotChunkDiameter || slotZ < 0 || slotZ >= snapshotChunkDiameter)
+            {
+                blockEmission[index] = 0;
+                return;
+            }
+
+            int slot = slotX + slotZ * snapshotChunkDiameter;
+            if (snapshotLoadedChunks[slot] == 0)
+            {
+                blockEmission[index] = 0;
+                return;
+            }
+
+            int srcIndex = slot * FastRebuildChunkVoxelCount + localX + localZ * Chunk.SizeX + y * Chunk.SizeX * Chunk.SizeZ;
+            byte blockId = snapshotVoxelData[srcIndex];
+            if (disableWater && FluidBlockUtility.IsWater((BlockType)blockId))
+                blockId = (byte)BlockType.Air;
+
+            blockEmission[index] = lightEmissionByBlock[blockId];
+        }
+
+        private static int FloorDiv(int value, int divisor)
+        {
+            if (value >= 0)
+                return value / divisor;
+
+            return -((-value + divisor - 1) / divisor);
+        }
+    }
+
+    [BurstCompile]
+    private struct FastRebuildApplyEmissionOverridesJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockEdit> overrides;
+        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
+        public NativeArray<byte> blockEmission;
+        public int chunkMinX;
+        public int chunkMinZ;
+        public int borderSize;
+        public int voxelSizeX;
+        public int voxelSizeZ;
+        public int voxelPlaneSize;
+
+        public void Execute()
+        {
+            for (int index = 0; index < overrides.Length; index++)
+            {
+                BlockEdit edit = overrides[index];
+                if (edit.y < 0 || edit.y >= Chunk.SizeY)
+                    continue;
+                if (edit.type < 0 || edit.type >= lightEmissionByBlock.Length)
+                    continue;
+
+                int ix = edit.x - chunkMinX + borderSize;
+                int iz = edit.z - chunkMinZ + borderSize;
+                if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
+                    continue;
+
+                int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
+                blockEmission[dstIndex] = lightEmissionByBlock[edit.type];
             }
         }
     }

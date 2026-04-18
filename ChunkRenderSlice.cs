@@ -58,6 +58,7 @@ public class ChunkRenderSlice : MonoBehaviour
     {
         meshFilter = meshFilter != null ? meshFilter : GetComponent<MeshFilter>();
         meshRenderer = meshRenderer != null ? meshRenderer : GetComponent<MeshRenderer>();
+        ConfigureShadowSettings();
 
         Material[] sharedMaterials = materials ?? Array.Empty<Material>();
         if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
@@ -81,6 +82,17 @@ public class ChunkRenderSlice : MonoBehaviour
         subchunkCount = Mathf.Max(1, sliceSubchunkCount);
         gameObject.name = $"ChunkSlice_{sliceIndex}";
         transform.localPosition = Vector3.zero;
+    }
+
+    private void ConfigureShadowSettings()
+    {
+        if (meshRenderer == null)
+            return;
+
+        meshRenderer.shadowCastingMode = ShadowCastingMode.On;
+        meshRenderer.receiveShadows = true;
+        meshRenderer.lightProbeUsage = LightProbeUsage.Off;
+        meshRenderer.reflectionProbeUsage = ReflectionProbeUsage.BlendProbes;
     }
 
     public void ApplyMeshData(

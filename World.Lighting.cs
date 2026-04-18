@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 public partial class World
@@ -83,12 +84,138 @@ public partial class World
         column[y] = value;
     }
 
+    private void SyncChunkBlockLightColumns(Vector2Int coord, NativeArray<byte> packedLight, int borderSize)
+    {
+        if (!packedLight.IsCreated)
+            return;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+
+        for (int lz = 0; lz < Chunk.SizeZ; lz++)
+        {
+            int worldZ = chunkMinZ + lz;
+            int sampleZ = lz + borderSize;
+
+            for (int lx = 0; lx < Chunk.SizeX; lx++)
+            {
+                int worldX = chunkMinX + lx;
+                int sampleX = lx + borderSize;
+                Vector2Int key = new Vector2Int(worldX, worldZ);
+                byte[] column = null;
+                bool hasAnyLight = false;
+
+                for (int y = 0; y < Chunk.SizeY; y++)
+                {
+                    int idx = sampleX + y * voxelSizeX + sampleZ * voxelPlaneSize;
+                    byte blockLight = LightUtils.GetBlockLight(packedLight[idx]);
+                    if (blockLight > 0)
+                    {
+                        hasAnyLight = true;
+                        if (column == null)
+                        {
+                            if (!globalLightColumns.TryGetValue(key, out column))
+                            {
+                                column = new byte[Chunk.SizeY];
+                                globalLightColumns[key] = column;
+                            }
+                        }
+
+                        column[y] = blockLight;
+                    }
+                    else if (column != null)
+                    {
+                        column[y] = 0;
+                    }
+                }
+
+                if (!hasAnyLight)
+                    globalLightColumns.Remove(key);
+            }
+        }
+    }
+
+    private bool ChunkHasBoundaryBlockLight(NativeArray<byte> packedLight, int borderSize)
+    {
+        if (!packedLight.IsCreated)
+            return false;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        int minX = borderSize;
+        int maxX = borderSize + Chunk.SizeX - 1;
+        int minZ = borderSize;
+        int maxZ = borderSize + Chunk.SizeZ - 1;
+
+        for (int z = minZ; z <= maxZ; z++)
+        {
+            bool isBoundaryZ = z == minZ || z == maxZ;
+            for (int y = 0; y < Chunk.SizeY; y++)
+            {
+                int baseIndex = y * voxelSizeX + z * voxelPlaneSize;
+                for (int x = minX; x <= maxX; x++)
+                {
+                    if (!isBoundaryZ && x != minX && x != maxX)
+                        continue;
+
+                    if (LightUtils.GetBlockLight(packedLight[baseIndex + x]) > 0)
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private void RequestNeighborChunkLightingRefresh(Vector2Int coord)
+    {
+        int chunkRadius = Mathf.Max(1, Mathf.CeilToInt(GetLightSmoothingBorderSize() / (float)Chunk.SizeX));
+        int fullMask = GetFullSubchunkMask();
+
+        for (int dz = -chunkRadius; dz <= chunkRadius; dz++)
+        {
+            for (int dx = -chunkRadius; dx <= chunkRadius; dx++)
+            {
+                if (dx == 0 && dz == 0)
+                    continue;
+
+                Vector2Int neighborCoord = new Vector2Int(coord.x + dx, coord.y + dz);
+                if (!activeChunks.ContainsKey(neighborCoord))
+                    continue;
+
+                RequestChunkRebuild(neighborCoord, fullMask, false);
+            }
+        }
+    }
+
+    private void PrimeNearbyOverrideLightSources(Vector2Int coord, int borderSize)
+    {
+        if (!enableVoxelLighting || blockOverrides.Count == 0)
+            return;
+
+        CollectRelevantTerrainOverridePositions(coord, borderSize, relevantTerrainOverridePositions);
+        for (int i = 0; i < relevantTerrainOverridePositions.Count; i++)
+        {
+            Vector3Int worldPos = relevantTerrainOverridePositions[i];
+            if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
+                continue;
+
+            byte emission = GetBlockEmission(ResolveWaterStateForDebug(overrideType));
+            if (emission <= 0)
+                continue;
+
+            PropagateLightGlobal(worldPos, emission, false);
+        }
+    }
+
     #endregion
 
     #region Global Light Propagation
 
 
-    public void PropagateLightGlobal(Vector3Int startWorldPos, byte lightEmission)
+    public void PropagateLightGlobal(Vector3Int startWorldPos, byte lightEmission, bool requestChunkRebuilds = true)
     {
         if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
 
@@ -153,10 +280,11 @@ public partial class World
         }
 
         // Reconstrói os chunks que receberam luz
+        if (!requestChunkRebuilds)
+            return;
+
         foreach (var kv in dirtiedChunks)
-        {
             RequestChunkRebuild(kv.Key, kv.Value, false);
-        }
     }
     public void RemoveLightGlobal(Vector3Int startWorldPos)
     {

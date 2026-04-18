@@ -12,6 +12,7 @@ public static class ChunkLighting
         [ReadOnly] public NativeArray<byte> blockTypes;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<byte> blockLightData;
+        [ReadOnly] public NativeArray<byte> blockEmissionData;
 
         public NativeArray<byte> light;
         public bool enableHorizontalSkylight;
@@ -29,6 +30,8 @@ public static class ChunkLighting
         {
             NativeArray<byte> skyMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
+            NativeArray<byte> blockMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
+            NativeQueue<int> blockQueue = new NativeQueue<int>(Allocator.Temp);
 
             // Step 1: vertical sun rays.
             for (int lx = 0; lx < voxelSizeX; lx++)
@@ -109,20 +112,67 @@ public static class ChunkLighting
                 }
             }
 
-            // Step 3: pack sky + block light.
             for (int i = 0; i < totalVoxels; i++)
             {
                 byte blockL = 0;
                 if (blockLightData.IsCreated && i < blockLightData.Length)
-                {
                     blockL = blockLightData[i];
-                }
 
-                light[i] = LightUtils.PackLight(skyMap[i], blockL);
+                byte blockEmission = 0;
+                if (blockEmissionData.IsCreated && i < blockEmissionData.Length)
+                    blockEmission = blockEmissionData[i];
+                else if (i < blockTypes.Length)
+                    blockEmission = blockMappings[(int)blockTypes[i]].lightEmission;
+
+                byte initialBlockLight = (byte)math.max((int)blockL, (int)blockEmission);
+                blockMap[i] = initialBlockLight;
+                if (initialBlockLight <= 1)
+                    continue;
+
+                bool canPropagate = false;
+                int z = i / voxelPlaneSize;
+                int rem = i % voxelPlaneSize;
+                int y = rem / voxelSizeX;
+                int x = rem % voxelSizeX;
+
+                if (x + 1 < voxelSizeX && CanImproveBlockNeighbor(i + 1, initialBlockLight, blockMap)) canPropagate = true;
+                else if (x - 1 >= 0 && CanImproveBlockNeighbor(i - 1, initialBlockLight, blockMap)) canPropagate = true;
+                else if (y + 1 < SizeY && CanImproveBlockNeighbor(i + voxelSizeX, initialBlockLight, blockMap)) canPropagate = true;
+                else if (y - 1 >= 0 && CanImproveBlockNeighbor(i - voxelSizeX, initialBlockLight, blockMap)) canPropagate = true;
+                else if (z + 1 < voxelSizeZ && CanImproveBlockNeighbor(i + voxelPlaneSize, initialBlockLight, blockMap)) canPropagate = true;
+                else if (z - 1 >= 0 && CanImproveBlockNeighbor(i - voxelPlaneSize, initialBlockLight, blockMap)) canPropagate = true;
+
+                if (canPropagate)
+                    blockQueue.Enqueue(i);
             }
+
+            while (blockQueue.TryDequeue(out int currentBlockIndex))
+            {
+                byte currentLight = blockMap[currentBlockIndex];
+                if (currentLight <= 1)
+                    continue;
+
+                int z = currentBlockIndex / voxelPlaneSize;
+                int rem = currentBlockIndex % voxelPlaneSize;
+                int y = rem / voxelSizeX;
+                int x = rem % voxelSizeX;
+
+                if (x + 1 < voxelSizeX) TryPropagateBlock(currentBlockIndex + 1, currentLight, blockMap, blockQueue);
+                if (x - 1 >= 0) TryPropagateBlock(currentBlockIndex - 1, currentLight, blockMap, blockQueue);
+                if (y + 1 < SizeY) TryPropagateBlock(currentBlockIndex + voxelSizeX, currentLight, blockMap, blockQueue);
+                if (y - 1 >= 0) TryPropagateBlock(currentBlockIndex - voxelSizeX, currentLight, blockMap, blockQueue);
+                if (z + 1 < voxelSizeZ) TryPropagateBlock(currentBlockIndex + voxelPlaneSize, currentLight, blockMap, blockQueue);
+                if (z - 1 >= 0) TryPropagateBlock(currentBlockIndex - voxelPlaneSize, currentLight, blockMap, blockQueue);
+            }
+
+            // Step 3: pack sky + block light.
+            for (int i = 0; i < totalVoxels; i++)
+                light[i] = LightUtils.PackLight(skyMap[i], blockMap[i]);
 
             skyMap.Dispose();
             lightQueue.Dispose();
+            blockMap.Dispose();
+            blockQueue.Dispose();
         }
 
         private bool CanImproveHorizontalNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
@@ -167,6 +217,27 @@ public static class ChunkLighting
             }
         }
 
+        private bool CanImproveBlockNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> blockMap)
+        {
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
+            int lightLoss = 1 + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            return propagatedLight > blockMap[neighborIndex];
+        }
+
+        private void TryPropagateBlock(int neighborIndex, byte currentLight, NativeArray<byte> blockMap, NativeQueue<int> blockQueue)
+        {
+            byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
+            int lightLoss = 1 + opacity;
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+            if (propagatedLight > blockMap[neighborIndex])
+            {
+                blockMap[neighborIndex] = propagatedLight;
+                blockQueue.Enqueue(neighborIndex);
+            }
+        }
+
     }
 
     [BurstCompile]
@@ -174,6 +245,7 @@ public static class ChunkLighting
     {
         [ReadOnly] public NativeArray<byte> opacity;
         [ReadOnly] public NativeArray<byte> blockLightData;
+        [ReadOnly] public NativeArray<byte> blockEmissionData;
 
         public NativeArray<byte> light;
         public bool enableHorizontalSkylight;
@@ -195,6 +267,8 @@ public static class ChunkLighting
         {
             NativeArray<byte> skyMap = new NativeArray<byte>(inputTotalVoxels, Allocator.Temp);
             NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
+            NativeArray<byte> blockMap = new NativeArray<byte>(inputTotalVoxels, Allocator.Temp);
+            NativeQueue<int> blockQueue = new NativeQueue<int>(Allocator.Temp);
 
             for (int lx = 0; lx < inputVoxelSizeX; lx++)
             {
@@ -267,6 +341,57 @@ public static class ChunkLighting
                 }
             }
 
+            for (int i = 0; i < inputTotalVoxels; i++)
+            {
+                byte blockL = 0;
+                if (blockLightData.IsCreated && i < blockLightData.Length)
+                    blockL = blockLightData[i];
+
+                byte blockEmission = 0;
+                if (blockEmissionData.IsCreated && i < blockEmissionData.Length)
+                    blockEmission = blockEmissionData[i];
+
+                byte initialBlockLight = (byte)math.max((int)blockL, (int)blockEmission);
+                blockMap[i] = initialBlockLight;
+                if (initialBlockLight <= 1)
+                    continue;
+
+                int z = i / inputVoxelPlaneSize;
+                int rem = i % inputVoxelPlaneSize;
+                int y = rem / inputVoxelSizeX;
+                int x = rem % inputVoxelSizeX;
+                bool canPropagate = false;
+
+                if (x + 1 < inputVoxelSizeX && CanImproveBlockNeighbor(i + 1, initialBlockLight, blockMap)) canPropagate = true;
+                else if (x - 1 >= 0 && CanImproveBlockNeighbor(i - 1, initialBlockLight, blockMap)) canPropagate = true;
+                else if (y + 1 < SizeY && CanImproveBlockNeighbor(i + inputVoxelSizeX, initialBlockLight, blockMap)) canPropagate = true;
+                else if (y - 1 >= 0 && CanImproveBlockNeighbor(i - inputVoxelSizeX, initialBlockLight, blockMap)) canPropagate = true;
+                else if (z + 1 < inputVoxelSizeZ && CanImproveBlockNeighbor(i + inputVoxelPlaneSize, initialBlockLight, blockMap)) canPropagate = true;
+                else if (z - 1 >= 0 && CanImproveBlockNeighbor(i - inputVoxelPlaneSize, initialBlockLight, blockMap)) canPropagate = true;
+
+                if (canPropagate)
+                    blockQueue.Enqueue(i);
+            }
+
+            while (blockQueue.TryDequeue(out int currentBlockIndex))
+            {
+                byte currentLight = blockMap[currentBlockIndex];
+                if (currentLight <= 1)
+                    continue;
+
+                int z = currentBlockIndex / inputVoxelPlaneSize;
+                int rem = currentBlockIndex % inputVoxelPlaneSize;
+                int y = rem / inputVoxelSizeX;
+                int x = rem % inputVoxelSizeX;
+
+                if (x + 1 < inputVoxelSizeX) TryPropagateBlock(currentBlockIndex + 1, currentLight, blockMap, blockQueue);
+                if (x - 1 >= 0) TryPropagateBlock(currentBlockIndex - 1, currentLight, blockMap, blockQueue);
+                if (y + 1 < SizeY) TryPropagateBlock(currentBlockIndex + inputVoxelSizeX, currentLight, blockMap, blockQueue);
+                if (y - 1 >= 0) TryPropagateBlock(currentBlockIndex - inputVoxelSizeX, currentLight, blockMap, blockQueue);
+                if (z + 1 < inputVoxelSizeZ) TryPropagateBlock(currentBlockIndex + inputVoxelPlaneSize, currentLight, blockMap, blockQueue);
+                if (z - 1 >= 0) TryPropagateBlock(currentBlockIndex - inputVoxelPlaneSize, currentLight, blockMap, blockQueue);
+            }
+
             for (int oz = 0; oz < outputVoxelSizeZ; oz++)
             {
                 int inputZ = oz + outputOffsetZ;
@@ -277,18 +402,15 @@ public static class ChunkLighting
                         int inputX = ox + outputOffsetX;
                         int inputIdx = inputX + y * inputVoxelSizeX + inputZ * inputVoxelPlaneSize;
                         int outputIdx = ox + y * outputVoxelSizeX + oz * outputVoxelPlaneSize;
-
-                        byte blockL = 0;
-                        if (blockLightData.IsCreated && inputIdx < blockLightData.Length)
-                            blockL = blockLightData[inputIdx];
-
-                        light[outputIdx] = LightUtils.PackLight(skyMap[inputIdx], blockL);
+                        light[outputIdx] = LightUtils.PackLight(skyMap[inputIdx], blockMap[inputIdx]);
                     }
                 }
             }
 
             skyMap.Dispose();
             lightQueue.Dispose();
+            blockMap.Dispose();
+            blockQueue.Dispose();
         }
 
         private bool CanImproveHorizontalNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> skyMap)
@@ -326,6 +448,25 @@ public static class ChunkLighting
             {
                 skyMap[neighborIndex] = propagatedLight;
                 lightQueue.Enqueue(neighborIndex);
+            }
+        }
+
+        private bool CanImproveBlockNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> blockMap)
+        {
+            int lightLoss = 1 + opacity[neighborIndex];
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            return propagatedLight > blockMap[neighborIndex];
+        }
+
+        private void TryPropagateBlock(int neighborIndex, byte currentLight, NativeArray<byte> blockMap, NativeQueue<int> blockQueue)
+        {
+            int lightLoss = 1 + opacity[neighborIndex];
+            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+
+            if (propagatedLight > blockMap[neighborIndex])
+            {
+                blockMap[neighborIndex] = propagatedLight;
+                blockQueue.Enqueue(neighborIndex);
             }
         }
     }

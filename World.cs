@@ -122,6 +122,7 @@ public partial class World : MonoBehaviour
 
     private bool isShuttingDown;
     private TorchFireParticleController torchFireParticleController;
+    private EmissiveBlockLightController emissiveBlockLightController;
 
     private void Awake()
     {
@@ -141,6 +142,7 @@ public partial class World : MonoBehaviour
         EnsureShaderFallbackBuffersBound();
         EnsureLoadingBootstrapExists();
         EnsureTorchFireParticleControllerExists();
+        EnsureEmissiveBlockLightControllerExists();
     }
 
     #endregion
@@ -516,6 +518,7 @@ public partial class World : MonoBehaviour
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
     private NativeArray<BlockModelCuboid> cachedNativeBlockModelCuboids;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
+    private NativeArray<byte> cachedNativeLightEmissionByBlock;
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
     private NativeArray<VegetationBillboardRuleData> cachedNativeVegetationBillboardRules;
@@ -756,6 +759,7 @@ public partial class World : MonoBehaviour
         if (cachedNativeBlockMappings.IsCreated) cachedNativeBlockMappings.Dispose();
         if (cachedNativeBlockModelCuboids.IsCreated) cachedNativeBlockModelCuboids.Dispose();
         if (cachedNativeEffectiveLightOpacityByBlock.IsCreated) cachedNativeEffectiveLightOpacityByBlock.Dispose();
+        if (cachedNativeLightEmissionByBlock.IsCreated) cachedNativeLightEmissionByBlock.Dispose();
         if (cachedNativeOreSettings.IsCreated) cachedNativeOreSettings.Dispose();
         if (cachedNativeTreeSpawnRules.IsCreated) cachedNativeTreeSpawnRules.Dispose();
         if (cachedNativeVegetationBillboardRules.IsCreated) cachedNativeVegetationBillboardRules.Dispose();
@@ -768,6 +772,7 @@ public partial class World : MonoBehaviour
                              cachedNativeBlockMappings.IsCreated &&
                              cachedNativeBlockModelCuboids.IsCreated &&
                              cachedNativeEffectiveLightOpacityByBlock.IsCreated &&
+                             cachedNativeLightEmissionByBlock.IsCreated &&
                              cachedNativeOreSettings.IsCreated &&
                              cachedNativeTreeSpawnRules.IsCreated &&
                              cachedNativeVegetationBillboardRules.IsCreated;
@@ -801,8 +806,12 @@ public partial class World : MonoBehaviour
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
         cachedNativeBlockModelCuboids = new NativeArray<BlockModelCuboid>(runtimeBlockModelCuboids, Allocator.Persistent);
         cachedNativeEffectiveLightOpacityByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
+        cachedNativeLightEmissionByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
         for (int i = 0; i < runtimeBlockMappings.Length; i++)
+        {
             cachedNativeEffectiveLightOpacityByBlock[i] = ChunkLighting.GetEffectiveOpacity(runtimeBlockMappings[i]);
+            cachedNativeLightEmissionByBlock[i] = runtimeBlockMappings[i].lightEmission;
+        }
         cachedNativeOreSettings = new NativeArray<OreSpawnSettings>(runtimeOreSettings, Allocator.Persistent);
         cachedNativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(runtimeTreeSpawnRules, Allocator.Persistent);
         cachedNativeVegetationBillboardRules = new NativeArray<VegetationBillboardRuleData>(runtimeVegetationBillboardRules, Allocator.Persistent);
@@ -2164,6 +2173,13 @@ public partial class World : MonoBehaviour
             torchFireParticleController = gameObject.AddComponent<TorchFireParticleController>();
     }
 
+    private void EnsureEmissiveBlockLightControllerExists()
+    {
+        emissiveBlockLightController = GetComponent<EmissiveBlockLightController>();
+        if (emissiveBlockLightController == null)
+            emissiveBlockLightController = gameObject.AddComponent<EmissiveBlockLightController>();
+    }
+
     private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)
     {
         if (changedProfile == null || changedProfile != terrainLayerProfile)
@@ -2480,6 +2496,8 @@ public partial class World : MonoBehaviour
                 }
                 else
                 {
+                    bool hadVoxelSnapshot = activeChunk.hasVoxelSnapshot;
+
                     if (!completedPostOverrideRefresh &&
                         TrySchedulePostCompletionOverrideRefresh(ref pd, activeChunk))
                     {
@@ -2501,6 +2519,12 @@ public partial class World : MonoBehaviour
                         SyncCurrentBlockOverridesToVoxelSnapshot(pd.coord, pd.borderSize, activeChunk.voxelData);
                     activeChunk.hasVoxelSnapshot = true;
                     activeChunk.UpdateLightSnapshot(pd.light, pd.borderSize);
+                    if (enableVoxelLighting)
+                    {
+                        SyncChunkBlockLightColumns(pd.coord, pd.light, pd.borderSize);
+                        if (!hadVoxelSnapshot && ChunkHasBoundaryBlockLight(pd.light, pd.borderSize))
+                            RequestNeighborChunkLightingRefresh(pd.coord);
+                    }
 
                     pendingMeshBuildRequests.Add(pd);
                     pendingJobPrioritiesDirty = true;
@@ -3441,6 +3465,7 @@ public partial class World : MonoBehaviour
         int dataBorderSize = GetDetailedGenerationBorderSize();
         int lightBorderSize = Mathf.Max(dataBorderSize, GetLightSmoothingBorderSize());
         int overrideBorderSize = Mathf.Max(dataBorderSize, lightBorderSize);
+        PrimeNearbyOverrideLightSources(coord, lightBorderSize);
         AppendRelevantBlockEdits(coord, overrideBorderSize, requestChunkEditsBuffer);
 
         NativeArray<BlockEdit> nativeEdits;
@@ -3471,11 +3496,8 @@ public partial class World : MonoBehaviour
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
-            chunkLightData = MeshGenerator.RentByteBuffer(
-                hasGlobalLightColumns ? voxelSizeX * Chunk.SizeY * voxelSizeZ : 0,
-                hasGlobalLightColumns);
-            if (hasGlobalLightColumns)
+            chunkLightData = MeshGenerator.RentByteBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
+            if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
         if (chunk.jobScheduled)
@@ -3489,7 +3511,7 @@ public partial class World : MonoBehaviour
         // A partir daqui a geracao entra na pipeline Burst/Jobs:
         // heightmap, superficie, cavernas, minerios, agua, arvores, edits e iluminacao.
         MeshGenerator.ScheduleDataJob(
-            coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock,
+            coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock, cachedNativeLightEmissionByBlock,
             baseHeight, offsetX, offsetZ, seaLevel, enableWater,
             GetBiomeNoiseSettings(),
             GetTerrainDensitySettings(),
@@ -3511,6 +3533,7 @@ public partial class World : MonoBehaviour
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
+            out NativeArray<byte> blockEmissionData,
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty,
             out NativeArray<ulong> subchunkColliderOccupancy,
@@ -3548,6 +3571,7 @@ public partial class World : MonoBehaviour
             coord = coord,
             expectedGen = expectedGen,
             chunkLightData = chunkLightData,
+            blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
             fastRebuildSnapshotVoxelData = default,
@@ -3609,6 +3633,7 @@ public partial class World : MonoBehaviour
         NativeArray<ulong> subchunkColliderOccupancy = MeshGenerator.RentUlongBuffer(Chunk.SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk);
         NativeArray<byte> lightOpacityData = default;
         NativeArray<byte> blockLightData = default;
+        NativeArray<byte> blockEmissionData = default;
         NativeArray<byte> snapshotVoxelData = MeshGenerator.RentByteBuffer(snapshotChunkCount * FastRebuildChunkVoxelCount);
         NativeArray<byte> snapshotLoadedChunks = MeshGenerator.RentByteBuffer(snapshotChunkCount);
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
@@ -3629,9 +3654,9 @@ public partial class World : MonoBehaviour
         if (enableVoxelLighting)
         {
             lightOpacityData = MeshGenerator.RentByteBuffer(lightTotalVoxels);
-            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
-            blockLightData = MeshGenerator.RentByteBuffer(hasGlobalLightColumns ? lightTotalVoxels : 0, hasGlobalLightColumns);
-            if (hasGlobalLightColumns)
+            blockLightData = MeshGenerator.RentByteBuffer(lightTotalVoxels, true);
+            blockEmissionData = MeshGenerator.RentByteBuffer(lightTotalVoxels, true);
+            if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
         }
 
@@ -3718,11 +3743,44 @@ public partial class World : MonoBehaviour
                 opacityOverrideHandle = opacityOverrideJob.Schedule(opacityPopulateHandle);
             }
 
+            var emissionPopulateJob = new FastRebuildPopulateEmissionJob
+            {
+                snapshotVoxelData = snapshotVoxelData,
+                snapshotLoadedChunks = snapshotLoadedChunks,
+                lightEmissionByBlock = cachedNativeLightEmissionByBlock,
+                blockEmission = blockEmissionData,
+                disableWater = !enableWater,
+                borderSize = lightBorderSize,
+                voxelSizeX = lightVoxelSizeX,
+                snapshotChunkRadius = snapshotChunkRadius,
+                snapshotChunkDiameter = snapshotChunkDiameter
+            };
+            JobHandle emissionPopulateHandle = emissionPopulateJob.Schedule(lightTotalVoxels, 128);
+
+            JobHandle emissionOverrideHandle = emissionPopulateHandle;
+            if (nativeOverrides.IsCreated && nativeOverrides.Length > 0)
+            {
+                var emissionOverrideJob = new FastRebuildApplyEmissionOverridesJob
+                {
+                    overrides = nativeOverrides,
+                    lightEmissionByBlock = cachedNativeLightEmissionByBlock,
+                    blockEmission = blockEmissionData,
+                    chunkMinX = chunkMinX,
+                    chunkMinZ = chunkMinZ,
+                    borderSize = lightBorderSize,
+                    voxelSizeX = lightVoxelSizeX,
+                    voxelSizeZ = lightVoxelSizeZ,
+                    voxelPlaneSize = lightVoxelPlaneSize
+                };
+                emissionOverrideHandle = emissionOverrideJob.Schedule(emissionPopulateHandle);
+            }
+
             var lightJob = new ChunkLighting.CroppedChunkLightingJob
             {
                 opacity = lightOpacityData,
                 light = light,
                 blockLightData = blockLightData,
+                blockEmissionData = blockEmissionData,
                 enableHorizontalSkylight = enableHorizontalSkylight,
                 horizontalSkylightStepLoss = horizontalSkylightStepLoss,
                 inputVoxelSizeX = lightVoxelSizeX,
@@ -3737,7 +3795,7 @@ public partial class World : MonoBehaviour
                 SizeY = Chunk.SizeY,
             };
 
-            visualDataHandle = lightJob.Schedule(JobHandle.CombineDependencies(deriveDataHandle, opacityOverrideHandle));
+            visualDataHandle = lightJob.Schedule(JobHandle.CombineDependencies(deriveDataHandle, opacityOverrideHandle, emissionOverrideHandle));
         }
         else
         {
@@ -3765,6 +3823,7 @@ public partial class World : MonoBehaviour
             coord = coord,
             expectedGen = expectedGen,
             chunkLightData = blockLightData,
+            blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,
             edits = default,
             fastRebuildSnapshotVoxelData = snapshotVoxelData,

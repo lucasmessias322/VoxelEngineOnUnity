@@ -222,11 +222,8 @@ public partial class World
         NativeArray<byte> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            bool hasGlobalLightColumns = globalLightColumns.Count > 0;
-            chunkLightData = MeshGenerator.RentByteBuffer(
-                hasGlobalLightColumns ? voxelSizeX * Chunk.SizeY * voxelSizeZ : 0,
-                hasGlobalLightColumns);
-            if (hasGlobalLightColumns)
+            chunkLightData = MeshGenerator.RentByteBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
+            if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
 
@@ -235,6 +232,7 @@ public partial class World
             cachedNativeNoiseLayers,
             cachedNativeBlockMappings,
             cachedNativeEffectiveLightOpacityByBlock,
+            cachedNativeLightEmissionByBlock,
             baseHeight,
             offsetX,
             offsetZ,
@@ -266,6 +264,7 @@ public partial class World
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
             out NativeArray<byte> light,
+            out NativeArray<byte> blockEmissionData,
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty,
             out NativeArray<ulong> subchunkColliderOccupancy,
@@ -303,6 +302,7 @@ public partial class World
             coord = coord,
             expectedGen = expectedGen,
             chunkLightData = chunkLightData,
+            blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,
             edits = nativeEdits,
             fastRebuildSnapshotVoxelData = default,

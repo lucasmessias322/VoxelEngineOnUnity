@@ -27,6 +27,7 @@ public partial class World
     {
         SafeDisposeNativeArray(ref pd.edits);
         MeshGenerator.ReturnByteBuffer(ref pd.chunkLightData);
+        MeshGenerator.ReturnByteBuffer(ref pd.blockEmissionData);
         MeshGenerator.ReturnByteBuffer(ref pd.lightOpacityData);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotVoxelData);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotLoadedChunks);
@@ -50,6 +51,7 @@ public partial class World
         MeshGenerator.ReturnBoolBuffer(ref pd.solids);
         MeshGenerator.ReturnByteBuffer(ref pd.light);
         MeshGenerator.ReturnByteBuffer(ref pd.chunkLightData);
+        MeshGenerator.ReturnByteBuffer(ref pd.blockEmissionData);
         MeshGenerator.ReturnByteBuffer(ref pd.lightOpacityData);
         SafeDisposeNativeArray(ref pd.edits);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotVoxelData);

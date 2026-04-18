@@ -24,6 +24,14 @@ Shader "Voxel/URP/VoxelWaterURP"
         [Header(Water Shading)]
         _alpha("Water Alpha", Range(0.0, 1.0)) = 1.0
         _Maxalpha("Max Alpha", Range(0.0, 1.0)) = 0.99
+        _AmbientStrength("Ambient Strength", Range(0.0, 2.0)) = 0.2
+        _DirectionalStrength("Main Light Strength", Range(0.0, 2.0)) = 0.45
+        _AdditionalLightsStrength("Additional Lights Strength", Range(0.0, 2.0)) = 0.35
+        _Smoothness("Smoothness", Range(0.0, 1.0)) = 0.94
+        _SpecularStrength("Specular Strength", Range(0.0, 4.0)) = 1.6
+        [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
+        [ToggleUI] _CastShadows("Cast Shadows", Float) = 0.0
+        _ShadowStrength("Shadow Strength", Range(0.0, 1.0)) = 0.85
 
         [Header(Camera Distance Opacity)]
         _DistanceAlphaNear("Near Opacity", Range(0.0, 1.0)) = 0.9
@@ -107,6 +115,14 @@ Shader "Voxel/URP/VoxelWaterURP"
             float _waveSpeed;
             float _alpha;
             float _Maxalpha;
+            float _AmbientStrength;
+            float _DirectionalStrength;
+            float _AdditionalLightsStrength;
+            float _Smoothness;
+            float _SpecularStrength;
+            float _ReceiveShadows;
+            float _CastShadows;
+            float _ShadowStrength;
             float _DistanceAlphaNear;
             float _DistanceAlphaFar;
             float _DistanceFadeStart;
@@ -356,6 +372,97 @@ Shader "Voxel/URP/VoxelWaterURP"
             return topMask * (half)_foamAmount;
         }
 
+        half ComputeWrappedDiffuse(half3 normalWS, half3 lightDirectionWS)
+        {
+            const half wrap = 0.18h;
+            half ndl = dot(normalWS, lightDirectionWS);
+            return saturate((ndl + wrap) / (1.0h + wrap));
+        }
+
+        half3 ComputeWaterAmbientLighting(half3 normalWS)
+        {
+            half skyFactor = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h));
+            return skyFactor.xxx * (0.2h + (half)_AmbientStrength);
+        }
+
+        half3 ComputeWaterDynamicLighting(float3 positionWS, half3 normalWS)
+        {
+            half3 dynamicLighting = 0.0h;
+            half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
+
+            Light mainLight = GetMainLight();
+            #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
+                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+            #endif
+
+            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
+            half mainDiffuse = ComputeWrappedDiffuse(normalWS, mainLight.direction);
+            dynamicLighting += mainLight.color * mainDiffuse * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
+
+            #if defined(_ADDITIONAL_LIGHTS)
+                uint lightCount = (uint)GetAdditionalLightsCount();
+                for (uint lightIndex = 0u; lightIndex < lightCount; ++lightIndex)
+                {
+                    Light addLight = GetAdditionalLight(lightIndex, positionWS);
+                    half addDiffuse = ComputeWrappedDiffuse(normalWS, addLight.direction);
+                    half addShadow = lerp(1.0h, addLight.shadowAttenuation, receiveShadowStrength);
+                    dynamicLighting += addLight.color * addDiffuse * addLight.distanceAttenuation * addShadow * (half)_AdditionalLightsStrength;
+                }
+            #endif
+
+            return dynamicLighting;
+        }
+
+        half ComputeWaterSpecularExponent()
+        {
+            return lerp(12.0h, 160.0h, saturate((half)_Smoothness));
+        }
+
+        half ComputeWaterSpecularTerm(half3 normalWS, half3 viewDirWS, half3 lightDirectionWS)
+        {
+            half ndl = saturate(dot(normalWS, lightDirectionWS));
+            if (ndl <= 0.0001h)
+                return 0.0h;
+
+            half3 halfDir = SafeNormalize(lightDirectionWS + viewDirWS);
+            half ndh = saturate(dot(normalWS, halfDir));
+            half specExponent = ComputeWaterSpecularExponent();
+            half normalization = (specExponent + 8.0h) * 0.125h;
+            half spec = pow(ndh, specExponent) * normalization;
+            half fresnel = pow(1.0h - saturate(dot(normalWS, viewDirWS)), 5.0h);
+            spec *= lerp(0.35h, 1.0h, fresnel);
+            spec *= lerp(0.7h, 1.2h, saturate((half)_Smoothness));
+            return spec * ndl * (half)_SpecularStrength;
+        }
+
+        half3 ComputeWaterSpecularLighting(float3 positionWS, half3 normalWS, half3 viewDirWS)
+        {
+            half3 specularLighting = 0.0h;
+            half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
+
+            Light mainLight = GetMainLight();
+            #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
+                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+            #endif
+
+            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
+            half mainSpecular = ComputeWaterSpecularTerm(normalWS, viewDirWS, mainLight.direction);
+            specularLighting += mainLight.color * mainSpecular * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
+
+            #if defined(_ADDITIONAL_LIGHTS)
+                uint lightCount = (uint)GetAdditionalLightsCount();
+                for (uint lightIndex = 0u; lightIndex < lightCount; ++lightIndex)
+                {
+                    Light addLight = GetAdditionalLight(lightIndex, positionWS);
+                    half addShadow = lerp(1.0h, addLight.shadowAttenuation, receiveShadowStrength);
+                    half addSpecular = ComputeWaterSpecularTerm(normalWS, viewDirWS, addLight.direction);
+                    specularLighting += addLight.color * addSpecular * addLight.distanceAttenuation * addShadow * (half)_AdditionalLightsStrength;
+                }
+            #endif
+
+            return specularLighting * _SurfaceHighlightColor.rgb;
+        }
+
         Varyings ForwardVertex(Attributes input)
         {
             Varyings output = (Varyings)0;
@@ -391,9 +498,13 @@ Shader "Voxel/URP/VoxelWaterURP"
 
             half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
             half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - input.positionWS);
+            half3 lighting = ComputeWaterAmbientLighting(normalWS);
+            lighting += ComputeWaterDynamicLighting(input.positionWS, normalWS);
+            half3 litSurface = surface.color.rgb * lighting;
+            half3 specularLighting = ComputeWaterSpecularLighting(input.positionWS, normalWS, viewDirWS);
 
             half foam = ComputeTopFoam(normalWS);
-            half3 foamColor = lerp(surface.color.rgb, half3(1.0h, 1.0h, 1.0h), saturate(foam * (half)_FoamIntensity));
+            half3 foamColor = lerp(litSurface, half3(1.0h, 1.0h, 1.0h), saturate(foam * (half)_FoamIntensity));
 
             half depthFade = ComputeDepthFade01(input.positionCS, input.positionWS);
             half depthFoam = saturate((1.0h - depthFade) * (half)_DepthFoamStrength);
@@ -401,7 +512,7 @@ Shader "Voxel/URP/VoxelWaterURP"
             half fresnel = pow(1.0h - saturate(dot(normalWS, viewDirWS)), (half)_SurfaceHighlightPower);
             half3 highlight = _SurfaceHighlightColor.rgb * fresnel * (half)_SurfaceHighlight;
 
-            half3 finalColor = surface.color.rgb + (foamColor - surface.color.rgb) * (half)0.45;
+            half3 finalColor = litSurface + specularLighting + (foamColor - litSurface) * (half)0.45;
             finalColor = lerp(finalColor, _DepthFoamColor.rgb, depthFoam);
             finalColor += highlight;
             finalColor = ApplyVoxelFog(finalColor, input.positionWS);
@@ -446,6 +557,10 @@ Shader "Voxel/URP/VoxelWaterURP"
             #pragma vertex ForwardVertex
             #pragma fragment ForwardFragment
             #pragma multi_compile_instancing
+            #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
+            #pragma multi_compile _ _ADDITIONAL_LIGHTS
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
+            #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             ENDHLSL
         }
 
@@ -485,6 +600,9 @@ Shader "Voxel/URP/VoxelWaterURP"
             {
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+
+                if (_CastShadows < 0.5)
+                    clip(-1.0h);
 
                 half distanceOpacity = ComputeDistanceOpacity(input.positionWS);
                 if (distanceOpacity <= 0.0001h)

@@ -146,6 +146,7 @@ public partial class World : MonoBehaviour
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
+        emissiveBlockLightController?.NotifyBlockChanged(worldPos, current, type);
 
         int terrainDirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, current, type);
         int chunksToRebuildCount = 0;
@@ -189,7 +190,12 @@ public partial class World : MonoBehaviour
         byte newOpacity = GetBlockOpacity(type);
         byte oldOpacity = GetBlockOpacity(current);
 
-        if (newEmission > 0)
+        if (oldEmission > 0 && newEmission > 0)
+        {
+            RemoveLightGlobal(worldPos);
+            PropagateLightGlobal(worldPos, newEmission);
+        }
+        else if (newEmission > 0)
         {
             PropagateLightGlobal(worldPos, newEmission);
         }

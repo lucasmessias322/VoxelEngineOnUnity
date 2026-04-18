@@ -501,6 +501,33 @@ public static partial class MeshGenerator
     }
 
     [BurstCompile]
+    private struct CopyGeneratedEmissionToLightVolumeJob : IJobParallelFor
+    {
+        [ReadOnly] public NativeArray<byte> sourceBlockTypes;
+        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
+        [NativeDisableParallelForRestriction] public NativeArray<byte> targetBlockEmission;
+
+        public int sourceVoxelSizeX;
+        public int targetVoxelSizeX;
+        public int targetVoxelPlaneSize;
+        public int sourceBorder;
+        public int targetBorder;
+
+        public void Execute(int index)
+        {
+            int x = index % sourceVoxelSizeX;
+            int temp = index / sourceVoxelSizeX;
+            int y = temp % SizeY;
+            int z = temp / SizeY;
+
+            int targetX = x + (targetBorder - sourceBorder);
+            int targetZ = z + (targetBorder - sourceBorder);
+            int targetIndex = targetX + y * targetVoxelSizeX + targetZ * targetVoxelPlaneSize;
+            targetBlockEmission[targetIndex] = lightEmissionByBlock[(int)sourceBlockTypes[index]];
+        }
+    }
+
+    [BurstCompile]
     private struct ApplyOpacityOverridesJob : IJob
     {
         [ReadOnly] public NativeArray<BlockEdit> overrides;
@@ -531,6 +558,41 @@ public static partial class MeshGenerator
 
                 int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
                 opacity[dstIndex] = effectiveOpacityByBlock[edit.type];
+            }
+        }
+    }
+
+    [BurstCompile]
+    private struct ApplyEmissionOverridesJob : IJob
+    {
+        [ReadOnly] public NativeArray<BlockEdit> overrides;
+        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
+        public NativeArray<byte> blockEmission;
+
+        public int chunkMinX;
+        public int chunkMinZ;
+        public int borderSize;
+        public int voxelSizeX;
+        public int voxelSizeZ;
+        public int voxelPlaneSize;
+
+        public void Execute()
+        {
+            for (int index = 0; index < overrides.Length; index++)
+            {
+                BlockEdit edit = overrides[index];
+                if (edit.y < 0 || edit.y >= SizeY)
+                    continue;
+                if (edit.type < 0 || edit.type >= lightEmissionByBlock.Length)
+                    continue;
+
+                int ix = edit.x - chunkMinX + borderSize;
+                int iz = edit.z - chunkMinZ + borderSize;
+                if (ix < 0 || ix >= voxelSizeX || iz < 0 || iz >= voxelSizeZ)
+                    continue;
+
+                int dstIndex = ix + edit.y * voxelSizeX + iz * voxelPlaneSize;
+                blockEmission[dstIndex] = lightEmissionByBlock[edit.type];
             }
         }
     }

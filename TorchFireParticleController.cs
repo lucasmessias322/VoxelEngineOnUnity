@@ -493,3 +493,488 @@ public sealed class TorchFireParticleController : MonoBehaviour
         scanCandidates.Clear();
     }
 }
+
+[DisallowMultipleComponent]
+[RequireComponent(typeof(World))]
+public sealed class EmissiveBlockLightController : MonoBehaviour
+{
+    [System.Serializable]
+    private struct EmissiveBlockLightOverride
+    {
+        public BlockType blockType;
+        public Color color;
+        [Min(0f)] public float intensity;
+        [Min(0.5f)] public float range;
+        [Range(0f, 1f)] public float shadowStrength;
+        public bool castShadows;
+        [Range(0f, 0.75f)] public float openFaceOffset;
+        public Vector3 localOffset;
+    }
+
+    private sealed class EmissiveLightInstance
+    {
+        public GameObject root;
+        public Light light;
+        public BlockType blockType;
+    }
+
+    private struct EmissiveLightCandidate
+    {
+        public Vector3Int position;
+        public BlockType blockType;
+        public byte emission;
+        public int distanceSqr;
+    }
+
+    private struct ResolvedLightStyle
+    {
+        public Color color;
+        public float intensity;
+        public float range;
+        public float shadowStrength;
+        public bool castShadows;
+        public float openFaceOffset;
+        public Vector3 localOffset;
+    }
+
+    [Header("Scan")]
+    [SerializeField, Min(0.05f)] private float scanInterval = 0.15f;
+    [SerializeField, Min(1)] private int horizontalScanRadius = 14;
+    [SerializeField, Min(1)] private int verticalScanRadius = 10;
+    [SerializeField, Min(1)] private int maxActiveLights = 8;
+    [SerializeField, Min(0)] private int maxShadowCastingLights = 1;
+    [SerializeField] private bool useCameraFallback = true;
+
+    [Header("Fallback Style")]
+    [SerializeField] private Color defaultLightColor = new Color(1f, 0.86f, 0.68f, 1f);
+    [SerializeField, Min(0.5f)] private float minLightRange = 4f;
+    [SerializeField, Min(0.5f)] private float maxLightRange = 9.5f;
+    [SerializeField, Min(0f)] private float minLightIntensity = 8f;
+    [SerializeField, Min(0f)] private float maxLightIntensity = 40f;
+    [SerializeField, Range(0f, 1f)] private float defaultShadowStrength = 0.8f;
+    [SerializeField] private bool defaultCastShadows = true;
+    [SerializeField, Range(0f, 0.75f)] private float defaultOpenFaceOffset = 0.56f;
+    [SerializeField] private Vector3 defaultLocalOffset = Vector3.zero;
+
+    [Header("Shadow Tuning")]
+    [SerializeField] private LightShadows shadowMode = LightShadows.Soft;
+    [SerializeField, Range(0.001f, 2f)] private float shadowBias = 0.05f;
+    [SerializeField, Range(0f, 3f)] private float shadowNormalBias = 0.35f;
+    [SerializeField, Range(0.01f, 1f)] private float shadowNearPlane = 0.2f;
+
+    [Header("Block Overrides")]
+    [SerializeField] private EmissiveBlockLightOverride[] lightOverrides = new[]
+    {
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.glowstone,
+            color = new Color(1f, 0.87f, 0.58f, 1f),
+            intensity = 34f,
+            range = 8.5f,
+            shadowStrength = 0.9f,
+            castShadows = true,
+            openFaceOffset = 0.62f,
+            localOffset = Vector3.zero
+        },
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.torch,
+            color = new Color(1f, 0.66f, 0.3f, 1f),
+            intensity = 20f,
+            range = 6.5f,
+            shadowStrength = 0.72f,
+            castShadows = true,
+            openFaceOffset = 0f,
+            localOffset = Vector3.zero
+        },
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.WallTorchEast,
+            color = new Color(1f, 0.66f, 0.3f, 1f),
+            intensity = 20f,
+            range = 6.5f,
+            shadowStrength = 0.72f,
+            castShadows = true,
+            openFaceOffset = 0f,
+            localOffset = Vector3.zero
+        },
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.WallTorchWest,
+            color = new Color(1f, 0.66f, 0.3f, 1f),
+            intensity = 20f,
+            range = 6.5f,
+            shadowStrength = 0.72f,
+            castShadows = true,
+            openFaceOffset = 0f,
+            localOffset = Vector3.zero
+        },
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.WallTorchSouth,
+            color = new Color(1f, 0.66f, 0.3f, 1f),
+            intensity = 20f,
+            range = 6.5f,
+            shadowStrength = 0.72f,
+            castShadows = true,
+            openFaceOffset = 0f,
+            localOffset = Vector3.zero
+        },
+        new EmissiveBlockLightOverride
+        {
+            blockType = BlockType.WallTorchNorth,
+            color = new Color(1f, 0.66f, 0.3f, 1f),
+            intensity = 20f,
+            range = 6.5f,
+            shadowStrength = 0.72f,
+            castShadows = true,
+            openFaceOffset = 0f,
+            localOffset = Vector3.zero
+        }
+    };
+
+    private readonly Dictionary<Vector3Int, EmissiveLightInstance> activeLights = new Dictionary<Vector3Int, EmissiveLightInstance>();
+    private readonly HashSet<Vector3Int> scannedPositions = new HashSet<Vector3Int>();
+    private readonly List<Vector3Int> pendingRemovals = new List<Vector3Int>();
+    private readonly List<EmissiveLightCandidate> scanCandidates = new List<EmissiveLightCandidate>(64);
+
+    private World world;
+    private Transform observer;
+    private float nextScanTime;
+    private Vector3Int lastObserverCell = new Vector3Int(int.MinValue, int.MinValue, int.MinValue);
+
+    private void Awake()
+    {
+        world = GetComponent<World>();
+    }
+
+    private void OnDisable()
+    {
+        ClearAllLights();
+    }
+
+    private void OnValidate()
+    {
+        maxShadowCastingLights = Mathf.Clamp(maxShadowCastingLights, 0, Mathf.Max(0, maxActiveLights));
+    }
+
+    private void Update()
+    {
+        if (!Application.isPlaying || world == null)
+            return;
+
+        ResolveObserver();
+        if (observer == null)
+        {
+            ClearAllLights();
+            return;
+        }
+
+        Vector3Int observerCell = Vector3Int.FloorToInt(observer.position);
+        bool observerMoved = observerCell != lastObserverCell;
+        if (!observerMoved && Time.time < nextScanTime)
+            return;
+
+        RefreshVisibleLights(observerCell);
+        lastObserverCell = observerCell;
+        nextScanTime = Time.time + Mathf.Max(0.05f, scanInterval);
+    }
+
+    public void NotifyBlockChanged(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        if (!Application.isPlaying || world == null)
+            return;
+
+        ResolveObserver();
+        if (observer == null)
+            return;
+
+        Vector3Int observerCell = Vector3Int.FloorToInt(observer.position);
+        bool wasTracked = activeLights.ContainsKey(worldPos);
+        if (!wasTracked && !IsWithinScanVolume(worldPos, observerCell))
+            return;
+
+        if (!TryGetEmissiveBlock(worldPos, out BlockType currentType, out byte emission))
+        {
+            RemoveLight(worldPos);
+            return;
+        }
+
+        EnsureLight(worldPos, currentType, emission, 0);
+    }
+
+    private void ResolveObserver()
+    {
+        if (world != null && world.player != null)
+        {
+            observer = world.player;
+            return;
+        }
+
+        if (useCameraFallback && Camera.main != null)
+        {
+            observer = Camera.main.transform;
+            return;
+        }
+
+        observer = null;
+    }
+
+    private void RefreshVisibleLights(Vector3Int observerCell)
+    {
+        scanCandidates.Clear();
+        scannedPositions.Clear();
+
+        int horizontalRadiusSqr = horizontalScanRadius * horizontalScanRadius;
+        for (int y = observerCell.y - verticalScanRadius; y <= observerCell.y + verticalScanRadius; y++)
+        {
+            if (y < 0 || y >= Chunk.SizeY)
+                continue;
+
+            for (int dz = -horizontalScanRadius; dz <= horizontalScanRadius; dz++)
+            {
+                for (int dx = -horizontalScanRadius; dx <= horizontalScanRadius; dx++)
+                {
+                    int horizontalDistanceSqr = dx * dx + dz * dz;
+                    if (horizontalDistanceSqr > horizontalRadiusSqr)
+                        continue;
+
+                    Vector3Int position = new Vector3Int(observerCell.x + dx, y, observerCell.z + dz);
+                    if (!TryGetEmissiveBlock(position, out BlockType blockType, out byte emission))
+                        continue;
+
+                    int dy = y - observerCell.y;
+                    scanCandidates.Add(new EmissiveLightCandidate
+                    {
+                        position = position,
+                        blockType = blockType,
+                        emission = emission,
+                        distanceSqr = horizontalDistanceSqr + dy * dy
+                    });
+                }
+            }
+        }
+
+        if (scanCandidates.Count > 1)
+        {
+            scanCandidates.Sort((a, b) =>
+            {
+                int emissionCompare = b.emission.CompareTo(a.emission);
+                return emissionCompare != 0 ? emissionCompare : a.distanceSqr.CompareTo(b.distanceSqr);
+            });
+        }
+
+        int limit = maxActiveLights > 0
+            ? Mathf.Min(maxActiveLights, scanCandidates.Count)
+            : scanCandidates.Count;
+
+        for (int i = 0; i < limit; i++)
+        {
+            EmissiveLightCandidate candidate = scanCandidates[i];
+            scannedPositions.Add(candidate.position);
+            EnsureLight(candidate.position, candidate.blockType, candidate.emission, i);
+        }
+
+        pendingRemovals.Clear();
+        foreach (KeyValuePair<Vector3Int, EmissiveLightInstance> entry in activeLights)
+        {
+            if (!scannedPositions.Contains(entry.Key))
+                pendingRemovals.Add(entry.Key);
+        }
+
+        for (int i = 0; i < pendingRemovals.Count; i++)
+            RemoveLight(pendingRemovals[i]);
+    }
+
+    private bool TryGetEmissiveBlock(Vector3Int worldPos, out BlockType blockType, out byte emission)
+    {
+        blockType = BlockType.Air;
+        emission = 0;
+
+        if (world == null || !world.TryGetLoadedBlockAt(worldPos, out blockType))
+            return false;
+
+        emission = world.GetBlockEmission(blockType);
+        return emission > 0;
+    }
+
+    private bool IsWithinScanVolume(Vector3Int worldPos, Vector3Int observerCell)
+    {
+        int dy = Mathf.Abs(worldPos.y - observerCell.y);
+        if (dy > verticalScanRadius)
+            return false;
+
+        int dx = worldPos.x - observerCell.x;
+        int dz = worldPos.z - observerCell.z;
+        return dx * dx + dz * dz <= horizontalScanRadius * horizontalScanRadius;
+    }
+
+    private void EnsureLight(Vector3Int blockPos, BlockType blockType, byte emission, int priorityIndex)
+    {
+        if (!activeLights.TryGetValue(blockPos, out EmissiveLightInstance instance) || instance == null || instance.root == null || instance.light == null)
+        {
+            instance = CreateLight(blockPos);
+            activeLights[blockPos] = instance;
+        }
+
+        instance.blockType = blockType;
+        UpdateLight(instance, blockPos, blockType, emission, priorityIndex);
+    }
+
+    private EmissiveLightInstance CreateLight(Vector3Int blockPos)
+    {
+        EmissiveLightInstance instance = new EmissiveLightInstance();
+        instance.root = new GameObject($"EmissiveBlockLight_{blockPos.x}_{blockPos.y}_{blockPos.z}");
+        instance.root.transform.SetParent(transform, false);
+        instance.light = instance.root.AddComponent<Light>();
+        instance.light.type = LightType.Point;
+        instance.light.lightmapBakeType = LightmapBakeType.Realtime;
+        instance.light.renderMode = LightRenderMode.ForcePixel;
+        instance.light.useColorTemperature = false;
+        return instance;
+    }
+
+    private void UpdateLight(EmissiveLightInstance instance, Vector3Int blockPos, BlockType blockType, byte emission, int priorityIndex)
+    {
+        ResolvedLightStyle style = ResolveLightStyle(blockType, emission);
+        instance.root.transform.position = ResolveLightWorldPosition(blockPos, blockType, style);
+
+        Light light = instance.light;
+        light.enabled = true;
+        light.color = style.color;
+        light.intensity = style.intensity;
+        light.range = style.range;
+
+        bool castShadows = style.castShadows && priorityIndex < maxShadowCastingLights;
+        light.shadows = castShadows ? shadowMode : LightShadows.None;
+        light.shadowStrength = style.shadowStrength;
+        light.shadowBias = shadowBias;
+        light.shadowNormalBias = shadowNormalBias;
+        light.shadowNearPlane = shadowNearPlane;
+    }
+
+    private ResolvedLightStyle ResolveLightStyle(BlockType blockType, byte emission)
+    {
+        if (TryGetOverride(blockType, out EmissiveBlockLightOverride lightOverride))
+        {
+            return new ResolvedLightStyle
+            {
+                color = lightOverride.color,
+                intensity = lightOverride.intensity,
+                range = lightOverride.range,
+                shadowStrength = lightOverride.shadowStrength,
+                castShadows = lightOverride.castShadows,
+                openFaceOffset = lightOverride.openFaceOffset,
+                localOffset = lightOverride.localOffset
+            };
+        }
+
+        float emission01 = Mathf.Clamp01(emission / 15f);
+        return new ResolvedLightStyle
+        {
+            color = defaultLightColor,
+            intensity = Mathf.Lerp(minLightIntensity, maxLightIntensity, emission01),
+            range = Mathf.Lerp(minLightRange, maxLightRange, emission01),
+            shadowStrength = defaultShadowStrength,
+            castShadows = defaultCastShadows,
+            openFaceOffset = defaultOpenFaceOffset,
+            localOffset = defaultLocalOffset
+        };
+    }
+
+    private bool TryGetOverride(BlockType blockType, out EmissiveBlockLightOverride lightOverride)
+    {
+        if (lightOverrides != null)
+        {
+            for (int i = 0; i < lightOverrides.Length; i++)
+            {
+                if (lightOverrides[i].blockType == blockType)
+                {
+                    lightOverride = lightOverrides[i];
+                    return true;
+                }
+            }
+        }
+
+        lightOverride = default;
+        return false;
+    }
+
+    private Vector3 ResolveLightWorldPosition(Vector3Int blockPos, BlockType blockType, ResolvedLightStyle style)
+    {
+        if (TorchPlacementUtility.IsTorchFireSource(blockType))
+            return TorchPlacementUtility.GetFireAnchorWorldPosition(blockPos, blockType) + style.localOffset;
+
+        Vector3 position = blockPos + new Vector3(0.5f, 0.5f, 0.5f);
+        BlockTextureMapping[] mappings = world != null && world.blockData != null ? world.blockData.mappings : null;
+        int mappingIndex = (int)blockType;
+        if (mappings != null && mappingIndex >= 0 && mappingIndex < mappings.Length)
+        {
+            BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(blockPos, blockType);
+            position = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mappings[mappingIndex], placementAxis).center;
+        }
+
+        Vector3 openDirection = ResolveOpenDirection(blockPos);
+        if (openDirection.sqrMagnitude > 0.0001f)
+            position += openDirection.normalized * style.openFaceOffset;
+        else if (style.openFaceOffset > 0f)
+            position += Vector3.up * style.openFaceOffset;
+
+        return position + style.localOffset;
+    }
+
+    private Vector3 ResolveOpenDirection(Vector3Int blockPos)
+    {
+        Vector3 direction = Vector3.zero;
+        int openSideCount = 0;
+
+        AccumulateOpenDirection(blockPos + Vector3Int.up, Vector3.up, ref direction, ref openSideCount);
+        AccumulateOpenDirection(blockPos + Vector3Int.down, Vector3.down, ref direction, ref openSideCount);
+        AccumulateOpenDirection(blockPos + Vector3Int.left, Vector3.left, ref direction, ref openSideCount);
+        AccumulateOpenDirection(blockPos + Vector3Int.right, Vector3.right, ref direction, ref openSideCount);
+        AccumulateOpenDirection(blockPos + Vector3Int.forward, Vector3.forward, ref direction, ref openSideCount);
+        AccumulateOpenDirection(blockPos + Vector3Int.back, Vector3.back, ref direction, ref openSideCount);
+
+        if (direction.sqrMagnitude <= 0.0001f && openSideCount > 0)
+            return Vector3.up;
+
+        return direction;
+    }
+
+    private void AccumulateOpenDirection(Vector3Int samplePos, Vector3 sampleDirection, ref Vector3 direction, ref int openSideCount)
+    {
+        BlockType sampleType = world != null ? world.GetBlockAt(samplePos) : BlockType.Air;
+        byte opacity = world != null ? world.GetBlockOpacity(sampleType) : (byte)0;
+        float openness = 1f - Mathf.Clamp01(opacity / 15f);
+        if (openness <= 0f)
+            return;
+
+        openSideCount++;
+        direction += sampleDirection * Mathf.Max(0.25f, openness);
+    }
+
+    private void RemoveLight(Vector3Int worldPos)
+    {
+        if (!activeLights.TryGetValue(worldPos, out EmissiveLightInstance instance))
+            return;
+
+        if (instance.root != null)
+            Destroy(instance.root);
+
+        activeLights.Remove(worldPos);
+    }
+
+    private void ClearAllLights()
+    {
+        foreach (KeyValuePair<Vector3Int, EmissiveLightInstance> entry in activeLights)
+        {
+            if (entry.Value != null && entry.Value.root != null)
+                Destroy(entry.Value.root);
+        }
+
+        activeLights.Clear();
+        scannedPositions.Clear();
+        pendingRemovals.Clear();
+        scanCandidates.Clear();
+    }
+}

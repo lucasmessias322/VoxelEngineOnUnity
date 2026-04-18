@@ -24,7 +24,13 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         _DirectionalStrength("Main Light Strength", Range(0.0, 2.0)) = 0.45
         _AdditionalLightsStrength("Additional Lights Strength", Range(0.0, 2.0)) = 0.35
         _WrapLighting("Wrap Lighting", Range(0.0, 1.0)) = 0.18
+        _Smoothness("Smoothness", Range(0.0, 1.0)) = 0.12
+        _SpecularStrength("Specular Strength", Range(0.0, 2.0)) = 0.08
+        [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
+        [ToggleUI] _CastShadows("Cast Shadows", Float) = 1.0
         _ShadowStrength("Shadow Strength", Range(0.0, 1.0)) = 1.0
+        _VoxelShadowBlend("Voxel Shadow Blend", Range(0.0, 1.0)) = 0.85
+        _VoxelShadowLightThreshold("Voxel Shadow Light Threshold", Range(0.0, 1.0)) = 0.97
         _AOStrength("Vertex AO Strength", Range(0.0, 2.0)) = 1.0
 
         [Header(Face Shading)]
@@ -107,7 +113,13 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             float _DirectionalStrength;
             float _AdditionalLightsStrength;
             float _WrapLighting;
+            float _Smoothness;
+            float _SpecularStrength;
+            float _ReceiveShadows;
+            float _CastShadows;
             float _ShadowStrength;
+            float _VoxelShadowBlend;
+            float _VoxelShadowLightThreshold;
             float _AOStrength;
             float _Top;
             float _Sides;
@@ -334,13 +346,14 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         half3 ComputeDynamicLighting(float3 positionWS, half3 normalWS)
         {
             half3 dynamicLighting = 0.0h;
+            half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
 
             Light mainLight = GetMainLight();
             #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
                 mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
             #endif
 
-            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, (half)_ShadowStrength);
+            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
             half mainDiffuse = ComputeWrappedDiffuse(normalWS, mainLight.direction);
             dynamicLighting += mainLight.color * mainDiffuse * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
 
@@ -350,11 +363,87 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 {
                     Light addLight = GetAdditionalLight(lightIndex, positionWS);
                     half addDiffuse = ComputeWrappedDiffuse(normalWS, addLight.direction);
-                    dynamicLighting += addLight.color * addDiffuse * addLight.distanceAttenuation * addLight.shadowAttenuation * (half)_AdditionalLightsStrength;
+                    half addShadow = lerp(1.0h, addLight.shadowAttenuation, receiveShadowStrength);
+                    dynamicLighting += addLight.color * addDiffuse * addLight.distanceAttenuation * addShadow * (half)_AdditionalLightsStrength;
                 }
             #endif
 
             return dynamicLighting;
+        }
+
+        half ComputeSpecularExponent()
+        {
+            return lerp(6.0h, 64.0h, saturate((half)_Smoothness));
+        }
+
+        half ComputeSpecularTerm(half3 normalWS, half3 viewDirWS, half3 lightDirectionWS)
+        {
+            half ndl = saturate(dot(normalWS, lightDirectionWS));
+            if (ndl <= 0.0001h)
+                return 0.0h;
+
+            half3 halfDir = SafeNormalize(lightDirectionWS + viewDirWS);
+            half ndh = saturate(dot(normalWS, halfDir));
+            half specExponent = ComputeSpecularExponent();
+            half normalization = (specExponent + 8.0h) * 0.125h;
+            half spec = pow(ndh, specExponent) * normalization;
+            spec *= lerp(0.55h, 1.0h, saturate((half)_Smoothness));
+            return spec * ndl * (half)_SpecularStrength;
+        }
+
+        half3 ComputeSpecularLighting(float3 positionWS, half3 normalWS, half3 viewDirWS)
+        {
+            half3 specularLighting = 0.0h;
+            half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
+
+            Light mainLight = GetMainLight();
+            #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
+                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+            #endif
+
+            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
+            half mainSpecular = ComputeSpecularTerm(normalWS, viewDirWS, mainLight.direction);
+            specularLighting += mainLight.color * mainSpecular * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
+
+            #if defined(_ADDITIONAL_LIGHTS)
+                uint lightCount = (uint)GetAdditionalLightsCount();
+                for (uint lightIndex = 0u; lightIndex < lightCount; ++lightIndex)
+                {
+                    Light addLight = GetAdditionalLight(lightIndex, positionWS);
+                    half addShadow = lerp(1.0h, addLight.shadowAttenuation, receiveShadowStrength);
+                    half addSpecular = ComputeSpecularTerm(normalWS, viewDirWS, addLight.direction);
+                    specularLighting += addLight.color * addSpecular * addLight.distanceAttenuation * addShadow * (half)_AdditionalLightsStrength;
+                }
+            #endif
+
+            return specularLighting;
+        }
+
+        half ComputeMainLightShadowFactor(float3 positionWS)
+        {
+            if (_ReceiveShadows <= 0.5)
+                return 1.0h;
+
+            Light mainLight = GetMainLight();
+            #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
+                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+            #endif
+
+            return lerp(1.0h, mainLight.shadowAttenuation, (half)_ShadowStrength);
+        }
+
+        half ApplyRealtimeShadowToVoxelLight(half voxelLight, half packedLight01, float3 positionWS)
+        {
+            // Packed voxel light currently mixes skylight and block light, so low thresholds
+            // will incorrectly shadow emissive lighting. Clamp to a safe range.
+            half voxelShadowThreshold = max((half)_VoxelShadowLightThreshold, 0.97h);
+            half shadowBlend = smoothstep(voxelShadowThreshold, 1.0h, saturate(packedLight01));
+            shadowBlend *= (half)_VoxelShadowBlend;
+            if (shadowBlend <= 0.0001h)
+                return voxelLight;
+
+            half mainShadow = ComputeMainLightShadowFactor(positionWS);
+            return lerp(voxelLight, voxelLight * mainShadow, shadowBlend);
         }
 
         half3 ApplyVoxelFog(half3 color, float3 positionWS)
@@ -673,10 +762,12 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             ApplySectionVisibilityMask(input.subchunkIndex);
 
             half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
+            half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - input.positionWS);
             half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
             half faceShade = ComputeFaceShade(normalWS);
             half voxelLight = max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength);
-            half environmentLight = saturate(voxelLight);
+            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, input.extra.x, input.positionWS);
+            half environmentLight = saturate(shadedVoxelLight);
             half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
 
             half tintMask = saturate(input.extra.y);
@@ -693,12 +784,13 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 albedo = baseAlbedo * (1.0h - overlayAlpha) + tintedOverlay * overlayAlpha;
             }
 
-            half3 lighting = voxelLight.xxx * faceShade;
+            half3 lighting = shadedVoxelLight.xxx * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;
             lighting += ComputeDynamicLighting(input.positionWS, normalWS) * environmentLight;
             lighting *= ao;
+            half3 specularLighting = ComputeSpecularLighting(input.positionWS, normalWS, viewDirWS) * lerp(1.0h, ao, 0.35h);
 
-            half3 finalColor = ApplyVoxelFog(albedo * lighting, input.positionWS);
+            half3 finalColor = ApplyVoxelFog(albedo * lighting + specularLighting, input.positionWS);
             return half4(finalColor, surface.alpha);
         }
 
@@ -736,6 +828,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             #pragma multi_compile_instancing
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile _ _ADDITIONAL_LIGHTS
+            #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
             #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             ENDHLSL
         }
@@ -787,6 +880,9 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             {
                 UNITY_SETUP_INSTANCE_ID(input);
                 UNITY_SETUP_STEREO_EYE_INDEX_POST_VERTEX(input);
+
+                if (_CastShadows < 0.5)
+                    clip(-1.0h);
 
                 SurfaceSample surface = SampleVoxelSurface(input.localUV, input.atlasOrigin, input.atlasSize);
                 ApplyVoxelAlphaClip(surface.alpha);
