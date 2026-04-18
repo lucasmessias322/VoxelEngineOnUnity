@@ -438,6 +438,64 @@ public static partial class MeshGenerator
             tris.Add(vIndex + 2);
         }
 
+        private struct VoxelLightChannels
+        {
+            public float sky;
+            public float block;
+
+            public VoxelLightChannels(float sky, float block)
+            {
+                this.sky = sky;
+                this.block = block;
+            }
+
+            public static VoxelLightChannels Max(VoxelLightChannels a, VoxelLightChannels b)
+            {
+                return new VoxelLightChannels(math.max(a.sky, b.sky), math.max(a.block, b.block));
+            }
+        }
+
+        private VoxelLightChannels GetSpecialMeshLightChannels01(
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            NativeArray<byte> light)
+        {
+            VoxelLightChannels channels = SampleSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
+            channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x, y + 1, z, voxelSizeX, voxelSizeZ, light));
+            channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x + 1, y, z, voxelSizeX, voxelSizeZ, light));
+            channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x - 1, y, z, voxelSizeX, voxelSizeZ, light));
+            channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x, y, z + 1, voxelSizeX, voxelSizeZ, light));
+            channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x, y, z - 1, voxelSizeX, voxelSizeZ, light));
+            return channels;
+        }
+
+        private VoxelLightChannels SampleSpecialMeshLightChannels01(
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            NativeArray<byte> light)
+        {
+            if ((uint)x >= (uint)voxelSizeX ||
+                (uint)y >= (uint)SizeY ||
+                (uint)z >= (uint)voxelSizeZ)
+            {
+                return default;
+            }
+
+            int voxelPlaneSize = voxelSizeX * SizeY;
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if ((uint)idx >= (uint)light.Length)
+                return default;
+
+            byte packed = light[idx];
+            return new VoxelLightChannels(GetSkyLight01(packed), GetBlockLight01(packed));
+        }
+
         private float GetSpecialMeshLight01(
             int x,
             int y,

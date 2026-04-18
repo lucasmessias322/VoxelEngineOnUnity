@@ -34,6 +34,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
         [ToggleUI] _CastShadows("Cast Shadows", Float) = 1.0
         _ShadowStrength("Shadow Strength", Range(0.0, 1.0)) = 1.0
+        _RealtimeShadowFillStrength("Realtime Shadow Fill Strength", Range(0.0, 1.0)) = 0.85
         _VoxelShadowBlend("Voxel Shadow Blend", Range(0.0, 1.0)) = 0.85
         _VoxelShadowLightThreshold("Voxel Shadow Light Threshold", Range(0.0, 1.0)) = 0.97
         _AOStrength("Vertex AO Strength", Range(0.0, 2.0)) = 1.0
@@ -127,6 +128,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             float _ReceiveShadows;
             float _CastShadows;
             float _ShadowStrength;
+            float _RealtimeShadowFillStrength;
             float _VoxelShadowBlend;
             float _VoxelShadowLightThreshold;
             float _AOStrength;
@@ -365,6 +367,11 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             return max(saturate(blockLight), saturate(skyLight) * (half)_VoxelSkyLightMultiplier);
         }
 
+        half ComputeVoxelDirectLightVisibility(half skyLight)
+        {
+            return saturate(skyLight * 64.0h);
+        }
+
         half ComputeWrappedDiffuse(half3 normalWS, half3 lightDirectionWS)
         {
             half wrap = saturate((half)_WrapLighting);
@@ -372,7 +379,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             return saturate((ndl + wrap) / (1.0h + wrap));
         }
 
-        half3 ComputeMainDynamicLighting(float3 positionWS, half3 normalWS)
+        half3 ComputeMainDynamicLighting(float3 positionWS, half3 normalWS, out half mainShadow)
         {
             half3 dynamicLighting = 0.0h;
             half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
@@ -382,11 +389,29 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
             #endif
 
-            half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
+            mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
             half mainDiffuse = ComputeWrappedDiffuse(normalWS, mainLight.direction);
             dynamicLighting += mainLight.color * mainDiffuse * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
 
             return dynamicLighting;
+        }
+
+        half ComputeRealtimeShadowFill(half mainShadow)
+        {
+            return lerp(1.0h, mainShadow, saturate((half)_RealtimeShadowFillStrength));
+        }
+
+        half ComputeVoxelLightWithRealtimeShadow(half skyLight, half blockLight, half realtimeShadowFill)
+        {
+            half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength * realtimeShadowFill;
+            half blockVoxelLight = saturate(blockLight) * (half)_VoxelLightStrength;
+            return max((half)_MinLight, max(skyVoxelLight, blockVoxelLight));
+        }
+
+        half ComputeSkyAmbientLight(half skyLight, half realtimeShadowFill)
+        {
+            half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength;
+            return saturate(skyVoxelLight * realtimeShadowFill);
         }
 
         half3 ComputeAdditionalDynamicLighting(float3 positionWS, float4 positionCS, half3 normalWS)
@@ -458,33 +483,6 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             #endif
 
             return specularLighting;
-        }
-
-        half ComputeMainLightShadowFactor(float3 positionWS)
-        {
-            if (_ReceiveShadows <= 0.5)
-                return 1.0h;
-
-            Light mainLight = GetMainLight();
-            #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
-                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
-            #endif
-
-            return lerp(1.0h, mainLight.shadowAttenuation, (half)_ShadowStrength);
-        }
-
-        half ApplyRealtimeShadowToVoxelLight(half voxelLight, half packedLight01, float3 positionWS)
-        {
-            // Packed voxel light currently mixes skylight and block light, so low thresholds
-            // will incorrectly shadow emissive lighting. Clamp to a safe range.
-            half voxelShadowThreshold = max((half)_VoxelShadowLightThreshold, 0.97h);
-            half shadowBlend = smoothstep(voxelShadowThreshold, 1.0h, saturate(packedLight01));
-            shadowBlend *= (half)_VoxelShadowBlend;
-            if (shadowBlend <= 0.0001h)
-                return voxelLight;
-
-            half mainShadow = ComputeMainLightShadowFactor(positionWS);
-            return lerp(voxelLight, voxelLight * mainShadow, shadowBlend);
         }
 
         half3 ApplyVoxelFog(half3 color, float3 positionWS)
@@ -832,20 +830,22 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - input.positionWS);
             half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
             half faceShade = ComputeFaceShade(normalWS);
-            half voxelLight01 = ResolveVoxelLight01(input.extra.x, input.blockLight);
-            half voxelLight = max((half)_MinLight, voxelLight01 * (half)_VoxelLightStrength);
-            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, voxelLight01, input.positionWS);
-            half environmentLight = saturate(shadedVoxelLight);
+            half skyLight01 = saturate(input.extra.x);
             half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
-            half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS);
+            half mainShadow;
+            half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS, mainShadow);
             half3 additionalDynamicLighting = ComputeAdditionalDynamicLighting(input.positionWS, input.positionCS, normalWS);
+            half realtimeShadowFill = ComputeRealtimeShadowFill(mainShadow);
+            half directLightVisibility = ComputeVoxelDirectLightVisibility(skyLight01);
+            half shadedVoxelLight = ComputeVoxelLightWithRealtimeShadow(skyLight01, input.blockLight, realtimeShadowFill);
+            half environmentLight = ComputeSkyAmbientLight(skyLight01, realtimeShadowFill);
 
             half3 lighting = shadedVoxelLight.xxx * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;
-            lighting += mainDynamicLighting * environmentLight;
+            lighting += mainDynamicLighting * directLightVisibility;
             lighting += additionalDynamicLighting;
             lighting *= ao;
-            half3 specularLighting = ComputeSpecularLighting(input.positionWS, input.positionCS, normalWS, viewDirWS) * lerp(1.0h, ao, 0.35h);
+            half3 specularLighting = ComputeSpecularLighting(input.positionWS, input.positionCS, normalWS, viewDirWS) * directLightVisibility * lerp(1.0h, ao, 0.35h);
 
             half3 emission = SampleVoxelEmission(input.localUV, input.atlasOrigin, input.atlasSize);
             half3 finalColor = ApplyVoxelFog(albedo * lighting + specularLighting + emission, input.positionWS);

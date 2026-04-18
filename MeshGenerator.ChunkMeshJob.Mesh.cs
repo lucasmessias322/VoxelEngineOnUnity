@@ -683,14 +683,34 @@ public static partial class MeshGenerator
 
         private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
-            byte l0 = SamplePackedLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            byte l1 = SamplePackedLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            byte l2 = SamplePackedLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-            byte l3 = SamplePackedLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            int sky = (LightUtils.GetSkyLight(l0) + LightUtils.GetSkyLight(l1) + LightUtils.GetSkyLight(l2) + LightUtils.GetSkyLight(l3) + 2) / 4;
-            int block = (LightUtils.GetBlockLight(l0) + LightUtils.GetBlockLight(l1) + LightUtils.GetBlockLight(l2) + LightUtils.GetBlockLight(l3) + 2) / 4;
+            byte l0 = SamplePackedLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            int sky = LightUtils.GetSkyLight(l0);
+            int block = LightUtils.GetBlockLight(l0);
+            int sampleCount = 1;
+
+            if (!s1)
+                AccumulatePackedLight(SamplePackedLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+
+            if (!s2)
+                AccumulatePackedLight(SamplePackedLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+
+            if (!s1 && !s2)
+                AccumulatePackedLight(SamplePackedLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+
+            sky = (sky + sampleCount / 2) / sampleCount;
+            block = (block + sampleCount / 2) / sampleCount;
             return LightUtils.PackLight((byte)sky, (byte)block);
+        }
+
+        private static void AccumulatePackedLight(byte packedLight, ref int sky, ref int block, ref int sampleCount)
+        {
+            sky += LightUtils.GetSkyLight(packedLight);
+            block += LightUtils.GetBlockLight(packedLight);
+            sampleCount++;
         }
 
         private byte SamplePackedLightValue(Vector3Int pos, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
