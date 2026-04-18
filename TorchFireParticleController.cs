@@ -813,7 +813,10 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         instance.root.transform.SetParent(transform, false);
         instance.light = instance.root.AddComponent<Light>();
         instance.light.type = LightType.Point;
+#if UNITY_EDITOR
+        // In Unity 6 player builds, this editor-only API is no longer available.
         instance.light.lightmapBakeType = LightmapBakeType.Realtime;
+#endif
         instance.light.renderMode = LightRenderMode.ForcePixel;
         instance.light.useColorTemperature = false;
         return instance;

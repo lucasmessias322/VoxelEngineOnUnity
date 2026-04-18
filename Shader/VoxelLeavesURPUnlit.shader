@@ -857,7 +857,8 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             {
                 half3 simpleVoxelLight = ComputeSimpleVoxelLightColor(input.extra.x, input.blockLight, input.blockLightColor);
                 half simpleAO = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
-                return half4(albedo * simpleVoxelLight * simpleAO, surface.alpha);
+                half3 simpleColor = ApplyVoxelFog(albedo * simpleVoxelLight * simpleAO, input.positionWS);
+                return half4(simpleColor, surface.alpha);
             }
 
             half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
