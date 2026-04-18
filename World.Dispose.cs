@@ -26,8 +26,8 @@ public partial class World
     private static void DisposeCompletedDataJobInputs(ref PendingData pd)
     {
         SafeDisposeNativeArray(ref pd.edits);
-        MeshGenerator.ReturnByteBuffer(ref pd.chunkLightData);
-        MeshGenerator.ReturnByteBuffer(ref pd.blockEmissionData);
+        MeshGenerator.ReturnUshortBuffer(ref pd.chunkLightData);
+        MeshGenerator.ReturnUshortBuffer(ref pd.blockEmissionData);
         MeshGenerator.ReturnByteBuffer(ref pd.lightOpacityData);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotVoxelData);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotLoadedChunks);
@@ -49,9 +49,9 @@ public partial class World
         MeshGenerator.ReturnByteBuffer(ref pd.blockPlacementAxes);
         MeshGenerator.ReturnByteBuffer(ref pd.knownVoxelData);
         MeshGenerator.ReturnBoolBuffer(ref pd.solids);
-        MeshGenerator.ReturnByteBuffer(ref pd.light);
-        MeshGenerator.ReturnByteBuffer(ref pd.chunkLightData);
-        MeshGenerator.ReturnByteBuffer(ref pd.blockEmissionData);
+        MeshGenerator.ReturnUshortBuffer(ref pd.light);
+        MeshGenerator.ReturnUshortBuffer(ref pd.chunkLightData);
+        MeshGenerator.ReturnUshortBuffer(ref pd.blockEmissionData);
         MeshGenerator.ReturnByteBuffer(ref pd.lightOpacityData);
         SafeDisposeNativeArray(ref pd.edits);
         MeshGenerator.ReturnByteBuffer(ref pd.fastRebuildSnapshotVoxelData);
@@ -132,7 +132,7 @@ public partial class World
         MeshGenerator.ReturnByteBuffer(ref pendingReturn.blockPlacementAxes);
         MeshGenerator.ReturnByteBuffer(ref pendingReturn.knownVoxelData);
         MeshGenerator.ReturnBoolBuffer(ref pendingReturn.solids);
-        MeshGenerator.ReturnByteBuffer(ref pendingReturn.light);
+        MeshGenerator.ReturnUshortBuffer(ref pendingReturn.light);
         MeshGenerator.ReturnBoolBuffer(ref pendingReturn.subchunkNonEmpty);
     }
 

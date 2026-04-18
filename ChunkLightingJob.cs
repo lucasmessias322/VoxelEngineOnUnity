@@ -11,10 +11,10 @@ public static class ChunkLighting
     {
         [ReadOnly] public NativeArray<byte> blockTypes;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
-        [ReadOnly] public NativeArray<byte> blockLightData;
-        [ReadOnly] public NativeArray<byte> blockEmissionData;
+        [ReadOnly] public NativeArray<ushort> blockLightData;
+        [ReadOnly] public NativeArray<ushort> blockEmissionData;
 
-        public NativeArray<byte> light;
+        public NativeArray<ushort> light;
         public bool enableHorizontalSkylight;
         public int horizontalSkylightStepLoss;
 
@@ -30,7 +30,7 @@ public static class ChunkLighting
         {
             NativeArray<byte> skyMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
             NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
-            NativeArray<byte> blockMap = new NativeArray<byte>(totalVoxels, Allocator.Temp);
+            NativeArray<ushort> blockMap = new NativeArray<ushort>(totalVoxels, Allocator.Temp);
             NativeQueue<int> blockQueue = new NativeQueue<int>(Allocator.Temp);
 
             // Step 1: vertical sun rays.
@@ -114,19 +114,26 @@ public static class ChunkLighting
 
             for (int i = 0; i < totalVoxels; i++)
             {
-                byte blockL = 0;
+                ushort blockL = 0;
                 if (blockLightData.IsCreated && i < blockLightData.Length)
                     blockL = blockLightData[i];
 
-                byte blockEmission = 0;
+                ushort blockEmission = 0;
                 if (blockEmissionData.IsCreated && i < blockEmissionData.Length)
                     blockEmission = blockEmissionData[i];
                 else if (i < blockTypes.Length)
-                    blockEmission = blockMappings[(int)blockTypes[i]].lightEmission;
+                {
+                    BlockTextureMapping mapping = blockMappings[(int)blockTypes[i]];
+                    blockEmission = LightUtils.PackEmission(
+                        mapping.lightEmission,
+                        mapping.lightColor.r,
+                        mapping.lightColor.g,
+                        mapping.lightColor.b);
+                }
 
-                byte initialBlockLight = (byte)math.max((int)blockL, (int)blockEmission);
+                ushort initialBlockLight = LightUtils.MaxBlockLight(blockL, blockEmission);
                 blockMap[i] = initialBlockLight;
-                if (initialBlockLight <= 1)
+                if (LightUtils.GetBlockLight(initialBlockLight) <= 1)
                     continue;
 
                 bool canPropagate = false;
@@ -148,8 +155,8 @@ public static class ChunkLighting
 
             while (blockQueue.TryDequeue(out int currentBlockIndex))
             {
-                byte currentLight = blockMap[currentBlockIndex];
-                if (currentLight <= 1)
+                ushort currentLight = blockMap[currentBlockIndex];
+                if (LightUtils.GetBlockLight(currentLight) <= 1)
                     continue;
 
                 int z = currentBlockIndex / voxelPlaneSize;
@@ -167,7 +174,14 @@ public static class ChunkLighting
 
             // Step 3: pack sky + block light.
             for (int i = 0; i < totalVoxels; i++)
-                light[i] = LightUtils.PackLight(skyMap[i], blockMap[i]);
+            {
+                ushort block = blockMap[i];
+                light[i] = LightUtils.PackLightRgb(
+                    skyMap[i],
+                    LightUtils.GetBlockLightR(block),
+                    LightUtils.GetBlockLightG(block),
+                    LightUtils.GetBlockLightB(block));
+            }
 
             skyMap.Dispose();
             lightQueue.Dispose();
@@ -217,23 +231,23 @@ public static class ChunkLighting
             }
         }
 
-        private bool CanImproveBlockNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> blockMap)
+        private bool CanImproveBlockNeighbor(int neighborIndex, ushort currentLight, NativeArray<ushort> blockMap)
         {
             byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
-            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
-            return propagatedLight > blockMap[neighborIndex];
+            ushort propagatedLight = LightUtils.AttenuateBlockLight(currentLight, lightLoss);
+            return LightUtils.IsBlockLightGreater(propagatedLight, blockMap[neighborIndex]);
         }
 
-        private void TryPropagateBlock(int neighborIndex, byte currentLight, NativeArray<byte> blockMap, NativeQueue<int> blockQueue)
+        private void TryPropagateBlock(int neighborIndex, ushort currentLight, NativeArray<ushort> blockMap, NativeQueue<int> blockQueue)
         {
             byte opacity = GetEffectiveOpacity(blockMappings[(int)blockTypes[neighborIndex]]);
             int lightLoss = 1 + opacity;
-            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            ushort propagatedLight = LightUtils.AttenuateBlockLight(currentLight, lightLoss);
 
-            if (propagatedLight > blockMap[neighborIndex])
+            if (LightUtils.IsBlockLightGreater(propagatedLight, blockMap[neighborIndex]))
             {
-                blockMap[neighborIndex] = propagatedLight;
+                blockMap[neighborIndex] = LightUtils.MaxBlockLight(blockMap[neighborIndex], propagatedLight);
                 blockQueue.Enqueue(neighborIndex);
             }
         }
@@ -244,10 +258,10 @@ public static class ChunkLighting
     public struct CroppedChunkLightingJob : IJob
     {
         [ReadOnly] public NativeArray<byte> opacity;
-        [ReadOnly] public NativeArray<byte> blockLightData;
-        [ReadOnly] public NativeArray<byte> blockEmissionData;
+        [ReadOnly] public NativeArray<ushort> blockLightData;
+        [ReadOnly] public NativeArray<ushort> blockEmissionData;
 
-        public NativeArray<byte> light;
+        public NativeArray<ushort> light;
         public bool enableHorizontalSkylight;
         public int horizontalSkylightStepLoss;
 
@@ -267,7 +281,7 @@ public static class ChunkLighting
         {
             NativeArray<byte> skyMap = new NativeArray<byte>(inputTotalVoxels, Allocator.Temp);
             NativeQueue<int> lightQueue = new NativeQueue<int>(Allocator.Temp);
-            NativeArray<byte> blockMap = new NativeArray<byte>(inputTotalVoxels, Allocator.Temp);
+            NativeArray<ushort> blockMap = new NativeArray<ushort>(inputTotalVoxels, Allocator.Temp);
             NativeQueue<int> blockQueue = new NativeQueue<int>(Allocator.Temp);
 
             for (int lx = 0; lx < inputVoxelSizeX; lx++)
@@ -343,17 +357,17 @@ public static class ChunkLighting
 
             for (int i = 0; i < inputTotalVoxels; i++)
             {
-                byte blockL = 0;
+                ushort blockL = 0;
                 if (blockLightData.IsCreated && i < blockLightData.Length)
                     blockL = blockLightData[i];
 
-                byte blockEmission = 0;
+                ushort blockEmission = 0;
                 if (blockEmissionData.IsCreated && i < blockEmissionData.Length)
                     blockEmission = blockEmissionData[i];
 
-                byte initialBlockLight = (byte)math.max((int)blockL, (int)blockEmission);
+                ushort initialBlockLight = LightUtils.MaxBlockLight(blockL, blockEmission);
                 blockMap[i] = initialBlockLight;
-                if (initialBlockLight <= 1)
+                if (LightUtils.GetBlockLight(initialBlockLight) <= 1)
                     continue;
 
                 int z = i / inputVoxelPlaneSize;
@@ -375,8 +389,8 @@ public static class ChunkLighting
 
             while (blockQueue.TryDequeue(out int currentBlockIndex))
             {
-                byte currentLight = blockMap[currentBlockIndex];
-                if (currentLight <= 1)
+                ushort currentLight = blockMap[currentBlockIndex];
+                if (LightUtils.GetBlockLight(currentLight) <= 1)
                     continue;
 
                 int z = currentBlockIndex / inputVoxelPlaneSize;
@@ -402,7 +416,12 @@ public static class ChunkLighting
                         int inputX = ox + outputOffsetX;
                         int inputIdx = inputX + y * inputVoxelSizeX + inputZ * inputVoxelPlaneSize;
                         int outputIdx = ox + y * outputVoxelSizeX + oz * outputVoxelPlaneSize;
-                        light[outputIdx] = LightUtils.PackLight(skyMap[inputIdx], blockMap[inputIdx]);
+                        ushort block = blockMap[inputIdx];
+                        light[outputIdx] = LightUtils.PackLightRgb(
+                            skyMap[inputIdx],
+                            LightUtils.GetBlockLightR(block),
+                            LightUtils.GetBlockLightG(block),
+                            LightUtils.GetBlockLightB(block));
                     }
                 }
             }
@@ -451,21 +470,21 @@ public static class ChunkLighting
             }
         }
 
-        private bool CanImproveBlockNeighbor(int neighborIndex, byte currentLight, NativeArray<byte> blockMap)
+        private bool CanImproveBlockNeighbor(int neighborIndex, ushort currentLight, NativeArray<ushort> blockMap)
         {
             int lightLoss = 1 + opacity[neighborIndex];
-            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
-            return propagatedLight > blockMap[neighborIndex];
+            ushort propagatedLight = LightUtils.AttenuateBlockLight(currentLight, lightLoss);
+            return LightUtils.IsBlockLightGreater(propagatedLight, blockMap[neighborIndex]);
         }
 
-        private void TryPropagateBlock(int neighborIndex, byte currentLight, NativeArray<byte> blockMap, NativeQueue<int> blockQueue)
+        private void TryPropagateBlock(int neighborIndex, ushort currentLight, NativeArray<ushort> blockMap, NativeQueue<int> blockQueue)
         {
             int lightLoss = 1 + opacity[neighborIndex];
-            byte propagatedLight = (byte)math.max(0, currentLight - lightLoss);
+            ushort propagatedLight = LightUtils.AttenuateBlockLight(currentLight, lightLoss);
 
-            if (propagatedLight > blockMap[neighborIndex])
+            if (LightUtils.IsBlockLightGreater(propagatedLight, blockMap[neighborIndex]))
             {
-                blockMap[neighborIndex] = propagatedLight;
+                blockMap[neighborIndex] = LightUtils.MaxBlockLight(blockMap[neighborIndex], propagatedLight);
                 blockQueue.Enqueue(neighborIndex);
             }
         }

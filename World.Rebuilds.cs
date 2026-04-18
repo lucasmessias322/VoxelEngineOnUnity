@@ -228,10 +228,10 @@ public partial class World
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> chunkLightData = default;
+        NativeArray<ushort> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = MeshGenerator.RentByteBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
+            chunkLightData = MeshGenerator.RentUshortBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
             if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
@@ -272,8 +272,8 @@ public partial class World
             out NativeArray<int> heightCache,
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
-            out NativeArray<byte> light,
-            out NativeArray<byte> blockEmissionData,
+            out NativeArray<ushort> light,
+            out NativeArray<ushort> blockEmissionData,
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty,
             out NativeArray<ulong> subchunkColliderOccupancy,

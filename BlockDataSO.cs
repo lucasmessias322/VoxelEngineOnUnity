@@ -1341,6 +1341,8 @@ public struct BlockTextureMapping
 
     public byte lightOpacity;  // 0..15 (0 = nao reduz, 15 = bloqueia)
     public byte lightEmission; // 0..15 (Glowstone = 15, Torch = 14)
+    [Tooltip("Cor RGB da luz emitida. Preto mantem compatibilidade e emite branco quando Light Emission > 0.")]
+    public Color lightColor;
 
     [Header("Biome Tinting")]
     [Tooltip("Aplica cor do bioma nesta face?")]

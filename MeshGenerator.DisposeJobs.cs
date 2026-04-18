@@ -17,7 +17,7 @@ public static partial class MeshGenerator
         [DeallocateOnJobCompletion] public NativeArray<byte> blockPlacementAxes;
         [DeallocateOnJobCompletion] public NativeArray<byte> knownVoxelData;
         [DeallocateOnJobCompletion] public NativeArray<bool> solids;
-        [DeallocateOnJobCompletion] public NativeArray<byte> light;
+        [DeallocateOnJobCompletion] public NativeArray<ushort> light;
         [DeallocateOnJobCompletion] public NativeArray<bool> subchunkNonEmpty; // ÃƒÂ¢Ã¢â‚¬Â Ã‚Â NOVO
         public void Execute() { }
     }

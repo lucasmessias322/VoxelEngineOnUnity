@@ -185,23 +185,26 @@ public partial class World : MonoBehaviour
             return;
         }
 
-        byte newEmission = GetBlockEmission(type);
-        byte oldEmission = GetBlockEmission(current);
+        ushort newEmission = GetBlockEmissionPacked(type);
+        ushort oldEmission = GetBlockEmissionPacked(current);
         byte newOpacity = GetBlockOpacity(type);
         byte oldOpacity = GetBlockOpacity(current);
 
-        if (oldEmission > 0 && newEmission > 0)
+        bool hadEmission = LightUtils.HasBlockLight(oldEmission);
+        bool hasEmission = LightUtils.HasBlockLight(newEmission);
+
+        if (hadEmission && hasEmission)
         {
-            RemoveLightGlobal(worldPos);
+            RemoveLightGlobal(worldPos, oldEmission);
             PropagateLightGlobal(worldPos, newEmission);
         }
-        else if (newEmission > 0)
+        else if (hasEmission)
         {
             PropagateLightGlobal(worldPos, newEmission);
         }
-        else if (oldEmission > 0)
+        else if (hadEmission)
         {
-            RemoveLightGlobal(worldPos);
+            RemoveLightGlobal(worldPos, oldEmission);
         }
         else
         {

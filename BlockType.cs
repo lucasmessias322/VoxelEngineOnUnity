@@ -57,6 +57,9 @@ public enum BlockType
     Anvil = 52,
     SolarPanel = 53,
     pipe = 54,
+    blueGowstone = 55,
+    redGowstone = 56,
+    
 }
 
 public static class FluidBlockUtility

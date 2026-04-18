@@ -1310,7 +1310,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (samplePos.y >= Chunk.SizeY)
             return 15;
 
-        if (world.TryGetRenderedBlockLightAt(samplePos, out byte renderedPackedLight))
+        if (world.TryGetRenderedBlockLightAt(samplePos, out ushort renderedPackedLight))
         {
             int renderedLight = Mathf.Max(
                 LightUtils.GetBlockLight(renderedPackedLight),
@@ -1319,7 +1319,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             return renderedLight;
         }
 
-        byte packedLight = world.GetGlobalBlockLightAt(samplePos);
+        ushort packedLight = world.GetGlobalBlockLightAt(samplePos);
         int blockLight = LightUtils.GetBlockLight(packedLight);
         int columnSkyLight = LightUtils.GetSkyLight(packedLight);
         int estimatedSkyLight = EstimateBreakVisualSkyLight(world, samplePos);

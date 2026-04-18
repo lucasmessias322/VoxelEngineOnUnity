@@ -27,6 +27,7 @@ public static partial class MeshGenerator
     private static readonly Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>> pooledTempDensitySettingsArrays = new Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>>();
     private static readonly Dictionary<int, Stack<NativeArray<TerrainColumnContext>>> pooledTempColumnContextArrays = new Dictionary<int, Stack<NativeArray<TerrainColumnContext>>>();
     private static readonly Dictionary<int, Stack<NativeArray<byte>>> pooledChunkByteArrays = new Dictionary<int, Stack<NativeArray<byte>>>();
+    private static readonly Dictionary<int, Stack<NativeArray<ushort>>> pooledChunkUshortArrays = new Dictionary<int, Stack<NativeArray<ushort>>>();
     private static readonly Dictionary<int, Stack<NativeArray<bool>>> pooledChunkBoolArrays = new Dictionary<int, Stack<NativeArray<bool>>>();
     private static readonly Dictionary<int, Stack<NativeArray<int>>> pooledChunkIntArrays = new Dictionary<int, Stack<NativeArray<int>>>();
     private static readonly Dictionary<int, Stack<NativeArray<ulong>>> pooledChunkUlongArrays = new Dictionary<int, Stack<NativeArray<ulong>>>();
@@ -63,6 +64,7 @@ public static partial class MeshGenerator
         DisposePooledNativeArrays(pooledTempDensitySettingsArrays);
         DisposePooledNativeArrays(pooledTempColumnContextArrays);
         DisposePooledNativeArrays(pooledChunkByteArrays);
+        DisposePooledNativeArrays(pooledChunkUshortArrays);
         DisposePooledNativeArrays(pooledChunkBoolArrays);
         DisposePooledNativeArrays(pooledChunkIntArrays);
         DisposePooledNativeArrays(pooledChunkUlongArrays);
@@ -95,6 +97,11 @@ public static partial class MeshGenerator
         return RentPooledNativeArray(pooledChunkByteArrays, length, clearMemory);
     }
 
+    public static NativeArray<ushort> RentUshortBuffer(int length, bool clearMemory = false)
+    {
+        return RentPooledNativeArray(pooledChunkUshortArrays, length, clearMemory);
+    }
+
     public static NativeArray<bool> RentBoolBuffer(int length, bool clearMemory = false)
     {
         return RentPooledNativeArray(pooledChunkBoolArrays, length, clearMemory);
@@ -118,6 +125,11 @@ public static partial class MeshGenerator
     public static void ReturnByteBuffer(ref NativeArray<byte> array)
     {
         ReturnPooledNativeArray(pooledChunkByteArrays, ref array);
+    }
+
+    public static void ReturnUshortBuffer(ref NativeArray<ushort> array)
+    {
+        ReturnPooledNativeArray(pooledChunkUshortArrays, ref array);
     }
 
     public static void ReturnBoolBuffer(ref NativeArray<bool> array)

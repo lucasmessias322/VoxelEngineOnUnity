@@ -91,21 +91,172 @@ public enum TreeLeafQualityMode : byte
 public static class LightUtils
 {
     // Junta as duas luzes (0-15) em um Ãºnico byte
-    public static byte PackLight(byte skyLight, byte blockLight)
+    public static ushort PackLight(byte skyLight, byte blockLight)
     {
-        return (byte)((skyLight << 4) | (blockLight & 0x0F));
+        return PackLightRgb(skyLight, blockLight, blockLight, blockLight);
     }
 
     // Extrai apenas a luz do cÃ©u (bits 4 a 7)
-    public static byte GetSkyLight(byte packedLight)
+    public static ushort PackLightRgb(byte skyLight, byte blockRed, byte blockGreen, byte blockBlue)
+    {
+        return (ushort)(
+            ((skyLight & 0x0F) << 12) |
+            ((blockRed & 0x0F) << 8) |
+            ((blockGreen & 0x0F) << 4) |
+            (blockBlue & 0x0F));
+    }
+
+    public static ushort PackBlockLight(byte blockLight)
+    {
+        return PackLight(0, blockLight);
+    }
+
+    public static ushort PackBlockLightRgb(byte blockRed, byte blockGreen, byte blockBlue)
+    {
+        return PackLightRgb(0, blockRed, blockGreen, blockBlue);
+    }
+
+    public static ushort PackEmission(byte emission, Color color)
+    {
+        return PackEmission(emission, color.r, color.g, color.b);
+    }
+
+    public static ushort PackEmission(byte emission, float r, float g, float b)
+    {
+        emission = ClampNibble(emission);
+        if (emission == 0)
+            return 0;
+
+        float maxComponent = math.max(r, math.max(g, b));
+        if (maxComponent <= 0.001f)
+        {
+            r = 1f;
+            g = 1f;
+            b = 1f;
+            maxComponent = 1f;
+        }
+
+        r = math.saturate(r / maxComponent);
+        g = math.saturate(g / maxComponent);
+        b = math.saturate(b / maxComponent);
+
+        return PackBlockLightRgb(
+            ScaleEmissionChannel(emission, r),
+            ScaleEmissionChannel(emission, g),
+            ScaleEmissionChannel(emission, b));
+    }
+
+    public static byte GetSkyLight(ushort packedLight)
+    {
+        return (byte)((packedLight >> 12) & 0x0F);
+    }
+
+    // Extrai apenas a luz dos blocos (bits 0 a 3)
+    public static byte GetBlockLightR(ushort packedLight)
+    {
+        return (byte)((packedLight >> 8) & 0x0F);
+    }
+
+    public static byte GetBlockLightG(ushort packedLight)
     {
         return (byte)((packedLight >> 4) & 0x0F);
     }
 
-    // Extrai apenas a luz dos blocos (bits 0 a 3)
-    public static byte GetBlockLight(byte packedLight)
+    public static byte GetBlockLightB(ushort packedLight)
     {
         return (byte)(packedLight & 0x0F);
+    }
+
+    private static byte MaxLightComponent(byte a, byte b)
+    {
+        return a >= b ? a : b;
+    }
+
+    private static byte MinLightComponent(byte a, byte b)
+    {
+        return a <= b ? a : b;
+    }
+
+    public static byte GetBlockLight(ushort packedLight)
+    {
+        return MaxLightComponent(
+            GetBlockLightR(packedLight),
+            MaxLightComponent(GetBlockLightG(packedLight), GetBlockLightB(packedLight)));
+    }
+
+    public static ushort GetBlockLightPacked(ushort packedLight)
+    {
+        return PackBlockLightRgb(GetBlockLightR(packedLight), GetBlockLightG(packedLight), GetBlockLightB(packedLight));
+    }
+
+    public static bool HasBlockLight(ushort packedLight)
+    {
+        return GetBlockLight(packedLight) > 0;
+    }
+
+    public static ushort MaxBlockLight(ushort a, ushort b)
+    {
+        return PackBlockLightRgb(
+            MaxLightComponent(GetBlockLightR(a), GetBlockLightR(b)),
+            MaxLightComponent(GetBlockLightG(a), GetBlockLightG(b)),
+            MaxLightComponent(GetBlockLightB(a), GetBlockLightB(b)));
+    }
+
+    public static ushort MinBlockLight(ushort a, ushort b)
+    {
+        return PackBlockLightRgb(
+            MinLightComponent(GetBlockLightR(a), GetBlockLightR(b)),
+            MinLightComponent(GetBlockLightG(a), GetBlockLightG(b)),
+            MinLightComponent(GetBlockLightB(a), GetBlockLightB(b)));
+    }
+
+    public static ushort MaxPackedLight(ushort a, ushort b)
+    {
+        return PackLightRgb(
+            MaxLightComponent(GetSkyLight(a), GetSkyLight(b)),
+            MaxLightComponent(GetBlockLightR(a), GetBlockLightR(b)),
+            MaxLightComponent(GetBlockLightG(a), GetBlockLightG(b)),
+            MaxLightComponent(GetBlockLightB(a), GetBlockLightB(b)));
+    }
+
+    public static bool IsBlockLightGreater(ushort candidate, ushort current)
+    {
+        return GetBlockLightR(candidate) > GetBlockLightR(current) ||
+               GetBlockLightG(candidate) > GetBlockLightG(current) ||
+               GetBlockLightB(candidate) > GetBlockLightB(current);
+    }
+
+    public static ushort AttenuateBlockLight(ushort packedBlockLight, int loss)
+    {
+        loss = math.max(0, loss);
+        return PackBlockLightRgb(
+            (byte)math.max(0, GetBlockLightR(packedBlockLight) - loss),
+            (byte)math.max(0, GetBlockLightG(packedBlockLight) - loss),
+            (byte)math.max(0, GetBlockLightB(packedBlockLight) - loss));
+    }
+
+    public static uint EncodeBlockLightColor32(ushort packedLight)
+    {
+        uint r = (uint)(GetBlockLightR(packedLight) * 17);
+        uint g = (uint)(GetBlockLightG(packedLight) * 17);
+        uint b = (uint)(GetBlockLightB(packedLight) * 17);
+        return r | (g << 8) | (b << 16) | (255u << 24);
+    }
+
+    public static uint EncodeWhiteBlockLightColor32(float blockLight01)
+    {
+        uint value = (uint)math.clamp((int)math.round(math.saturate(blockLight01) * 255f), 0, 255);
+        return value | (value << 8) | (value << 16) | (255u << 24);
+    }
+
+    private static byte ClampNibble(byte value)
+    {
+        return (byte)math.min(value, 15);
+    }
+
+    private static byte ScaleEmissionChannel(byte emission, float channel)
+    {
+        return (byte)math.clamp((int)math.round(emission * math.saturate(channel)), 0, 15);
     }
 }
 
@@ -503,7 +654,7 @@ public partial class World : MonoBehaviour
     private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>();
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
-    private Dictionary<Vector2Int, byte[]> globalLightColumns = new Dictionary<Vector2Int, byte[]>();
+    private Dictionary<Vector2Int, ushort[]> globalLightColumns = new Dictionary<Vector2Int, ushort[]>();
     // Misc
     private float offsetX, offsetZ;
     private int nextChunkGeneration = 0;
@@ -528,7 +679,7 @@ public partial class World : MonoBehaviour
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
     private NativeArray<BlockModelCuboid> cachedNativeBlockModelCuboids;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
-    private NativeArray<byte> cachedNativeLightEmissionByBlock;
+    private NativeArray<ushort> cachedNativeLightEmissionByBlock;
     private NativeArray<OreSpawnSettings> cachedNativeOreSettings;
     private NativeArray<TreeSpawnRuleData> cachedNativeTreeSpawnRules;
     private NativeArray<VegetationBillboardRuleData> cachedNativeVegetationBillboardRules;
@@ -574,8 +725,9 @@ public partial class World : MonoBehaviour
     private readonly List<VegetationBillboardRuleData> vegetationBillboardRuleBuildBuffer = new List<VegetationBillboardRuleData>(16);
     private readonly Queue<Vector3Int> propagateLightQueueBuffer = new Queue<Vector3Int>(256);
     private readonly Dictionary<Vector2Int, int> propagateDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
-    private readonly Queue<(Vector3Int pos, byte lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, byte)>(256);
+    private readonly Queue<(Vector3Int pos, ushort lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, ushort)>(256);
     private readonly Queue<Vector3Int> removeLightRefillQueueBuffer = new Queue<Vector3Int>(256);
+    private readonly Dictionary<Vector3Int, ushort> removeLightAffectedContributionsBuffer = new Dictionary<Vector3Int, ushort>(256);
     private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
     private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(256);
     private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>();
@@ -817,11 +969,11 @@ public partial class World : MonoBehaviour
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
         cachedNativeBlockModelCuboids = new NativeArray<BlockModelCuboid>(runtimeBlockModelCuboids, Allocator.Persistent);
         cachedNativeEffectiveLightOpacityByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
-        cachedNativeLightEmissionByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
+        cachedNativeLightEmissionByBlock = new NativeArray<ushort>(runtimeBlockMappings.Length, Allocator.Persistent);
         for (int i = 0; i < runtimeBlockMappings.Length; i++)
         {
             cachedNativeEffectiveLightOpacityByBlock[i] = ChunkLighting.GetEffectiveOpacity(runtimeBlockMappings[i]);
-            cachedNativeLightEmissionByBlock[i] = runtimeBlockMappings[i].lightEmission;
+            cachedNativeLightEmissionByBlock[i] = LightUtils.PackEmission(runtimeBlockMappings[i].lightEmission, runtimeBlockMappings[i].lightColor);
         }
         cachedNativeOreSettings = new NativeArray<OreSpawnSettings>(runtimeOreSettings, Allocator.Persistent);
         cachedNativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(runtimeTreeSpawnRules, Allocator.Persistent);
@@ -3203,7 +3355,7 @@ public partial class World : MonoBehaviour
     }
 
     private void InjectGlobalLightColumns(
-        NativeArray<byte> chunkLightData,
+        NativeArray<ushort> chunkLightData,
         int chunkMinX,
         int chunkMinZ,
         int borderSize,
@@ -3229,7 +3381,7 @@ public partial class World : MonoBehaviour
                 int wz = kv.Key.y;
                 if (wx < minWX || wx > maxWX || wz < minWZ || wz > maxWZ) continue;
 
-                byte[] column = kv.Value;
+                ushort[] column = kv.Value;
                 int padX = wx - chunkMinX + borderSize;
                 int padZ = wz - chunkMinZ + borderSize;
 
@@ -3249,7 +3401,7 @@ public partial class World : MonoBehaviour
             for (int wz = minWZ; wz <= maxWZ; wz++)
             {
                 var key = new Vector2Int(wx, wz);
-                if (!globalLightColumns.TryGetValue(key, out byte[] column)) continue;
+                if (!globalLightColumns.TryGetValue(key, out ushort[] column)) continue;
 
                 int padX = wx - chunkMinX + borderSize;
                 int padZ = wz - chunkMinZ + borderSize;
@@ -3507,10 +3659,10 @@ public partial class World : MonoBehaviour
         int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
         int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> chunkLightData = default;
+        NativeArray<ushort> chunkLightData = default;
         if (enableVoxelLighting)
         {
-            chunkLightData = MeshGenerator.RentByteBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
+            chunkLightData = MeshGenerator.RentUshortBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
             if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(chunkLightData, chunkMinX, chunkMinZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }
@@ -3546,8 +3698,8 @@ public partial class World : MonoBehaviour
             out NativeArray<int> heightCache,
             out NativeArray<byte> blockTypes,
             out NativeArray<bool> solids,
-            out NativeArray<byte> light,
-            out NativeArray<byte> blockEmissionData,
+            out NativeArray<ushort> light,
+            out NativeArray<ushort> blockEmissionData,
             out NativeArray<byte> lightOpacityData,
             out NativeArray<bool> subchunkNonEmpty,
             out NativeArray<ulong> subchunkColliderOccupancy,
@@ -3642,12 +3794,12 @@ public partial class World : MonoBehaviour
         NativeArray<byte> blockPlacementAxes = CreateDefaultPlacementAxisArray(copyTotalVoxels);
         NativeArray<byte> knownVoxelData = MeshGenerator.RentByteBuffer(copyTotalVoxels);
         NativeArray<bool> solids = MeshGenerator.RentBoolBuffer(copyTotalVoxels);
-        NativeArray<byte> light = MeshGenerator.RentByteBuffer(copyTotalVoxels);
+        NativeArray<ushort> light = MeshGenerator.RentUshortBuffer(copyTotalVoxels);
         NativeArray<bool> subchunkNonEmpty = MeshGenerator.RentBoolBuffer(Chunk.SubchunksPerColumn);
         NativeArray<ulong> subchunkColliderOccupancy = MeshGenerator.RentUlongBuffer(Chunk.SubchunksPerColumn * Chunk.ColliderOccupancyWordsPerSubchunk);
         NativeArray<byte> lightOpacityData = default;
-        NativeArray<byte> blockLightData = default;
-        NativeArray<byte> blockEmissionData = default;
+        NativeArray<ushort> blockLightData = default;
+        NativeArray<ushort> blockEmissionData = default;
         NativeArray<byte> snapshotVoxelData = MeshGenerator.RentByteBuffer(snapshotChunkCount * FastRebuildChunkVoxelCount);
         NativeArray<byte> snapshotLoadedChunks = MeshGenerator.RentByteBuffer(snapshotChunkCount);
         NativeArray<BlockEdit> nativeOverrides = BuildFastRebuildOverrideArray(coord, maxSnapshotBorder);
@@ -3668,8 +3820,8 @@ public partial class World : MonoBehaviour
         if (enableVoxelLighting)
         {
             lightOpacityData = MeshGenerator.RentByteBuffer(lightTotalVoxels);
-            blockLightData = MeshGenerator.RentByteBuffer(lightTotalVoxels, true);
-            blockEmissionData = MeshGenerator.RentByteBuffer(lightTotalVoxels, true);
+            blockLightData = MeshGenerator.RentUshortBuffer(lightTotalVoxels, true);
+            blockEmissionData = MeshGenerator.RentUshortBuffer(lightTotalVoxels, true);
             if (globalLightColumns.Count > 0)
                 InjectGlobalLightColumns(blockLightData, chunkMinX, chunkMinZ, lightBorderSize, lightVoxelSizeX, lightVoxelSizeZ, lightVoxelPlaneSize);
         }
@@ -3813,7 +3965,7 @@ public partial class World : MonoBehaviour
         }
         else
         {
-            byte fullBright = LightUtils.PackLight(15, 0);
+            ushort fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 

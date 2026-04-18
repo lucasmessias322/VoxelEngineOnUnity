@@ -36,24 +36,58 @@ public partial class World
         return 0;
     }
 
+    public ushort GetBlockEmissionPacked(BlockType type)
+    {
+        if (blockData != null && blockData.mappings != null)
+        {
+            int t = (int)type;
+            if (t >= 0 && t < blockData.mappings.Length)
+            {
+                BlockTextureMapping mapping = blockData.mappings[t];
+                return LightUtils.PackEmission(mapping.lightEmission, mapping.lightColor);
+            }
+        }
+        return 0;
+    }
+
+    public Color GetBlockEmissionColor(BlockType type)
+    {
+        if (blockData != null && blockData.mappings != null)
+        {
+            int t = (int)type;
+            if (t >= 0 && t < blockData.mappings.Length)
+            {
+                Color color = blockData.mappings[t].lightColor;
+                float maxComponent = Mathf.Max(color.r, Mathf.Max(color.g, color.b));
+                return maxComponent > 0.001f ? color : Color.white;
+            }
+        }
+        return Color.white;
+    }
+
+    private static ushort GetOverlappingBlockLight(ushort currentLight, ushort candidateLight)
+    {
+        return LightUtils.MinBlockLight(currentLight, candidateLight);
+    }
+
     #endregion
 
     #region Column Light Helpers (MUITO mais rápido)
 
-    private byte GetColumnLight(int worldX, int worldZ, int y)
+    private ushort GetColumnLight(int worldX, int worldZ, int y)
     {
         if (y < 0 || y >= Chunk.SizeY) return 0;
 
         var key = new Vector2Int(worldX, worldZ);
-        return globalLightColumns.TryGetValue(key, out byte[] column) ? column[y] : (byte)0;
+        return globalLightColumns.TryGetValue(key, out ushort[] column) ? column[y] : (ushort)0;
     }
 
-    public byte GetGlobalBlockLightAt(Vector3Int worldPos)
+    public ushort GetGlobalBlockLightAt(Vector3Int worldPos)
     {
         return GetColumnLight(worldPos.x, worldPos.z, worldPos.y);
     }
 
-    public bool TryGetRenderedBlockLightAt(Vector3Int worldPos, out byte packedLight)
+    public bool TryGetRenderedBlockLightAt(Vector3Int worldPos, out ushort packedLight)
     {
         packedLight = 0;
         if (worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
@@ -68,23 +102,23 @@ public partial class World
         return chunk.TryGetLightSnapshot(localX, worldPos.y, localZ, out packedLight);
     }
 
-    private void SetColumnLight(int worldX, int worldZ, int y, byte value)
+    private void SetColumnLight(int worldX, int worldZ, int y, ushort value)
     {
         if (y < 0 || y >= Chunk.SizeY) return;
 
         var key = new Vector2Int(worldX, worldZ);
 
-        if (!globalLightColumns.TryGetValue(key, out byte[] column))
+        if (!globalLightColumns.TryGetValue(key, out ushort[] column))
         {
             if (value == 0) return;
-            column = new byte[Chunk.SizeY];
+            column = new ushort[Chunk.SizeY];
             globalLightColumns[key] = column;
         }
 
         column[y] = value;
     }
 
-    private void SyncChunkBlockLightColumns(Vector2Int coord, NativeArray<byte> packedLight, int borderSize)
+    private void SyncChunkBlockLightColumns(Vector2Int coord, NativeArray<ushort> packedLight, int borderSize)
     {
         if (!packedLight.IsCreated)
             return;
@@ -104,21 +138,21 @@ public partial class World
                 int worldX = chunkMinX + lx;
                 int sampleX = lx + borderSize;
                 Vector2Int key = new Vector2Int(worldX, worldZ);
-                byte[] column = null;
+                ushort[] column = null;
                 bool hasAnyLight = false;
 
                 for (int y = 0; y < Chunk.SizeY; y++)
                 {
                     int idx = sampleX + y * voxelSizeX + sampleZ * voxelPlaneSize;
-                    byte blockLight = LightUtils.GetBlockLight(packedLight[idx]);
-                    if (blockLight > 0)
+                    ushort blockLight = LightUtils.GetBlockLightPacked(packedLight[idx]);
+                    if (LightUtils.HasBlockLight(blockLight))
                     {
                         hasAnyLight = true;
                         if (column == null)
                         {
                             if (!globalLightColumns.TryGetValue(key, out column))
                             {
-                                column = new byte[Chunk.SizeY];
+                                column = new ushort[Chunk.SizeY];
                                 globalLightColumns[key] = column;
                             }
                         }
@@ -137,7 +171,7 @@ public partial class World
         }
     }
 
-    private bool ChunkHasBoundaryBlockLight(NativeArray<byte> packedLight, int borderSize)
+    private bool ChunkHasBoundaryBlockLight(NativeArray<ushort> packedLight, int borderSize)
     {
         if (!packedLight.IsCreated)
             return false;
@@ -202,8 +236,8 @@ public partial class World
             if (!blockOverrides.TryGetValue(worldPos, out BlockType overrideType))
                 continue;
 
-            byte emission = GetBlockEmission(ResolveWaterStateForDebug(overrideType));
-            if (emission <= 0)
+            ushort emission = GetBlockEmissionPacked(ResolveWaterStateForDebug(overrideType));
+            if (!LightUtils.HasBlockLight(emission))
                 continue;
 
             PropagateLightGlobal(worldPos, emission, false);
@@ -217,7 +251,13 @@ public partial class World
 
     public void PropagateLightGlobal(Vector3Int startWorldPos, byte lightEmission, bool requestChunkRebuilds = true)
     {
+        PropagateLightGlobal(startWorldPos, LightUtils.PackBlockLight(lightEmission), requestChunkRebuilds);
+    }
+
+    public void PropagateLightGlobal(Vector3Int startWorldPos, ushort lightEmission, bool requestChunkRebuilds = true)
+    {
         if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
+        if (!LightUtils.HasBlockLight(lightEmission)) return;
 
         Queue<Vector3Int> lightQueue = propagateLightQueueBuffer;
         lightQueue.Clear();
@@ -234,7 +274,7 @@ public partial class World
             Vector3Int node = lightQueue.Dequeue();
 
             // Pega a luz atual da coluna
-            byte currentLight = GetColumnLight(node.x, node.z, node.y);
+            ushort currentLight = GetColumnLight(node.x, node.z, node.y);
 
             // Marca o chunk como sujo
             Vector2Int chunkCoord = new Vector2Int(
@@ -265,15 +305,13 @@ public partial class World
                     continue;
 
                 // Pega a luz do vizinho usando coluna
-                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                ushort neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                ushort candidateLight = LightUtils.AttenuateBlockLight(currentLight, 1 + opacity);
 
-                byte cost = (byte)(1 + opacity);
-                byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
-
-                if (candidateLight > neighborLight)
+                if (LightUtils.IsBlockLightGreater(candidateLight, neighborLight))
                 {
                     // Define a nova luz usando coluna
-                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
+                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, LightUtils.MaxBlockLight(neighborLight, candidateLight));
                     lightQueue.Enqueue(neighborPos);
                 }
             }
@@ -288,93 +326,184 @@ public partial class World
     }
     public void RemoveLightGlobal(Vector3Int startWorldPos)
     {
-        if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY) return;
+        RemoveLightGlobal(startWorldPos, GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y));
+    }
 
-        byte oldLight = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
-        if (oldLight == 0) return;
+    public void RemoveLightGlobal(Vector3Int startWorldPos, ushort removedEmission)
+    {
+        if (startWorldPos.y < 0 || startWorldPos.y >= Chunk.SizeY)
+            return;
+        if (!LightUtils.HasBlockLight(removedEmission))
+            return;
 
-        Queue<(Vector3Int pos, byte lightLevel)> darkQueue = removeLightDarkQueueBuffer;
+        Queue<(Vector3Int pos, ushort lightLevel)> darkQueue = removeLightDarkQueueBuffer;
         darkQueue.Clear();
         Queue<Vector3Int> refillQueue = removeLightRefillQueueBuffer;
         refillQueue.Clear();
+        Dictionary<Vector3Int, ushort> affectedContributions = removeLightAffectedContributionsBuffer;
+        affectedContributions.Clear();
         Dictionary<Vector2Int, int> dirtiedChunks = removeLightDirtyChunksBuffer;
         dirtiedChunks.Clear();
+        HashSet<Vector3Int> enqueued = refillLightEnqueuedBuffer;
+        enqueued.Clear();
         HashSet<Vector2Int> columnsToCleanup = cleanupLightColumnKeysBuffer;
         columnsToCleanup.Clear();
 
-        darkQueue.Enqueue((startWorldPos, oldLight));
-        SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, 0);
-        columnsToCleanup.Add(new Vector2Int(startWorldPos.x, startWorldPos.z));
+        darkQueue.Enqueue((startWorldPos, removedEmission));
 
         while (darkQueue.Count > 0)
         {
             var node = darkQueue.Dequeue();
-            Vector2Int chunkCoord = new Vector2Int(Mathf.FloorToInt((float)node.pos.x / Chunk.SizeX), Mathf.FloorToInt((float)node.pos.z / Chunk.SizeZ));
-            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.pos.y));
+            if (!LightUtils.HasBlockLight(node.lightLevel))
+                continue;
+
+            ushort currentNodeLight = GetColumnLight(node.pos.x, node.pos.z, node.pos.y);
+            ushort overlappingLight = GetOverlappingBlockLight(currentNodeLight, node.lightLevel);
+            if (!LightUtils.HasBlockLight(overlappingLight))
+                continue;
+
+            if (affectedContributions.TryGetValue(node.pos, out ushort previousContribution))
+            {
+                ushort mergedContribution = LightUtils.MaxBlockLight(previousContribution, overlappingLight);
+                if (mergedContribution == previousContribution)
+                    continue;
+
+                affectedContributions[node.pos] = mergedContribution;
+                overlappingLight = mergedContribution;
+            }
+            else
+            {
+                affectedContributions[node.pos] = overlappingLight;
+            }
 
             foreach (Vector3Int dir in sixDirections)
             {
                 Vector3Int neighborPos = node.pos + dir;
-                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY)
+                    continue;
 
                 Vector2Int neighborChunk = new Vector2Int(
                     Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
-                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
-                );
-                if (!IsChunkLoaded(neighborChunk)) continue;
+                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ));
+                if (!IsChunkLoaded(neighborChunk))
+                    continue;
 
-                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
-                if (neighborLight > 0)
+                BlockType neighborBlock = GetBlockAt(neighborPos);
+                byte opacity = GetBlockOpacity(neighborBlock);
+                if (opacity >= 15)
+                    continue;
+
+                ushort propagatedRemoval = LightUtils.AttenuateBlockLight(overlappingLight, 1 + opacity);
+                if (!LightUtils.HasBlockLight(propagatedRemoval))
+                    continue;
+
+                ushort neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                ushort neighborOverlap = GetOverlappingBlockLight(neighborLight, propagatedRemoval);
+                if (!LightUtils.HasBlockLight(neighborOverlap))
+                    continue;
+
+                if (affectedContributions.TryGetValue(neighborPos, out ushort previousNeighborContribution) &&
+                    !LightUtils.IsBlockLightGreater(neighborOverlap, previousNeighborContribution))
+                    continue;
+
+                darkQueue.Enqueue((neighborPos, neighborOverlap));
+            }
+        }
+
+        if (affectedContributions.Count == 0)
+        {
+            enqueued.Clear();
+            columnsToCleanup.Clear();
+            return;
+        }
+
+        foreach (var kv in affectedContributions)
+        {
+            Vector3Int pos = kv.Key;
+            SetColumnLight(pos.x, pos.z, pos.y, 0);
+            columnsToCleanup.Add(new Vector2Int(pos.x, pos.z));
+
+            Vector2Int chunkCoord = new Vector2Int(
+                Mathf.FloorToInt((float)pos.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)pos.z / Chunk.SizeZ));
+            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(pos.y));
+        }
+
+        foreach (var kv in affectedContributions)
+        {
+            Vector3Int pos = kv.Key;
+            BlockType blockAtPos = GetBlockAt(pos);
+            byte targetOpacity = GetBlockOpacity(blockAtPos);
+            ushort seededLight = GetBlockEmissionPacked(blockAtPos);
+
+            if (targetOpacity < 15)
+            {
+                foreach (Vector3Int dir in sixDirections)
                 {
-                    if (neighborLight < node.lightLevel)
-                    {
-                        SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, 0);
-                        columnsToCleanup.Add(new Vector2Int(neighborPos.x, neighborPos.z));
-                        darkQueue.Enqueue((neighborPos, neighborLight));
-                    }
-                    else if (neighborLight >= node.lightLevel)
-                    {
-                        refillQueue.Enqueue(neighborPos);
-                    }
+                    Vector3Int neighborPos = pos + dir;
+                    if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY)
+                        continue;
+
+                    if (affectedContributions.ContainsKey(neighborPos))
+                        continue;
+
+                    Vector2Int neighborChunk = new Vector2Int(
+                        Mathf.FloorToInt((float)neighborPos.x / Chunk.SizeX),
+                        Mathf.FloorToInt((float)neighborPos.z / Chunk.SizeZ));
+                    if (!IsChunkLoaded(neighborChunk))
+                        continue;
+
+                    ushort neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                    if (!LightUtils.HasBlockLight(neighborLight))
+                        continue;
+
+                    ushort candidateLight = LightUtils.AttenuateBlockLight(neighborLight, 1 + targetOpacity);
+                    seededLight = LightUtils.MaxBlockLight(seededLight, candidateLight);
                 }
             }
+
+            if (!LightUtils.HasBlockLight(seededLight))
+                continue;
+
+            SetColumnLight(pos.x, pos.z, pos.y, seededLight);
+            if (enqueued.Add(pos))
+                refillQueue.Enqueue(pos);
         }
 
         while (refillQueue.Count > 0)
         {
             Vector3Int node = refillQueue.Dequeue();
-            byte currentLight = GetColumnLight(node.x, node.z, node.y);
-
-            Vector2Int chunkCoord = new Vector2Int(
-                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
-                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
-            );
-            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
+            ushort currentLight = GetColumnLight(node.x, node.z, node.y);
+            if (!LightUtils.HasBlockLight(currentLight))
+                continue;
 
             foreach (Vector3Int dir in sixDirections)
             {
                 Vector3Int neighborPos = node + dir;
-                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY) continue;
+                if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY)
+                    continue;
+                if (!affectedContributions.ContainsKey(neighborPos))
+                    continue;
 
                 Vector2Int neighborChunk = new Vector2Int(
-                    Mathf.FloorToInt(neighborPos.x / Chunk.SizeX),
-                    Mathf.FloorToInt(neighborPos.z / Chunk.SizeZ)
-                );
-                if (!IsChunkLoaded(neighborChunk)) continue;
+                    Mathf.FloorToInt((float)neighborPos.x / Chunk.SizeX),
+                    Mathf.FloorToInt((float)neighborPos.z / Chunk.SizeZ));
+                if (!IsChunkLoaded(neighborChunk))
+                    continue;
 
                 BlockType neighborBlock = GetBlockAt(neighborPos);
                 byte opacity = GetBlockOpacity(neighborBlock);
-                if (opacity >= 15) continue;
+                if (opacity >= 15)
+                    continue;
 
-                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
-                byte cost = (byte)(1 + opacity);
-                byte candidateLight = (byte)Mathf.Max(0, currentLight - cost);
+                ushort neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                ushort candidateLight = LightUtils.AttenuateBlockLight(currentLight, 1 + opacity);
+                if (!LightUtils.IsBlockLightGreater(candidateLight, neighborLight))
+                    continue;
 
-                if (candidateLight > neighborLight)
-                {
-                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
+                SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, LightUtils.MaxBlockLight(neighborLight, candidateLight));
+                if (enqueued.Add(neighborPos))
                     refillQueue.Enqueue(neighborPos);
-                }
             }
         }
 
@@ -382,6 +511,8 @@ public partial class World
             RequestChunkRebuild(kv.Key, kv.Value, false);
 
         CleanupEmptyLightColumns(columnsToCleanup);
+        affectedContributions.Clear();
+        enqueued.Clear();
         columnsToCleanup.Clear();
     }
 
@@ -401,7 +532,7 @@ public partial class World
         byte startOpacity = GetBlockOpacity(startBlock);
         if (startOpacity < 15)
         {
-            byte bestAtStart = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
+            ushort bestAtStart = GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y);
 
             foreach (Vector3Int dir in sixDirections)
             {
@@ -414,21 +545,22 @@ public partial class World
                 );
                 if (!IsChunkLoaded(neighborChunk)) continue;
 
-                byte nLight = GetColumnLight(n.x, n.z, n.y);
-                if (nLight == 0) continue;
+                ushort nLight = GetColumnLight(n.x, n.z, n.y);
+                if (!LightUtils.HasBlockLight(nLight)) continue;
 
-                byte candidate = (byte)Mathf.Max(0, nLight - (1 + startOpacity));
-                if (candidate > bestAtStart) bestAtStart = candidate;
+                ushort candidate = LightUtils.AttenuateBlockLight(nLight, 1 + startOpacity);
+                if (LightUtils.IsBlockLightGreater(candidate, bestAtStart))
+                    bestAtStart = LightUtils.MaxBlockLight(bestAtStart, candidate);
             }
 
-            if (bestAtStart > GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y))
+            if (LightUtils.IsBlockLightGreater(bestAtStart, GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y)))
             {
                 SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, bestAtStart);
             }
         }
 
         // Seed queue with changed position and lit neighbors.
-        if (GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y) > 0)
+        if (LightUtils.HasBlockLight(GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y)))
         {
             refillQueue.Enqueue(startWorldPos);
             enqueued.Add(startWorldPos);
@@ -445,7 +577,7 @@ public partial class World
             );
             if (!IsChunkLoaded(neighborChunk)) continue;
 
-            if (GetColumnLight(n.x, n.z, n.y) > 0 && enqueued.Add(n))
+            if (LightUtils.HasBlockLight(GetColumnLight(n.x, n.z, n.y)) && enqueued.Add(n))
             {
                 refillQueue.Enqueue(n);
             }
@@ -454,8 +586,8 @@ public partial class World
         while (refillQueue.Count > 0)
         {
             Vector3Int node = refillQueue.Dequeue();
-            byte currentLight = GetColumnLight(node.x, node.z, node.y);
-            if (currentLight == 0) continue;
+            ushort currentLight = GetColumnLight(node.x, node.z, node.y);
+            if (!LightUtils.HasBlockLight(currentLight)) continue;
 
             Vector2Int chunkCoord = new Vector2Int(
                 Mathf.FloorToInt((float)node.x / Chunk.SizeX),
@@ -478,12 +610,12 @@ public partial class World
                 byte opacity = GetBlockOpacity(neighborBlock);
                 if (opacity >= 15) continue;
 
-                byte neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
-                byte candidateLight = (byte)Mathf.Max(0, currentLight - (1 + opacity));
+                ushort neighborLight = GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y);
+                ushort candidateLight = LightUtils.AttenuateBlockLight(currentLight, 1 + opacity);
 
-                if (candidateLight > neighborLight)
+                if (LightUtils.IsBlockLightGreater(candidateLight, neighborLight))
                 {
-                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, candidateLight);
+                    SetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y, LightUtils.MaxBlockLight(neighborLight, candidateLight));
                     if (enqueued.Add(neighborPos))
                     {
                         refillQueue.Enqueue(neighborPos);
@@ -526,7 +658,7 @@ public partial class World
         toRemove.Clear();
         foreach (Vector2Int key in candidateColumns)
         {
-            if (!globalLightColumns.TryGetValue(key, out byte[] column))
+            if (!globalLightColumns.TryGetValue(key, out ushort[] column))
                 continue;
 
             bool allZero = true;

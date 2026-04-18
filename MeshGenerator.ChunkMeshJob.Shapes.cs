@@ -334,6 +334,11 @@ public static partial class MeshGenerator
         {
             int vertexGlobalStart = vertices.Length;
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            ushort emissionPacked = LightUtils.PackEmission(
+                emission,
+                mapping.lightColor.r,
+                mapping.lightColor.g,
+                mapping.lightColor.b);
             ResolveAtlasRect(mapping, face, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
             AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, default, atlasSize);
             AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, default, atlasSize);
@@ -344,13 +349,14 @@ public static partial class MeshGenerator
             {
                 Vector3Int stepU = (corner == 1 || corner == 2) ? lightStepU : -lightStepU;
                 Vector3Int stepV = (corner == 2 || corner == 3) ? lightStepV : -lightStepV;
-                byte vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
+                ushort vertexLight = GetVertexLight(lightPlanePos, stepU, stepV, light, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
                 if (emission > 0)
-                    vertexLight = WithBlockLightAtLeast(vertexLight, emission);
+                    vertexLight = WithBlockLightAtLeast(vertexLight, emissionPacked);
 
                 PackedChunkVertex vertex = vertices[vertexGlobalStart + corner];
                 vertex.uv2 = new Vector4(GetSkyLight01(vertexLight), tint ? 1f : 0f, 1f, 0f);
                 vertex.uv3 = EncodeAtlasSizeWithBlockLight(atlasSize, vertexLight);
+                vertex.blockLightColor = LightUtils.EncodeBlockLightColor32(vertexLight);
                 vertices[vertexGlobalStart + corner] = vertex;
             }
 
@@ -461,7 +467,7 @@ public static partial class MeshGenerator
             int z,
             int voxelSizeX,
             int voxelSizeZ,
-            NativeArray<byte> light)
+            NativeArray<ushort> light)
         {
             VoxelLightChannels channels = SampleSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
             channels = VoxelLightChannels.Max(channels, SampleSpecialMeshLightChannels01(x, y + 1, z, voxelSizeX, voxelSizeZ, light));
@@ -478,7 +484,7 @@ public static partial class MeshGenerator
             int z,
             int voxelSizeX,
             int voxelSizeZ,
-            NativeArray<byte> light)
+            NativeArray<ushort> light)
         {
             if ((uint)x >= (uint)voxelSizeX ||
                 (uint)y >= (uint)SizeY ||
@@ -492,7 +498,7 @@ public static partial class MeshGenerator
             if ((uint)idx >= (uint)light.Length)
                 return default;
 
-            byte packed = light[idx];
+            ushort packed = light[idx];
             return new VoxelLightChannels(GetSkyLight01(packed), GetBlockLight01(packed));
         }
 
@@ -502,7 +508,7 @@ public static partial class MeshGenerator
             int z,
             int voxelSizeX,
             int voxelSizeZ,
-            NativeArray<byte> light)
+            NativeArray<ushort> light)
         {
             float light01 = SampleSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
             light01 = math.max(light01, SampleSpecialMeshLight01(x, y + 1, z, voxelSizeX, voxelSizeZ, light));
@@ -519,7 +525,7 @@ public static partial class MeshGenerator
             int z,
             int voxelSizeX,
             int voxelSizeZ,
-            NativeArray<byte> light)
+            NativeArray<ushort> light)
         {
             if ((uint)x >= (uint)voxelSizeX ||
                 (uint)y >= (uint)SizeY ||
@@ -536,7 +542,7 @@ public static partial class MeshGenerator
             return GetResolvedLight01(light[idx]);
         }
 
-        private float GetResolvedLight01(byte packed)
+        private float GetResolvedLight01(ushort packed)
         {
             byte lightValue = ResolvePackedLightValue(packed);
             return lightValue / 15f;

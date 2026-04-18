@@ -11,7 +11,7 @@ public static partial class MeshGenerator
 {
     private partial struct ChunkMeshJob
     {
-        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<byte> blockTypes, NativeArray<bool> solids, NativeArray<byte> light, float invAtlasTilesX, float invAtlasTilesY)
+        private void GenerateMesh(NativeArray<int> heightCache, NativeArray<byte> blockTypes, NativeArray<bool> solids, NativeArray<ushort> light, float invAtlasTilesX, float invAtlasTilesY)
         {
             int voxelSizeX = SizeX + 2 * border;
             int voxelSizeZ = SizeZ + 2 * border;
@@ -110,11 +110,11 @@ public static partial class MeshGenerator
                                     continue;
                                 }
 
-                                byte packed = outside
+                                ushort packed = outside
                                     ? LightUtils.PackLight(15, 0)
                                     : light[nx + ny * voxelSizeX + nz * voxelPlaneSize];
 
-                                byte faceLight = packed;
+                                ushort faceLight = packed;
 
                                 int aoPlaneN = n + normalSign;
                                 Vector3Int aoPos = new Vector3Int(
@@ -143,13 +143,17 @@ public static partial class MeshGenerator
                                     ao3 = GetVertexAO(aoPos, -stepU, stepV, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 }
 
-                                byte light0 = GetVertexLight(aoPos, -stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                byte light1 = GetVertexLight(aoPos, stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                byte light2 = GetVertexLight(aoPos, stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
-                                byte light3 = GetVertexLight(aoPos, -stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort light0 = GetVertexLight(aoPos, -stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort light1 = GetVertexLight(aoPos, stepU, -stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort light2 = GetVertexLight(aoPos, stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+                                ushort light3 = GetVertexLight(aoPos, -stepU, stepV, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
                                 if (IsEmissiveBlock(currentMapping))
                                 {
-                                    byte emission = currentMapping.lightEmission;
+                                    ushort emission = LightUtils.PackEmission(
+                                        currentMapping.lightEmission,
+                                        currentMapping.lightColor.r,
+                                        currentMapping.lightColor.g,
+                                        currentMapping.lightColor.b);
                                     light0 = WithBlockLightAtLeast(light0, emission);
                                     light1 = WithBlockLightAtLeast(light1, emission);
                                     light2 = WithBlockLightAtLeast(light2, emission);
@@ -293,10 +297,10 @@ public static partial class MeshGenerator
                                 byte ao1 = bottomRightFace.ao1;
                                 byte ao2 = topRightFace.ao2;
                                 byte ao3 = topLeftFace.ao3;
-                                byte light0 = bottomLeftFace.light0;
-                                byte light1 = bottomRightFace.light1;
-                                byte light2 = topRightFace.light2;
-                                byte light3 = topLeftFace.light3;
+                                ushort light0 = bottomLeftFace.light0;
+                                ushort light1 = bottomRightFace.light1;
+                                ushort light2 = topRightFace.light2;
+                                ushort light3 = topLeftFace.light3;
                                 float surfaceY0 = DecodeSurfaceY(bottomLeftFace.surfaceY0);
                                 float surfaceY1 = DecodeSurfaceY(bottomRightFace.surfaceY1);
                                 float surfaceY2 = DecodeSurfaceY(topRightFace.surfaceY2);
@@ -350,7 +354,7 @@ public static partial class MeshGenerator
                                         uvPlacementAxis);
 
                                     byte currentAO = l == 0 ? ao0 : (l == 1 ? ao1 : (l == 2 ? ao2 : ao3));
-                                    byte currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
+                                    ushort currentLight = l == 0 ? light0 : (l == 1 ? light1 : (l == 2 ? light2 : light3));
                                     float skyLight = GetSkyLight01(currentLight);
                                     float floatTint = tint ? 1f : 0f;
                                     float aoCurve = aoCurveExponent > 0f ? aoCurveExponent : DefaultAOCurveExponent;
@@ -364,7 +368,8 @@ public static partial class MeshGenerator
                                         uvCoord,
                                         atlasUv,
                                         new Vector4(skyLight, floatTint, floatAO, packedSubchunkAndOverlay),
-                                        EncodeAtlasSizeWithBlockLight(atlasSize, currentLight));
+                                        EncodeAtlasSizeWithBlockLight(atlasSize, currentLight),
+                                        LightUtils.EncodeBlockLightColor32(currentLight));
                                 }
 
                                 NativeList<int> tris = FluidBlockUtility.IsWater(bt)
@@ -681,39 +686,45 @@ public static partial class MeshGenerator
             return mapping.isSolid;
         }
 
-        private byte GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private ushort GetVertexLight(Vector3Int pos, Vector3Int d1, Vector3Int d2, NativeArray<ushort> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             bool s1 = IsOccluder(pos.x + d1.x, pos.y + d1.y, pos.z + d1.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
             bool s2 = IsOccluder(pos.x + d2.x, pos.y + d2.y, pos.z + d2.z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
-            byte l0 = SamplePackedLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            ushort l0 = SamplePackedLightValue(pos, light, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             int sky = LightUtils.GetSkyLight(l0);
-            int block = LightUtils.GetBlockLight(l0);
+            int blockR = LightUtils.GetBlockLightR(l0);
+            int blockG = LightUtils.GetBlockLightG(l0);
+            int blockB = LightUtils.GetBlockLightB(l0);
             int sampleCount = 1;
 
             if (!s1)
-                AccumulatePackedLight(SamplePackedLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+                AccumulatePackedLight(SamplePackedLightValue(pos + d1, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref blockR, ref blockG, ref blockB, ref sampleCount);
 
             if (!s2)
-                AccumulatePackedLight(SamplePackedLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+                AccumulatePackedLight(SamplePackedLightValue(pos + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref blockR, ref blockG, ref blockB, ref sampleCount);
 
             if (!s1 && !s2)
-                AccumulatePackedLight(SamplePackedLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref block, ref sampleCount);
+                AccumulatePackedLight(SamplePackedLightValue(pos + d1 + d2, light, voxelSizeX, voxelSizeZ, voxelPlaneSize), ref sky, ref blockR, ref blockG, ref blockB, ref sampleCount);
 
             sky = (sky + sampleCount / 2) / sampleCount;
-            block = (block + sampleCount / 2) / sampleCount;
-            return LightUtils.PackLight((byte)sky, (byte)block);
+            blockR = (blockR + sampleCount / 2) / sampleCount;
+            blockG = (blockG + sampleCount / 2) / sampleCount;
+            blockB = (blockB + sampleCount / 2) / sampleCount;
+            return LightUtils.PackLightRgb((byte)sky, (byte)blockR, (byte)blockG, (byte)blockB);
         }
 
-        private static void AccumulatePackedLight(byte packedLight, ref int sky, ref int block, ref int sampleCount)
+        private static void AccumulatePackedLight(ushort packedLight, ref int sky, ref int blockR, ref int blockG, ref int blockB, ref int sampleCount)
         {
             sky += LightUtils.GetSkyLight(packedLight);
-            block += LightUtils.GetBlockLight(packedLight);
+            blockR += LightUtils.GetBlockLightR(packedLight);
+            blockG += LightUtils.GetBlockLightG(packedLight);
+            blockB += LightUtils.GetBlockLightB(packedLight);
             sampleCount++;
         }
 
-        private byte SamplePackedLightValue(Vector3Int pos, NativeArray<byte> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
+        private ushort SamplePackedLightValue(Vector3Int pos, NativeArray<ushort> light, int voxelSizeX, int voxelSizeZ, int voxelPlaneSize)
         {
             if (pos.y < 0)
                 return 0;

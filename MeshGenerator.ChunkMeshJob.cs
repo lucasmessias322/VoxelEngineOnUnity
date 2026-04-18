@@ -22,7 +22,7 @@ public static partial class MeshGenerator
         [ReadOnly] public NativeArray<bool> solids;
         [ReadOnly] public NativeArray<BlockTextureMapping> blockMappings;
         [ReadOnly] public NativeArray<BlockModelCuboid> blockModelCuboids;
-        [ReadOnly] public NativeArray<byte> light;
+        [ReadOnly] public NativeArray<ushort> light;
         [ReadOnly] public NativeArray<int3> suppressedGrassBillboards;
         [ReadOnly] public NativeArray<VegetationBillboardRuleData> vegetationBillboardRules;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
@@ -84,7 +84,7 @@ public static partial class MeshGenerator
             public byte blockId;
             public byte placementAxis;
             public byte valid;
-            public byte faceLight;
+            public ushort faceLight;
             public uint mergeKey;
             public ulong uvRectKey;
             public ushort surfaceY0;
@@ -95,10 +95,10 @@ public static partial class MeshGenerator
             public byte ao1;
             public byte ao2;
             public byte ao3;
-            public byte light0;
-            public byte light1;
-            public byte light2;
-            public byte light3;
+            public ushort light0;
+            public ushort light1;
+            public ushort light2;
+            public ushort light3;
         }
 
         public void Execute()
@@ -170,6 +170,11 @@ public static partial class MeshGenerator
 
         private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector4 uv3)
         {
+            AddPackedVertex(position, normal, uv0, uv1, uv2, uv3, LightUtils.EncodeWhiteBlockLightColor32(uv3.z));
+        }
+
+        private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector4 uv3, uint blockLightColor)
+        {
             vertices.Add(new PackedChunkVertex
             {
                 position = position,
@@ -177,42 +182,44 @@ public static partial class MeshGenerator
                 uv0 = uv0,
                 uv1 = uv1,
                 uv2 = uv2,
-                uv3 = uv3
+                uv3 = uv3,
+                blockLightColor = blockLightColor
             });
         }
 
-        private byte ResolvePackedLightValue(byte packedLight)
+        private byte ResolvePackedLightValue(ushort packedLight)
         {
             int skyLight = LightUtils.GetSkyLight(packedLight);
             int blockLight = LightUtils.GetBlockLight(packedLight);
             return (byte)math.clamp(math.max(skyLight, blockLight), 0, 15);
         }
 
-        private static byte MaxPackedLight(byte a, byte b)
+        private static ushort MaxPackedLight(ushort a, ushort b)
         {
-            int skyLight = math.max((int)LightUtils.GetSkyLight(a), (int)LightUtils.GetSkyLight(b));
-            int blockLight = math.max((int)LightUtils.GetBlockLight(a), (int)LightUtils.GetBlockLight(b));
-            return LightUtils.PackLight((byte)skyLight, (byte)blockLight);
+            return LightUtils.MaxPackedLight(a, b);
         }
 
-        private static byte WithBlockLightAtLeast(byte packedLight, byte blockLight)
+        private static ushort WithBlockLightAtLeast(ushort packedLight, byte blockLight)
         {
-            int sky = LightUtils.GetSkyLight(packedLight);
-            int block = math.max((int)LightUtils.GetBlockLight(packedLight), (int)blockLight);
-            return LightUtils.PackLight((byte)sky, (byte)math.clamp(block, 0, 15));
+            return WithBlockLightAtLeast(packedLight, LightUtils.PackBlockLight(blockLight));
         }
 
-        private static float GetSkyLight01(byte packedLight)
+        private static ushort WithBlockLightAtLeast(ushort packedLight, ushort blockLight)
+        {
+            return LightUtils.MaxPackedLight(packedLight, blockLight);
+        }
+
+        private static float GetSkyLight01(ushort packedLight)
         {
             return LightUtils.GetSkyLight(packedLight) / 15f;
         }
 
-        private static float GetBlockLight01(byte packedLight)
+        private static float GetBlockLight01(ushort packedLight)
         {
             return LightUtils.GetBlockLight(packedLight) / 15f;
         }
 
-        private static Vector4 EncodeAtlasSizeWithBlockLight(Vector2 atlasSize, byte packedLight)
+        private static Vector4 EncodeAtlasSizeWithBlockLight(Vector2 atlasSize, ushort packedLight)
         {
             return new Vector4(atlasSize.x, atlasSize.y, GetBlockLight01(packedLight), 0f);
         }
@@ -645,7 +652,7 @@ public static partial class MeshGenerator
             return true;
         }
 
-        private static byte GetRectVertexLight(
+        private static ushort GetRectVertexLight(
             NativeArray<GreedyFaceData> mask,
             int sizeU,
             int startI,
@@ -674,8 +681,10 @@ public static partial class MeshGenerator
             int height,
             bool flipTriangle)
         {
-            return MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, true) &&
-                   MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, false);
+            return MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, 0) &&
+                   MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, 1) &&
+                   MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, 2) &&
+                   MatchesQuadInterpolationForLightChannel(mask, sizeU, startI, startJ, width, height, flipTriangle, 3);
         }
 
         private static bool MatchesQuadInterpolationForLightChannel(
@@ -686,22 +695,22 @@ public static partial class MeshGenerator
             int width,
             int height,
             bool flipTriangle,
-            bool skyChannel)
+            int channel)
         {
             if (width <= 0 || height <= 0)
                 return false;
 
             int scale = width * height;
-            int light00 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0), skyChannel);
-            int light10 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0), skyChannel);
-            int light11 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height), skyChannel);
-            int light01 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height), skyChannel);
+            int light00 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, 0), channel);
+            int light10 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, 0), channel);
+            int light11 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, width, height), channel);
+            int light01 = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, 0, height), channel);
 
             for (int y = 0; y <= height; y++)
             {
                 for (int x = 0; x <= width; x++)
                 {
-                    int actual = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, x, y), skyChannel);
+                    int actual = GetPackedLightChannel(GetRectVertexLight(mask, sizeU, startI, startJ, width, height, x, y), channel);
                     int expectedScaled;
 
                     if (!flipTriangle)
@@ -743,12 +752,18 @@ public static partial class MeshGenerator
             return true;
         }
 
-        private static int GetPackedLightChannel(byte packedLight, bool skyChannel)
+        private static int GetPackedLightChannel(ushort packedLight, int channel)
         {
-            return skyChannel ? LightUtils.GetSkyLight(packedLight) : LightUtils.GetBlockLight(packedLight);
+            switch (channel)
+            {
+                case 0: return LightUtils.GetSkyLight(packedLight);
+                case 1: return LightUtils.GetBlockLightR(packedLight);
+                case 2: return LightUtils.GetBlockLightG(packedLight);
+                default: return LightUtils.GetBlockLightB(packedLight);
+            }
         }
 
-        private static int GetPackedLightBrightness(byte packedLight)
+        private static int GetPackedLightBrightness(ushort packedLight)
         {
             return math.max((int)LightUtils.GetSkyLight(packedLight), (int)LightUtils.GetBlockLight(packedLight));
         }

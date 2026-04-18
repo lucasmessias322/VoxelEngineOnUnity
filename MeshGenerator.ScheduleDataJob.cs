@@ -14,7 +14,7 @@ public static partial class MeshGenerator
         NativeArray<NoiseLayer> noiseLayers,
         NativeArray<BlockTextureMapping> blockMappings,
         NativeArray<byte> effectiveOpacityByBlock,
-        NativeArray<byte> lightEmissionByBlock,
+        NativeArray<ushort> lightEmissionByBlock,
         int baseHeight,
         float globalOffsetX,
         float globalOffsetZ,
@@ -40,7 +40,7 @@ public static partial class MeshGenerator
         bool enableVoxelLighting,
         bool enableHorizontalSkylight,
         int horizontalSkylightStepLoss,
-        NativeArray<byte> lightData,
+        NativeArray<ushort> lightData,
         NativeArray<byte> chunkVoxelSnapshot,
         out JobHandle dataHandle,
         out JobHandle terrainDataHandle,
@@ -48,8 +48,8 @@ public static partial class MeshGenerator
         out NativeArray<int> heightCache,
         out NativeArray<byte> blockTypes,
         out NativeArray<bool> solids,
-        out NativeArray<byte> light,
-        out NativeArray<byte> blockEmissionData,
+        out NativeArray<ushort> light,
+        out NativeArray<ushort> blockEmissionData,
         out NativeArray<byte> lightOpacityData,
         out NativeArray<bool> subchunkNonEmpty,
         out NativeArray<ulong> subchunkColliderOccupancy,
@@ -93,7 +93,7 @@ public static partial class MeshGenerator
         blockTypes = RentByteBuffer(dataTotalVoxels);
         solids = RentBoolBuffer(dataTotalVoxels);
         NativeArray<bool> baseTerrainSolids = new NativeArray<bool>(dataTotalVoxels, Allocator.Persistent);
-        light = RentByteBuffer(dataTotalVoxels);
+        light = RentUshortBuffer(dataTotalVoxels);
         blockEmissionData = default;
         lightOpacityData = default;
         NativeArray<byte> sharedSpaghettiCarveMask = new NativeArray<byte>(0, Allocator.Persistent);
@@ -343,7 +343,7 @@ public static partial class MeshGenerator
                 borderSize = dataBorderSize
             };
             JobHandle snapshotHandle = snapshotJob.Schedule(finalChunkDataHandle);
-            byte fullBright = LightUtils.PackLight(15, 0);
+            ushort fullBright = LightUtils.PackLight(15, 0);
             for (int i = 0; i < light.Length; i++)
                 light[i] = fullBright;
 
@@ -366,7 +366,7 @@ public static partial class MeshGenerator
             return;
         }
 
-        blockEmissionData = RentByteBuffer(lightTotalVoxels, true);
+        blockEmissionData = RentUshortBuffer(lightTotalVoxels, true);
         lightOpacityData = RentByteBuffer(lightTotalVoxels);
         NativeArray<int> lightHeightCache = new NativeArray<int>(lightTotalHeightPoints, Allocator.Persistent);
         var lightHeightJob = new HeightmapJob

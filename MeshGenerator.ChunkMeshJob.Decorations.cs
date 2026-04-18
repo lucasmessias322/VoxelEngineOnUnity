@@ -28,7 +28,7 @@ public static partial class MeshGenerator
 
         private void GenerateDecorativeMeshes(
             NativeArray<byte> blockTypes,
-            NativeArray<byte> light,
+            NativeArray<ushort> light,
             float invAtlasTilesX,
             float invAtlasTilesY)
         {
@@ -279,7 +279,7 @@ public static partial class MeshGenerator
                         float billboardHeight = VegetationBillboardUtility.ComputeHeight(grassBillboardHeight, variationHash);
                         float billboardHalfWidth = VegetationBillboardUtility.ComputeHalfWidth(variationHash);
                         float centerYOffset = VegetationBillboardUtility.ComputeBaseYOffset(variationHash);
-                        byte packed = light[upIdx];
+                        ushort packed = light[upIdx];
                         float skyLight01 = GetSkyLight01(packed);
                         float blockLight01 = GetBlockLight01(packed);
                         Vector3 center = new Vector3((x - border) + 0.5f + jx, py + centerYOffset, (z - border) + 0.5f + jz);
@@ -294,7 +294,7 @@ public static partial class MeshGenerator
             int y,
             int z,
             NativeArray<byte> blockTypes,
-            NativeArray<byte> light,
+            NativeArray<ushort> light,
             int voxelSizeX,
             int voxelSizeZ,
             int voxelPlaneSize,
@@ -334,7 +334,7 @@ public static partial class MeshGenerator
             int x,
             int y,
             int z,
-            NativeArray<byte> light,
+            NativeArray<ushort> light,
             int voxelSizeX,
             int voxelSizeZ,
             Vector2 atlasUv,

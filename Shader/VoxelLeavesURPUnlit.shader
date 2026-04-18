@@ -225,6 +225,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
         {
             float4 positionOS : POSITION;
             float3 normalOS : NORMAL;
+            half4 blockLightColor : COLOR;
             float2 uv0 : TEXCOORD0;
             float2 uv1 : TEXCOORD1;
             float4 uv2 : TEXCOORD2;
@@ -246,6 +247,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 tintColor : TEXCOORD6;
             half subchunkIndex : TEXCOORD7;
             half blockLight : TEXCOORD8;
+            half3 blockLightColor : TEXCOORD9;
             UNITY_VERTEX_INPUT_INSTANCE_ID
             UNITY_VERTEX_OUTPUT_STEREO
         };
@@ -361,6 +363,20 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             return max(saturate(blockLight), saturate(skyLight) * (half)_VoxelSkyLightMultiplier);
         }
 
+        half3 ResolveBlockLightColor(half blockLight, half3 blockLightColor)
+        {
+            half hasColor = step(0.0001h, dot(blockLightColor, half3(1.0h, 1.0h, 1.0h)));
+            return lerp(blockLight.xxx, saturate(blockLightColor), hasColor);
+        }
+
+        half3 ComputeSimpleVoxelLightColor(half skyLight, half blockLight, half3 blockLightColor)
+        {
+            half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength;
+            half3 resolvedBlockLight = ResolveBlockLightColor(blockLight, blockLightColor) * (half)_VoxelLightStrength;
+            half minLight = (half)_MinLight;
+            return saturate(max(half3(minLight, minLight, minLight), max(skyVoxelLight.xxx, resolvedBlockLight)));
+        }
+
         half ComputeVoxelDirectLightVisibility(half skyLight)
         {
             return saturate(skyLight * 64.0h);
@@ -401,6 +417,14 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength * realtimeShadowFill;
             half blockVoxelLight = saturate(blockLight) * (half)_VoxelLightStrength;
             return max((half)_MinLight, max(skyVoxelLight, blockVoxelLight));
+        }
+
+        half3 ComputeVoxelLightColorWithRealtimeShadow(half skyLight, half blockLight, half3 blockLightColor, half realtimeShadowFill)
+        {
+            half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength * realtimeShadowFill;
+            half3 resolvedBlockLight = ResolveBlockLightColor(blockLight, blockLightColor) * (half)_VoxelLightStrength;
+            half minLight = (half)_MinLight;
+            return max(half3(minLight, minLight, minLight), max(skyVoxelLight.xxx, resolvedBlockLight));
         }
 
         half ComputeSkyAmbientLight(half skyLight, half realtimeShadowFill)
@@ -695,7 +719,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             normalWS = normalize(normalWS + half3(offsetXZ.x, 0.0, offsetXZ.y) * (half)(0.22 * finalMask));
         }
 
-        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out float2 atlasSize, out half3 extra, out half3 tintColor, out half subchunkIndex, out half blockLight)
+        void ResolveVoxelVertexData(Attributes input, out float3 positionWS, out half3 normalWS, out float2 localUV, out float2 atlasOrigin, out float2 atlasSize, out half3 extra, out half3 tintColor, out half subchunkIndex, out half blockLight, out half3 blockLightColor)
         {
             positionWS = 0.0.xxx;
             normalWS = half3(0.0h, 1.0h, 0.0h);
@@ -706,6 +730,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             tintColor = half3(1.0h, 1.0h, 1.0h);
             subchunkIndex = 0.0h;
             blockLight = 0.0h;
+            blockLightColor = 0.0h.xxx;
 
             if (_UseCompactOpaqueFaces > 0.5)
             {
@@ -790,6 +815,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             atlasOrigin = input.uv1;
             atlasSize = input.uv3.xy;
             blockLight = saturate((half)input.uv3.z);
+            blockLightColor = saturate(input.blockLightColor.rgb);
             extra = saturate(input.uv2.xyz);
             half3 foliageTint = ResolveFolliageTintByWorldPosition(positionWS);
             half tintMask = saturate(input.uv2.y);
@@ -810,7 +836,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             UNITY_TRANSFER_INSTANCE_ID(input, output);
             UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.atlasSize, output.extra, output.tintColor, output.subchunkIndex, output.blockLight);
+            ResolveVoxelVertexData(input, output.positionWS, output.normalWS, output.localUV, output.atlasOrigin, output.atlasSize, output.extra, output.tintColor, output.subchunkIndex, output.blockLight, output.blockLightColor);
             output.positionCS = TransformWorldToHClip(output.positionWS);
             return output;
         }
@@ -829,8 +855,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
             if (_EnableRealisticShader <= 0.5)
             {
-                half voxelLight01 = ResolveVoxelLight01(input.extra.x, input.blockLight);
-                half simpleVoxelLight = saturate(max((half)_MinLight, voxelLight01 * (half)_VoxelLightStrength));
+                half3 simpleVoxelLight = ComputeSimpleVoxelLightColor(input.extra.x, input.blockLight, input.blockLightColor);
                 half simpleAO = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
                 return half4(albedo * simpleVoxelLight * simpleAO, surface.alpha);
             }
@@ -844,10 +869,10 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 additionalDynamicLighting = ComputeAdditionalDynamicLighting(input.positionWS, input.positionCS, normalWS);
             half realtimeShadowFill = ComputeRealtimeShadowFill(mainShadow);
             half directLightVisibility = ComputeVoxelDirectLightVisibility(skyLight01);
-            half shadedVoxelLight = ComputeVoxelLightWithRealtimeShadow(skyLight01, input.blockLight, realtimeShadowFill);
+            half3 shadedVoxelLight = ComputeVoxelLightColorWithRealtimeShadow(skyLight01, input.blockLight, input.blockLightColor, realtimeShadowFill);
             half environmentLight = ComputeSkyAmbientLight(skyLight01, realtimeShadowFill);
 
-            half3 lighting = shadedVoxelLight.xxx * faceShade;
+            half3 lighting = shadedVoxelLight * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;
             lighting += mainDynamicLighting * directLightVisibility;
             lighting += additionalDynamicLighting;
@@ -869,7 +894,8 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half3 normalWS;
             half3 extra;
             half3 tintColor;
-            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight);
+            half3 blockLightColor;
+            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight, blockLightColor);
 
             output.positionCS = TransformWorldToHClip(positionWS);
             output.normalWS = normalWS;
@@ -923,11 +949,12 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
                 UNITY_TRANSFER_INSTANCE_ID(input, output);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(output);
 
-                float3 positionWS;
-                half3 normalWS;
-                half3 extra;
-                half3 tintColor;
-                ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight);
+            float3 positionWS;
+            half3 normalWS;
+            half3 extra;
+            half3 tintColor;
+            half3 blockLightColor;
+            ResolveVoxelVertexData(input, positionWS, normalWS, output.localUV, output.atlasOrigin, output.atlasSize, extra, tintColor, output.subchunkIndex, output.blockLight, blockLightColor);
 
                 #if _CASTING_PUNCTUAL_LIGHT_SHADOW
                     float3 lightDirectionWS = normalize(_LightPosition - positionWS);

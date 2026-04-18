@@ -25,7 +25,7 @@ public partial class World : MonoBehaviour
         public NativeArray<int> heightCache;
         public NativeArray<byte> blockTypes;
         public NativeArray<bool> solids;
-        public NativeArray<byte> light;
+        public NativeArray<ushort> light;
         public NativeArray<int3> suppressedBillboards;
         public bool buildColliders;
     }
@@ -41,13 +41,13 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> knownVoxelData;
         public bool useKnownVoxelData;
         public NativeArray<bool> solids;
-        public NativeArray<byte> light;
+        public NativeArray<ushort> light;
         public int borderSize;
         public Chunk chunk;
         public Vector2Int coord;
         public int expectedGen;
-        public NativeArray<byte> chunkLightData;
-        public NativeArray<byte> blockEmissionData;
+        public NativeArray<ushort> chunkLightData;
+        public NativeArray<ushort> blockEmissionData;
         public NativeArray<byte> lightOpacityData;
         public NativeArray<BlockEdit> edits;
         public NativeArray<byte> fastRebuildSnapshotVoxelData;
@@ -73,7 +73,7 @@ public partial class World : MonoBehaviour
         public NativeArray<byte> blockPlacementAxes;
         public NativeArray<byte> knownVoxelData;
         public NativeArray<bool> solids;
-        public NativeArray<byte> light;
+        public NativeArray<ushort> light;
         public NativeArray<bool> subchunkNonEmpty;
     }
 
@@ -480,8 +480,8 @@ public partial class World : MonoBehaviour
     {
         [ReadOnly] public NativeArray<byte> snapshotVoxelData;
         [ReadOnly] public NativeArray<byte> snapshotLoadedChunks;
-        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
-        public NativeArray<byte> blockEmission;
+        [ReadOnly] public NativeArray<ushort> lightEmissionByBlock;
+        public NativeArray<ushort> blockEmission;
         public bool disableWater;
         public int borderSize;
         public int voxelSizeX;
@@ -538,8 +538,8 @@ public partial class World : MonoBehaviour
     private struct FastRebuildApplyEmissionOverridesJob : IJob
     {
         [ReadOnly] public NativeArray<BlockEdit> overrides;
-        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
-        public NativeArray<byte> blockEmission;
+        [ReadOnly] public NativeArray<ushort> lightEmissionByBlock;
+        public NativeArray<ushort> blockEmission;
         public int chunkMinX;
         public int chunkMinZ;
         public int borderSize;

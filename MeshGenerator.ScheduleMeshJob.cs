@@ -14,7 +14,7 @@ public static partial class MeshGenerator
         NativeArray<byte> blockTypes,
         NativeArray<byte> blockPlacementAxes,
         NativeArray<bool> solids,
-        NativeArray<byte> light,
+        NativeArray<ushort> light,
         NativeArray<BlockTextureMapping> nativeBlockMappings,
         NativeArray<BlockModelCuboid> nativeBlockModelCuboids,
         NativeArray<int3> suppressedGrassBillboards,

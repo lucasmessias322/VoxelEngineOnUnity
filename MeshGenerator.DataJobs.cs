@@ -504,8 +504,8 @@ public static partial class MeshGenerator
     private struct CopyGeneratedEmissionToLightVolumeJob : IJobParallelFor
     {
         [ReadOnly] public NativeArray<byte> sourceBlockTypes;
-        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
-        [NativeDisableParallelForRestriction] public NativeArray<byte> targetBlockEmission;
+        [ReadOnly] public NativeArray<ushort> lightEmissionByBlock;
+        [NativeDisableParallelForRestriction] public NativeArray<ushort> targetBlockEmission;
 
         public int sourceVoxelSizeX;
         public int targetVoxelSizeX;
@@ -566,8 +566,8 @@ public static partial class MeshGenerator
     private struct ApplyEmissionOverridesJob : IJob
     {
         [ReadOnly] public NativeArray<BlockEdit> overrides;
-        [ReadOnly] public NativeArray<byte> lightEmissionByBlock;
-        public NativeArray<byte> blockEmission;
+        [ReadOnly] public NativeArray<ushort> lightEmissionByBlock;
+        public NativeArray<ushort> blockEmission;
 
         public int chunkMinX;
         public int chunkMinZ;

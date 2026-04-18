@@ -29,7 +29,7 @@ public class Chunk : MonoBehaviour
     [HideInInspector] public Bounds worldBounds;
     public bool hasVoxelData = false;
     [NonSerialized] public bool hasVoxelSnapshot = false;
-    [NonSerialized] private byte[] lightSnapshot;
+    [NonSerialized] private ushort[] lightSnapshot;
     [NonSerialized] private bool hasLightSnapshot = false;
     [NonSerialized] public bool pendingRecycle = false;
 
@@ -293,7 +293,7 @@ public class Chunk : MonoBehaviour
         pendingRecycle = false;
     }
 
-    public void UpdateLightSnapshot(NativeArray<byte> sourceLightData, int borderSize)
+    public void UpdateLightSnapshot(NativeArray<ushort> sourceLightData, int borderSize)
     {
         hasLightSnapshot = false;
         if (!sourceLightData.IsCreated || borderSize < 0)
@@ -307,7 +307,7 @@ public class Chunk : MonoBehaviour
             return;
 
         if (lightSnapshot == null || lightSnapshot.Length != LightSnapshotLength)
-            lightSnapshot = new byte[LightSnapshotLength];
+            lightSnapshot = new ushort[LightSnapshotLength];
 
         for (int z = 0; z < SizeZ; z++)
         {
@@ -324,7 +324,7 @@ public class Chunk : MonoBehaviour
         hasLightSnapshot = true;
     }
 
-    public bool TryGetLightSnapshot(int localX, int y, int localZ, out byte packedLight)
+    public bool TryGetLightSnapshot(int localX, int y, int localZ, out ushort packedLight)
     {
         packedLight = 0;
         if (!hasLightSnapshot || lightSnapshot == null || lightSnapshot.Length != LightSnapshotLength)

@@ -850,7 +850,7 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         float emission01 = Mathf.Clamp01(emission / 15f);
         return new ResolvedLightStyle
         {
-            color = defaultLightColor,
+            color = world != null ? world.GetBlockEmissionColor(blockType) : defaultLightColor,
             intensity = Mathf.Lerp(minLightIntensity, maxLightIntensity, emission01),
             range = Mathf.Lerp(minLightRange, maxLightRange, emission01),
             openFaceOffset = defaultOpenFaceOffset,
