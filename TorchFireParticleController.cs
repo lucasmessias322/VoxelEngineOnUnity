@@ -505,8 +505,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         public Color color;
         [Min(0f)] public float intensity;
         [Min(0.5f)] public float range;
-        [Range(0f, 1f)] public float shadowStrength;
-        public bool castShadows;
         [Range(0f, 0.75f)] public float openFaceOffset;
         public Vector3 localOffset;
     }
@@ -531,8 +529,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         public Color color;
         public float intensity;
         public float range;
-        public float shadowStrength;
-        public bool castShadows;
         public float openFaceOffset;
         public Vector3 localOffset;
     }
@@ -542,7 +538,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
     [SerializeField, Min(1)] private int horizontalScanRadius = 14;
     [SerializeField, Min(1)] private int verticalScanRadius = 10;
     [SerializeField, Min(1)] private int maxActiveLights = 8;
-    [SerializeField, Min(0)] private int maxShadowCastingLights = 1;
     [SerializeField] private bool useCameraFallback = true;
 
     [Header("Fallback Style")]
@@ -551,16 +546,8 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
     [SerializeField, Min(0.5f)] private float maxLightRange = 9.5f;
     [SerializeField, Min(0f)] private float minLightIntensity = 8f;
     [SerializeField, Min(0f)] private float maxLightIntensity = 40f;
-    [SerializeField, Range(0f, 1f)] private float defaultShadowStrength = 0.8f;
-    [SerializeField] private bool defaultCastShadows = true;
     [SerializeField, Range(0f, 0.75f)] private float defaultOpenFaceOffset = 0.56f;
     [SerializeField] private Vector3 defaultLocalOffset = Vector3.zero;
-
-    [Header("Shadow Tuning")]
-    [SerializeField] private LightShadows shadowMode = LightShadows.Soft;
-    [SerializeField, Range(0.001f, 2f)] private float shadowBias = 0.05f;
-    [SerializeField, Range(0f, 3f)] private float shadowNormalBias = 0.35f;
-    [SerializeField, Range(0.01f, 1f)] private float shadowNearPlane = 0.2f;
 
     [Header("Block Overrides")]
     [SerializeField] private EmissiveBlockLightOverride[] lightOverrides = new[]
@@ -571,8 +558,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.87f, 0.58f, 1f),
             intensity = 34f,
             range = 8.5f,
-            shadowStrength = 0.9f,
-            castShadows = true,
             openFaceOffset = 0.62f,
             localOffset = Vector3.zero
         },
@@ -582,8 +567,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.66f, 0.3f, 1f),
             intensity = 20f,
             range = 6.5f,
-            shadowStrength = 0.72f,
-            castShadows = true,
             openFaceOffset = 0f,
             localOffset = Vector3.zero
         },
@@ -593,8 +576,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.66f, 0.3f, 1f),
             intensity = 20f,
             range = 6.5f,
-            shadowStrength = 0.72f,
-            castShadows = true,
             openFaceOffset = 0f,
             localOffset = Vector3.zero
         },
@@ -604,8 +585,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.66f, 0.3f, 1f),
             intensity = 20f,
             range = 6.5f,
-            shadowStrength = 0.72f,
-            castShadows = true,
             openFaceOffset = 0f,
             localOffset = Vector3.zero
         },
@@ -615,8 +594,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.66f, 0.3f, 1f),
             intensity = 20f,
             range = 6.5f,
-            shadowStrength = 0.72f,
-            castShadows = true,
             openFaceOffset = 0f,
             localOffset = Vector3.zero
         },
@@ -626,8 +603,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = new Color(1f, 0.66f, 0.3f, 1f),
             intensity = 20f,
             range = 6.5f,
-            shadowStrength = 0.72f,
-            castShadows = true,
             openFaceOffset = 0f,
             localOffset = Vector3.zero
         }
@@ -651,11 +626,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
     private void OnDisable()
     {
         ClearAllLights();
-    }
-
-    private void OnValidate()
-    {
-        maxShadowCastingLights = Mathf.Clamp(maxShadowCastingLights, 0, Mathf.Max(0, maxActiveLights));
     }
 
     private void Update()
@@ -844,13 +814,8 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         light.color = style.color;
         light.intensity = style.intensity;
         light.range = style.range;
-
-        bool castShadows = style.castShadows && priorityIndex < maxShadowCastingLights;
-        light.shadows = castShadows ? shadowMode : LightShadows.None;
-        light.shadowStrength = style.shadowStrength;
-        light.shadowBias = shadowBias;
-        light.shadowNormalBias = shadowNormalBias;
-        light.shadowNearPlane = shadowNearPlane;
+        light.shadows = LightShadows.None;
+        light.shadowStrength = 0f;
     }
 
     private ResolvedLightStyle ResolveLightStyle(BlockType blockType, byte emission)
@@ -862,8 +827,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
                 color = lightOverride.color,
                 intensity = lightOverride.intensity,
                 range = lightOverride.range,
-                shadowStrength = lightOverride.shadowStrength,
-                castShadows = lightOverride.castShadows,
                 openFaceOffset = lightOverride.openFaceOffset,
                 localOffset = lightOverride.localOffset
             };
@@ -875,8 +838,6 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             color = defaultLightColor,
             intensity = Mathf.Lerp(minLightIntensity, maxLightIntensity, emission01),
             range = Mathf.Lerp(minLightRange, maxLightRange, emission01),
-            shadowStrength = defaultShadowStrength,
-            castShadows = defaultCastShadows,
             openFaceOffset = defaultOpenFaceOffset,
             localOffset = defaultLocalOffset
         };

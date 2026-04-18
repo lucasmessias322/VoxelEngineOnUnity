@@ -356,7 +356,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             return saturate((ndl + wrap) / (1.0h + wrap));
         }
 
-        half3 ComputeDynamicLighting(float3 positionWS, half3 normalWS)
+        half3 ComputeMainDynamicLighting(float3 positionWS, half3 normalWS)
         {
             half3 dynamicLighting = 0.0h;
             half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
@@ -370,15 +370,25 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half mainDiffuse = ComputeWrappedDiffuse(normalWS, mainLight.direction);
             dynamicLighting += mainLight.color * mainDiffuse * mainLight.distanceAttenuation * mainShadow * (half)_DirectionalStrength;
 
+            return dynamicLighting;
+        }
+
+        half3 ComputeAdditionalDynamicLighting(float3 positionWS, float4 positionCS, half3 normalWS)
+        {
+            half3 dynamicLighting = 0.0h;
+            half receiveShadowStrength = (_ReceiveShadows > 0.5) ? (half)_ShadowStrength : 0.0h;
+
             #if defined(_ADDITIONAL_LIGHTS)
+                InputData inputData = (InputData)0;
+                inputData.positionWS = positionWS;
+                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(positionCS);
                 uint lightCount = (uint)GetAdditionalLightsCount();
-                for (uint lightIndex = 0u; lightIndex < lightCount; ++lightIndex)
-                {
+                LIGHT_LOOP_BEGIN(lightCount)
                     Light addLight = GetAdditionalLight(lightIndex, positionWS);
                     half addDiffuse = ComputeWrappedDiffuse(normalWS, addLight.direction);
                     half addShadow = lerp(1.0h, addLight.shadowAttenuation, receiveShadowStrength);
                     dynamicLighting += addLight.color * addDiffuse * addLight.distanceAttenuation * addShadow * (half)_AdditionalLightsStrength;
-                }
+                LIGHT_LOOP_END
             #endif
 
             return dynamicLighting;
@@ -810,12 +820,15 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, input.extra.x, input.positionWS);
             half environmentLight = saturate(shadedVoxelLight);
             half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
+            half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS);
+            half3 additionalDynamicLighting = ComputeAdditionalDynamicLighting(input.positionWS, input.positionCS, normalWS);
 
             half3 albedo = surface.color.rgb * input.tintColor;
 
             half3 lighting = shadedVoxelLight.xxx * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;
-            lighting += ComputeDynamicLighting(input.positionWS, normalWS) * environmentLight;
+            lighting += mainDynamicLighting * environmentLight;
+            lighting += additionalDynamicLighting;
             lighting *= ao;
 
             half3 finalColor = ApplyVoxelFog(albedo * lighting, input.positionWS);
@@ -846,7 +859,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
         Pass
         {
             Name "ForwardLit"
-            Tags { "LightMode" = "UniversalForward" }
+            Tags { "LightMode" = "UniversalForwardOnly" }
 
             AlphaToMask [_AlphaToMask]
 
@@ -857,6 +870,7 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
             #pragma multi_compile_instancing
             #pragma multi_compile _ _MAIN_LIGHT_SHADOWS _MAIN_LIGHT_SHADOWS_CASCADE _MAIN_LIGHT_SHADOWS_SCREEN
             #pragma multi_compile _ _ADDITIONAL_LIGHTS
+            #pragma multi_compile _ _CLUSTER_LIGHT_LOOP
             #pragma multi_compile_fragment _ _ADDITIONAL_LIGHT_SHADOWS
             #pragma multi_compile_fragment _ _SHADOWS_SOFT _SHADOWS_SOFT_LOW _SHADOWS_SOFT_MEDIUM _SHADOWS_SOFT_HIGH
             ENDHLSL
