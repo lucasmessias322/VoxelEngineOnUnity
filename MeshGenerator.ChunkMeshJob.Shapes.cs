@@ -448,16 +448,20 @@ public static partial class MeshGenerator
         {
             public float sky;
             public float block;
+            public ushort packedLight;
+            public uint blockLightColor;
 
-            public VoxelLightChannels(float sky, float block)
+            public VoxelLightChannels(ushort packedLight)
             {
-                this.sky = sky;
-                this.block = block;
+                this.packedLight = packedLight;
+                sky = GetSkyLight01(packedLight);
+                block = GetBlockLight01(packedLight);
+                blockLightColor = LightUtils.EncodeBlockLightColor32(packedLight);
             }
 
             public static VoxelLightChannels Max(VoxelLightChannels a, VoxelLightChannels b)
             {
-                return new VoxelLightChannels(math.max(a.sky, b.sky), math.max(a.block, b.block));
+                return new VoxelLightChannels(LightUtils.MaxPackedLight(a.packedLight, b.packedLight));
             }
         }
 
@@ -499,7 +503,7 @@ public static partial class MeshGenerator
                 return default;
 
             ushort packed = light[idx];
-            return new VoxelLightChannels(GetSkyLight01(packed), GetBlockLight01(packed));
+            return new VoxelLightChannels(packed);
         }
 
         private float GetSpecialMeshLight01(

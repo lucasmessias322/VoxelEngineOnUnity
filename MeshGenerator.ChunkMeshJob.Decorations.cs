@@ -279,11 +279,9 @@ public static partial class MeshGenerator
                         float billboardHeight = VegetationBillboardUtility.ComputeHeight(grassBillboardHeight, variationHash);
                         float billboardHalfWidth = VegetationBillboardUtility.ComputeHalfWidth(variationHash);
                         float centerYOffset = VegetationBillboardUtility.ComputeBaseYOffset(variationHash);
-                        ushort packed = light[upIdx];
-                        float skyLight01 = GetSkyLight01(packed);
-                        float blockLight01 = GetBlockLight01(packed);
+                        VoxelLightChannels billboardLight = GetSpecialMeshLightChannels01(x, py, z, voxelSizeX, voxelSizeZ, light);
                         Vector3 center = new Vector3((x - border) + 0.5f + jx, py + centerYOffset, (z - border) + 0.5f + jz);
-                        AddBillboardCross(center, billboardHeight, billboardHalfWidth, billboardAtlasUv, billboardAtlasSize, skyLight01, blockLight01, billboardTint);
+                        AddBillboardCross(center, billboardHeight, billboardHalfWidth, billboardAtlasUv, billboardAtlasSize, billboardLight.sky, billboardLight.block, billboardLight.blockLightColor, billboardTint);
                     }
                 }
             }
@@ -327,7 +325,7 @@ public static partial class MeshGenerator
             VoxelLightChannels billboardLight = GetSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
             // Mantem o centro do billboard no centro do voxel para as quads cruzarem pelas diagonais do bloco.
             Vector3 center = new Vector3((x - border) + 0.5f + jx, y + baseYOffset, (z - border) + 0.5f + jz);
-            AddBillboardCross(center, height, halfWidth, atlasUv, atlasSize, billboardLight.sky, billboardLight.block, tint);
+            AddBillboardCross(center, height, halfWidth, atlasUv, atlasSize, billboardLight.sky, billboardLight.block, billboardLight.blockLightColor, tint);
         }
 
         private void AddUltraLeafBillboardFoliage(
@@ -361,7 +359,7 @@ public static partial class MeshGenerator
             VoxelLightChannels billboardLight = GetSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
             // Pivot no centro do voxel para manter volume aparente de qualquer angulo.
             Vector3 center = new Vector3((x - border) + 0.5f + jx, y + 0.5f + baseYOffset, (z - border) + 0.5f + jz);
-            AddBillboardFourFaces(center, height, halfWidth, atlasUv, atlasSize, billboardLight.sky, billboardLight.block, tint, rotationDeg, baseTiltDeg, randomTiltRangeDeg, variationHash);
+            AddBillboardFourFaces(center, height, halfWidth, atlasUv, atlasSize, billboardLight.sky, billboardLight.block, billboardLight.blockLightColor, tint, rotationDeg, baseTiltDeg, randomTiltRangeDeg, variationHash);
         }
 
         private void AddBillboardFourFaces(
@@ -372,6 +370,7 @@ public static partial class MeshGenerator
             Vector2 atlasSize,
             float skyLight01,
             float blockLight01,
+            uint blockLightColor,
             float tint,
             float rotationOffsetDegrees,
             float tiltBaseDegrees,
@@ -389,7 +388,7 @@ public static partial class MeshGenerator
                 if ((i & 1) != 0)
                     tiltDegrees = -tiltDegrees;
 
-                AddBillboardPlane(center, height, halfWidth, dir, tiltDegrees, atlasUv, atlasSize, skyLight01, blockLight01, tint);
+                AddBillboardPlane(center, height, halfWidth, dir, tiltDegrees, atlasUv, atlasSize, skyLight01, blockLight01, blockLightColor, tint);
             }
         }
 
@@ -403,6 +402,7 @@ public static partial class MeshGenerator
             Vector2 atlasSize,
             float skyLight01,
             float blockLight01,
+            uint blockLightColor,
             float tint)
         {
             Vector3 right = new Vector3(horizontalDirectionXZ.x, 0f, horizontalDirectionXZ.y) * halfWidth;
@@ -421,7 +421,7 @@ public static partial class MeshGenerator
             Vector3 p1 = center + right - halfUp;
             Vector3 p2 = center + right + halfUp;
             Vector3 p3 = center - right + halfUp;
-            AddDoubleSidedQuad(p0, p1, p2, p3, atlasUv, atlasSize, skyLight01, blockLight01, tint);
+            AddDoubleSidedQuad(p0, p1, p2, p3, atlasUv, atlasSize, skyLight01, blockLight01, blockLightColor, tint);
         }
 
         private bool TryResolveVegetationBillboardRule(
@@ -453,19 +453,19 @@ public static partial class MeshGenerator
                 out variationHash);
         }
 
-        private void AddBillboardCross(Vector3 center, float height, float halfWidth, Vector2 atlasUv, Vector2 atlasSize, float skyLight01, float blockLight01, float tint)
+        private void AddBillboardCross(Vector3 center, float height, float halfWidth, Vector2 atlasUv, Vector2 atlasSize, float skyLight01, float blockLight01, uint blockLightColor, float tint)
         {
             Vector3 a0 = center + new Vector3(-halfWidth, 0f, -halfWidth);
             Vector3 a1 = center + new Vector3(halfWidth, 0f, halfWidth);
             Vector3 a2 = a1 + new Vector3(0f, height, 0f);
             Vector3 a3 = a0 + new Vector3(0f, height, 0f);
-            AddDoubleSidedQuad(a0, a1, a2, a3, atlasUv, atlasSize, skyLight01, blockLight01, tint);
+            AddDoubleSidedQuad(a0, a1, a2, a3, atlasUv, atlasSize, skyLight01, blockLight01, blockLightColor, tint);
 
             Vector3 b0 = center + new Vector3(-halfWidth, 0f, halfWidth);
             Vector3 b1 = center + new Vector3(halfWidth, 0f, -halfWidth);
             Vector3 b2 = b1 + new Vector3(0f, height, 0f);
             Vector3 b3 = b0 + new Vector3(0f, height, 0f);
-            AddDoubleSidedQuad(b0, b1, b2, b3, atlasUv, atlasSize, skyLight01, blockLight01, tint);
+            AddDoubleSidedQuad(b0, b1, b2, b3, atlasUv, atlasSize, skyLight01, blockLight01, blockLightColor, tint);
         }
 
         private bool IsSuppressedGrassBillboard(int worldX, int worldY, int worldZ)
@@ -502,6 +502,7 @@ public static partial class MeshGenerator
             Vector2 atlasSize,
             float skyLight01,
             float blockLight01,
+            uint blockLightColor,
             float tint)
         {
             int vIndex = GetCurrentSubchunkLocalVertexIndex();
@@ -509,10 +510,10 @@ public static partial class MeshGenerator
 
             Vector4 e = new Vector4(math.saturate(skyLight01), tint, 1f, 0f);
             Vector4 atlasAndBlockLight = new Vector4(atlasSize.x, atlasSize.y, math.saturate(blockLight01), 0f);
-            AddPackedVertex(p0, planeNormal, new Vector2(0f, 0f), atlasUv, e, atlasAndBlockLight);
-            AddPackedVertex(p1, planeNormal, new Vector2(1f, 0f), atlasUv, e, atlasAndBlockLight);
-            AddPackedVertex(p2, planeNormal, new Vector2(1f, 1f), atlasUv, e, atlasAndBlockLight);
-            AddPackedVertex(p3, planeNormal, new Vector2(0f, 1f), atlasUv, e, atlasAndBlockLight);
+            AddPackedVertex(p0, planeNormal, new Vector2(0f, 0f), atlasUv, e, atlasAndBlockLight, blockLightColor);
+            AddPackedVertex(p1, planeNormal, new Vector2(1f, 0f), atlasUv, e, atlasAndBlockLight, blockLightColor);
+            AddPackedVertex(p2, planeNormal, new Vector2(1f, 1f), atlasUv, e, atlasAndBlockLight, blockLightColor);
+            AddPackedVertex(p3, planeNormal, new Vector2(0f, 1f), atlasUv, e, atlasAndBlockLight, blockLightColor);
 
             billboardTriangles.Add(vIndex + 0);
             billboardTriangles.Add(vIndex + 1);
