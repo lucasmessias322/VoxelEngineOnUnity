@@ -288,6 +288,7 @@ public partial class World
         data.mesh.bounds = CreateHighBuildSectionBounds(coord, section);
         data.meshFilter.sharedMesh = data.mesh;
         ApplyBiomeTintToRenderer(data.meshRenderer, coord);
+        ApplyRealisticShaderRendererSettings(data.meshRenderer);
         data.meshRenderer.enabled = true;
         data.root.SetActive(true);
 

@@ -492,7 +492,11 @@ public partial class World : MonoBehaviour
 
         ChunkBiomeTints tints = EvaluateChunkBiomeTints(coord);
         for (int i = 0; i < chunk.subRenderers.Length; i++)
-            ApplyBiomeTintToRenderer(chunk.subRenderers[i], tints);
+        {
+            Renderer renderer = chunk.subRenderers[i];
+            ApplyBiomeTintToRenderer(renderer, tints);
+            ApplyRealisticShaderRendererSettings(renderer);
+        }
     }
 
     private void ApplyBiomeTintToRenderer(Renderer renderer, Vector2Int coord)
@@ -536,7 +540,19 @@ public partial class World : MonoBehaviour
         biomeTintPropertyBlock.SetColor(FolliageTintCorner10PropertyId, tints.foliageCorner10);
         biomeTintPropertyBlock.SetColor(FolliageTintCorner01PropertyId, tints.foliageCorner01);
         biomeTintPropertyBlock.SetColor(FolliageTintCorner11PropertyId, tints.foliageCorner11);
+        biomeTintPropertyBlock.SetFloat(EnableRealisticShaderPropertyId, enableRealisticShader ? 1f : 0f);
         renderer.SetPropertyBlock(biomeTintPropertyBlock);
+    }
+
+    private void ApplyRealisticShaderRendererSettings(Renderer renderer)
+    {
+        if (renderer == null)
+            return;
+
+        renderer.shadowCastingMode = enableRealisticShader
+            ? UnityEngine.Rendering.ShadowCastingMode.On
+            : UnityEngine.Rendering.ShadowCastingMode.Off;
+        renderer.receiveShadows = enableRealisticShader;
     }
 
     private ChunkBiomeTints EvaluateChunkBiomeTints(Vector2Int coord)

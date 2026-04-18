@@ -633,6 +633,12 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
         if (!Application.isPlaying || world == null)
             return;
 
+        if (!world.enableRealisticShader)
+        {
+            ClearAllLights();
+            return;
+        }
+
         ResolveObserver();
         if (observer == null)
         {
@@ -654,6 +660,12 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
     {
         if (!Application.isPlaying || world == null)
             return;
+
+        if (!world.enableRealisticShader)
+        {
+            RemoveLight(worldPos);
+            return;
+        }
 
         ResolveObserver();
         if (observer == null)
@@ -781,6 +793,9 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
 
     private void EnsureLight(Vector3Int blockPos, BlockType blockType, byte emission, int priorityIndex)
     {
+        if (world == null || !world.enableRealisticShader)
+            return;
+
         if (!activeLights.TryGetValue(blockPos, out EmissiveLightInstance instance) || instance == null || instance.root == null || instance.light == null)
         {
             instance = CreateLight(blockPos);
@@ -882,6 +897,17 @@ public sealed class EmissiveBlockLightController : MonoBehaviour
             position += Vector3.up * style.openFaceOffset;
 
         return position + style.localOffset;
+    }
+
+    public void RefreshRealisticShaderState()
+    {
+        if (world == null)
+            world = GetComponent<World>();
+
+        if (world == null || world.enableRealisticShader)
+            return;
+
+        ClearAllLights();
     }
 
     private Vector3 ResolveOpenDirection(Vector3Int blockPos)

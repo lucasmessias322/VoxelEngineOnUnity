@@ -45,6 +45,32 @@ public partial class World
             RequestHighBuildMeshRebuild(kv.Key);
     }
 
+    private void HandleRealisticShaderToggle()
+    {
+        if (lastEnableRealisticShader == enableRealisticShader)
+            return;
+
+        lastEnableRealisticShader = enableRealisticShader;
+        RefreshRealisticShaderModeOnRenderers();
+        emissiveBlockLightController?.RefreshRealisticShaderState();
+    }
+
+    private void RefreshRealisticShaderModeOnRenderers()
+    {
+        foreach (var kv in activeChunks)
+            ApplyChunkBiomeTint(kv.Value, kv.Key);
+
+        foreach (var kv in highBuildMeshes)
+        {
+            HighBuildMeshData data = kv.Value;
+            if (data?.meshRenderer == null)
+                continue;
+
+            ApplyBiomeTintToRenderer(data.meshRenderer, new Vector2Int(kv.Key.x, kv.Key.z));
+            ApplyRealisticShaderRendererSettings(data.meshRenderer);
+        }
+    }
+
     private void HandleVisualFeatureToggle()
     {
         bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;

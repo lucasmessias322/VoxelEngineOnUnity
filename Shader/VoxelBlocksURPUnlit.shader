@@ -16,6 +16,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         _AtlasSize("Atlas Size (Tiles XY)", Vector) = (9, 10, 0, 0)
         [Toggle] _AtlasOriginTopLeft("Atlas Origin Top Left", Float) = 1
         _PaddingUV("Atlas Padding", Range(0.0, 0.01)) = 0.002
+        [HideInInspector] _EnableRealisticShader("Enable Realistic Shader", Float) = 1
 
         [Header(Lighting)]
         _MinLight("Minimum Light", Range(0.0, 1.0)) = 0.08
@@ -107,6 +108,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             float4 _AtlasSize;
             float _AtlasOriginTopLeft;
             float _PaddingUV;
+            float _EnableRealisticShader;
             float _MinLight;
             float _VoxelLightStrength;
             float _AmbientStrength;
@@ -773,19 +775,9 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             ApplyVoxelAlphaClip(surface.alpha);
             ApplySectionVisibilityMask(input.subchunkIndex);
 
-            half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
-            half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - input.positionWS);
-            half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
-            half faceShade = ComputeFaceShade(normalWS);
-            half voxelLight = max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength);
-            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, input.extra.x, input.positionWS);
-            half environmentLight = saturate(shadedVoxelLight);
-            half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
-            half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS);
-            half3 additionalDynamicLighting = ComputeAdditionalDynamicLighting(input.positionWS, input.positionCS, normalWS);
-
             half tintMask = saturate(input.extra.y);
             half grassSideOverlayMask = saturate(input.extra.w);
+            half3 normalWS = NormalizeNormalPerPixel(input.normalWS);
             half3 baseAlbedo = surface.color.rgb;
             half3 albedo = baseAlbedo * input.tintColor;
 
@@ -797,6 +789,23 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
                 half3 tintedOverlay = sideOverlay.rgb * input.tintColor;
                 albedo = baseAlbedo * (1.0h - overlayAlpha) + tintedOverlay * overlayAlpha;
             }
+
+            if (_EnableRealisticShader <= 0.5)
+            {
+                half simpleVoxelLight = saturate(max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength));
+                half simpleAO = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
+                return half4(albedo * simpleVoxelLight * simpleAO, surface.alpha);
+            }
+
+            half3 viewDirWS = SafeNormalize(GetCameraPositionWS() - input.positionWS);
+            half ao = lerp(1.0h, saturate(input.extra.z), (half)_AOStrength);
+            half faceShade = ComputeFaceShade(normalWS);
+            half voxelLight = max((half)_MinLight, input.extra.x * (half)_VoxelLightStrength);
+            half shadedVoxelLight = ApplyRealtimeShadowToVoxelLight(voxelLight, input.extra.x, input.positionWS);
+            half environmentLight = saturate(shadedVoxelLight);
+            half hemisphericAmbient = lerp(0.55h, 1.0h, saturate(normalWS.y * 0.5h + 0.5h)) * (half)_AmbientStrength;
+            half3 mainDynamicLighting = ComputeMainDynamicLighting(input.positionWS, normalWS);
+            half3 additionalDynamicLighting = ComputeAdditionalDynamicLighting(input.positionWS, input.positionCS, normalWS);
 
             half3 lighting = shadedVoxelLight.xxx * faceShade;
             lighting += hemisphericAmbient.xxx * faceShade * environmentLight;

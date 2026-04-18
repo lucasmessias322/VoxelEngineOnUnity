@@ -349,6 +349,8 @@ public partial class World : MonoBehaviour
     public int maxChunkRebuildsPerFrame = 1;
 
     [Header("Features Toggle")]
+    [Tooltip("Liga/desliga o caminho de iluminacao realista dos shaders voxel. Quando desligado, usa uma iluminacao voxel simples.")]
+    public bool enableRealisticShader = true;
     public bool enableTrees = true;
     [Tooltip("Quando ativo, quebrar um tronco quebra a arvore inteira de forma gradual (tipo treecapitator).")]
     public bool enableTreeCapitator = true;
@@ -502,6 +504,7 @@ public partial class World : MonoBehaviour
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
+    private bool lastEnableRealisticShader = true;
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
@@ -531,6 +534,7 @@ public partial class World : MonoBehaviour
     private static readonly int OpaqueGpuSectionsBufferPropertyId = Shader.PropertyToID("_OpaqueGpuSections");
     private static readonly int OpaqueBlockMappingsBufferPropertyId = Shader.PropertyToID("_OpaqueBlockMappings");
     private static readonly int UnityIndirectDrawArgsBufferPropertyId = Shader.PropertyToID("unity_IndirectDrawArgs");
+    private static readonly int EnableRealisticShaderPropertyId = Shader.PropertyToID("_EnableRealisticShader");
     private const int PulledOpaqueFaceStrideBytes = 112;   // 7 * float4
     private const int CompactOpaqueFaceStrideBytes = 16;   // 4 * uint
     private const int OpaqueGpuSectionStrideBytes = 32;    // 2 * float4
@@ -1852,6 +1856,7 @@ public partial class World : MonoBehaviour
         }
 
         lastEnableBlockColliders = enableBlockColliders;
+        lastEnableRealisticShader = enableRealisticShader;
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
@@ -2090,6 +2095,7 @@ public partial class World : MonoBehaviour
         float updateBudgetSeconds = updateWorkBudgetMS > 0f ? updateWorkBudgetMS / 1000f : 0f;
 
         HandleBlockColliderToggle();
+        HandleRealisticShaderToggle();
         HandleVisualFeatureToggle();
         ApplyResolvedVisualSubchunkRendererLayout();
         meshesAppliedThisFrame = 0;
