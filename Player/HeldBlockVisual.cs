@@ -7,6 +7,9 @@ public class HeldBlockVisual : MonoBehaviour
 {
     private const string FollowRootName = "HeldItemFollowRoot";
     private const string VisualRootName = "HeldItemVisual";
+    private const string RotationXRootName = "HeldItemRotationX";
+    private const string RotationYRootName = "HeldItemRotationY";
+    private const string RotationZRootName = "HeldItemRotationZ";
     private const string BlockVisualName = "BlockVisual";
     private const string FlatItemVisualName = "FlatItemVisual";
     private const string HeldPrefabRootName = "HeldPrefabRoot";
@@ -20,11 +23,22 @@ public class HeldBlockVisual : MonoBehaviour
         Prefab
     }
 
+    private enum ViewVisibilityMode
+    {
+        Always,
+        FirstPersonOnly,
+        ThirdPersonOnly
+    }
+
     [Header("References")]
     [SerializeField] private HotbarMirror hotbar;
     [SerializeField] private Transform handAnchor;
     [SerializeField] private World world;
     [SerializeField] private ItemAtlasDataSO itemAtlasData;
+
+    [Header("Visibility")]
+    [SerializeField] private ViewVisibilityMode visibilityMode = ViewVisibilityMode.FirstPersonOnly;
+    [SerializeField] private bool applyGameObjectLayerToVisuals;
 
     [Header("Default View")]
     [Tooltip("Fallback/shared local position (used by prefab and when separate positions are disabled).")]
@@ -41,6 +55,8 @@ public class HeldBlockVisual : MonoBehaviour
     [SerializeField] private bool hideWhenInventoryOpen = true;
     [SerializeField] private bool castShadows = false;
     [SerializeField] private bool receiveShadows = false;
+    [SerializeField] private bool applyItemHeldTransformOverrides = true;
+    [SerializeField] private bool useSplitRotationAxes;
 
     [Header("Flat Item Rendering")]
     [Tooltip("Material usado para renderizar itens planos na mao. A textura do item sera aplicada por renderer em runtime.")]
@@ -77,6 +93,9 @@ public class HeldBlockVisual : MonoBehaviour
 
     private GameObject followRoot;
     private GameObject visualRoot;
+    private GameObject rotationXRoot;
+    private GameObject rotationYRoot;
+    private GameObject rotationZRoot;
     private GameObject blockVisualObject;
     private MeshFilter blockMeshFilter;
     private MeshRenderer blockMeshRenderer;
@@ -166,6 +185,9 @@ public class HeldBlockVisual : MonoBehaviour
 
         followRoot = null;
         visualRoot = null;
+        rotationXRoot = null;
+        rotationYRoot = null;
+        rotationZRoot = null;
         blockVisualObject = null;
         flatItemVisualObject = null;
         heldPrefabInstance = null;
@@ -255,28 +277,38 @@ public class HeldBlockVisual : MonoBehaviour
 
         DestroyDuplicateChildren(followRoot.transform, VisualRootName, visualRoot.transform);
 
+        Transform visualContentParent = EnsureVisualContentParent();
+
         if (blockVisualObject == null && visualRoot != null)
-            blockVisualObject = FindDirectChildByName(visualRoot.transform, BlockVisualName)?.gameObject;
+            blockVisualObject = FindDirectChildByName(visualContentParent, BlockVisualName)?.gameObject;
 
         if (blockVisualObject == null)
         {
             blockVisualObject = new GameObject(BlockVisualName);
-            blockVisualObject.transform.SetParent(visualRoot.transform, false);
+            blockVisualObject.transform.SetParent(visualContentParent, false);
             blockMeshFilter = blockVisualObject.AddComponent<MeshFilter>();
             blockMeshRenderer = blockVisualObject.AddComponent<MeshRenderer>();
             blockVisualObject.SetActive(false);
         }
+        else if (blockVisualObject.transform.parent != visualContentParent)
+        {
+            blockVisualObject.transform.SetParent(visualContentParent, false);
+        }
 
         if (flatItemVisualObject == null && visualRoot != null)
-            flatItemVisualObject = FindDirectChildByName(visualRoot.transform, FlatItemVisualName)?.gameObject;
+            flatItemVisualObject = FindDirectChildByName(visualContentParent, FlatItemVisualName)?.gameObject;
 
         if (flatItemVisualObject == null)
         {
             flatItemVisualObject = new GameObject(FlatItemVisualName);
-            flatItemVisualObject.transform.SetParent(visualRoot.transform, false);
+            flatItemVisualObject.transform.SetParent(visualContentParent, false);
             flatItemMeshFilter = flatItemVisualObject.AddComponent<MeshFilter>();
             flatItemMeshRenderer = flatItemVisualObject.AddComponent<MeshRenderer>();
             flatItemVisualObject.SetActive(false);
+        }
+        else if (flatItemVisualObject.transform.parent != visualContentParent)
+        {
+            flatItemVisualObject.transform.SetParent(visualContentParent, false);
         }
 
         if (blockMeshFilter == null)
@@ -291,18 +323,19 @@ public class HeldBlockVisual : MonoBehaviour
         if (heldPrefabInstance == null)
         {
             heldPrefabInstance = new GameObject(HeldPrefabRootName);
-            heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
+            heldPrefabInstance.transform.SetParent(visualContentParent, false);
             heldPrefabInstance.SetActive(false);
         }
-        else if (heldPrefabInstance.transform.parent != visualRoot.transform)
+        else if (heldPrefabInstance.transform.parent != visualContentParent)
         {
-            heldPrefabInstance.transform.SetParent(visualRoot.transform, false);
+            heldPrefabInstance.transform.SetParent(visualContentParent, false);
         }
 
         if (flatItemPropertyBlock == null)
             flatItemPropertyBlock = new MaterialPropertyBlock();
 
         ApplyRendererSettings();
+        ApplyVisualHierarchyLayer();
     }
 
     private void UpdateFollowRootTransform()
@@ -342,7 +375,7 @@ public class HeldBlockVisual : MonoBehaviour
         Vector3 targetEulerAngles = GetDefaultLocalEulerAnglesFor(visualKind);
         Vector3 targetScale = GetDefaultRootScaleFor(visualKind);
 
-        if (selectedItem != null)
+        if (selectedItem != null && applyItemHeldTransformOverrides)
         {
             // Legacy behavior has absolute priority.
             if (selectedItem.overrideHeldTransform)
@@ -367,8 +400,97 @@ public class HeldBlockVisual : MonoBehaviour
         }
 
         visualRoot.transform.localPosition = targetPosition;
-        visualRoot.transform.localRotation = Quaternion.Euler(targetEulerAngles);
         visualRoot.transform.localScale = targetScale;
+
+        if (useSplitRotationAxes)
+        {
+            EnsureRotationHierarchy();
+            visualRoot.transform.localRotation = Quaternion.identity;
+
+            if (rotationXRoot != null)
+                rotationXRoot.transform.localRotation = Quaternion.AngleAxis(targetEulerAngles.x, Vector3.right);
+
+            if (rotationYRoot != null)
+                rotationYRoot.transform.localRotation = Quaternion.AngleAxis(targetEulerAngles.y, Vector3.up);
+
+            if (rotationZRoot != null)
+                rotationZRoot.transform.localRotation = Quaternion.AngleAxis(targetEulerAngles.z, Vector3.forward);
+
+            return;
+        }
+
+        ResetSplitRotationAxes();
+        visualRoot.transform.localRotation = Quaternion.Euler(targetEulerAngles);
+    }
+
+    private Transform EnsureVisualContentParent()
+    {
+        if (!useSplitRotationAxes)
+            return visualRoot != null ? visualRoot.transform : null;
+
+        EnsureRotationHierarchy();
+        return rotationZRoot != null ? rotationZRoot.transform : (visualRoot != null ? visualRoot.transform : null);
+    }
+
+    private void EnsureRotationHierarchy()
+    {
+        if (visualRoot == null)
+            return;
+
+        if (rotationXRoot == null)
+            rotationXRoot = FindDirectChildByName(visualRoot.transform, RotationXRootName)?.gameObject;
+
+        if (rotationXRoot == null)
+        {
+            rotationXRoot = new GameObject(RotationXRootName);
+            rotationXRoot.transform.SetParent(visualRoot.transform, false);
+        }
+        else if (rotationXRoot.transform.parent != visualRoot.transform)
+        {
+            rotationXRoot.transform.SetParent(visualRoot.transform, false);
+        }
+
+        if (rotationYRoot == null)
+            rotationYRoot = FindDirectChildByName(rotationXRoot.transform, RotationYRootName)?.gameObject;
+
+        if (rotationYRoot == null)
+        {
+            rotationYRoot = new GameObject(RotationYRootName);
+            rotationYRoot.transform.SetParent(rotationXRoot.transform, false);
+        }
+        else if (rotationYRoot.transform.parent != rotationXRoot.transform)
+        {
+            rotationYRoot.transform.SetParent(rotationXRoot.transform, false);
+        }
+
+        if (rotationZRoot == null)
+            rotationZRoot = FindDirectChildByName(rotationYRoot.transform, RotationZRootName)?.gameObject;
+
+        if (rotationZRoot == null)
+        {
+            rotationZRoot = new GameObject(RotationZRootName);
+            rotationZRoot.transform.SetParent(rotationYRoot.transform, false);
+        }
+        else if (rotationZRoot.transform.parent != rotationYRoot.transform)
+        {
+            rotationZRoot.transform.SetParent(rotationYRoot.transform, false);
+        }
+
+        ResetTransform(rotationXRoot.transform);
+        ResetTransform(rotationYRoot.transform);
+        ResetTransform(rotationZRoot.transform);
+    }
+
+    private void ResetSplitRotationAxes()
+    {
+        if (rotationXRoot != null)
+            rotationXRoot.transform.localRotation = Quaternion.identity;
+
+        if (rotationYRoot != null)
+            rotationYRoot.transform.localRotation = Quaternion.identity;
+
+        if (rotationZRoot != null)
+            rotationZRoot.transform.localRotation = Quaternion.identity;
     }
 
     private Vector3 GetDefaultLocalPositionFor(HeldVisualKind visualKind)
@@ -441,6 +563,14 @@ public class HeldBlockVisual : MonoBehaviour
     {
         if (visualRoot == null)
             return;
+
+        if (!ShouldDisplayInCurrentView())
+        {
+            UpdateArmMeshVisibility(false);
+            ClearShownState();
+            SetVisible(false);
+            return;
+        }
 
         if (hideWhenInventoryOpen && PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
         {
@@ -617,6 +747,7 @@ public class HeldBlockVisual : MonoBehaviour
         heldPrefabVisualObject.transform.localPosition = Vector3.zero;
         heldPrefabVisualObject.transform.localRotation = Quaternion.identity;
         heldPrefabVisualObject.transform.localScale = SanitizeScale(prefab.transform.localScale);
+        ApplyVisualHierarchyLayer();
         heldPrefabSource = prefab;
         return heldPrefabInstance;
     }
@@ -627,7 +758,7 @@ public class HeldBlockVisual : MonoBehaviour
             return;
 
         Vector3 sourceScale = SanitizeScale(selectedItem.heldPrefab.transform.localScale);
-        if (!ShouldOverrideHeldScale(selectedItem))
+        if (!applyItemHeldTransformOverrides || !ShouldOverrideHeldScale(selectedItem))
         {
             prefabTransform.localScale = Vector3.one;
             heldPrefabVisualObject.transform.localScale = sourceScale;
@@ -1231,6 +1362,30 @@ public class HeldBlockVisual : MonoBehaviour
         isVisible = visible;
     }
 
+    private bool ShouldDisplayInCurrentView()
+    {
+        if (visibilityMode == ViewVisibilityMode.Always)
+            return true;
+
+        bool isThirdPerson = fpsController != null && fpsController.IsThirdPerson();
+        switch (visibilityMode)
+        {
+            case ViewVisibilityMode.ThirdPersonOnly:
+                return isThirdPerson;
+            case ViewVisibilityMode.FirstPersonOnly:
+            default:
+                return !isThirdPerson;
+        }
+    }
+
+    private void ApplyVisualHierarchyLayer()
+    {
+        if (!applyGameObjectLayerToVisuals || followRoot == null)
+            return;
+
+        ApplyLayerRecursively(followRoot, gameObject.layer);
+    }
+
     private void UpdateArmMeshVisibility(bool isHoldingSomething)
     {
         if (playerArmRenderer == null)
@@ -1243,7 +1398,7 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void CaptureMiningRigPose(bool force = false)
     {
-        if (firstPersonRigRoot == null)
+        if (!CanDriveRigMotion() || firstPersonRigRoot == null)
             return;
 
         if (!force && miningRigPoseCaptured && capturedMiningRigRoot == firstPersonRigRoot)
@@ -1278,9 +1433,14 @@ public class HeldBlockVisual : MonoBehaviour
 
     private void ApplyMiningMotion()
     {
-        if (!enableMiningMotion)
+        if (!CanDriveRigMotion())
         {
-            RestoreMiningRigPose();
+            if (miningRigPoseCaptured)
+            {
+                RestoreMiningRigPose();
+                miningRigPoseCaptured = false;
+                capturedMiningRigRoot = null;
+            }
             return;
         }
 
@@ -1378,6 +1538,11 @@ public class HeldBlockVisual : MonoBehaviour
         placeSwingElapsed = 0f;
     }
 
+    private bool CanDriveRigMotion()
+    {
+        return enableMiningMotion && visibilityMode != ViewVisibilityMode.ThirdPersonOnly;
+    }
+
     private void ClearShownState()
     {
         shownItem = null;
@@ -1432,5 +1597,26 @@ public class HeldBlockVisual : MonoBehaviour
 
             Destroy(child.gameObject);
         }
+    }
+
+    private static void ResetTransform(Transform target)
+    {
+        if (target == null)
+            return;
+
+        target.localPosition = Vector3.zero;
+        target.localRotation = Quaternion.identity;
+        target.localScale = Vector3.one;
+    }
+
+    private static void ApplyLayerRecursively(GameObject target, int layer)
+    {
+        if (target == null)
+            return;
+
+        target.layer = layer;
+        Transform root = target.transform;
+        for (int i = 0; i < root.childCount; i++)
+            ApplyLayerRecursively(root.GetChild(i).gameObject, layer);
     }
 }

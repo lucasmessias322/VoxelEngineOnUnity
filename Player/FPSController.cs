@@ -89,7 +89,6 @@ public class FPSController : MonoBehaviour
     private CameraViewMode currentViewMode;
     private Vector3 defaultCameraLocalPosition;
     private Transform[] cachedCameraChildren;
-    private HeldBlockVisual cachedHeldBlockVisual;
     private bool firstPersonVisualsVisible = true;
     [SerializeField] private LayerMask playerMeshLayer;
     private readonly RaycastHit[] thirdPersonHitBuffer = new RaycastHit[ThirdPersonHitBufferSize];
@@ -194,8 +193,6 @@ public class FPSController : MonoBehaviour
                 cachedCameraChildren[i] = cameraTransform.GetChild(i);
         }
 
-        if (cachedHeldBlockVisual == null)
-            cachedHeldBlockVisual = FindAnyObjectByType<HeldBlockVisual>();
     }
 
     private void UpdateCameraTransform(bool forceVisualRefresh = false)
@@ -292,9 +289,6 @@ public class FPSController : MonoBehaviour
                     firstPersonOnlyObject.SetActive(shouldShowFirstPersonVisuals);
             }
         }
-
-        if (cachedHeldBlockVisual != null)
-            cachedHeldBlockVisual.gameObject.SetActive(shouldShowFirstPersonVisuals);
     }
 
     private void HandleCrouchInput()

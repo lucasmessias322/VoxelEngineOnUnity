@@ -42,6 +42,15 @@ public class PlayerArmSwing : MonoBehaviour
     [SerializeField] private float blendSpeed = 12f;
     [SerializeField] private float movementThreshold = 0.05f;
 
+    [Header("Block Action Settings")]
+    [SerializeField] private PlayerBlockBreaker blockBreaker;
+    [SerializeField] private bool enableBlockActionSwing = true;
+    [SerializeField] private float breakActionSwingAngle = 92f;
+    [SerializeField] private float breakActionSwingFrequency = 4.75f;
+    [SerializeField] private float breakActionBlendSpeed = 18f;
+    [SerializeField] private float placeActionSwingAngle = 78f;
+    [SerializeField] private float placeActionDuration = 0.18f;
+
     [Header("Head Look Settings")]
     [SerializeField] private bool enableHeadLook = true;
     [SerializeField] private bool onlyLookInThirdPerson = true;
@@ -64,6 +73,10 @@ public class PlayerArmSwing : MonoBehaviour
     private float nextReferenceResolveTime;
     private bool idlePoseCaptured;
     private bool hasAnyAnimatedReference;
+    private float breakActionWeight;
+    private float breakActionTimer;
+    private int lastSeenPlaceActionVersion = -1;
+    private float placeActionElapsed = float.PositiveInfinity;
 
     private void Awake()
     {
@@ -78,12 +91,14 @@ public class PlayerArmSwing : MonoBehaviour
         ResolveReferences(force: true);
         RefreshCachedState();
         CacheReferencePosition();
+        PrimeBlockActionTracking();
     }
 
     private void OnDisable()
     {
         RestoreIdlePose();
         swingTimer = 0f;
+        ResetBlockActionAnimation();
     }
 
     private void LateUpdate()
@@ -113,8 +128,10 @@ public class PlayerArmSwing : MonoBehaviour
                 legSwingAmount = swingPhase * legSwingAngle;
         }
 
-        ApplyLimbRotation(leftArm, leftIdleLocalRotation, armSwingAmount, cachedArmSwingAxis, blendFactor);
-        ApplyLimbRotation(rightArm, rightIdleLocalRotation, -armSwingAmount, cachedArmSwingAxis, blendFactor);
+        Quaternion rightArmActionRotation = GetBlockActionRotation();
+
+        ApplyLimbRotation(leftArm, ComposeLimbRotation(leftIdleLocalRotation, armSwingAmount, cachedArmSwingAxis), blendFactor);
+        ApplyLimbRotation(rightArm, ComposeLimbRotation(rightIdleLocalRotation, -armSwingAmount, cachedArmSwingAxis, rightArmActionRotation), blendFactor);
         ApplyLimbRotation(leftLeg, leftLegIdleLocalRotation, -legSwingAmount, cachedLegSwingAxis, blendFactor);
         ApplyLimbRotation(rightLeg, rightLegIdleLocalRotation, legSwingAmount, cachedLegSwingAxis, blendFactor);
         ApplyHeadLookRotation(blendFactor);
@@ -155,10 +172,11 @@ public class PlayerArmSwing : MonoBehaviour
     private void ResolveReferences(bool force = false)
     {
         bool movementResolved = characterController != null && movementReference != null;
+        bool blockActionResolved = !enableBlockActionSwing || blockBreaker != null;
         bool headLookReferenceResolved = !enableHeadLook || headLookReference != null;
         bool thirdPersonReferenceResolved = !enableHeadLook || !onlyLookInThirdPerson || fpsController != null;
 
-        if (!force && movementResolved && headLookReferenceResolved && thirdPersonReferenceResolved)
+        if (!force && movementResolved && blockActionResolved && headLookReferenceResolved && thirdPersonReferenceResolved)
             return;
 
         if (!force && Time.unscaledTime < nextReferenceResolveTime)
@@ -178,6 +196,18 @@ public class PlayerArmSwing : MonoBehaviour
 
         if (fpsController == null)
             fpsController = GetComponentInParent<FPSController>();
+
+        if (blockBreaker == null)
+            blockBreaker = GetComponent<PlayerBlockBreaker>();
+
+        if (blockBreaker == null)
+            blockBreaker = GetComponentInParent<PlayerBlockBreaker>();
+
+        if (blockBreaker == null)
+            blockBreaker = GetComponentInChildren<PlayerBlockBreaker>();
+
+        if (blockBreaker == null)
+            blockBreaker = FindAnyObjectByType<PlayerBlockBreaker>();
 
         if (headLookReference == null && fpsController != null)
             headLookReference = fpsController.CameraTransform;
@@ -205,13 +235,74 @@ public class PlayerArmSwing : MonoBehaviour
 
     private void ApplyLimbRotation(Transform limb, Quaternion idleRotation, float swingAmount, Vector3 swingAxis, float blendFactor)
     {
+        ApplyLimbRotation(limb, ComposeLimbRotation(idleRotation, swingAmount, swingAxis), blendFactor);
+    }
+
+    private void ApplyLimbRotation(Transform limb, Quaternion targetRotation, float blendFactor)
+    {
         if (limb == null)
             return;
 
-        Quaternion targetRotation = idleRotation * Quaternion.AngleAxis(swingAmount, swingAxis);
         limb.localRotation = blendFactor >= 1f
             ? targetRotation
             : Quaternion.Lerp(limb.localRotation, targetRotation, blendFactor);
+    }
+
+    private Quaternion GetBlockActionRotation()
+    {
+        if (!enableBlockActionSwing || blockBreaker == null)
+        {
+            ResetBlockActionAnimation();
+            return Quaternion.identity;
+        }
+
+        UpdatePlaceActionTrigger();
+
+        float actionBlendFactor = breakActionBlendSpeed <= 0f
+            ? 1f
+            : 1f - Mathf.Exp(-breakActionBlendSpeed * Time.deltaTime);
+
+        bool shouldAnimateBreak = blockBreaker.IsBreakInProgress;
+        float targetWeight = shouldAnimateBreak ? 1f : 0f;
+        breakActionWeight = actionBlendFactor >= 1f
+            ? targetWeight
+            : Mathf.Lerp(breakActionWeight, targetWeight, actionBlendFactor);
+
+        if (shouldAnimateBreak)
+        {
+            breakActionTimer += Time.deltaTime * breakActionSwingFrequency;
+        }
+        else if (breakActionWeight <= 0.001f)
+        {
+            breakActionTimer = 0f;
+        }
+
+        float breakAngle = 0f;
+        if (breakActionWeight > 0.001f)
+        {
+            float phase = breakActionTimer * Mathf.PI * 2f;
+            float swing = 0.5f - (0.5f * Mathf.Cos(phase));
+            float progressMultiplier = Mathf.Lerp(0.9f, 1f, blockBreaker.BreakProgressNormalized);
+            breakAngle = swing * breakActionSwingAngle * breakActionWeight * progressMultiplier;
+        }
+
+        float placeAngle = 0f;
+        if (placeActionElapsed < float.PositiveInfinity)
+        {
+            placeActionElapsed += Time.deltaTime;
+            float duration = Mathf.Max(0.01f, placeActionDuration);
+            float normalizedTime = Mathf.Clamp01(placeActionElapsed / duration);
+            placeAngle = Mathf.Sin(normalizedTime * Mathf.PI) * placeActionSwingAngle;
+
+            if (normalizedTime >= 1f)
+                placeActionElapsed = float.PositiveInfinity;
+        }
+
+        float totalActionAngle = breakAngle + placeAngle;
+        if (Mathf.Abs(totalActionAngle) <= 0.001f)
+            return Quaternion.identity;
+
+        return Quaternion.AngleAxis(totalActionAngle, cachedArmSwingAxis);
     }
 
     private void ApplyHeadLookRotation(float defaultBlendFactor)
@@ -259,6 +350,56 @@ public class PlayerArmSwing : MonoBehaviour
         lastReferencePosition = movementReference.position;
     }
 
+    private void PrimeBlockActionTracking()
+    {
+        if (blockBreaker == null)
+        {
+            lastSeenPlaceActionVersion = -1;
+            return;
+        }
+
+        lastSeenPlaceActionVersion = blockBreaker.PlaceActionVersion;
+        placeActionElapsed = float.PositiveInfinity;
+    }
+
+    private void ResetBlockActionAnimation()
+    {
+        breakActionWeight = 0f;
+        breakActionTimer = 0f;
+        placeActionElapsed = float.PositiveInfinity;
+    }
+
+    private void UpdatePlaceActionTrigger()
+    {
+        if (blockBreaker == null)
+            return;
+
+        int currentPlaceActionVersion = blockBreaker.PlaceActionVersion;
+        if (lastSeenPlaceActionVersion < 0)
+        {
+            lastSeenPlaceActionVersion = currentPlaceActionVersion;
+            return;
+        }
+
+        if (currentPlaceActionVersion == lastSeenPlaceActionVersion)
+            return;
+
+        lastSeenPlaceActionVersion = currentPlaceActionVersion;
+        placeActionElapsed = 0f;
+    }
+
+    private static Quaternion ComposeLimbRotation(Quaternion idleRotation, float swingAmount, Vector3 swingAxis)
+    {
+        Quaternion swingRotation = Quaternion.AngleAxis(swingAmount, swingAxis);
+        return idleRotation * swingRotation;
+    }
+
+    private static Quaternion ComposeLimbRotation(Quaternion idleRotation, float swingAmount, Vector3 swingAxis, Quaternion extraRotation)
+    {
+        Quaternion swingRotation = Quaternion.AngleAxis(swingAmount, swingAxis);
+        return idleRotation * swingRotation * extraRotation;
+    }
+
     private void OnValidate()
     {
         swingAngle = Mathf.Max(0f, swingAngle);
@@ -267,6 +408,9 @@ public class PlayerArmSwing : MonoBehaviour
         maxSpeedForFullSwing = Mathf.Max(0.01f, maxSpeedForFullSwing);
         blendSpeed = Mathf.Max(0f, blendSpeed);
         movementThreshold = Mathf.Max(0f, movementThreshold);
+        breakActionSwingFrequency = Mathf.Max(0.01f, breakActionSwingFrequency);
+        breakActionBlendSpeed = Mathf.Max(0f, breakActionBlendSpeed);
+        placeActionDuration = Mathf.Max(0.01f, placeActionDuration);
         maxHeadPitch = Mathf.Clamp(maxHeadPitch, 0f, 89f);
         headBlendSpeed = Mathf.Max(0f, headBlendSpeed);
         RefreshCachedState();
