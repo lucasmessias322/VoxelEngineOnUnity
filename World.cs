@@ -504,6 +504,17 @@ public partial class World : MonoBehaviour
     [Tooltip("Quantidade maxima de pedidos de rebuild de chunk processados por frame.")]
     [Min(1)]
     public int maxChunkRebuildsPerFrame = 1;
+    [Tooltip("Agrupa refreshes de mesh/luz apos edicoes de bloco para reduzir spikes quando o player constroi rapido.")]
+    public bool smoothInteractiveBlockEdits = true;
+    [Tooltip("Pequeno atraso maximo antes de reconstruir chunks editados. Mantem a resposta visual curta e permite coalescer varias edicoes.")]
+    [Min(0f)]
+    public float interactiveBlockEditRefreshDelaySeconds = 0.035f;
+    [Tooltip("Quantidade maxima de atualizacoes de luz de bloco processadas por frame apos edicoes interativas.")]
+    [Min(1)]
+    public int maxInteractiveBlockLightRefreshesPerFrame = 1;
+    [Tooltip("Orcamento de tempo (ms) para iniciar refreshes de luz de bloco apos edicoes interativas. Uma atualizacao ja iniciada sempre termina.")]
+    [Min(0f)]
+    public float interactiveBlockLightRefreshBudgetMS = 0.75f;
 
     [Header("Features Toggle")]
     [Tooltip("Liga/desliga o caminho de iluminacao realista dos shaders voxel. Quando desligado, usa uma iluminacao voxel simples.")]
@@ -661,6 +672,7 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
     private readonly Dictionary<Vector2Int, bool> queuedChunkRebuildRequiresCollider = new Dictionary<Vector2Int, bool>();
+    private readonly Dictionary<Vector2Int, float> queuedChunkRebuildEarliestProcessTime = new Dictionary<Vector2Int, float>();
     private readonly Queue<Vector2Int> queuedLightingOnlyChunkRebuilds = new Queue<Vector2Int>();
     private readonly HashSet<Vector2Int> queuedLightingOnlyChunkRebuildsSet = new HashSet<Vector2Int>();
     private readonly Dictionary<Vector2Int, int> queuedLightingOnlyChunkRebuildMasks = new Dictionary<Vector2Int, int>();
@@ -670,6 +682,8 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector2Int> queuedChunkJobTrackingRefreshSet = new HashSet<Vector2Int>();
     private readonly Queue<Vector3Int> queuedColliderBuilds = new Queue<Vector3Int>();
     private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>();
+    private readonly Queue<Vector3Int> queuedInteractiveBlockLightRefreshes = new Queue<Vector3Int>();
+    private readonly Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh> queuedInteractiveBlockLightRefreshesByPosition = new Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh>();
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
     private readonly List<Vector3Int> relevantTerrainOverridePositions = new List<Vector3Int>(128);
     private bool terrainOverrideIndexInitialized = false;
@@ -2541,6 +2555,9 @@ public partial class World : MonoBehaviour
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedTreeCapitatorBreaks();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedInteractiveBlockLightRefreshes();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedChunkRebuilds();

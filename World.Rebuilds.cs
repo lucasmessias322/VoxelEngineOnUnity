@@ -118,6 +118,16 @@ public partial class World
 
     private void RequestChunkRebuild(Vector2Int coord, int dirtySubchunkMask, bool rebuildColliders)
     {
+        RequestChunkRebuild(coord, dirtySubchunkMask, rebuildColliders, 0f);
+    }
+
+    private void RequestChunkRebuildDelayed(Vector2Int coord, int dirtySubchunkMask, bool rebuildColliders, float delaySeconds)
+    {
+        RequestChunkRebuild(coord, dirtySubchunkMask, rebuildColliders, delaySeconds);
+    }
+
+    private void RequestChunkRebuild(Vector2Int coord, int dirtySubchunkMask, bool rebuildColliders, float delaySeconds)
+    {
         dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
         if (dirtySubchunkMask == 0)
             return;
@@ -131,6 +141,19 @@ public partial class World
             queuedChunkRebuildRequiresCollider[coord] = existingRequiresCollider || rebuildColliders;
         else
             queuedChunkRebuildRequiresCollider[coord] = rebuildColliders;
+
+        if (delaySeconds > 0f)
+        {
+            float requestedTime = Time.time + delaySeconds;
+            if (queuedChunkRebuildEarliestProcessTime.TryGetValue(coord, out float existingTime))
+                queuedChunkRebuildEarliestProcessTime[coord] = Mathf.Min(existingTime, requestedTime);
+            else if (!queuedChunkRebuildsSet.Contains(coord))
+                queuedChunkRebuildEarliestProcessTime[coord] = requestedTime;
+        }
+        else
+        {
+            queuedChunkRebuildEarliestProcessTime.Remove(coord);
+        }
 
         if (queuedChunkRebuildsSet.Add(coord))
             queuedChunkRebuilds.Enqueue(coord);
@@ -167,6 +190,16 @@ public partial class World
         {
             Vector2Int coord = queuedChunkRebuilds.Dequeue();
             queuedChunkRebuildsSet.Remove(coord);
+
+            if (queuedChunkRebuildEarliestProcessTime.TryGetValue(coord, out float earliestProcessTime) &&
+                Time.time < earliestProcessTime)
+            {
+                if (queuedChunkRebuildsSet.Add(coord))
+                    queuedChunkRebuilds.Enqueue(coord);
+                continue;
+            }
+
+            queuedChunkRebuildEarliestProcessTime.Remove(coord);
 
             if (!queuedChunkRebuildMasks.TryGetValue(coord, out int dirtySubchunkMask))
             {

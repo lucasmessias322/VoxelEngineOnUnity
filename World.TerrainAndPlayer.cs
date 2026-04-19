@@ -54,6 +54,14 @@ public partial class World : MonoBehaviour
         public Vector3 throwDirection;
     }
 
+    private struct PendingInteractiveBlockLightRefresh
+    {
+        public Vector3Int position;
+        public BlockType previousType;
+        public BlockType newType;
+        public float earliestRefreshTime;
+    }
+
     private struct LeafSupportSearchNode
     {
         public Vector3Int position;
@@ -148,7 +156,64 @@ public partial class World : MonoBehaviour
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
         emissiveBlockLightController?.NotifyBlockChanged(worldPos, current, type);
 
-        int terrainDirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, current, type);
+        RequestBlockEditRefresh(worldPos, chunkCoord, current, type);
+    }
+
+    private void RequestBlockEditRefresh(
+        Vector3Int worldPos,
+        Vector2Int chunkCoord,
+        BlockType previousType,
+        BlockType newType)
+    {
+        int chunksToRebuildCount = CollectBlockEditRebuildChunks(worldPos, chunkCoord);
+        int localX = worldPos.x - (chunkCoord.x * Chunk.SizeX);
+        int localZ = worldPos.z - (chunkCoord.y * Chunk.SizeZ);
+        float refreshDelay = GetInteractiveBlockEditRefreshDelaySeconds();
+        bool smoothRefresh = ShouldSmoothInteractiveBlockEditRefresh(refreshDelay);
+
+        // Fora da altura simulada por chunk, mantemos apenas override:
+        // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.
+        if (worldPos.y >= Chunk.SizeY)
+        {
+            IndexHighOverride(worldPos, chunkCoord, newType);
+
+            RequestHighBuildMeshRebuild(chunkCoord);
+            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
+            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
+            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
+            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
+
+            if (worldPos.y == Chunk.SizeY || worldPos.y == Chunk.SizeY + 1)
+            {
+                int topTerrainSubchunkMask = GetDirtySubchunkMaskForWorldY(Chunk.SizeY - 1);
+                for (int i = 0; i < chunksToRebuildCount; i++)
+                    RequestBlockEditChunkRebuild(blockChangeChunksToRebuildBuffer[i], topTerrainSubchunkMask, smoothRefresh, refreshDelay);
+            }
+            return;
+        }
+
+        int terrainDirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, previousType, newType);
+        for (int i = 0; i < chunksToRebuildCount; i++)
+            RequestBlockEditChunkRebuild(blockChangeChunksToRebuildBuffer[i], terrainDirtySubchunkMask, smoothRefresh, refreshDelay);
+
+        if (smoothRefresh)
+            QueueInteractiveBlockLightRefresh(worldPos, previousType, newType, refreshDelay);
+        else
+            ApplyBlockEditLightRefresh(worldPos, previousType, newType);
+
+        // Mudanca no topo do chunk pode expor/ocultar a face inferior de construcoes altas.
+        if (worldPos.y >= Chunk.SizeY - 1)
+        {
+            RequestHighBuildMeshRebuild(chunkCoord);
+            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
+            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
+            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
+            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
+        }
+    }
+
+    private int CollectBlockEditRebuildChunks(Vector3Int worldPos, Vector2Int chunkCoord)
+    {
         int chunksToRebuildCount = 0;
         AddUniqueChunkCoordToBuffer(chunkCoord, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
 
@@ -164,31 +229,158 @@ public partial class World : MonoBehaviour
         if (localX == Chunk.SizeX - 1 && localZ == 0) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.right + Vector2Int.down, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
         if (localX == Chunk.SizeX - 1 && localZ == Chunk.SizeZ - 1) AddUniqueChunkCoordToBuffer(chunkCoord + Vector2Int.right + Vector2Int.up, blockChangeChunksToRebuildBuffer, ref chunksToRebuildCount);
 
-        // Fora da altura simulada por chunk, mantemos apenas override:
-        // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.
-        if (worldPos.y >= Chunk.SizeY)
+        return chunksToRebuildCount;
+    }
+
+    private void RequestBlockEditChunkRebuild(Vector2Int coord, int dirtySubchunkMask, bool smoothRefresh, float refreshDelay)
+    {
+        if (smoothRefresh)
+            RequestChunkRebuildDelayed(coord, dirtySubchunkMask, true, refreshDelay);
+        else
+            RequestChunkRebuild(coord, dirtySubchunkMask);
+    }
+
+    private float GetInteractiveBlockEditRefreshDelaySeconds()
+    {
+        return Mathf.Max(0f, interactiveBlockEditRefreshDelaySeconds);
+    }
+
+    private bool ShouldSmoothInteractiveBlockEditRefresh(float refreshDelay)
+    {
+        return smoothInteractiveBlockEdits && refreshDelay > 0f;
+    }
+
+    private void QueueInteractiveBlockLightRefresh(
+        Vector3Int worldPos,
+        BlockType previousType,
+        BlockType newType,
+        float refreshDelay)
+    {
+        if (!DoesBlockEditNeedBlockLightRefresh(worldPos, previousType, newType))
+            return;
+
+        float requestedTime = Time.time + Mathf.Max(0f, refreshDelay);
+        if (queuedInteractiveBlockLightRefreshesByPosition.TryGetValue(worldPos, out PendingInteractiveBlockLightRefresh existing))
         {
-            IndexHighOverride(worldPos, chunkCoord, type);
+            existing.newType = newType;
+            existing.earliestRefreshTime = Mathf.Min(existing.earliestRefreshTime, requestedTime);
 
-            RequestHighBuildMeshRebuild(chunkCoord);
-            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
-            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
-            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
-            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
-
-            if (worldPos.y == Chunk.SizeY || worldPos.y == Chunk.SizeY + 1)
+            if (existing.previousType == existing.newType)
             {
-                int topTerrainSubchunkMask = GetDirtySubchunkMaskForWorldY(Chunk.SizeY - 1);
-                for (int i = 0; i < chunksToRebuildCount; i++)
-                    RequestChunkRebuild(blockChangeChunksToRebuildBuffer[i], topTerrainSubchunkMask);
+                queuedInteractiveBlockLightRefreshesByPosition.Remove(worldPos);
+                return;
             }
+
+            queuedInteractiveBlockLightRefreshesByPosition[worldPos] = existing;
             return;
         }
 
-        ushort newEmission = GetBlockEmissionPacked(type);
-        ushort oldEmission = GetBlockEmissionPacked(current);
-        byte newOpacity = GetBlockOpacity(type);
-        byte oldOpacity = GetBlockOpacity(current);
+        if (previousType == newType)
+            return;
+
+        queuedInteractiveBlockLightRefreshesByPosition[worldPos] = new PendingInteractiveBlockLightRefresh
+        {
+            position = worldPos,
+            previousType = previousType,
+            newType = newType,
+            earliestRefreshTime = requestedTime
+        };
+        queuedInteractiveBlockLightRefreshes.Enqueue(worldPos);
+    }
+
+    private void ProcessQueuedInteractiveBlockLightRefreshes()
+    {
+        if (queuedInteractiveBlockLightRefreshes.Count == 0)
+            return;
+
+        float stepStartTime = Time.realtimeSinceStartup;
+        float timeBudgetSeconds = interactiveBlockLightRefreshBudgetMS > 0f ? interactiveBlockLightRefreshBudgetMS / 1000f : 0f;
+        int perFrameLimit = Mathf.Max(1, maxInteractiveBlockLightRefreshesPerFrame);
+        int processed = 0;
+        int attempts = queuedInteractiveBlockLightRefreshes.Count;
+        float now = Time.time;
+
+        while (processed < perFrameLimit && attempts-- > 0 && queuedInteractiveBlockLightRefreshes.Count > 0)
+        {
+            if (processed > 0 &&
+                timeBudgetSeconds > 0f &&
+                Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+            {
+                break;
+            }
+
+            Vector3Int worldPos = queuedInteractiveBlockLightRefreshes.Dequeue();
+            if (!queuedInteractiveBlockLightRefreshesByPosition.TryGetValue(worldPos, out PendingInteractiveBlockLightRefresh request))
+                continue;
+
+            if (request.earliestRefreshTime > now)
+            {
+                queuedInteractiveBlockLightRefreshes.Enqueue(worldPos);
+                continue;
+            }
+
+            queuedInteractiveBlockLightRefreshesByPosition.Remove(worldPos);
+            ApplyBlockEditLightRefresh(request.position, request.previousType, request.newType);
+            processed++;
+        }
+    }
+
+    private bool DoesBlockEditNeedBlockLightRefresh(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        if (!enableVoxelLighting ||
+            worldPos.y < 0 ||
+            worldPos.y >= Chunk.SizeY ||
+            previousType == newType)
+        {
+            return false;
+        }
+
+        ushort newEmission = GetBlockEmissionPacked(newType);
+        ushort oldEmission = GetBlockEmissionPacked(previousType);
+        if (LightUtils.HasBlockLight(newEmission) || LightUtils.HasBlockLight(oldEmission))
+            return true;
+
+        byte newOpacity = GetBlockOpacity(newType);
+        byte oldOpacity = GetBlockOpacity(previousType);
+        bool becameOpaque = oldOpacity < 15 && newOpacity >= 15;
+        bool becameTransparent = oldOpacity >= 15 && newOpacity < 15;
+        if (!becameOpaque && !becameTransparent)
+            return false;
+
+        return LightUtils.HasBlockLight(GetColumnLight(worldPos.x, worldPos.z, worldPos.y)) ||
+               HasAdjacentLoadedBlockLight(worldPos);
+    }
+
+    private bool HasAdjacentLoadedBlockLight(Vector3Int worldPos)
+    {
+        for (int i = 0; i < sixDirections.Length; i++)
+        {
+            Vector3Int neighborPos = worldPos + sixDirections[i];
+            if (neighborPos.y < 0 || neighborPos.y >= Chunk.SizeY)
+                continue;
+
+            Vector2Int neighborChunk = new Vector2Int(
+                Mathf.FloorToInt((float)neighborPos.x / Chunk.SizeX),
+                Mathf.FloorToInt((float)neighborPos.z / Chunk.SizeZ));
+            if (!IsChunkLoaded(neighborChunk))
+                continue;
+
+            if (LightUtils.HasBlockLight(GetColumnLight(neighborPos.x, neighborPos.z, neighborPos.y)))
+                return true;
+        }
+
+        return false;
+    }
+
+    private void ApplyBlockEditLightRefresh(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        if (!enableVoxelLighting || worldPos.y < 0 || worldPos.y >= Chunk.SizeY)
+            return;
+
+        ushort newEmission = GetBlockEmissionPacked(newType);
+        ushort oldEmission = GetBlockEmissionPacked(previousType);
+        byte newOpacity = GetBlockOpacity(newType);
+        byte oldOpacity = GetBlockOpacity(previousType);
 
         bool hadEmission = LightUtils.HasBlockLight(oldEmission);
         bool hasEmission = LightUtils.HasBlockLight(newEmission);
@@ -212,26 +404,9 @@ public partial class World : MonoBehaviour
             bool becameTransparent = oldOpacity >= 15 && newOpacity < 15;
 
             if (becameOpaque)
-            {
                 RemoveLightGlobal(worldPos);
-            }
             else if (becameTransparent)
-            {
                 RefillLightGlobal(worldPos);
-            }
-        }
-
-        for (int i = 0; i < chunksToRebuildCount; i++)
-            RequestChunkRebuild(blockChangeChunksToRebuildBuffer[i], terrainDirtySubchunkMask);
-
-        // Mudanca no topo do chunk pode expor/ocultar a face inferior de construcoes altas.
-        if (worldPos.y >= Chunk.SizeY - 1)
-        {
-            RequestHighBuildMeshRebuild(chunkCoord);
-            if (localX == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.left);
-            if (localX == Chunk.SizeX - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.right);
-            if (localZ == 0) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.down);
-            if (localZ == Chunk.SizeZ - 1) RequestHighBuildMeshRebuild(chunkCoord + Vector2Int.up);
         }
     }
 
