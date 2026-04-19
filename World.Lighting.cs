@@ -219,7 +219,7 @@ public partial class World
                 if (!activeChunks.ContainsKey(neighborCoord))
                     continue;
 
-                RequestChunkRebuild(neighborCoord, fullMask, false);
+                RequestLightingOnlyChunkRebuild(neighborCoord, fullMask);
             }
         }
     }
@@ -322,7 +322,7 @@ public partial class World
             return;
 
         foreach (var kv in dirtiedChunks)
-            RequestChunkRebuild(kv.Key, kv.Value, false);
+            RequestLightingOnlyChunkRebuild(kv.Key, kv.Value);
     }
     public void RemoveLightGlobal(Vector3Int startWorldPos)
     {
@@ -508,7 +508,7 @@ public partial class World
         }
 
         foreach (var kv in dirtiedChunks)
-            RequestChunkRebuild(kv.Key, kv.Value, false);
+            RequestLightingOnlyChunkRebuild(kv.Key, kv.Value);
 
         CleanupEmptyLightColumns(columnsToCleanup);
         affectedContributions.Clear();
@@ -626,7 +626,7 @@ public partial class World
 
         foreach (var kv in dirtiedChunks)
         {
-            RequestChunkRebuild(kv.Key, kv.Value, false);
+            RequestLightingOnlyChunkRebuild(kv.Key, kv.Value);
         }
     }
 

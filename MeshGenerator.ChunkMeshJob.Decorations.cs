@@ -92,7 +92,9 @@ public static partial class MeshGenerator
                             BlockRenderShape effectiveShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
                             if (!mapping.isEmpty && effectiveShape != BlockRenderShape.Cube)
                             {
-                                float specialLight01 = GetSpecialMeshLight01(x, y, z, voxelSizeX, voxelSizeZ, light);
+                                currentSubchunkSupportsLightingOnlyRebuild = false;
+                                activeSpecialMeshLightChannels = GetSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
+                                float specialLight01 = GetResolvedLight01(activeSpecialMeshLightChannels);
                                 Vector3 origin = new Vector3(x - border, y, z - border);
                                 byte rawPlacementData = GetBlockPlacementAxisValue(idx);
                                 BlockPlacementAxis placementAxis = blockType == BlockType.wire &&
@@ -218,6 +220,7 @@ public static partial class MeshGenerator
                             y >= startY &&
                             blockType == BlockType.Leaves)
                         {
+                            currentSubchunkSupportsLightingOnlyRebuild = false;
                             if (generateUltraLeafFoliage)
                             {
                                 AddUltraLeafBillboardFoliage(
@@ -266,6 +269,7 @@ public static partial class MeshGenerator
                         if (!TryResolveVegetationBillboardRule(blockType, worldX, py, worldZ, noiseScale, out BlockType billboardBlockType, out uint variationHash))
                             continue;
 
+                        currentSubchunkSupportsLightingOnlyRebuild = false;
                         int billboardMappingIndex = (int)billboardBlockType;
                         if ((uint)billboardMappingIndex >= (uint)blockMappings.Length)
                             continue;
@@ -505,7 +509,7 @@ public static partial class MeshGenerator
             uint blockLightColor,
             float tint)
         {
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
             Vector3 planeNormal = ComputeQuadPlaneNormal(p0, p1, p2);
 
             Vector4 e = new Vector4(math.saturate(skyLight01), tint, 1f, 0f);
@@ -2779,7 +2783,7 @@ public static partial class MeshGenerator
                 ResolveAtlasRect(mapping, textureFace, invAtlasTilesX, invAtlasTilesY, out atlasUv, out atlasSize);
             }
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
 
             ResolveCustomFaceVertexAOFrame(sampledFace, p0, normal, out Vector3 aoNormal0, out Vector3 stepU0, out Vector3 stepV0);
             ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
@@ -2847,7 +2851,7 @@ public static partial class MeshGenerator
             bool tint = mapping.GetTint(sampledFace);
             ResolveAtlasRect(mapping, sampledFace, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
             FixedList512Bytes<ShapeBox> emptyShapeBoxes = default;
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
 
             ResolveCustomFaceVertexAOFrame(sampledFace, p0, normal, out Vector3 aoNormal0, out Vector3 stepU0, out Vector3 stepV0);
             ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
@@ -2948,7 +2952,7 @@ public static partial class MeshGenerator
             BlockPlacementAxis currentPlacementAxis,
             RampShapeVariant currentRampVariant)
         {
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
             Vector2 atlasUv;
             Vector2 atlasSize;
             if (BlockAtlasUvUtility.IsValidUvRectData(explicitUvRectData))
@@ -3020,13 +3024,15 @@ public static partial class MeshGenerator
             }
 
             float floatTint = tint ? 1f : 0f;
+            VoxelLightChannels lightChannels = ResolveActiveSpecialMeshLightChannels(light01);
             AddPackedVertex(
                 position,
                 normal,
                 uv,
                 atlasUv,
-                new Vector4(light01, floatTint, ResolveAmbientOcclusionFactor(aoValue), 0f),
-                atlasSize);
+                new Vector4(lightChannels.sky, floatTint, ResolveAmbientOcclusionFactor(aoValue), 0f),
+                EncodeAtlasSizeWithBlockLight(atlasSize, lightChannels),
+                lightChannels.blockLightColor);
         }
 
         private bool IsAmbientOccluderAtPoint(
@@ -3305,12 +3311,14 @@ public static partial class MeshGenerator
                 atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
             }
 
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
-            Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
-            AddPackedVertex(p0, normal, uv0, atlasUv, extra, atlasSize);
-            AddPackedVertex(p1, normal, uv1, atlasUv, extra, atlasSize);
-            AddPackedVertex(p2, normal, uv2, atlasUv, extra, atlasSize);
-            AddPackedVertex(p3, normal, uv3, atlasUv, extra, atlasSize);
+            int vIndex = GetCurrentSliceVertexIndex();
+            VoxelLightChannels lightChannels = ResolveActiveSpecialMeshLightChannels(light01);
+            Vector4 extra = new Vector4(lightChannels.sky, tint ? 1f : 0f, 1f, 0f);
+            Vector4 atlasAndBlockLight = EncodeAtlasSizeWithBlockLight(atlasSize, lightChannels);
+            AddPackedVertex(p0, normal, uv0, atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p1, normal, uv1, atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p2, normal, uv2, atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p3, normal, uv3, atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
 
             if (invertWinding)
             {

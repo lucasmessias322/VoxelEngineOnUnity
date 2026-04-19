@@ -77,7 +77,8 @@ public static partial class MeshGenerator
         public NativeList<int> transparentTriangles;
         public NativeList<int> billboardTriangles;
         public NativeArray<ulong> subchunkVisibilityMasks;
-        private int currentSubchunkVertexStart;
+        private VoxelLightChannels activeSpecialMeshLightChannels;
+        private bool currentSubchunkSupportsLightingOnlyRebuild;
 
         private struct GreedyFaceData
         {
@@ -124,9 +125,15 @@ public static partial class MeshGenerator
                     if (!subchunkNonEmpty[sub])
                     {
                         subchunkVisibilityMasks[sub] = SubchunkOcclusion.AllVisibleMask;
-                        subchunkRanges[sub] = default;
+                        subchunkRanges[sub] = new SubchunkMeshRange
+                        {
+                            supportsLightingOnlyRebuild = 1
+                        };
                         continue;
                     }
+
+                    currentSubchunkSupportsLightingOnlyRebuild = true;
+                    activeSpecialMeshLightChannels = default;
 
                     SubchunkMeshRange range = new SubchunkMeshRange
                     {
@@ -136,7 +143,6 @@ public static partial class MeshGenerator
                         billboardStart = billboardTriangles.Length,
                         waterStart = waterTriangles.Length
                     };
-                    currentSubchunkVertexStart = range.vertexStart;
 
                     subchunkVisibilityMasks[sub] = ComputeVisibilityMask(occlusionState, occlusionQueue);
 
@@ -148,6 +154,7 @@ public static partial class MeshGenerator
                     range.transparentCount = transparentTriangles.Length - range.transparentStart;
                     range.billboardCount = billboardTriangles.Length - range.billboardStart;
                     range.waterCount = waterTriangles.Length - range.waterStart;
+                    range.supportsLightingOnlyRebuild = currentSubchunkSupportsLightingOnlyRebuild ? (byte)1 : (byte)0;
                     subchunkRanges[sub] = range;
                 }
             }
@@ -158,9 +165,9 @@ public static partial class MeshGenerator
             }
         }
 
-        private int GetCurrentSubchunkLocalVertexIndex()
+        private int GetCurrentSliceVertexIndex()
         {
-            return vertices.Length - currentSubchunkVertexStart;
+            return vertices.Length;
         }
 
         private void AddPackedVertex(Vector3 position, Vector3 normal, Vector2 uv0, Vector2 uv1, Vector4 uv2, Vector2 uv3)

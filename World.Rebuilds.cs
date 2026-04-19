@@ -136,6 +136,24 @@ public partial class World
             queuedChunkRebuilds.Enqueue(coord);
     }
 
+    private void RequestLightingOnlyChunkRebuild(Vector2Int coord, int dirtySubchunkMask)
+    {
+        if (!enableVoxelLighting)
+            return;
+
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        if (dirtySubchunkMask == 0 || HasQueuedChunkRebuild(coord))
+            return;
+
+        if (queuedLightingOnlyChunkRebuildMasks.TryGetValue(coord, out int existingMask))
+            queuedLightingOnlyChunkRebuildMasks[coord] = existingMask | dirtySubchunkMask;
+        else
+            queuedLightingOnlyChunkRebuildMasks[coord] = dirtySubchunkMask;
+
+        if (queuedLightingOnlyChunkRebuildsSet.Add(coord))
+            queuedLightingOnlyChunkRebuilds.Enqueue(coord);
+    }
+
     private void ProcessQueuedChunkRebuilds()
     {
         if (queuedChunkRebuilds.Count == 0)
@@ -171,6 +189,181 @@ public partial class World
         }
     }
 
+    private void ProcessQueuedLightingOnlyChunkRebuilds()
+    {
+        if (!enableVoxelLighting || queuedLightingOnlyChunkRebuilds.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, maxChunkRebuildsPerFrame);
+        int processed = 0;
+        int attempts = queuedLightingOnlyChunkRebuilds.Count;
+
+        while (processed < perFrameLimit && attempts-- > 0)
+        {
+            Vector2Int coord = queuedLightingOnlyChunkRebuilds.Dequeue();
+            queuedLightingOnlyChunkRebuildsSet.Remove(coord);
+
+            if (!queuedLightingOnlyChunkRebuildMasks.TryGetValue(coord, out int dirtySubchunkMask))
+                continue;
+
+            queuedLightingOnlyChunkRebuildMasks.Remove(coord);
+            if (HasQueuedChunkRebuild(coord))
+                continue;
+
+            if (IsChunkJobPending(coord))
+            {
+                RequestLightingOnlyChunkRebuild(coord, dirtySubchunkMask);
+                continue;
+            }
+
+            if (RequestLightingOnlyChunkRebuildImmediate(coord, dirtySubchunkMask))
+                processed++;
+        }
+    }
+
+    private bool SupportsLightingOnlyRebuildForVisualSlice(Chunk chunk, int visualSliceIndex)
+    {
+        if (chunk == null)
+            return false;
+
+        return chunk.TryGetVisualSliceLightingOnlyRebuildSupport(visualSliceIndex, out bool supports) && supports;
+    }
+
+    private bool RequestLightingOnlyChunkRebuildImmediate(Vector2Int coord, int dirtySubchunkMask)
+    {
+        if (!enableVoxelLighting || !activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+            return false;
+
+        dirtySubchunkMask = SanitizeDirtySubchunkMask(dirtySubchunkMask);
+        if (dirtySubchunkMask == 0)
+            return false;
+
+        if (chunk.jobScheduled)
+        {
+            if (!chunk.currentJob.IsCompleted)
+            {
+                RequestLightingOnlyChunkRebuild(coord, dirtySubchunkMask);
+                return false;
+            }
+
+            chunk.CompleteTrackedJob();
+            chunk.jobScheduled = false;
+            chunk.currentJob = default;
+        }
+
+        if (!chunk.HasInitializedSubchunks || !chunk.hasVoxelData || !chunk.hasVoxelSnapshot)
+        {
+            RequestChunkRebuild(coord, dirtySubchunkMask, false);
+            return true;
+        }
+
+        int touchedVisualSliceMask = 0;
+        bool hasUnsupportedLightingOnlySlice = false;
+        int visualSliceCount = chunk.visualSlices != null
+            ? chunk.visualSlices.Length
+            : Chunk.GetVisualSliceCount(chunk.visualSubchunksPerRenderer);
+
+        for (int sliceIndex = 0; sliceIndex < visualSliceCount; sliceIndex++)
+        {
+            int sliceMask = chunk.GetVisualSliceMask(sliceIndex);
+            if ((sliceMask & dirtySubchunkMask) == 0)
+                continue;
+
+            touchedVisualSliceMask |= sliceMask;
+            if (!SupportsLightingOnlyRebuildForVisualSlice(chunk, sliceIndex))
+                hasUnsupportedLightingOnlySlice = true;
+        }
+
+        if (hasUnsupportedLightingOnlySlice)
+        {
+            RequestChunkRebuild(coord, touchedVisualSliceMask, false);
+            return true;
+        }
+
+        int lightBorderSize = GetMeshNeighborPadding();
+        int voxelSizeX = Chunk.SizeX + 2 * lightBorderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * lightBorderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        NativeArray<ushort> chunkBlockLightData = MeshGenerator.RentUshortBuffer(voxelSizeX * Chunk.SizeY * voxelSizeZ, true);
+        if (globalLightColumns.Count > 0)
+            InjectGlobalLightColumns(chunkBlockLightData, coord.x * Chunk.SizeX, coord.y * Chunk.SizeZ, lightBorderSize, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+        chunk.UpdateBlockLightSnapshot(chunkBlockLightData, lightBorderSize);
+
+        JobHandle combinedRelightHandle = default;
+        bool hasScheduledRelightJobs = false;
+        int expectedGen = chunk.generation;
+
+        for (int sliceIndex = 0; sliceIndex < visualSliceCount; sliceIndex++)
+        {
+            int sliceDirtySubchunkMask = chunk.GetVisualSliceMask(sliceIndex) & dirtySubchunkMask;
+            if (sliceDirtySubchunkMask == 0)
+                continue;
+
+            if (!chunk.TryGetVisualSlice(sliceIndex, out ChunkRenderSlice visualSlice) ||
+                visualSlice == null ||
+                !visualSlice.HasGeometry)
+            {
+                continue;
+            }
+
+            NativeList<MeshGenerator.PackedChunkVertex> relitVertices = MeshGenerator.RentMeshVertexList(Mathf.Max(1, visualSlice.VertexCount));
+            if (!visualSlice.TryCaptureVertexData(relitVertices))
+            {
+                MeshGenerator.ReturnMeshVertexList(ref relitVertices);
+                continue;
+            }
+
+            MeshGenerator.ScheduleRelightJob(relitVertices, chunkBlockLightData, lightBorderSize, out JobHandle relightHandle);
+            combinedRelightHandle = hasScheduledRelightJobs
+                ? JobHandle.CombineDependencies(combinedRelightHandle, relightHandle)
+                : relightHandle;
+            hasScheduledRelightJobs = true;
+
+            pendingMeshes.Add(new PendingMesh
+            {
+                handle = relightHandle,
+                jobCompleted = false,
+                vertices = relitVertices,
+                opaqueTriangles = default,
+                transparentTriangles = default,
+                billboardTriangles = default,
+                waterTriangles = default,
+                coord = coord,
+                expectedGen = expectedGen,
+                parentChunk = chunk,
+                subchunkRanges = default,
+                subchunkVisibilityMasks = default,
+                dirtySubchunkMask = sliceDirtySubchunkMask,
+                visualSliceIndex = sliceIndex,
+                heightCache = default,
+                blockTypes = default,
+                solids = default,
+                light = default,
+                suppressedBillboards = default,
+                buildColliders = false,
+                lightingOnlyRebuild = true
+            });
+            pendingJobPrioritiesDirty = true;
+        }
+
+        if (!hasScheduledRelightJobs)
+        {
+            MeshGenerator.ReturnUshortBuffer(ref chunkBlockLightData);
+            return true;
+        }
+
+        pendingChunkDataBufferReturns.Add(new PendingChunkDataBufferReturn
+        {
+            handle = combinedRelightHandle,
+            light = chunkBlockLightData
+        });
+
+        chunk.currentJob = combinedRelightHandle;
+        chunk.jobScheduled = true;
+        return true;
+    }
+
     private void RequestChunkRebuildImmediate(Vector2Int coord, int dirtySubchunkMask, bool rebuildColliders)
     {
         if (!activeChunks.TryGetValue(coord, out Chunk chunk))
@@ -195,11 +388,15 @@ public partial class World
 
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
+        bool useDetailedGeneration = ShouldChunkUseDetailedGeneration(coord);
+        chunk.requestedDetailedGeneration = useDetailedGeneration;
 
-        if (TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders))
+        if (chunk.hasDetailedGenerationData == useDetailedGeneration &&
+            TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders))
             return;
 
         chunk.hasVoxelData = false;
+        chunk.hasVoxelSnapshot = false;
 
         rebuildChunkEditsBuffer.Clear();
         int dataBorderSize = GetDetailedGenerationBorderSize();
@@ -260,7 +457,7 @@ public partial class World
             enableTrees,
             cachedNativeOreSettings,
             cachedNativeTreeSpawnRules,
-            caveSpaghettiSettings,
+            GetSpaghettiCaveSettingsForChunk(useDetailedGeneration),
             enableVoxelLighting,
             enableHorizontalSkylight,
             horizontalSkylightStepLoss,

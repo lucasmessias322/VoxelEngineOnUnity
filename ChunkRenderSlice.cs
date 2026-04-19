@@ -54,6 +54,7 @@ public class ChunkRenderSlice : MonoBehaviour
     public int StartSubchunkIndex => startSubchunkIndex;
     public int EndSubchunkIndexExclusive => startSubchunkIndex + subchunkCount;
     public bool HasGeometry => hasGeometry;
+    public int VertexCount => mesh != null ? mesh.vertexCount : 0;
 
     public void Initialize(Material[] materials, int sliceIndex, int sliceStartSubchunkIndex, int sliceSubchunkCount)
     {
@@ -165,6 +166,54 @@ public class ChunkRenderSlice : MonoBehaviour
         SetActiveState(false);
     }
 
+    public bool TryCaptureVertexData(NativeList<MeshGenerator.PackedChunkVertex> output)
+    {
+        if (output.IsCreated)
+            output.Clear();
+
+        if (!hasGeometry || mesh == null)
+            return false;
+
+        int vertexCount = mesh.vertexCount;
+        if (vertexCount <= 0)
+            return false;
+
+        output.ResizeUninitialized(vertexCount);
+        Mesh.MeshDataArray readOnlyMeshData = Mesh.AcquireReadOnlyMeshData(mesh);
+        try
+        {
+            NativeArray<MeshGenerator.PackedChunkVertex> sourceVertices = readOnlyMeshData[0].GetVertexData<MeshGenerator.PackedChunkVertex>();
+            NativeArray<MeshGenerator.PackedChunkVertex>.Copy(sourceVertices, 0, output.AsArray(), 0, vertexCount);
+        }
+        finally
+        {
+            readOnlyMeshData.Dispose();
+        }
+
+        return true;
+    }
+
+    public bool ApplyRelitVertexData(NativeList<MeshGenerator.PackedChunkVertex> vertices)
+    {
+        if (!hasGeometry || mesh == null || !vertices.IsCreated)
+            return false;
+
+        int vertexCount = mesh.vertexCount;
+        if (vertexCount <= 0 || vertices.Length != vertexCount)
+            return false;
+
+        mesh.SetVertexBufferData(
+            vertices.AsArray(),
+            0,
+            0,
+            vertexCount,
+            0,
+            MeshUpdateFlags.DontRecalculateBounds |
+            MeshUpdateFlags.DontValidateIndices |
+            MeshUpdateFlags.DontNotifyMeshUsers);
+        return true;
+    }
+
     private SliceMeshTotals CalculateMeshTotals(NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges)
     {
         int totalVertexCount = 0;
@@ -202,46 +251,16 @@ public class ChunkRenderSlice : MonoBehaviour
         NativeArray<int> indexData,
         SliceMeshTotals totals)
     {
-        if (subchunkCount <= 1)
-        {
-            NativeArray<MeshGenerator.PackedChunkVertex>.Copy(vertices.AsArray(), vertexData, totals.vertexCount);
+        NativeArray<MeshGenerator.PackedChunkVertex>.Copy(vertices.AsArray(), vertexData, totals.vertexCount);
 
-            int opaqueWriteOffset = 0;
-            int transparentWriteOffset = totals.opaqueCount;
-            int waterWriteOffset = totals.opaqueCount + totals.TotalTransparentLikeCount;
+        int opaqueWriteOffset = 0;
+        int transparentWriteOffset = totals.opaqueCount;
+        int waterWriteOffset = totals.opaqueCount + totals.TotalTransparentLikeCount;
 
-            CopyTriangleRange(indexData, ref opaqueWriteOffset, opaqueTris);
-            CopyTriangleRange(indexData, ref transparentWriteOffset, transparentTris);
-            CopyTriangleRange(indexData, ref transparentWriteOffset, billboardTris);
-            CopyTriangleRange(indexData, ref waterWriteOffset, waterTris);
-            return;
-        }
-
-        int targetVertexStart = 0;
-        int opaqueWriteOffsetMulti = 0;
-        int transparentWriteOffsetMulti = totals.opaqueCount;
-        int waterWriteOffsetMulti = totals.opaqueCount + totals.TotalTransparentLikeCount;
-
-        for (int sub = startSubchunkIndex; sub < EndSubchunkIndexExclusive; sub++)
-        {
-            MeshGenerator.SubchunkMeshRange range = subchunkRanges[sub];
-            if (range.vertexCount <= 0)
-                continue;
-
-            NativeArray<MeshGenerator.PackedChunkVertex>.Copy(
-                vertices.AsArray(),
-                range.vertexStart,
-                vertexData,
-                targetVertexStart,
-                range.vertexCount);
-
-            CopyTriangleRangeRebased(indexData, ref opaqueWriteOffsetMulti, opaqueTris, range.opaqueStart, range.opaqueCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref transparentWriteOffsetMulti, transparentTris, range.transparentStart, range.transparentCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref transparentWriteOffsetMulti, billboardTris, range.billboardStart, range.billboardCount, targetVertexStart);
-            CopyTriangleRangeRebased(indexData, ref waterWriteOffsetMulti, waterTris, range.waterStart, range.waterCount, targetVertexStart);
-
-            targetVertexStart += range.vertexCount;
-        }
+        CopyTriangleRange(indexData, ref opaqueWriteOffset, opaqueTris);
+        CopyTriangleRange(indexData, ref transparentWriteOffset, transparentTris);
+        CopyTriangleRange(indexData, ref transparentWriteOffset, billboardTris);
+        CopyTriangleRange(indexData, ref waterWriteOffset, waterTris);
     }
 
     private static void ConfigureSubMeshes(Mesh.MeshData meshData, SliceMeshTotals totals)
@@ -291,21 +310,6 @@ public class ChunkRenderSlice : MonoBehaviour
             return;
 
         NativeArray<int>.Copy(source.AsArray(), 0, target, targetStart, count);
-        targetStart += count;
-    }
-
-    private static void CopyTriangleRangeRebased(
-        NativeArray<int> target,
-        ref int targetStart,
-        NativeList<int> source,
-        int sourceStart,
-        int count,
-        int vertexDelta)
-    {
-        NativeArray<int> sourceArray = source.AsArray();
-        for (int i = 0; i < count; i++)
-            target[targetStart + i] = sourceArray[sourceStart + i] + vertexDelta;
-
         targetStart += count;
     }
 

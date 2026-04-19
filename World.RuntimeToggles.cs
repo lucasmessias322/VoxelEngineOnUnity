@@ -82,6 +82,8 @@ public partial class World
         bool lightingChanged = lastEnableVoxelLighting != enableVoxelLighting;
         bool aoChanged = lastEnableAmbientOcclusion != enableAmbientOcclusion;
         bool waterChanged = lastEnableWater != enableWater;
+        bool chunkDetailLodChanged = lastEnableChunkDetailLod != enableChunkDetailLod ||
+                                     lastChunkDetailLodDistance != chunkDetailLodDistance;
         bool leafQualityChanged = lastTreeLeafQuality != treeLeafQuality;
         int currentLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
         bool leafFoliageSettingsChanged = lastTreeLeafFoliageSettingsHash != currentLeafFoliageSettingsHash;
@@ -96,6 +98,8 @@ public partial class World
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
         lastEnableWater = enableWater;
+        lastEnableChunkDetailLod = enableChunkDetailLod;
+        lastChunkDetailLodDistance = chunkDetailLodDistance;
         lastTreeLeafQuality = treeLeafQuality;
         lastTreeLeafFoliageSettingsHash = currentLeafFoliageSettingsHash;
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
@@ -107,9 +111,13 @@ public partial class World
             queuedWaterUpdateSet.Clear();
         }
 
+        if (chunkDetailLodChanged)
+            ClearChunkDetailPromotionQueue();
+
         if (!lightingChanged &&
             !aoChanged &&
             !waterChanged &&
+            !chunkDetailLodChanged &&
             !leafQualityChanged &&
             !leafFoliageSettingsChanged &&
             !horizontalLightingChanged &&

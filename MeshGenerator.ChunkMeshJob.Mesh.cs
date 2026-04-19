@@ -307,7 +307,7 @@ public static partial class MeshGenerator
                                 float surfaceY3 = DecodeSurfaceY(topLeftFace.surfaceY3);
                                 int baseBlockY = u == 1 ? i : v == 1 ? j : n;
 
-                                int vIndex = GetCurrentSubchunkLocalVertexIndex();
+                                int vIndex = GetCurrentSliceVertexIndex();
                                 BlockTextureMapping m = blockMappings[(int)bt];
                                 BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(bottomLeftFace.placementAxis);
                                 BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(m, faceType, placementAxis);

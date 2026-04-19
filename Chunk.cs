@@ -12,6 +12,8 @@ public class Chunk : MonoBehaviour
         public bool canHaveColliders;
         public bool hasColliderData;
         public bool isVisible;
+        public bool supportsLightingOnlyRebuild;
+        public bool lightingOnlySupportValid;
     }
 
     public const int SizeX = 16;
@@ -32,6 +34,8 @@ public class Chunk : MonoBehaviour
     [NonSerialized] private ushort[] lightSnapshot;
     [NonSerialized] private bool hasLightSnapshot = false;
     [NonSerialized] public bool pendingRecycle = false;
+    [NonSerialized] public bool hasDetailedGenerationData = true;
+    [NonSerialized] public bool requestedDetailedGeneration = true;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
@@ -169,6 +173,8 @@ public class Chunk : MonoBehaviour
             subchunks[i].canHaveColliders = false;
             subchunks[i].hasColliderData = false;
             subchunks[i].isVisible = true;
+            subchunks[i].supportsLightingOnlyRebuild = false;
+            subchunks[i].lightingOnlySupportValid = false;
             subchunkColliderBuilders[i].Clear();
             ClearSubchunkColliderOccupancy(i);
         }
@@ -324,6 +330,45 @@ public class Chunk : MonoBehaviour
         hasLightSnapshot = true;
     }
 
+    public void UpdateBlockLightSnapshot(NativeArray<ushort> sourceLightData, int borderSize)
+    {
+        if (!hasLightSnapshot ||
+            lightSnapshot == null ||
+            lightSnapshot.Length != LightSnapshotLength ||
+            !sourceLightData.IsCreated ||
+            borderSize < 0)
+        {
+            return;
+        }
+
+        int voxelSizeX = SizeX + 2 * borderSize;
+        int voxelSizeZ = SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * SizeY;
+        int expectedLength = voxelPlaneSize * voxelSizeZ;
+        if (voxelSizeX <= 0 || voxelSizeZ <= 0 || sourceLightData.Length < expectedLength)
+            return;
+
+        for (int z = 0; z < SizeZ; z++)
+        {
+            int sourceZ = z + borderSize;
+            for (int y = 0; y < SizeY; y++)
+            {
+                int sourceIndex = borderSize + y * voxelSizeX + sourceZ * voxelPlaneSize;
+                int targetIndex = y * SizeX * SizeZ + z * SizeX;
+                for (int x = 0; x < SizeX; x++)
+                {
+                    ushort existingPackedLight = lightSnapshot[targetIndex + x];
+                    ushort updatedBlockLight = sourceLightData[sourceIndex + x];
+                    lightSnapshot[targetIndex + x] = LightUtils.PackLightRgb(
+                        LightUtils.GetSkyLight(existingPackedLight),
+                        LightUtils.GetBlockLightR(updatedBlockLight),
+                        LightUtils.GetBlockLightG(updatedBlockLight),
+                        LightUtils.GetBlockLightB(updatedBlockLight));
+                }
+            }
+        }
+    }
+
     public bool TryGetLightSnapshot(int localX, int y, int localZ, out ushort packedLight)
     {
         packedLight = 0;
@@ -348,6 +393,8 @@ public class Chunk : MonoBehaviour
         hasVoxelData = false;
         hasVoxelSnapshot = false;
         hasLightSnapshot = false;
+        hasDetailedGenerationData = true;
+        requestedDetailedGeneration = true;
         ClearAllSubchunkVisibilityData();
         lightingContextHashValid = false;
         lastLightingContextHash = 0;
@@ -441,6 +488,39 @@ public class Chunk : MonoBehaviour
             ClearSubchunkColliderData(subchunkIndex);
     }
 
+    public void SetSubchunkLightingOnlyRebuildSupport(int subchunkIndex, bool supported)
+    {
+        if (!IsSubchunkIndexValid(subchunkIndex))
+            return;
+
+        subchunks[subchunkIndex].supportsLightingOnlyRebuild = supported;
+        subchunks[subchunkIndex].lightingOnlySupportValid = true;
+    }
+
+    public bool TryGetVisualSliceLightingOnlyRebuildSupport(int visualSliceIndex, out bool supported)
+    {
+        supported = false;
+        if (visualSliceIndex < 0 || visualSliceIndex >= GetVisualSliceCount(visualSubchunksPerRenderer))
+            return false;
+
+        EnsureSubchunkStorage();
+
+        int start = visualSliceIndex * visualSubchunksPerRenderer;
+        int end = Mathf.Min(start + visualSubchunksPerRenderer, SubchunksPerColumn);
+        supported = true;
+
+        for (int sub = start; sub < end; sub++)
+        {
+            if (!subchunks[sub].lightingOnlySupportValid)
+                return false;
+
+            if (!subchunks[sub].supportsLightingOnlyRebuild)
+                supported = false;
+        }
+
+        return true;
+    }
+
     public void SetSubchunkVisible(int subchunkIndex, bool visible)
     {
         if (!IsSubchunkIndexValid(subchunkIndex))
@@ -530,6 +610,7 @@ public class Chunk : MonoBehaviour
 
         subchunks[subchunkIndex].hasGeometry = false;
         subchunks[subchunkIndex].canHaveColliders = false;
+        SetSubchunkLightingOnlyRebuildSupport(subchunkIndex, true);
         ClearSubchunkColliderData(subchunkIndex);
         ClearSubchunkColliderOccupancy(subchunkIndex);
     }

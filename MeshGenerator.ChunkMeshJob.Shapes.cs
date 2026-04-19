@@ -238,18 +238,29 @@ public static partial class MeshGenerator
             NativeList<int> tris,
             float blockLight01 = 0f)
         {
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
             Vector3 normal = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
             if (normal.sqrMagnitude < 0.0001f)
                 normal = Vector3.up;
 
             ResolveAtlasRect(mapping, face, invAtlasTilesX, invAtlasTilesY, out Vector2 atlasUv, out Vector2 atlasSize);
-            Vector4 extra = new Vector4(light01, tint ? 1f : 0f, 1f, 0f);
-            Vector4 atlasAndBlockLight = new Vector4(atlasSize.x, atlasSize.y, math.saturate(blockLight01), 0f);
-            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra, atlasAndBlockLight);
-            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra, atlasAndBlockLight);
-            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra, atlasAndBlockLight);
-            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra, atlasAndBlockLight);
+            VoxelLightChannels lightChannels = ResolveActiveSpecialMeshLightChannels(light01);
+            if (mapping.lightEmission > 0)
+            {
+                ushort emissionPacked = LightUtils.PackEmission(
+                    mapping.lightEmission,
+                    mapping.lightColor.r,
+                    mapping.lightColor.g,
+                    mapping.lightColor.b);
+                lightChannels = VoxelLightChannels.Max(lightChannels, new VoxelLightChannels(emissionPacked));
+            }
+
+            Vector4 extra = new Vector4(lightChannels.sky, tint ? 1f : 0f, 1f, 0f);
+            Vector4 atlasAndBlockLight = EncodeAtlasSizeWithBlockLight(atlasSize, lightChannels);
+            AddPackedVertex(p0, normal, new Vector2(0f, 0f), atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p1, normal, new Vector2(1f, 0f), atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p2, normal, new Vector2(1f, 1f), atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p3, normal, new Vector2(0f, 1f), atlasUv, extra, atlasAndBlockLight, lightChannels.blockLightColor);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -333,7 +344,7 @@ public static partial class MeshGenerator
             NativeList<int> tris)
         {
             int vertexGlobalStart = vertices.Length;
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
             ushort emissionPacked = LightUtils.PackEmission(
                 emission,
                 mapping.lightColor.r,
@@ -419,15 +430,17 @@ public static partial class MeshGenerator
             NativeList<int> tris,
             int uvQuarterTurns = 0)
         {
-            int vIndex = GetCurrentSubchunkLocalVertexIndex();
+            int vIndex = GetCurrentSliceVertexIndex();
             Vector3 planeNormal = ComputeQuadPlaneNormal(p0, p1, p2);
             ResolveShapeQuadUv(uvQuarterTurns, out Vector2 uv0, out Vector2 uv1, out Vector2 uv2, out Vector2 uv3);
 
-            Vector4 e = new Vector4(light01, tint, 1f, 0f);
-            AddPackedVertex(p0, planeNormal, uv0, atlasUv, e, atlasSize);
-            AddPackedVertex(p1, planeNormal, uv1, atlasUv, e, atlasSize);
-            AddPackedVertex(p2, planeNormal, uv2, atlasUv, e, atlasSize);
-            AddPackedVertex(p3, planeNormal, uv3, atlasUv, e, atlasSize);
+            VoxelLightChannels lightChannels = ResolveActiveSpecialMeshLightChannels(light01);
+            Vector4 e = new Vector4(lightChannels.sky, tint, 1f, 0f);
+            Vector4 atlasAndBlockLight = EncodeAtlasSizeWithBlockLight(atlasSize, lightChannels);
+            AddPackedVertex(p0, planeNormal, uv0, atlasUv, e, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p1, planeNormal, uv1, atlasUv, e, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p2, planeNormal, uv2, atlasUv, e, atlasAndBlockLight, lightChannels.blockLightColor);
+            AddPackedVertex(p3, planeNormal, uv3, atlasUv, e, atlasAndBlockLight, lightChannels.blockLightColor);
 
             tris.Add(vIndex + 0);
             tris.Add(vIndex + 1);
@@ -463,6 +476,26 @@ public static partial class MeshGenerator
             {
                 return new VoxelLightChannels(LightUtils.MaxPackedLight(a.packedLight, b.packedLight));
             }
+        }
+
+        private VoxelLightChannels ResolveActiveSpecialMeshLightChannels(float fallbackLight01)
+        {
+            VoxelLightChannels channels = activeSpecialMeshLightChannels;
+            if (channels.packedLight != 0 || channels.sky > 0f || channels.block > 0f || fallbackLight01 <= 0f)
+                return channels;
+
+            byte fallbackSkyLight = (byte)math.clamp((int)math.round(math.saturate(fallbackLight01) * 15f), 0, 15);
+            return new VoxelLightChannels(LightUtils.PackLight(fallbackSkyLight, 0));
+        }
+
+        private static float GetResolvedLight01(VoxelLightChannels channels)
+        {
+            return math.max(channels.sky, channels.block);
+        }
+
+        private static Vector4 EncodeAtlasSizeWithBlockLight(Vector2 atlasSize, VoxelLightChannels channels)
+        {
+            return new Vector4(atlasSize.x, atlasSize.y, math.saturate(channels.block), 0f);
         }
 
         private VoxelLightChannels GetSpecialMeshLightChannels01(

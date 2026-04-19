@@ -32,6 +32,7 @@ public static partial class MeshGenerator
         public int billboardCount;
         public int waterStart;
         public int waterCount;
+        public byte supportsLightingOnlyRebuild;
     }
 
     [StructLayout(LayoutKind.Sequential)]

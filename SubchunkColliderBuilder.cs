@@ -16,6 +16,7 @@ internal sealed class SubchunkColliderBuilder
     private int cachedStartY = -1;
     private int cachedHeight;
     private bool hasCachedColliderLayout;
+    private bool cachedColliderLayoutHasCustomShapes;
 
     public bool TryBuild(
         GameObject owner,
@@ -33,12 +34,24 @@ internal sealed class SubchunkColliderBuilder
 
         int volume = Chunk.SizeX * height * Chunk.SizeZ;
         PrepareBuffers(volume, out bool[] solids, out bool[] visited);
-        FillCubeSolidBuffer(voxelData, blockMappings, clampedStartY, height, solids);
+        int occupancyWordCount = Chunk.ColliderOccupancyWordsPerSubchunk;
+        EnsureOccupancyBuffers(occupancyWordCount);
+        Array.Clear(colliderOccupancyBuffer, 0, occupancyWordCount);
+        FillCubeSolidBufferAndOccupancy(voxelData, blockMappings, clampedStartY, height, solids, colliderOccupancyBuffer);
 
-        int colliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
+        int cubeColliderCount = CreateGreedyColliders(owner, clampedStartY, height, solids, visited);
+        int colliderCount = cubeColliderCount;
         colliderCount = AppendCustomShapeColliders(owner, voxelData, blockMappings, blockModelCuboids, clampedStartY, height, colliderCount);
         activeBoxColliderCount = colliderCount;
         DisableUnusedColliders(colliderCount);
+        CacheColliderLayout(
+            clampedStartY,
+            height,
+            colliderOccupancyBuffer,
+            0,
+            occupancyWordCount,
+            colliderCount,
+            colliderCount > cubeColliderCount);
         return colliderCount > 0;
     }
 
@@ -89,7 +102,24 @@ internal sealed class SubchunkColliderBuilder
         out bool hasColliders)
     {
         hasColliders = false;
-        return false;
+
+        if (!TryResolveBuildRange(startY, endY, out int clampedStartY, out int height) ||
+            occupancyBits == null ||
+            occupancyWordOffset < 0 ||
+            occupancyWordCount <= 0 ||
+            occupancyWordOffset + occupancyWordCount > occupancyBits.Length ||
+            cachedColliderLayoutHasCustomShapes)
+        {
+            return false;
+        }
+
+        return TryRestoreCachedColliderLayoutInternal(
+            occupancyBits,
+            occupancyWordOffset,
+            occupancyWordCount,
+            clampedStartY,
+            height,
+            out hasColliders);
     }
 
     private static bool TryResolveBuildRange(
@@ -133,12 +163,13 @@ internal sealed class SubchunkColliderBuilder
         Array.Clear(visited, 0, volume);
     }
 
-    private static void FillCubeSolidBuffer(
+    private static void FillCubeSolidBufferAndOccupancy(
         NativeArray<byte> voxelData,
         BlockTextureMapping[] blockMappings,
         int clampedStartY,
         int height,
-        bool[] solids)
+        bool[] solids,
+        ulong[] occupancyBuffer)
     {
         int plane = Chunk.SizeX * Chunk.SizeZ;
 
@@ -156,11 +187,14 @@ internal sealed class SubchunkColliderBuilder
                 for (int x = 0; x < Chunk.SizeX; x++)
                 {
                     int worldIndex = worldYBase + worldZBase + x;
-                    if (!IsFullCubeCollidable(voxelData[worldIndex], blockMappings))
+                    if (!TryGetCollidableMapping((BlockType)voxelData[worldIndex], blockMappings, out BlockTextureMapping mapping))
                         continue;
 
                     int localIndex = x + localYBase + localZBase;
-                    solids[localIndex] = true;
+                    occupancyBuffer[localIndex >> 6] |= 1UL << (localIndex & 63);
+
+                    if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+                        solids[localIndex] = true;
                 }
             }
         }
@@ -394,7 +428,8 @@ internal sealed class SubchunkColliderBuilder
         ulong[] occupancyBits,
         int occupancyWordOffset,
         int occupancyWordCount,
-        int colliderCount)
+        int colliderCount,
+        bool hasCustomShapeColliders)
     {
         EnsureCachedOccupancyBuffer(occupancyWordCount);
         Array.Copy(occupancyBits, occupancyWordOffset, cachedColliderOccupancyBits, 0, occupancyWordCount);
@@ -402,6 +437,7 @@ internal sealed class SubchunkColliderBuilder
         cachedColliderCount = colliderCount;
         cachedStartY = clampedStartY;
         cachedHeight = height;
+        cachedColliderLayoutHasCustomShapes = hasCustomShapeColliders;
         hasCachedColliderLayout = true;
     }
 

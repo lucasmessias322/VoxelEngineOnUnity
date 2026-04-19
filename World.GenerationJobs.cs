@@ -28,6 +28,7 @@ public partial class World : MonoBehaviour
         public NativeArray<ushort> light;
         public NativeArray<int3> suppressedBillboards;
         public bool buildColliders;
+        public bool lightingOnlyRebuild;
     }
 
     private struct PendingData
