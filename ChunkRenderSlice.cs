@@ -22,7 +22,7 @@ public class ChunkRenderSlice : MonoBehaviour
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
     private Material[] sourceMaterials = Array.Empty<Material>();
-    private Material[] activeSharedMaterials = Array.Empty<Material>();
+    private readonly Material[][] activeMaterialCache = new Material[MaterialMaskCacheSize][];
     private int startSubchunkIndex;
     private int subchunkCount;
     private bool hasGeometry;
@@ -34,6 +34,7 @@ public class ChunkRenderSlice : MonoBehaviour
     private const int OpaqueMaterialIndex = 0;
     private const int TransparentMaterialIndex = 1;
     private const int WaterMaterialIndex = 2;
+    private const int MaterialMaskCacheSize = 8;
 
     private readonly struct SliceMeshTotals
     {
@@ -74,11 +75,12 @@ public class ChunkRenderSlice : MonoBehaviour
 
         Material[] sharedMaterials = materials ?? Array.Empty<Material>();
         if (!ReferenceEquals(sourceMaterials, sharedMaterials))
+        {
             activeMaterialMask = -1;
+            Array.Clear(activeMaterialCache, 0, activeMaterialCache.Length);
+        }
 
         sourceMaterials = sharedMaterials;
-        if (!hasGeometry && !HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
-            meshRenderer.sharedMaterials = sharedMaterials;
 
         mesh = mesh != null ? mesh : meshFilter.sharedMesh;
         if (mesh == null)
@@ -341,24 +343,6 @@ public class ChunkRenderSlice : MonoBehaviour
         targetStart += count;
     }
 
-    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
-    {
-        if (ReferenceEquals(current, desired))
-            return true;
-        if (current == null || desired == null)
-            return current == desired;
-        if (current.Length != desired.Length)
-            return false;
-
-        for (int i = 0; i < current.Length; i++)
-        {
-            if (current[i] != desired[i])
-                return false;
-        }
-
-        return true;
-    }
-
     private static int CountActiveSubMeshes(SliceMeshTotals totals)
     {
         int count = 0;
@@ -374,18 +358,11 @@ public class ChunkRenderSlice : MonoBehaviour
     private void ConfigureActiveMaterials(SliceMeshTotals totals)
     {
         int materialMask = BuildMaterialMask(totals);
-        if (materialMask == activeMaterialMask &&
-            activeSharedMaterials != null &&
-            HasSameSharedMaterials(meshRenderer.sharedMaterials, activeSharedMaterials))
-        {
+        if (materialMask == activeMaterialMask)
             return;
-        }
 
-        Material[] desiredMaterials = BuildActiveMaterialArray(materialMask);
-        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, desiredMaterials))
-            meshRenderer.sharedMaterials = desiredMaterials;
-
-        activeSharedMaterials = desiredMaterials;
+        Material[] desiredMaterials = GetCachedActiveMaterialArray(materialMask);
+        meshRenderer.sharedMaterials = desiredMaterials;
         activeMaterialMask = materialMask;
     }
 
@@ -401,8 +378,17 @@ public class ChunkRenderSlice : MonoBehaviour
         return mask;
     }
 
-    private Material[] BuildActiveMaterialArray(int materialMask)
+    private Material[] GetCachedActiveMaterialArray(int materialMask)
     {
+        if (materialMask == 0)
+            return Array.Empty<Material>();
+
+        if ((uint)materialMask < (uint)activeMaterialCache.Length &&
+            activeMaterialCache[materialMask] != null)
+        {
+            return activeMaterialCache[materialMask];
+        }
+
         int materialCount = CountBits(materialMask);
         if (materialCount == 0)
             return Array.Empty<Material>();
@@ -418,6 +404,9 @@ public class ChunkRenderSlice : MonoBehaviour
 
         if ((materialMask & WaterMaterialMask) != 0)
             materials[writeIndex] = GetSourceMaterial(WaterMaterialIndex);
+
+        if ((uint)materialMask < (uint)activeMaterialCache.Length)
+            activeMaterialCache[materialMask] = materials;
 
         return materials;
     }

@@ -13,19 +13,19 @@ public partial class World : MonoBehaviour
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
 
-    private readonly Queue<TreeCapitatorBreakCandidate> queuedTreeCapitatorBreaks = new Queue<TreeCapitatorBreakCandidate>();
-    private readonly HashSet<Vector3Int> queuedTreeCapitatorSet = new HashSet<Vector3Int>();
-    private readonly Queue<Vector3Int> treeCapitatorSearchQueue = new Queue<Vector3Int>();
-    private readonly HashSet<Vector3Int> treeCapitatorVisited = new HashSet<Vector3Int>();
+    private readonly Queue<TreeCapitatorBreakCandidate> queuedTreeCapitatorBreaks = new Queue<TreeCapitatorBreakCandidate>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> queuedTreeCapitatorSet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Queue<Vector3Int> treeCapitatorSearchQueue = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> treeCapitatorVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly List<Vector3Int> treeCapitatorCollectedLogs = new List<Vector3Int>(64);
-    private readonly HashSet<Vector3Int> playerPlacedLogs = new HashSet<Vector3Int>();
+    private readonly HashSet<Vector3Int> playerPlacedLogs = new HashSet<Vector3Int>(InitialBlockEditCapacity);
 
-    private readonly Queue<LeafDecayCandidate> queuedLeafDecay = new Queue<LeafDecayCandidate>();
-    private readonly HashSet<Vector3Int> queuedLeafDecaySet = new HashSet<Vector3Int>();
-    private readonly Dictionary<Vector3Int, float> leafDecayUnsupportedSince = new Dictionary<Vector3Int, float>();
-    private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>();
-    private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>();
-    private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>();
+    private readonly Queue<LeafDecayCandidate> queuedLeafDecay = new Queue<LeafDecayCandidate>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> queuedLeafDecaySet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Dictionary<Vector3Int, float> leafDecayUnsupportedSince = new Dictionary<Vector3Int, float>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
 
     private static readonly Vector3Int[] TreeCapitatorNeighborOffsets = CreateTreeCapitatorNeighborOffsets();
@@ -859,10 +859,10 @@ public partial class World : MonoBehaviour
     [SerializeField, Min(0.01f)] private float waterTickInterval = 0.05f;
     [SerializeField, Min(1)] private int waterSlopeSearchDistance = 4;
 
-    private readonly Queue<WaterUpdateCandidate> queuedWaterUpdates = new Queue<WaterUpdateCandidate>();
-    private readonly HashSet<Vector3Int> queuedWaterUpdateSet = new HashSet<Vector3Int>();
-    private readonly HashSet<Vector3Int> persistentWaterSources = new HashSet<Vector3Int>();
-    private readonly HashSet<Vector3Int> waterSlopeVisited = new HashSet<Vector3Int>();
+    private readonly Queue<WaterUpdateCandidate> queuedWaterUpdates = new Queue<WaterUpdateCandidate>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> queuedWaterUpdateSet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> persistentWaterSources = new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly HashSet<Vector3Int> waterSlopeVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
 
     private static readonly Vector3Int[] WaterNeighborOffsets =
     {

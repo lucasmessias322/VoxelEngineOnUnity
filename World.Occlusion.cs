@@ -17,6 +17,9 @@ public partial class World : MonoBehaviour
     public bool preferMainCameraForOcclusion = true;
 
     [Header("Minecraft Section Occlusion Performance")]
+    [Min(0)]
+    [Tooltip("Mantem secoes proximas da camera visiveis enquanto o grafo incremental atualiza, evitando buracos/void ao cavar para baixo.")]
+    public int sectionOcclusionImmediateRevealRadius = 1;
     [Min(32)]
     [Tooltip("Limita quantas secoes o BFS de oclusao processa por frame para evitar picos de CPU durante streaming de chunks.")]
     public int sectionOcclusionPropagationBudgetPerFrame = 512;
@@ -134,6 +137,8 @@ public partial class World : MonoBehaviour
         if (togglesChanged)
             sectionOcclusionGraphDirty = true;
 
+        ApplyImmediateCameraSectionVisibility(cameraSection);
+
         if (sectionOcclusionGraphDirty &&
             (!sectionOcclusionRebuildInProgress || cameraSectionChanged || togglesChanged))
         {
@@ -228,6 +233,9 @@ public partial class World : MonoBehaviour
             EnqueueSectionOcclusionNode(new SectionOcclusionNode(cameraChunkCoord, cameraSection.y, -1, 0));
             return sectionOcclusionQueue.Count > 0;
         }
+
+        if (cameraSection.y >= 0 && cameraSection.y < Chunk.SubchunksPerColumn)
+            return false;
 
         bool isBelowWorld = cameraSection.y < 0;
         int seedSubchunk = isBelowWorld ? 0 : Chunk.SubchunksPerColumn - 1;
@@ -418,7 +426,7 @@ public partial class World : MonoBehaviour
         if (!activeChunks.TryGetValue(chunkCoord, out chunk) || chunk == null || !chunk.HasInitializedSubchunks)
             return false;
 
-        return true;
+        return chunk.TryGetSubchunkVisibilityData(subchunkIndex, out _);
     }
 
     private Vector3Int GetSectionCoordFromWorld(Vector3 worldPosition)
@@ -484,6 +492,13 @@ public partial class World : MonoBehaviour
             return;
         }
 
+        if (IsSectionInsideImmediateRevealRange(chunkCoord, subchunkIndex))
+        {
+            chunk.SetSubchunkVisible(subchunkIndex, true);
+            sectionOcclusionAppliedVisibleSections.Add(GetSectionKey(chunkCoord, subchunkIndex));
+            return;
+        }
+
         chunk.SetSubchunkVisible(subchunkIndex, sectionOcclusionAppliedVisibleSections.Contains(GetSectionKey(chunkCoord, subchunkIndex)));
     }
 
@@ -537,5 +552,58 @@ public partial class World : MonoBehaviour
 
             chunk.RefreshAllVisualSliceVisibility();
         }
+    }
+
+    private void ApplyImmediateCameraSectionVisibility(Vector3Int cameraSection)
+    {
+        if (!enableMinecraftSectionOcclusion ||
+            sectionOcclusionAllVisibleApplied ||
+            cameraSection.y < 0 ||
+            cameraSection.y >= Chunk.SubchunksPerColumn)
+        {
+            return;
+        }
+
+        int radius = Mathf.Max(0, sectionOcclusionImmediateRevealRadius);
+        Vector2Int cameraChunkCoord = new Vector2Int(cameraSection.x, cameraSection.z);
+
+        for (int dz = -radius; dz <= radius; dz++)
+        {
+            for (int dx = -radius; dx <= radius; dx++)
+            {
+                Vector2Int coord = new Vector2Int(cameraChunkCoord.x + dx, cameraChunkCoord.y + dz);
+                if (!IsCoordInsideRenderDistance(coord, cameraChunkCoord))
+                    continue;
+
+                if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null || !chunk.HasInitializedSubchunks)
+                    continue;
+
+                for (int dy = -radius; dy <= radius; dy++)
+                {
+                    int subchunkIndex = cameraSection.y + dy;
+                    if (subchunkIndex < 0 || subchunkIndex >= chunk.SubchunkCount)
+                        continue;
+
+                    chunk.SetSubchunkVisible(subchunkIndex, true);
+                    chunk.RefreshVisualSliceVisibilityForSubchunk(subchunkIndex);
+                    sectionOcclusionAppliedVisibleSections.Add(GetSectionKey(coord, subchunkIndex));
+                }
+            }
+        }
+    }
+
+    private bool IsSectionInsideImmediateRevealRange(Vector2Int chunkCoord, int subchunkIndex)
+    {
+        if (!enableMinecraftSectionOcclusion ||
+            sectionOcclusionImmediateRevealRadius < 0 ||
+            lastOcclusionCameraSection.x == int.MinValue)
+        {
+            return false;
+        }
+
+        int radius = Mathf.Max(0, sectionOcclusionImmediateRevealRadius);
+        return Mathf.Abs(chunkCoord.x - lastOcclusionCameraSection.x) <= radius &&
+               Mathf.Abs(chunkCoord.y - lastOcclusionCameraSection.z) <= radius &&
+               Mathf.Abs(subchunkIndex - lastOcclusionCameraSection.y) <= radius;
     }
 }

@@ -657,44 +657,55 @@ public partial class World : MonoBehaviour
 
     #region Private State
 
+    private const int InitialActiveChunkCollectionCapacity = 512;
+    private const int InitialChunkPoolCapacity = 256;
+    private const int InitialChunkWorkCollectionCapacity = 256;
+    private const int InitialQueuedChunkWorkCapacity = 512;
+    private const int InitialBlockEditCapacity = 8192;
+    private const int InitialBlockEditChunkIndexCapacity = 512;
+    private const int InitialPerChunkBlockEditCapacity = 32;
+    private const int InitialInteractiveBlockLightRefreshCapacity = 1024;
+    private const int InitialLightColumnCapacity = 4096;
+    private const int InitialLightWorkCollectionCapacity = 1024;
+
     // Active chunks & pool
-    private Dictionary<Vector2Int, Chunk> activeChunks = new Dictionary<Vector2Int, Chunk>();
-    private Queue<Chunk> chunkPool = new Queue<Chunk>();
+    private Dictionary<Vector2Int, Chunk> activeChunks = new Dictionary<Vector2Int, Chunk>(InitialActiveChunkCollectionCapacity);
+    private Queue<Chunk> chunkPool = new Queue<Chunk>(InitialChunkPoolCapacity);
 
     // Pending work
-    private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>();
-    private List<PendingMesh> pendingMeshes = new List<PendingMesh>();
-    private List<PendingData> pendingDataJobs = new List<PendingData>();
-    private List<PendingData> pendingMeshBuildRequests = new List<PendingData>();
+    private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>(InitialQueuedChunkWorkCapacity);
+    private List<PendingMesh> pendingMeshes = new List<PendingMesh>(InitialQueuedChunkWorkCapacity);
+    private List<PendingData> pendingDataJobs = new List<PendingData>(InitialChunkWorkCollectionCapacity);
+    private List<PendingData> pendingMeshBuildRequests = new List<PendingData>(InitialChunkWorkCollectionCapacity);
     private readonly List<PendingChunkDataBufferReturn> pendingChunkDataBufferReturns = new List<PendingChunkDataBufferReturn>(64);
     private readonly List<Chunk> retiredChunksAwaitingRecycle = new List<Chunk>(64);
-    private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>();
-    private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>();
-    private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>();
-    private readonly Dictionary<Vector2Int, bool> queuedChunkRebuildRequiresCollider = new Dictionary<Vector2Int, bool>();
-    private readonly Dictionary<Vector2Int, float> queuedChunkRebuildEarliestProcessTime = new Dictionary<Vector2Int, float>();
-    private readonly Queue<Vector2Int> queuedLightingOnlyChunkRebuilds = new Queue<Vector2Int>();
-    private readonly HashSet<Vector2Int> queuedLightingOnlyChunkRebuildsSet = new HashSet<Vector2Int>();
-    private readonly Dictionary<Vector2Int, int> queuedLightingOnlyChunkRebuildMasks = new Dictionary<Vector2Int, int>();
-    private readonly Queue<Vector2Int> queuedChunkDetailPromotions = new Queue<Vector2Int>();
-    private readonly HashSet<Vector2Int> queuedChunkDetailPromotionsSet = new HashSet<Vector2Int>();
-    private readonly Queue<Vector2Int> queuedChunkJobTrackingRefreshes = new Queue<Vector2Int>();
-    private readonly HashSet<Vector2Int> queuedChunkJobTrackingRefreshSet = new HashSet<Vector2Int>();
-    private readonly Queue<Vector3Int> queuedColliderBuilds = new Queue<Vector3Int>();
-    private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>();
-    private readonly Queue<Vector3Int> queuedInteractiveBlockLightRefreshes = new Queue<Vector3Int>();
-    private readonly Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh> queuedInteractiveBlockLightRefreshesByPosition = new Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh>();
-    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
-    private readonly List<Vector3Int> relevantTerrainOverridePositions = new List<Vector3Int>(128);
+    private readonly Queue<Vector2Int> queuedChunkRebuilds = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> queuedChunkRebuildsSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<Vector2Int, int> queuedChunkRebuildMasks = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<Vector2Int, bool> queuedChunkRebuildRequiresCollider = new Dictionary<Vector2Int, bool>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<Vector2Int, float> queuedChunkRebuildEarliestProcessTime = new Dictionary<Vector2Int, float>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector2Int> queuedLightingOnlyChunkRebuilds = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> queuedLightingOnlyChunkRebuildsSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<Vector2Int, int> queuedLightingOnlyChunkRebuildMasks = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector2Int> queuedChunkDetailPromotions = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> queuedChunkDetailPromotionsSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector2Int> queuedChunkJobTrackingRefreshes = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> queuedChunkJobTrackingRefreshSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector3Int> queuedColliderBuilds = new Queue<Vector3Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<Vector3Int, PendingColliderBuild> queuedColliderBuildsByKey = new Dictionary<Vector3Int, PendingColliderBuild>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector3Int> queuedInteractiveBlockLightRefreshes = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh> queuedInteractiveBlockLightRefreshesByPosition = new Dictionary<Vector3Int, PendingInteractiveBlockLightRefresh>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> terrainOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(InitialBlockEditChunkIndexCapacity);
+    private readonly List<Vector3Int> relevantTerrainOverridePositions = new List<Vector3Int>(InitialQueuedChunkWorkCapacity);
     private bool terrainOverrideIndexInitialized = false;
 
     // Overrides and light
-    private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>();
-    private readonly Dictionary<Vector3Int, BlockPlacementAxis> blockPlacementAxes = new Dictionary<Vector3Int, BlockPlacementAxis>();
-    private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>();
-    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
+    private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>(InitialBlockEditCapacity);
+    private readonly Dictionary<Vector3Int, BlockPlacementAxis> blockPlacementAxes = new Dictionary<Vector3Int, BlockPlacementAxis>(InitialBlockEditCapacity);
+    private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(InitialBlockEditChunkIndexCapacity);
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
-    private Dictionary<Vector2Int, ushort[]> globalLightColumns = new Dictionary<Vector2Int, ushort[]>();
+    private Dictionary<Vector2Int, ushort[]> globalLightColumns = new Dictionary<Vector2Int, ushort[]>(InitialLightColumnCapacity);
     // Misc
     private float offsetX, offsetZ;
     private int nextChunkGeneration = 0;
@@ -756,7 +767,7 @@ public partial class World : MonoBehaviour
     private bool pendingJobPrioritiesDirty = true;
     private Camera cachedMeshApplyPriorityCamera;
     private readonly Plane[] meshApplyPriorityFrustumPlanes = new Plane[6];
-    private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
+    private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
     private Comparison<(Vector2Int coord, float distSq)> pendingChunkDistanceComparison;
     private Comparison<PendingData> pendingDataDistanceComparison;
@@ -768,16 +779,16 @@ public partial class World : MonoBehaviour
     private readonly List<BlockEdit> fastRebuildOverrideEditsBuffer = new List<BlockEdit>(64);
     private readonly List<TreeSpawnRuleData> treeSpawnRuleBuildBuffer = new List<TreeSpawnRuleData>(12);
     private readonly List<VegetationBillboardRuleData> vegetationBillboardRuleBuildBuffer = new List<VegetationBillboardRuleData>(16);
-    private readonly Queue<Vector3Int> propagateLightQueueBuffer = new Queue<Vector3Int>(256);
-    private readonly Dictionary<Vector2Int, int> propagateDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
-    private readonly Queue<(Vector3Int pos, ushort lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, ushort)>(256);
-    private readonly Queue<Vector3Int> removeLightRefillQueueBuffer = new Queue<Vector3Int>(256);
-    private readonly Dictionary<Vector3Int, ushort> removeLightAffectedContributionsBuffer = new Dictionary<Vector3Int, ushort>(256);
-    private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
-    private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(256);
-    private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>();
-    private readonly Dictionary<Vector2Int, int> refillLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(128);
-    private readonly HashSet<Vector2Int> cleanupLightColumnKeysBuffer = new HashSet<Vector2Int>();
+    private readonly Queue<Vector3Int> propagateLightQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
+    private readonly Dictionary<Vector2Int, int> propagateDirtyChunksBuffer = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<(Vector3Int pos, ushort lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, ushort)>(InitialLightWorkCollectionCapacity);
+    private readonly Queue<Vector3Int> removeLightRefillQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
+    private readonly Dictionary<Vector3Int, ushort> removeLightAffectedContributionsBuffer = new Dictionary<Vector3Int, ushort>(InitialLightWorkCollectionCapacity);
+    private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
+    private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>(InitialLightWorkCollectionCapacity);
+    private readonly Dictionary<Vector2Int, int> refillLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> cleanupLightColumnKeysBuffer = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private readonly List<Vector2Int> cleanupLightColumnsRemoveBuffer = new List<Vector2Int>(128);
 
     private TerrainDensitySettings GetTerrainDensitySettings()
@@ -1604,7 +1615,7 @@ public partial class World : MonoBehaviour
             Vector2Int coord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
             if (!terrainOverridePositionsByChunk.TryGetValue(coord, out HashSet<Vector3Int> positions))
             {
-                positions = new HashSet<Vector3Int>();
+                positions = new HashSet<Vector3Int>(InitialPerChunkBlockEditCapacity);
                 terrainOverridePositionsByChunk[coord] = positions;
             }
 
@@ -1621,7 +1632,7 @@ public partial class World : MonoBehaviour
 
         if (!terrainOverridePositionsByChunk.TryGetValue(coord, out HashSet<Vector3Int> positions))
         {
-            positions = new HashSet<Vector3Int>();
+            positions = new HashSet<Vector3Int>(InitialPerChunkBlockEditCapacity);
             terrainOverridePositionsByChunk[coord] = positions;
         }
 
@@ -2551,6 +2562,9 @@ public partial class World : MonoBehaviour
         meshesAppliedThisFrame = 0;
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            UpdateSectionOcclusionVisibility();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedWaterUpdates();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
@@ -2590,8 +2604,6 @@ public partial class World : MonoBehaviour
 
         ProcessPendingChunkDataBufferReturns();
 
-        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
-            UpdateSectionOcclusionVisibility();
     }
 
     private static bool HasUpdateBudgetRemaining(float frameStartTime, float budgetSeconds)
@@ -3686,7 +3698,7 @@ public partial class World : MonoBehaviour
         Vector2Int coord = GetChunkCoordFromWorldXZ(pos.x, pos.z);
         if (!suppressedGrassBillboardsByChunk.TryGetValue(coord, out HashSet<Vector3Int> set))
         {
-            set = new HashSet<Vector3Int>();
+            set = new HashSet<Vector3Int>(InitialPerChunkBlockEditCapacity);
             suppressedGrassBillboardsByChunk[coord] = set;
         }
 

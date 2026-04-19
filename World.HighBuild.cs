@@ -21,7 +21,8 @@ public partial class World
         public readonly List<int> opaqueTris = new List<int>(384);
         public readonly List<int> transparentTris = new List<int>(384);
         public readonly List<int> waterTris = new List<int>(384);
-        public Material[] activeSharedMaterials = System.Array.Empty<Material>();
+        public Material[] sourceMaterials = System.Array.Empty<Material>();
+        public readonly Material[][] activeMaterialCache = new Material[HighBuildMaterialMaskCacheSize][];
         public readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
         public bool[] colliderSolidsBuffer;
         public bool[] colliderVisitedBuffer;
@@ -37,12 +38,13 @@ public partial class World
     private const int HighBuildOpaqueMaterialIndex = 0;
     private const int HighBuildTransparentMaterialIndex = 1;
     private const int HighBuildWaterMaterialIndex = 2;
+    private const int HighBuildMaterialMaskCacheSize = 8;
 
     // Key: (chunkX, highSectionY, chunkZ)
-    private readonly Dictionary<Vector3Int, HighBuildMeshData> highBuildMeshes = new Dictionary<Vector3Int, HighBuildMeshData>();
-    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> highOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>();
-    private readonly Queue<Vector2Int> queuedHighBuildRebuilds = new Queue<Vector2Int>();
-    private readonly HashSet<Vector2Int> queuedHighBuildRebuildsSet = new HashSet<Vector2Int>();
+    private readonly Dictionary<Vector3Int, HighBuildMeshData> highBuildMeshes = new Dictionary<Vector3Int, HighBuildMeshData>(InitialBlockEditChunkIndexCapacity);
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> highOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(InitialBlockEditChunkIndexCapacity);
+    private readonly Queue<Vector2Int> queuedHighBuildRebuilds = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly HashSet<Vector2Int> queuedHighBuildRebuildsSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
     [SerializeField, Min(0f)] private float highBuildRebuildTimeBudgetMS = 0.75f;
 
     private void IndexHighOverride(Vector3Int worldPos, Vector2Int coord, BlockType type)
@@ -59,7 +61,7 @@ public partial class World
 
         if (!highOverridePositionsByChunk.TryGetValue(coord, out HashSet<Vector3Int> positions))
         {
-            positions = new HashSet<Vector3Int>();
+            positions = new HashSet<Vector3Int>(InitialPerChunkBlockEditCapacity);
             highOverridePositionsByChunk[coord] = positions;
         }
 
@@ -84,7 +86,7 @@ public partial class World
             if (p.x < minX || p.x > maxX || p.z < minZ || p.z > maxZ) continue;
             if (effectiveType == BlockType.Air) continue;
 
-            if (positions == null) positions = new HashSet<Vector3Int>();
+            if (positions == null) positions = new HashSet<Vector3Int>(InitialPerChunkBlockEditCapacity);
             positions.Add(p);
         }
 
@@ -448,18 +450,19 @@ public partial class World
             return;
 
         int materialMask = BuildHighBuildMaterialMask(opaqueIndexCount, transparentIndexCount, waterIndexCount);
-        if (materialMask == data.activeMaterialMask &&
-            data.activeSharedMaterials != null &&
-            HasSameSharedMaterials(data.meshRenderer.sharedMaterials, data.activeSharedMaterials))
+        Material[] currentSourceMaterials = Material ?? System.Array.Empty<Material>();
+        if (!ReferenceEquals(data.sourceMaterials, currentSourceMaterials))
         {
-            return;
+            data.sourceMaterials = currentSourceMaterials;
+            System.Array.Clear(data.activeMaterialCache, 0, data.activeMaterialCache.Length);
+            data.activeMaterialMask = -1;
         }
 
-        Material[] desiredMaterials = BuildHighBuildActiveMaterialArray(materialMask);
-        if (!HasSameSharedMaterials(data.meshRenderer.sharedMaterials, desiredMaterials))
-            data.meshRenderer.sharedMaterials = desiredMaterials;
+        if (materialMask == data.activeMaterialMask)
+            return;
 
-        data.activeSharedMaterials = desiredMaterials;
+        Material[] desiredMaterials = GetCachedHighBuildActiveMaterialArray(data, materialMask);
+        data.meshRenderer.sharedMaterials = desiredMaterials;
         data.activeMaterialMask = materialMask;
     }
 
@@ -475,8 +478,17 @@ public partial class World
         return mask;
     }
 
-    private Material[] BuildHighBuildActiveMaterialArray(int materialMask)
+    private Material[] GetCachedHighBuildActiveMaterialArray(HighBuildMeshData data, int materialMask)
     {
+        if (materialMask == 0)
+            return System.Array.Empty<Material>();
+
+        if ((uint)materialMask < (uint)data.activeMaterialCache.Length &&
+            data.activeMaterialCache[materialMask] != null)
+        {
+            return data.activeMaterialCache[materialMask];
+        }
+
         int materialCount = CountHighBuildMaterialBits(materialMask);
         if (materialCount == 0)
             return System.Array.Empty<Material>();
@@ -485,26 +497,30 @@ public partial class World
         int writeIndex = 0;
 
         if ((materialMask & HighBuildOpaqueMaterialMask) != 0)
-            materials[writeIndex++] = GetHighBuildSourceMaterial(HighBuildOpaqueMaterialIndex);
+            materials[writeIndex++] = GetHighBuildSourceMaterial(data, HighBuildOpaqueMaterialIndex);
 
         if ((materialMask & HighBuildTransparentMaterialMask) != 0)
-            materials[writeIndex++] = GetHighBuildSourceMaterial(HighBuildTransparentMaterialIndex);
+            materials[writeIndex++] = GetHighBuildSourceMaterial(data, HighBuildTransparentMaterialIndex);
 
         if ((materialMask & HighBuildWaterMaterialMask) != 0)
-            materials[writeIndex] = GetHighBuildSourceMaterial(HighBuildWaterMaterialIndex);
+            materials[writeIndex] = GetHighBuildSourceMaterial(data, HighBuildWaterMaterialIndex);
+
+        if ((uint)materialMask < (uint)data.activeMaterialCache.Length)
+            data.activeMaterialCache[materialMask] = materials;
 
         return materials;
     }
 
-    private Material GetHighBuildSourceMaterial(int index)
+    private static Material GetHighBuildSourceMaterial(HighBuildMeshData data, int index)
     {
-        if (Material == null || Material.Length == 0)
+        Material[] sourceMaterials = data != null ? data.sourceMaterials : null;
+        if (sourceMaterials == null || sourceMaterials.Length == 0)
             return null;
 
-        if ((uint)index < (uint)Material.Length)
-            return Material[index];
+        if ((uint)index < (uint)sourceMaterials.Length)
+            return sourceMaterials[index];
 
-        return Material[0];
+        return sourceMaterials[0];
     }
 
     private static int CountHighBuildMaterialBits(int value)
@@ -517,24 +533,6 @@ public partial class World
         }
 
         return count;
-    }
-
-    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
-    {
-        if (ReferenceEquals(current, desired))
-            return true;
-        if (current == null || desired == null)
-            return current == desired;
-        if (current.Length != desired.Length)
-            return false;
-
-        for (int i = 0; i < current.Length; i++)
-        {
-            if (current[i] != desired[i])
-                return false;
-        }
-
-        return true;
     }
 
     private void BuildHighBuildSectionColliders(HighBuildMeshData data, Vector2Int coord, int section, List<Vector3Int> positions)
