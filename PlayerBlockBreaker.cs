@@ -15,6 +15,15 @@ public class PlayerBlockBreaker : MonoBehaviour
         Wood = 3
     }
 
+    private struct PlacementAttempt
+    {
+        public Vector3Int hitNormal;
+        public Vector3 hitPoint;
+        public Vector3Int placePos;
+        public BlockType placedBlockType;
+        public BlockPlacementAxis placementAxis;
+    }
+
     private const float MinecraftTicksPerSecond = 20f;
     private const float MinecraftMinBreakDurationSeconds = 1f / MinecraftTicksPerSecond;
     private const float MinecraftHarvestableDamageDivisor = 30f;
@@ -42,6 +51,14 @@ public class PlayerBlockBreaker : MonoBehaviour
     [SerializeField] private bool preventPlaceInsidePlayer = true;
     [SerializeField] private float fallbackPlayerRadius = 0.35f;
     [SerializeField] private float fallbackPlayerHeight = 1.8f;
+    [SerializeField, Min(0.01f)] private float holdPlaceIntervalSeconds = 0.12f;
+
+    [Header("Place assist")]
+    [SerializeField] private bool enablePlacementAimAssist = true;
+    [SerializeField, Range(0.02f, 0.35f)] private float placementAimAssistEdgeThreshold = 0.14f;
+    [SerializeField, Range(0f, 1f)] private float placementAimAssistMinViewAlignment = 0.12f;
+    [SerializeField, Min(0f)] private float placementAimAssistSwitchPenalty = 0.015f;
+    [SerializeField, Min(0f)] private float placementAimAssistViewBias = 0.05f;
 
     private AudioSource audioSource;
     public AudioClip placeBlockClip;
@@ -98,6 +115,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     private float breakProgress01;
     private int lastCrackStage = -1;
     private int placeActionVersion;
+    private float nextHoldPlaceTime;
 
     public bool IsBreakInProgress => breakingBlock.x != int.MinValue;
     public float BreakProgressNormalized => Mathf.Clamp01(breakProgress01);
@@ -1692,106 +1710,530 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     void HandlePlaceBlock()
     {
-        if (Input.GetMouseButtonDown(1))
+        bool placePressedThisFrame = Input.GetMouseButtonDown(1);
+        bool placeHeld = Input.GetMouseButton(1);
+        if (!placePressedThisFrame && !placeHeld)
+            return;
+
+        if (placePressedThisFrame)
         {
-            FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
-                ? FurnaceUIController.Instance
-                : FindAnyObjectByType<FurnaceUIController>();
-            if (furnaceUI != null &&
-                furnaceUI.TryHandleFurnaceInteraction(selector))
+            if (TryHandleRightClickInteractions())
             {
                 CancelBreak();
                 return;
             }
-
-            CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
-            if (craftingStationUI != null &&
-                craftingStationUI.TryHandleCrafterInteraction(selector))
-            {
-                CancelBreak();
-                return;
-            }
-
-            CancelBreak();
-
-            Vector3Int targetBlock;
-            Vector3Int hitNormal;
-            Vector3 hitPoint;
-            BlockType targetType;
-            bool isBillboardTarget;
-            if (!selector.TryGetPlacementTarget(out targetBlock, out hitNormal, out hitPoint, out targetType, out isBillboardTarget))
-            {
-                if (!selector.TryGetSelectedBlock(out targetBlock, out hitNormal))
-                    return;
-
-                targetType = World.Instance.GetBlockAt(targetBlock);
-                hitPoint = selector != null ? selector.CurrentHitPoint : targetBlock + Vector3.one * 0.5f;
-                isBillboardTarget = selector != null && selector.IsBillboardHit;
-            }
-
-            BlockType selectedBlockType = placeBlockType;
-            if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
-                return;
-
-            bool replaceTarget = isBillboardTarget || IsLiquid(targetType);
-
-            // Billboard e liquidos: substitui exatamente a celula alvo (estilo Minecraft).
-            Vector3Int placePos = replaceTarget ? targetBlock : targetBlock + hitNormal;
-
-            if (placePos.y <= 2)
-                return;
-
-            BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
-            BlockType blockAtPlacePos = World.Instance.GetBlockAt(placePos);
-
-            Vector3 lookForward = ResolvePlacementLookForward();
-            BlockPlacementAxis placementAxis = World.Instance.ResolvePlacementAxisForPlacement(
-                placedBlockType,
-                hitNormal,
-                lookForward,
-                hitPoint);
-
-            bool canMergeWireState = placedBlockType == BlockType.wire &&
-                                     blockAtPlacePos == BlockType.wire &&
-                                     World.Instance.CanPlaceWireStateAt(placePos, placementAxis);
-
-            if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos) && !canMergeWireState)
-                return;
-
-            if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
-                return;
-
-            if (placedBlockType == BlockType.wire && !CanPlaceWireAt(placePos, hitNormal))
-                return;
-
-            if (preventPlaceInsidePlayer &&
-                ShouldPreventPlacementInsidePlayer(placedBlockType) &&
-                IsBlockIntersectingPlayer(placePos, placedBlockType, placementAxis))
-            {
-                return;
-            }
-
-            if (!IsCreativeModeActive() && hotbar != null && !hotbar.TryConsumeSelected(1))
-                return;
-
-            if (placedBlockType == BlockType.wire)
-            {
-                if (!World.Instance.TryPlaceWireStateAt(placePos, placementAxis, true))
-                    return;
-            }
-            else
-            {
-                World.Instance.SetBlockAt(placePos, placedBlockType, true, placementAxis);
-            }
-
-            unchecked
-            {
-                placeActionVersion++;
-            }
-
-            if (placeBlockClip != null)
-                audioSource.PlayOneShot(placeBlockClip);
         }
+
+        if (!placePressedThisFrame && Time.time < nextHoldPlaceTime)
+            return;
+
+        CancelBreak();
+
+        if (!TryResolveSelectedPlacementAttempt(out PlacementAttempt attempt))
+            return;
+
+        if (!IsCreativeModeActive() && hotbar != null && !hotbar.TryConsumeSelected(1))
+            return;
+
+        World world = World.Instance;
+        if (world == null)
+            return;
+
+        if (attempt.placedBlockType == BlockType.wire)
+        {
+            if (!world.TryPlaceWireStateAt(attempt.placePos, attempt.placementAxis, true))
+                return;
+        }
+        else
+        {
+            world.SetBlockAt(attempt.placePos, attempt.placedBlockType, true, attempt.placementAxis);
+        }
+
+        unchecked
+        {
+            placeActionVersion++;
+        }
+
+        nextHoldPlaceTime = Time.time + Mathf.Max(0.01f, holdPlaceIntervalSeconds);
+
+        if (placeBlockClip != null)
+            audioSource.PlayOneShot(placeBlockClip);
+    }
+
+    private bool TryHandleRightClickInteractions()
+    {
+        FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
+            ? FurnaceUIController.Instance
+            : FindAnyObjectByType<FurnaceUIController>();
+        if (furnaceUI != null &&
+            furnaceUI.TryHandleFurnaceInteraction(selector))
+        {
+            return true;
+        }
+
+        CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
+        return craftingStationUI != null &&
+               craftingStationUI.TryHandleCrafterInteraction(selector);
+    }
+
+    private bool TryResolveSelectedPlacementAttempt(out PlacementAttempt attempt)
+    {
+        attempt = default;
+
+        BlockType selectedBlockType = placeBlockType;
+        if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
+            return false;
+
+        if (!TryResolvePlacementInput(
+                out Vector3Int targetBlock,
+                out Vector3Int hitNormal,
+                out Vector3 hitPoint,
+                out BlockType targetType,
+                out bool isBillboardTarget))
+        {
+            return false;
+        }
+
+        bool hasBaseAttempt = TryBuildPlacementAttempt(
+                selectedBlockType,
+                targetBlock,
+                hitNormal,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                out PlacementAttempt baseAttempt);
+        if (hasBaseAttempt)
+        {
+            attempt = baseAttempt;
+        }
+
+        if (!ShouldUsePlacementAimAssist(targetType, isBillboardTarget))
+            return hasBaseAttempt;
+
+        Bounds targetBounds = ResolveBlockBounds(targetBlock, targetType);
+        Vector3 viewDirection = ResolvePlacementViewDirection();
+        float bestScore = float.PositiveInfinity;
+        bool foundAttempt = false;
+
+        if (hasBaseAttempt)
+        {
+            bestScore = ComputeCurrentPlacementFaceScore(targetBounds, hitNormal, hitPoint, viewDirection);
+            foundAttempt = true;
+        }
+
+        float edgeThreshold = Mathf.Max(0.02f, placementAimAssistEdgeThreshold);
+        if (Mathf.Abs(hitNormal.x) > 0)
+        {
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.up,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.up),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.down,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.down),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.forward,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.forward),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.back,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.back),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+        }
+        else if (Mathf.Abs(hitNormal.y) > 0)
+        {
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.right,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.right),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.left,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.left),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.forward,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.forward),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.back,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.back),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+        }
+        else if (Mathf.Abs(hitNormal.z) > 0)
+        {
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.right,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.right),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.left,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.left),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.up,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.up),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+            TryEvaluatePlacementAimAssistCandidate(
+                selectedBlockType,
+                targetBlock,
+                Vector3Int.down,
+                BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.down),
+                edgeThreshold,
+                hitPoint,
+                targetType,
+                isBillboardTarget,
+                viewDirection,
+                ref bestScore,
+                ref attempt,
+                ref foundAttempt);
+        }
+
+        return foundAttempt;
+    }
+
+    private bool TryResolvePlacementInput(
+        out Vector3Int targetBlock,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint,
+        out BlockType targetType,
+        out bool isBillboardTarget)
+    {
+        targetBlock = default;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        targetType = BlockType.Air;
+        isBillboardTarget = false;
+
+        if (selector != null &&
+            selector.TryGetPlacementTarget(out targetBlock, out hitNormal, out hitPoint, out targetType, out isBillboardTarget))
+        {
+            return true;
+        }
+
+        World world = World.Instance;
+        if (selector == null || world == null || !selector.TryGetSelectedBlock(out targetBlock, out hitNormal))
+            return false;
+
+        targetType = world.GetBlockAt(targetBlock);
+        hitPoint = selector.CurrentHitPoint != Vector3.zero
+            ? selector.CurrentHitPoint
+            : targetBlock + Vector3.one * 0.5f;
+        isBillboardTarget = selector.IsBillboardHit;
+        return true;
+    }
+
+    private bool TryBuildPlacementAttempt(
+        BlockType selectedBlockType,
+        Vector3Int targetBlock,
+        Vector3Int hitNormal,
+        Vector3 hitPoint,
+        BlockType targetType,
+        bool isBillboardTarget,
+        out PlacementAttempt attempt)
+    {
+        attempt = default;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        bool replaceTarget = isBillboardTarget || IsLiquid(targetType);
+        Vector3Int placePos = replaceTarget ? targetBlock : targetBlock + hitNormal;
+        if (placePos.y <= 2)
+            return false;
+
+        BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
+        BlockType blockAtPlacePos = world.GetBlockAt(placePos);
+
+        Vector3 lookForward = ResolvePlacementLookForward();
+        BlockPlacementAxis placementAxis = world.ResolvePlacementAxisForPlacement(
+            placedBlockType,
+            hitNormal,
+            lookForward,
+            hitPoint);
+
+        bool canMergeWireState = placedBlockType == BlockType.wire &&
+                                 blockAtPlacePos == BlockType.wire &&
+                                 world.CanPlaceWireStateAt(placePos, placementAxis);
+
+        if (blockAtPlacePos != BlockType.Air && !IsLiquid(blockAtPlacePos) && !canMergeWireState)
+            return false;
+
+        if (TorchPlacementUtility.IsTorchLike(placedBlockType) && !CanPlaceTorchAt(placePos, placedBlockType))
+            return false;
+
+        if (placedBlockType == BlockType.wire && !CanPlaceWireAt(placePos, hitNormal))
+            return false;
+
+        if (preventPlaceInsidePlayer &&
+            ShouldPreventPlacementInsidePlayer(placedBlockType) &&
+            IsBlockIntersectingPlayer(placePos, placedBlockType, placementAxis))
+        {
+            return false;
+        }
+
+        attempt = new PlacementAttempt
+        {
+            hitNormal = hitNormal,
+            hitPoint = hitPoint,
+            placePos = placePos,
+            placedBlockType = placedBlockType,
+            placementAxis = placementAxis
+        };
+        return true;
+    }
+
+    private bool ShouldUsePlacementAimAssist(BlockType targetType, bool isBillboardTarget)
+    {
+        if (!enablePlacementAimAssist || isBillboardTarget || targetType == BlockType.Air || IsLiquid(targetType))
+            return false;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return true;
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(targetType);
+        if (mappingResult == null)
+            return true;
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        if (!BlockShapeUtility.UsesCustomMesh(mapping))
+            return true;
+
+        return BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cuboid;
+    }
+
+    private void TryEvaluatePlacementAimAssistCandidate(
+        BlockType selectedBlockType,
+        Vector3Int targetBlock,
+        Vector3Int candidateNormal,
+        float edgeDistance,
+        float edgeThreshold,
+        Vector3 originalHitPoint,
+        BlockType targetType,
+        bool isBillboardTarget,
+        Vector3 viewDirection,
+        ref float bestScore,
+        ref PlacementAttempt bestAttempt,
+        ref bool foundAttempt)
+    {
+        if (edgeDistance > edgeThreshold)
+            return;
+
+        float alignment = Mathf.Max(0f, Vector3.Dot(viewDirection, (Vector3)candidateNormal));
+        if (alignment < placementAimAssistMinViewAlignment)
+            return;
+
+        Bounds targetBounds = ResolveBlockBounds(targetBlock, targetType);
+        Vector3 candidateHitPoint = ProjectHitPointToFace(targetBounds, originalHitPoint, candidateNormal);
+        if (!TryBuildPlacementAttempt(
+                selectedBlockType,
+                targetBlock,
+                candidateNormal,
+                candidateHitPoint,
+                targetType,
+                isBillboardTarget,
+                out PlacementAttempt candidateAttempt))
+        {
+            return;
+        }
+
+        float score = edgeDistance +
+                      Mathf.Max(0f, placementAimAssistSwitchPenalty) -
+                      (alignment * Mathf.Max(0f, placementAimAssistViewBias));
+        if (foundAttempt && score >= bestScore)
+            return;
+
+        bestScore = score;
+        bestAttempt = candidateAttempt;
+        foundAttempt = true;
+    }
+
+    private float ComputeCurrentPlacementFaceScore(Bounds targetBounds, Vector3Int hitNormal, Vector3 hitPoint, Vector3 viewDirection)
+    {
+        float nearestEdgeDistance = GetNearestAdjacentEdgeDistance(targetBounds, hitNormal, hitPoint);
+        float edgePenalty = float.IsPositiveInfinity(nearestEdgeDistance)
+            ? 0f
+            : Mathf.Max(0f, Mathf.Max(0.02f, placementAimAssistEdgeThreshold) - nearestEdgeDistance);
+        float alignment = Mathf.Max(0f, Vector3.Dot(viewDirection, (Vector3)hitNormal));
+        return edgePenalty - (alignment * Mathf.Max(0f, placementAimAssistViewBias));
+    }
+
+    private float GetNearestAdjacentEdgeDistance(Bounds targetBounds, Vector3Int hitNormal, Vector3 hitPoint)
+    {
+        float best = float.PositiveInfinity;
+
+        if (hitNormal.x == 0)
+        {
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.right));
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.left));
+        }
+
+        if (hitNormal.y == 0)
+        {
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.up));
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.down));
+        }
+
+        if (hitNormal.z == 0)
+        {
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.forward));
+            best = Mathf.Min(best, BoundsDistanceToFace(targetBounds, hitPoint, Vector3Int.back));
+        }
+
+        return best;
+    }
+
+    private static float BoundsDistanceToFace(Bounds targetBounds, Vector3 hitPoint, Vector3Int faceNormal)
+    {
+        Vector3 clampedPoint = new Vector3(
+            Mathf.Clamp(hitPoint.x, targetBounds.min.x, targetBounds.max.x),
+            Mathf.Clamp(hitPoint.y, targetBounds.min.y, targetBounds.max.y),
+            Mathf.Clamp(hitPoint.z, targetBounds.min.z, targetBounds.max.z));
+
+        if (faceNormal.x > 0)
+            return Mathf.Abs(targetBounds.max.x - clampedPoint.x);
+        if (faceNormal.x < 0)
+            return Mathf.Abs(clampedPoint.x - targetBounds.min.x);
+        if (faceNormal.y > 0)
+            return Mathf.Abs(targetBounds.max.y - clampedPoint.y);
+        if (faceNormal.y < 0)
+            return Mathf.Abs(clampedPoint.y - targetBounds.min.y);
+        if (faceNormal.z > 0)
+            return Mathf.Abs(targetBounds.max.z - clampedPoint.z);
+
+        return Mathf.Abs(clampedPoint.z - targetBounds.min.z);
+    }
+
+    private static Vector3 ProjectHitPointToFace(Bounds targetBounds, Vector3 hitPoint, Vector3Int faceNormal)
+    {
+        Vector3 projected = new Vector3(
+            Mathf.Clamp(hitPoint.x, targetBounds.min.x, targetBounds.max.x),
+            Mathf.Clamp(hitPoint.y, targetBounds.min.y, targetBounds.max.y),
+            Mathf.Clamp(hitPoint.z, targetBounds.min.z, targetBounds.max.z));
+
+        if (faceNormal.x > 0)
+            projected.x = targetBounds.max.x;
+        else if (faceNormal.x < 0)
+            projected.x = targetBounds.min.x;
+        else if (faceNormal.y > 0)
+            projected.y = targetBounds.max.y;
+        else if (faceNormal.y < 0)
+            projected.y = targetBounds.min.y;
+        else if (faceNormal.z > 0)
+            projected.z = targetBounds.max.z;
+        else if (faceNormal.z < 0)
+            projected.z = targetBounds.min.z;
+
+        return projected;
+    }
+
+    private Vector3 ResolvePlacementViewDirection()
+    {
+        Vector3 rawDirection = cam != null ? -cam.transform.forward : -transform.forward;
+        return rawDirection.sqrMagnitude > 0.0001f
+            ? rawDirection.normalized
+            : Vector3.up;
     }
 
     private static bool IsCreativeModeActive()
