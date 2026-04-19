@@ -21,13 +21,22 @@ public partial class World
         public readonly List<int> opaqueTris = new List<int>(384);
         public readonly List<int> transparentTris = new List<int>(384);
         public readonly List<int> waterTris = new List<int>(384);
+        public Material[] activeSharedMaterials = System.Array.Empty<Material>();
         public readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
         public bool[] colliderSolidsBuffer;
         public bool[] colliderVisitedBuffer;
         public int activeBoxColliderCount;
         public bool hasColliderData;
         public bool canHaveColliders;
+        public int activeMaterialMask = -1;
     }
+
+    private const int HighBuildOpaqueMaterialMask = 1 << 0;
+    private const int HighBuildTransparentMaterialMask = 1 << 1;
+    private const int HighBuildWaterMaterialMask = 1 << 2;
+    private const int HighBuildOpaqueMaterialIndex = 0;
+    private const int HighBuildTransparentMaterialIndex = 1;
+    private const int HighBuildWaterMaterialIndex = 2;
 
     // Key: (chunkX, highSectionY, chunkZ)
     private readonly Dictionary<Vector3Int, HighBuildMeshData> highBuildMeshes = new Dictionary<Vector3Int, HighBuildMeshData>();
@@ -281,12 +290,17 @@ public partial class World
         data.mesh.SetUVs(1, uv1);
         data.mesh.SetUVs(2, uv2);
         data.mesh.SetUVs(3, uv3);
-        data.mesh.subMeshCount = 3;
-        data.mesh.SetTriangles(opaqueTris, 0, true);
-        data.mesh.SetTriangles(transparentTris, 1, true);
-        data.mesh.SetTriangles(waterTris, 2, true);
+        int totalIndexCount = opaqueTris.Count + transparentTris.Count + waterTris.Count;
+        if (totalIndexCount == 0)
+        {
+            DisableHighBuildMesh(new Vector3Int(coord.x, section, coord.y));
+            return;
+        }
+
+        ConfigureHighBuildSubMeshes(data.mesh, opaqueTris, transparentTris, waterTris);
         data.mesh.bounds = CreateHighBuildSectionBounds(coord, section);
         data.meshFilter.sharedMesh = data.mesh;
+        ConfigureHighBuildActiveMaterials(data, opaqueTris.Count, transparentTris.Count, waterTris.Count);
         ApplyBiomeTintToRenderer(data.meshRenderer, coord);
         ApplyRealisticShaderRendererSettings(data.meshRenderer);
         data.meshRenderer.enabled = true;
@@ -374,7 +388,7 @@ public partial class World
 
         MeshFilter mf = go.AddComponent<MeshFilter>();
         MeshRenderer mr = go.AddComponent<MeshRenderer>();
-        mr.materials = Material;
+        mr.sharedMaterials = Material;
         mr.shadowCastingMode = ShadowCastingMode.On;
         mr.receiveShadows = true;
         mr.lightProbeUsage = LightProbeUsage.Off;
@@ -398,6 +412,129 @@ public partial class World
 
         highBuildMeshes[key] = created;
         return created;
+    }
+
+    private void ConfigureHighBuildSubMeshes(
+        Mesh mesh,
+        List<int> opaqueTris,
+        List<int> transparentTris,
+        List<int> waterTris)
+    {
+        int subMeshCount = 0;
+        if (opaqueTris.Count > 0) subMeshCount++;
+        if (transparentTris.Count > 0) subMeshCount++;
+        if (waterTris.Count > 0) subMeshCount++;
+
+        mesh.subMeshCount = subMeshCount;
+        int subMeshIndex = 0;
+
+        if (opaqueTris.Count > 0)
+            mesh.SetTriangles(opaqueTris, subMeshIndex++, true);
+
+        if (transparentTris.Count > 0)
+            mesh.SetTriangles(transparentTris, subMeshIndex++, true);
+
+        if (waterTris.Count > 0)
+            mesh.SetTriangles(waterTris, subMeshIndex, true);
+    }
+
+    private void ConfigureHighBuildActiveMaterials(
+        HighBuildMeshData data,
+        int opaqueIndexCount,
+        int transparentIndexCount,
+        int waterIndexCount)
+    {
+        if (data == null || data.meshRenderer == null)
+            return;
+
+        int materialMask = BuildHighBuildMaterialMask(opaqueIndexCount, transparentIndexCount, waterIndexCount);
+        if (materialMask == data.activeMaterialMask &&
+            data.activeSharedMaterials != null &&
+            HasSameSharedMaterials(data.meshRenderer.sharedMaterials, data.activeSharedMaterials))
+        {
+            return;
+        }
+
+        Material[] desiredMaterials = BuildHighBuildActiveMaterialArray(materialMask);
+        if (!HasSameSharedMaterials(data.meshRenderer.sharedMaterials, desiredMaterials))
+            data.meshRenderer.sharedMaterials = desiredMaterials;
+
+        data.activeSharedMaterials = desiredMaterials;
+        data.activeMaterialMask = materialMask;
+    }
+
+    private static int BuildHighBuildMaterialMask(int opaqueIndexCount, int transparentIndexCount, int waterIndexCount)
+    {
+        int mask = 0;
+        if (opaqueIndexCount > 0)
+            mask |= HighBuildOpaqueMaterialMask;
+        if (transparentIndexCount > 0)
+            mask |= HighBuildTransparentMaterialMask;
+        if (waterIndexCount > 0)
+            mask |= HighBuildWaterMaterialMask;
+        return mask;
+    }
+
+    private Material[] BuildHighBuildActiveMaterialArray(int materialMask)
+    {
+        int materialCount = CountHighBuildMaterialBits(materialMask);
+        if (materialCount == 0)
+            return System.Array.Empty<Material>();
+
+        Material[] materials = new Material[materialCount];
+        int writeIndex = 0;
+
+        if ((materialMask & HighBuildOpaqueMaterialMask) != 0)
+            materials[writeIndex++] = GetHighBuildSourceMaterial(HighBuildOpaqueMaterialIndex);
+
+        if ((materialMask & HighBuildTransparentMaterialMask) != 0)
+            materials[writeIndex++] = GetHighBuildSourceMaterial(HighBuildTransparentMaterialIndex);
+
+        if ((materialMask & HighBuildWaterMaterialMask) != 0)
+            materials[writeIndex] = GetHighBuildSourceMaterial(HighBuildWaterMaterialIndex);
+
+        return materials;
+    }
+
+    private Material GetHighBuildSourceMaterial(int index)
+    {
+        if (Material == null || Material.Length == 0)
+            return null;
+
+        if ((uint)index < (uint)Material.Length)
+            return Material[index];
+
+        return Material[0];
+    }
+
+    private static int CountHighBuildMaterialBits(int value)
+    {
+        int count = 0;
+        while (value != 0)
+        {
+            count += value & 1;
+            value >>= 1;
+        }
+
+        return count;
+    }
+
+    private static bool HasSameSharedMaterials(Material[] current, Material[] desired)
+    {
+        if (ReferenceEquals(current, desired))
+            return true;
+        if (current == null || desired == null)
+            return current == desired;
+        if (current.Length != desired.Length)
+            return false;
+
+        for (int i = 0; i < current.Length; i++)
+        {
+            if (current[i] != desired[i])
+                return false;
+        }
+
+        return true;
     }
 
     private void BuildHighBuildSectionColliders(HighBuildMeshData data, Vector2Int coord, int section, List<Vector3Int> positions)

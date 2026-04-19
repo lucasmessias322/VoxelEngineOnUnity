@@ -21,9 +21,19 @@ public class ChunkRenderSlice : MonoBehaviour
     private MeshFilter meshFilter;
     [HideInInspector] public MeshRenderer meshRenderer;
     private Mesh mesh;
+    private Material[] sourceMaterials = Array.Empty<Material>();
+    private Material[] activeSharedMaterials = Array.Empty<Material>();
     private int startSubchunkIndex;
     private int subchunkCount;
     private bool hasGeometry;
+    private int activeMaterialMask = -1;
+
+    private const int OpaqueMaterialMask = 1 << 0;
+    private const int TransparentMaterialMask = 1 << 1;
+    private const int WaterMaterialMask = 1 << 2;
+    private const int OpaqueMaterialIndex = 0;
+    private const int TransparentMaterialIndex = 1;
+    private const int WaterMaterialIndex = 2;
 
     private readonly struct SliceMeshTotals
     {
@@ -63,7 +73,11 @@ public class ChunkRenderSlice : MonoBehaviour
         ConfigureShadowSettings();
 
         Material[] sharedMaterials = materials ?? Array.Empty<Material>();
-        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
+        if (!ReferenceEquals(sourceMaterials, sharedMaterials))
+            activeMaterialMask = -1;
+
+        sourceMaterials = sharedMaterials;
+        if (!hasGeometry && !HasSameSharedMaterials(meshRenderer.sharedMaterials, sharedMaterials))
             meshRenderer.sharedMaterials = sharedMaterials;
 
         mesh = mesh != null ? mesh : meshFilter.sharedMesh;
@@ -107,7 +121,7 @@ public class ChunkRenderSlice : MonoBehaviour
         Chunk owningChunk)
     {
         SliceMeshTotals totals = CalculateMeshTotals(subchunkRanges);
-        if (totals.vertexCount == 0)
+        if (totals.vertexCount == 0 || totals.TotalIndexCount == 0)
         {
             ClearMesh();
             return;
@@ -117,7 +131,7 @@ public class ChunkRenderSlice : MonoBehaviour
         var meshData = meshDataArray[0];
         meshData.SetVertexBufferParams(totals.vertexCount, ChunkVertexLayout);
         meshData.SetIndexBufferParams(totals.TotalIndexCount, IndexFormat.UInt32);
-        meshData.subMeshCount = 3;
+        meshData.subMeshCount = CountActiveSubMeshes(totals);
 
         NativeArray<MeshGenerator.PackedChunkVertex> vertexData = meshData.GetVertexData<MeshGenerator.PackedChunkVertex>();
         NativeArray<int> indexData = meshData.GetIndexData<int>();
@@ -131,6 +145,8 @@ public class ChunkRenderSlice : MonoBehaviour
             MeshUpdateFlags.DontRecalculateBounds |
             MeshUpdateFlags.DontValidateIndices |
             MeshUpdateFlags.DontNotifyMeshUsers);
+
+        ConfigureActiveMaterials(totals);
 
         mesh.bounds = CreateMeshBounds(
             startSubchunkIndex * Chunk.SubchunkHeight,
@@ -265,12 +281,24 @@ public class ChunkRenderSlice : MonoBehaviour
 
     private static void ConfigureSubMeshes(Mesh.MeshData meshData, SliceMeshTotals totals)
     {
+        int subMeshIndex = 0;
         int transparentStart = totals.opaqueCount;
         int waterStart = totals.opaqueCount + totals.TotalTransparentLikeCount;
 
-        meshData.SetSubMesh(0, new SubMeshDescriptor(0, totals.opaqueCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-        meshData.SetSubMesh(1, new SubMeshDescriptor(transparentStart, totals.TotalTransparentLikeCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
-        meshData.SetSubMesh(2, new SubMeshDescriptor(waterStart, totals.waterCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        if (totals.opaqueCount > 0)
+        {
+            meshData.SetSubMesh(subMeshIndex++, new SubMeshDescriptor(0, totals.opaqueCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        }
+
+        if (totals.TotalTransparentLikeCount > 0)
+        {
+            meshData.SetSubMesh(subMeshIndex++, new SubMeshDescriptor(transparentStart, totals.TotalTransparentLikeCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        }
+
+        if (totals.waterCount > 0)
+        {
+            meshData.SetSubMesh(subMeshIndex, new SubMeshDescriptor(waterStart, totals.waterCount, MeshTopology.Triangles), MeshUpdateFlags.DontRecalculateBounds);
+        }
     }
 
     private void SetActiveState(bool active)
@@ -329,6 +357,92 @@ public class ChunkRenderSlice : MonoBehaviour
         }
 
         return true;
+    }
+
+    private static int CountActiveSubMeshes(SliceMeshTotals totals)
+    {
+        int count = 0;
+        if (totals.opaqueCount > 0)
+            count++;
+        if (totals.TotalTransparentLikeCount > 0)
+            count++;
+        if (totals.waterCount > 0)
+            count++;
+        return count;
+    }
+
+    private void ConfigureActiveMaterials(SliceMeshTotals totals)
+    {
+        int materialMask = BuildMaterialMask(totals);
+        if (materialMask == activeMaterialMask &&
+            activeSharedMaterials != null &&
+            HasSameSharedMaterials(meshRenderer.sharedMaterials, activeSharedMaterials))
+        {
+            return;
+        }
+
+        Material[] desiredMaterials = BuildActiveMaterialArray(materialMask);
+        if (!HasSameSharedMaterials(meshRenderer.sharedMaterials, desiredMaterials))
+            meshRenderer.sharedMaterials = desiredMaterials;
+
+        activeSharedMaterials = desiredMaterials;
+        activeMaterialMask = materialMask;
+    }
+
+    private static int BuildMaterialMask(SliceMeshTotals totals)
+    {
+        int mask = 0;
+        if (totals.opaqueCount > 0)
+            mask |= OpaqueMaterialMask;
+        if (totals.TotalTransparentLikeCount > 0)
+            mask |= TransparentMaterialMask;
+        if (totals.waterCount > 0)
+            mask |= WaterMaterialMask;
+        return mask;
+    }
+
+    private Material[] BuildActiveMaterialArray(int materialMask)
+    {
+        int materialCount = CountBits(materialMask);
+        if (materialCount == 0)
+            return Array.Empty<Material>();
+
+        Material[] materials = new Material[materialCount];
+        int writeIndex = 0;
+
+        if ((materialMask & OpaqueMaterialMask) != 0)
+            materials[writeIndex++] = GetSourceMaterial(OpaqueMaterialIndex);
+
+        if ((materialMask & TransparentMaterialMask) != 0)
+            materials[writeIndex++] = GetSourceMaterial(TransparentMaterialIndex);
+
+        if ((materialMask & WaterMaterialMask) != 0)
+            materials[writeIndex] = GetSourceMaterial(WaterMaterialIndex);
+
+        return materials;
+    }
+
+    private Material GetSourceMaterial(int index)
+    {
+        if (sourceMaterials == null || sourceMaterials.Length == 0)
+            return null;
+
+        if ((uint)index < (uint)sourceMaterials.Length)
+            return sourceMaterials[index];
+
+        return sourceMaterials[0];
+    }
+
+    private static int CountBits(int value)
+    {
+        int count = 0;
+        while (value != 0)
+        {
+            count += value & 1;
+            value >>= 1;
+        }
+
+        return count;
     }
 
     private static Bounds CreateMeshBounds(int startY, int endY)
