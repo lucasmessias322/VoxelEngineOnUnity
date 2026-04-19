@@ -448,6 +448,11 @@ public partial class World : MonoBehaviour
     [Header("Performance Settings")]
     public int maxChunksPerFrame = 4;
     public int maxMeshAppliesPerFrame = 2;
+    [Tooltip("Quando ativo, meshes prontas sao aplicadas por prioridade visual: slices visiveis, perto da camera/player e dentro do frustum entram primeiro.")]
+    public bool enableSmartMeshApplyPrioritization = true;
+    [Tooltip("Limite de meshes prontas avaliadas por apply. 0 avalia todas. Use para limitar custo quando houver backlog extremo.")]
+    [Min(0)]
+    public int meshApplyPriorityScanLimit = 64;
     [Tooltip("Quantidade maxima de chunks com dados/luz prontos que podem agendar jobs de mesh por frame.")]
     [Min(1)]
     public int maxMeshSchedulesPerFrame = 1;
@@ -735,6 +740,8 @@ public partial class World : MonoBehaviour
     private int _lastSimulationDistance = -1;
     private Vector2Int _lastPendingJobPriorityCenter = new Vector2Int(int.MinValue, int.MinValue);
     private bool pendingJobPrioritiesDirty = true;
+    private Camera cachedMeshApplyPriorityCamera;
+    private readonly Plane[] meshApplyPriorityFrustumPlanes = new Plane[6];
     private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>();
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
     private Comparison<(Vector2Int coord, float distSq)> pendingChunkDistanceComparison;
@@ -1273,6 +1280,139 @@ public partial class World : MonoBehaviour
             return distCmp;
 
         return a.visualSliceIndex.CompareTo(b.visualSliceIndex);
+    }
+
+    private Camera ResolveMeshApplyPriorityCamera()
+    {
+        if (cachedMeshApplyPriorityCamera != null && cachedMeshApplyPriorityCamera.isActiveAndEnabled)
+            return cachedMeshApplyPriorityCamera;
+
+        cachedMeshApplyPriorityCamera = null;
+        if (player != null)
+            cachedMeshApplyPriorityCamera = player.GetComponentInChildren<Camera>();
+
+        if (cachedMeshApplyPriorityCamera == null || !cachedMeshApplyPriorityCamera.isActiveAndEnabled)
+            cachedMeshApplyPriorityCamera = Camera.main;
+
+        return cachedMeshApplyPriorityCamera != null && cachedMeshApplyPriorityCamera.isActiveAndEnabled
+            ? cachedMeshApplyPriorityCamera
+            : null;
+    }
+
+    private bool TryResolvePendingMeshApplyTarget(PendingMesh pm, out Chunk activeChunk, out ChunkRenderSlice visualSlice)
+    {
+        visualSlice = null;
+        if (!activeChunks.TryGetValue(pm.coord, out activeChunk) || activeChunk == null)
+            return false;
+
+        if (activeChunk.generation != pm.expectedGen || HasQueuedChunkRebuild(pm.coord))
+            return false;
+
+        return activeChunk.TryGetVisualSlice(pm.visualSliceIndex, out visualSlice) && visualSlice != null;
+    }
+
+    private int SelectNextPendingMeshApplyIndex(Camera priorityCamera, bool hasPriorityCamera)
+    {
+        int bestIndex = -1;
+        int staleReadyIndex = -1;
+        float bestScore = float.NegativeInfinity;
+        int readyCandidatesScanned = 0;
+        int scanLimit = Mathf.Max(0, meshApplyPriorityScanLimit);
+
+        for (int i = 0; i < pendingMeshes.Count; i++)
+        {
+            PendingMesh pm = pendingMeshes[i];
+            if (!pm.jobCompleted && !pm.handle.IsCompleted)
+                continue;
+
+            if (!TryResolvePendingMeshApplyTarget(pm, out Chunk activeChunk, out ChunkRenderSlice visualSlice))
+            {
+                if (staleReadyIndex < 0)
+                    staleReadyIndex = i;
+                continue;
+            }
+
+            if (!enableSmartMeshApplyPrioritization)
+                return i;
+
+            float score = ComputePendingMeshApplyPriority(pm, activeChunk, visualSlice, priorityCamera, hasPriorityCamera);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                bestIndex = i;
+            }
+
+            readyCandidatesScanned++;
+            if (scanLimit > 0 && readyCandidatesScanned >= scanLimit)
+                break;
+        }
+
+        return bestIndex >= 0 ? bestIndex : staleReadyIndex;
+    }
+
+    private float ComputePendingMeshApplyPriority(
+        PendingMesh pm,
+        Chunk activeChunk,
+        ChunkRenderSlice visualSlice,
+        Camera priorityCamera,
+        bool hasPriorityCamera)
+    {
+        float score = pm.lightingOnlyRebuild ? 12000f : 0f;
+        score -= GetChunkDistanceSqToPlayer(pm.coord) * 650f;
+
+        Bounds sliceBounds = GetPendingMeshSliceWorldBounds(pm, activeChunk, visualSlice);
+        if (visualSlice != null && visualSlice.meshRenderer != null)
+        {
+            if (visualSlice.meshRenderer.isVisible)
+                score += 90000f;
+            if (visualSlice.meshRenderer.enabled)
+                score += 6000f;
+        }
+
+        if (!hasPriorityCamera || priorityCamera == null)
+            return score - pm.visualSliceIndex;
+
+        bool isInsideFrustum = GeometryUtility.TestPlanesAABB(meshApplyPriorityFrustumPlanes, sliceBounds);
+        score += isInsideFrustum ? 55000f : -45000f;
+
+        Transform cameraTransform = priorityCamera.transform;
+        Vector3 toSlice = sliceBounds.center - cameraTransform.position;
+        float distanceSq = toSlice.sqrMagnitude;
+        score -= distanceSq * 0.018f;
+
+        if (distanceSq > 0.001f)
+        {
+            float forwardDot = Vector3.Dot(cameraTransform.forward, toSlice / Mathf.Sqrt(distanceSq));
+            score += forwardDot >= 0f ? forwardDot * 14000f : forwardDot * 28000f;
+        }
+
+        float cameraY = cameraTransform.position.y;
+        if (cameraY >= sliceBounds.min.y - Chunk.SubchunkHeight &&
+            cameraY <= sliceBounds.max.y + Chunk.SubchunkHeight)
+        {
+            score += 8000f;
+        }
+
+        return score;
+    }
+
+    private Bounds GetPendingMeshSliceWorldBounds(PendingMesh pm, Chunk activeChunk, ChunkRenderSlice visualSlice)
+    {
+        int startSubchunk = visualSlice != null
+            ? visualSlice.StartSubchunkIndex
+            : Mathf.Clamp(pm.visualSliceIndex * Mathf.Max(1, activeChunk.visualSubchunksPerRenderer), 0, Chunk.SubchunksPerColumn - 1);
+        int endSubchunk = visualSlice != null
+            ? visualSlice.EndSubchunkIndexExclusive
+            : Mathf.Min(startSubchunk + Mathf.Max(1, activeChunk.visualSubchunksPerRenderer), Chunk.SubchunksPerColumn);
+
+        float startY = startSubchunk * Chunk.SubchunkHeight;
+        float endY = Mathf.Min(endSubchunk * Chunk.SubchunkHeight, Chunk.SizeY);
+        float height = Mathf.Max(1f, endY - startY);
+        Vector3 origin = activeChunk != null ? activeChunk.transform.position : new Vector3(pm.coord.x * Chunk.SizeX, 0f, pm.coord.y * Chunk.SizeZ);
+
+        return new Bounds(
+            origin + new Vector3(Chunk.SizeX * 0.5f, startY + height * 0.5f, Chunk.SizeZ * 0.5f),
+            new Vector3(Chunk.SizeX + 2f, height + 2f, Chunk.SizeZ + 2f));
     }
 
     private bool HasOtherPendingMeshJobs(Vector2Int coord, int expectedGen, int excludeIndex)
@@ -2937,27 +3077,28 @@ public partial class World : MonoBehaviour
 
         float stageStartTime = Time.realtimeSinceStartup;
         float stageBudgetSeconds = GetBudgetSeconds(chunkMeshApplyBudgetMS);
-        int i = 0;
+        Camera priorityCamera = enableSmartMeshApplyPrioritization ? ResolveMeshApplyPriorityCamera() : null;
+        bool hasPriorityCamera = priorityCamera != null;
+        if (hasPriorityCamera)
+            GeometryUtility.CalculateFrustumPlanes(priorityCamera, meshApplyPriorityFrustumPlanes);
 
-        while (i < pendingMeshes.Count)
+        while (pendingMeshes.Count > 0)
         {
             if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
                 break;
             if (meshesAppliedThisFrame >= maxMeshAppliesPerFrame)
                 break;
 
-            var pm = pendingMeshes[i];
+            int selectedIndex = SelectNextPendingMeshApplyIndex(priorityCamera, hasPriorityCamera);
+            if (selectedIndex < 0)
+                break;
+
+            var pm = pendingMeshes[selectedIndex];
             if (!pm.jobCompleted)
             {
-                if (!pm.handle.IsCompleted)
-                {
-                    i++;
-                    continue;
-                }
-
                 pm.handle.Complete();
                 pm.jobCompleted = true;
-                pendingMeshes[i] = pm;
+                pendingMeshes[selectedIndex] = pm;
             }
 
             if (!HasPipelineAndStageBudgetRemaining(pipelineStartTime, pipelineBudgetSeconds, stageStartTime, stageBudgetSeconds))
@@ -3041,7 +3182,7 @@ public partial class World : MonoBehaviour
             }
 
             DisposePendingMesh(pm);
-            RemovePendingMeshAtSwapBack(i);
+            RemovePendingMeshAtSwapBack(selectedIndex);
             if (hasActiveChunk)
             {
                 RefreshChunkJobTracking(pm.coord, activeChunk);
