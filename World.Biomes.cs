@@ -549,10 +549,11 @@ public partial class World : MonoBehaviour
         if (renderer == null)
             return;
 
-        renderer.shadowCastingMode = enableRealisticShader
+        bool useRealtimeRendererShadows = enableRealisticShader && !IsMobileMaterialProfileSelected;
+        renderer.shadowCastingMode = useRealtimeRendererShadows
             ? UnityEngine.Rendering.ShadowCastingMode.On
             : UnityEngine.Rendering.ShadowCastingMode.Off;
-        renderer.receiveShadows = enableRealisticShader;
+        renderer.receiveShadows = useRealtimeRendererShadows;
     }
 
     private ChunkBiomeTints EvaluateChunkBiomeTints(Vector2Int coord)

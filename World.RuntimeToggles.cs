@@ -61,6 +61,17 @@ public partial class World
         emissiveBlockLightController?.RefreshEmissivePointLightState();
     }
 
+    private void HandleWorldMaterialProfileToggle()
+    {
+        int currentMaterialProfileHash = ComputeWorldMaterialProfileHash();
+        if (lastWorldMaterialProfileHash == currentMaterialProfileHash)
+            return;
+
+        lastWorldMaterialProfileHash = currentMaterialProfileHash;
+        RefreshWorldMaterialProfileOnRenderers();
+        emissiveBlockLightController?.RefreshEmissivePointLightState();
+    }
+
     private void RefreshRealisticShaderModeOnRenderers()
     {
         foreach (var kv in activeChunks)

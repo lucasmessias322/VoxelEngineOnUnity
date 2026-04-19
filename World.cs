@@ -5,6 +5,7 @@ using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 
 [Serializable]
@@ -82,6 +83,12 @@ public enum TreeLeafQualityMode : byte
     Medium = 0,
     High = 1,
     Ultra = 2
+}
+
+public enum WorldMaterialProfile : byte
+{
+    PcLit = 0,
+    MobileUnlit = 1
 }
 
 
@@ -270,7 +277,7 @@ public partial class World : MonoBehaviour
     public const int MinRenderDistance = 2;
     public const int MaxRenderDistance = 32;
     internal bool IsShuttingDown => isShuttingDown;
-    public bool ShouldUseEmissiveBlockPointLights => enableRealisticShader && enableEmissiveBlockPointLights;
+    public bool ShouldUseEmissiveBlockPointLights => !IsMobileMaterialProfileSelected && enableRealisticShader && enableEmissiveBlockPointLights;
 
     private bool isShuttingDown;
     private TorchFireParticleController torchFireParticleController;
@@ -315,8 +322,14 @@ public partial class World : MonoBehaviour
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
 
-    [Header("Atlas / Material")]
-    public Material[] Material;
+    [Header("Atlas / Materials")]
+    [Tooltip("Escolhe qual lista de materiais o World usa para chunks, high-build e renderers do terreno.")]
+    [SerializeField] private WorldMaterialProfile materialProfile = WorldMaterialProfile.PcLit;
+    [Tooltip("Materiais atuais/pesados para PC: blocos lit, folhas lit e agua lit, nessa ordem.")]
+    [FormerlySerializedAs("Material")]
+    [SerializeField] private Material[] pcMaterials = Array.Empty<Material>();
+    [Tooltip("Materiais leves para mobile: Blocks Mobile, Folhas Mobile e Water Mobile, nessa ordem.")]
+    [SerializeField] private Material[] mobileMaterials = Array.Empty<Material>();
     public int atlasTilesX = 4;
     public int atlasTilesY = 4;
     [Tooltip("Gerador do atlas de blocos usado para converter o mapeamento legacy por tiles para UV rects runtime.")]
@@ -719,6 +732,7 @@ public partial class World : MonoBehaviour
     private bool lastEnableAmbientOcclusion = true;
     private bool lastEnableWater = true;
     private bool lastEnableChunkDetailLod = true;
+    private int lastWorldMaterialProfileHash = int.MinValue;
     private int lastChunkDetailLodDistance = 10;
     private TreeLeafQualityMode lastTreeLeafQuality = TreeLeafQualityMode.Medium;
     private int lastTreeLeafFoliageSettingsHash = int.MinValue;
@@ -794,6 +808,112 @@ public partial class World : MonoBehaviour
     private TerrainDensitySettings GetTerrainDensitySettings()
     {
         return terrainDensity.Sanitized();
+    }
+
+    public Material[] Material
+    {
+        get => ActiveWorldMaterials;
+        set => pcMaterials = value;
+    }
+
+    private bool IsMobileMaterialProfileSelected => materialProfile == WorldMaterialProfile.MobileUnlit;
+
+    private Material[] ActiveWorldMaterials
+    {
+        get
+        {
+            if (IsMobileMaterialProfileSelected && HasAnyMaterial(mobileMaterials))
+                return mobileMaterials;
+
+            return pcMaterials ?? Array.Empty<Material>();
+        }
+    }
+
+    private static bool HasAnyMaterial(Material[] materials)
+    {
+        if (materials == null)
+            return false;
+
+        for (int i = 0; i < materials.Length; i++)
+        {
+            if (materials[i] != null)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static bool ContainsMaterial(Material[] materials, Material material)
+    {
+        if (materials == null || material == null)
+            return false;
+
+        for (int i = 0; i < materials.Length; i++)
+        {
+            if (ReferenceEquals(materials[i], material))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool IsWorldMaterial(Material material)
+    {
+        return ContainsMaterial(pcMaterials, material) || ContainsMaterial(mobileMaterials, material);
+    }
+
+    private int ComputeWorldMaterialProfileHash()
+    {
+        unchecked
+        {
+            int hash = 17;
+            hash = hash * 31 + (int)materialProfile;
+
+            Material[] activeMaterials = ActiveWorldMaterials;
+            if (activeMaterials == null)
+                return hash;
+
+            hash = hash * 31 + activeMaterials.Length;
+            for (int i = 0; i < activeMaterials.Length; i++)
+            {
+                Material material = activeMaterials[i];
+                hash = hash * 31 + (material != null ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(material) : 0);
+            }
+
+            return hash;
+        }
+    }
+
+    private void RefreshWorldMaterialProfileOnRenderers()
+    {
+        Material[] activeMaterials = ActiveWorldMaterials;
+
+        foreach (var kv in activeChunks)
+        {
+            Chunk chunk = kv.Value;
+            if (chunk == null || chunk.visualSlices == null)
+                continue;
+
+            for (int i = 0; i < chunk.visualSlices.Length; i++)
+            {
+                ChunkRenderSlice visualSlice = chunk.visualSlices[i];
+                if (visualSlice != null)
+                    visualSlice.UpdateSourceMaterials(activeMaterials);
+            }
+
+            ApplyChunkBiomeTint(chunk, kv.Key);
+        }
+
+        foreach (var kv in highBuildMeshes)
+        {
+            HighBuildMeshData data = kv.Value;
+            RefreshHighBuildSourceMaterials(data, activeMaterials);
+            if (data?.meshRenderer == null)
+                continue;
+
+            ApplyBiomeTintToRenderer(data.meshRenderer, new Vector2Int(kv.Key.x, kv.Key.z));
+            ApplyRealisticShaderRendererSettings(data.meshRenderer);
+        }
     }
 
     private void EnsureShaderFallbackBuffersBound()
@@ -1497,7 +1617,7 @@ public partial class World : MonoBehaviour
             if (chunk == null)
                 continue;
 
-            chunk.InitializeSubchunks(Material, resolved);
+            chunk.InitializeSubchunks(ActiveWorldMaterials, resolved);
             chunk.UpdateWorldBounds();
             RequestFullChunkRebuild(kv.Key, false);
         }
@@ -2289,6 +2409,14 @@ public partial class World : MonoBehaviour
         if (!Application.isPlaying || isShuttingDown || activeChunks == null || activeChunks.Count == 0)
             return;
 
+        int currentMaterialProfileHash = ComputeWorldMaterialProfileHash();
+        if (lastWorldMaterialProfileHash != currentMaterialProfileHash)
+        {
+            lastWorldMaterialProfileHash = currentMaterialProfileHash;
+            RefreshWorldMaterialProfileOnRenderers();
+            emissiveBlockLightController?.RefreshEmissivePointLightState();
+        }
+
         loadedChunkCoordsBuffer.Clear();
         foreach (var kv in activeChunks)
             loadedChunkCoordsBuffer.Add(kv.Key);
@@ -2305,6 +2433,7 @@ public partial class World : MonoBehaviour
             RebuildBlockAtlasCompatibility();
         }
         RefreshTerrainGenerationRuntimeState();
+        lastWorldMaterialProfileHash = ComputeWorldMaterialProfileHash();
 
         // Pre-instantiate pool
         for (int i = 0; i < poolSize; i++)
@@ -2395,36 +2524,24 @@ public partial class World : MonoBehaviour
         if (generator == blockAtlasGenerator)
             score += 1000;
 
-        if (generator.targetMaterials != null && Material != null)
+        if (generator.targetMaterials != null)
         {
             for (int i = 0; i < generator.targetMaterials.Count; i++)
             {
                 Material targetMaterial = generator.targetMaterials[i];
-                if (targetMaterial == null)
-                    continue;
-
-                for (int j = 0; j < Material.Length; j++)
-                {
-                    if (ReferenceEquals(targetMaterial, Material[j]))
-                        score += 100;
-                }
+                if (IsWorldMaterial(targetMaterial))
+                    score += 100;
             }
         }
 
-        if (generator.targetRenderer != null && Material != null)
+        if (generator.targetRenderer != null)
         {
             Material[] rendererMaterials = generator.targetRenderer.sharedMaterials;
             for (int i = 0; i < rendererMaterials.Length; i++)
             {
                 Material rendererMaterial = rendererMaterials[i];
-                if (rendererMaterial == null)
-                    continue;
-
-                for (int j = 0; j < Material.Length; j++)
-                {
-                    if (ReferenceEquals(rendererMaterial, Material[j]))
-                        score += 50;
-                }
+                if (IsWorldMaterial(rendererMaterial))
+                    score += 50;
             }
         }
 
@@ -2438,12 +2555,21 @@ public partial class World : MonoBehaviour
 
     private void ApplyGeneratedAtlasToWorldMaterials(Texture atlasTexture)
     {
-        if (atlasTexture == null || Material == null)
+        if (atlasTexture == null)
             return;
 
-        for (int i = 0; i < Material.Length; i++)
+        ApplyGeneratedAtlasToMaterials(atlasTexture, pcMaterials);
+        ApplyGeneratedAtlasToMaterials(atlasTexture, mobileMaterials);
+    }
+
+    private void ApplyGeneratedAtlasToMaterials(Texture atlasTexture, Material[] materials)
+    {
+        if (materials == null)
+            return;
+
+        for (int i = 0; i < materials.Length; i++)
         {
-            Material material = Material[i];
+            Material material = materials[i];
             if (material == null)
                 continue;
 
@@ -2556,6 +2682,7 @@ public partial class World : MonoBehaviour
         float updateBudgetSeconds = updateWorkBudgetMS > 0f ? updateWorkBudgetMS / 1000f : 0f;
 
         HandleBlockColliderToggle();
+        HandleWorldMaterialProfileToggle();
         HandleRealisticShaderToggle();
         HandleVisualFeatureToggle();
         ApplyResolvedVisualSubchunkRendererLayout();
@@ -3027,7 +3154,7 @@ public partial class World : MonoBehaviour
                     int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
                     if (!activeChunk.HasInitializedSubchunks ||
                         activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
-                        activeChunk.InitializeSubchunks(Material, resolvedVisualSubchunksPerRenderer);
+                        activeChunk.InitializeSubchunks(ActiveWorldMaterials, resolvedVisualSubchunksPerRenderer);
                     else
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
@@ -3248,7 +3375,7 @@ public partial class World : MonoBehaviour
         Chunk chunk = obj.GetComponent<Chunk>();
         if (chunk != null && prewarmPooledChunkVisuals)
         {
-            chunk.InitializeSubchunks(Material, GetResolvedVisualSubchunksPerRenderer());
+            chunk.InitializeSubchunks(ActiveWorldMaterials, GetResolvedVisualSubchunksPerRenderer());
             chunk.ResetChunk();
         }
 

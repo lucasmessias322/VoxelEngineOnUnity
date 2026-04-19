@@ -232,6 +232,25 @@ public class ChunkRenderSlice : MonoBehaviour
         return true;
     }
 
+    public void UpdateSourceMaterials(Material[] materials)
+    {
+        Material[] sharedMaterials = materials ?? Array.Empty<Material>();
+        if (ReferenceEquals(sourceMaterials, sharedMaterials))
+            return;
+
+        int previousMaterialMask = activeMaterialMask;
+        sourceMaterials = sharedMaterials;
+        Array.Clear(activeMaterialCache, 0, activeMaterialCache.Length);
+        activeMaterialMask = -1;
+
+        if (!hasGeometry || meshRenderer == null || previousMaterialMask <= 0)
+            return;
+
+        Material[] desiredMaterials = GetCachedActiveMaterialArray(previousMaterialMask);
+        meshRenderer.sharedMaterials = desiredMaterials;
+        activeMaterialMask = previousMaterialMask;
+    }
+
     private SliceMeshTotals CalculateMeshTotals(NativeArray<MeshGenerator.SubchunkMeshRange> subchunkRanges)
     {
         int totalVertexCount = 0;

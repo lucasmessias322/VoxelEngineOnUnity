@@ -6,6 +6,7 @@ using UnityEngine;
 public class FPSController : MonoBehaviour
 {
     private const int ThirdPersonHitBufferSize = 16;
+    private const float LegacyMouseSensitivityReferenceFps = 60f;
 
     private enum CameraViewMode
     {
@@ -151,8 +152,9 @@ public class FPSController : MonoBehaviour
         if (PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
             return;
 
-        float mouseX = Input.GetAxis("Mouse X") * mouseSensitivity * Time.deltaTime;
-        float mouseY = Input.GetAxis("Mouse Y") * mouseSensitivity * Time.deltaTime;
+        float lookSensitivity = mouseSensitivity / LegacyMouseSensitivityReferenceFps;
+        float mouseX = Input.GetAxis("Mouse X") * lookSensitivity;
+        float mouseY = Input.GetAxis("Mouse Y") * lookSensitivity;
 
         xRotation -= mouseY;
         xRotation = Mathf.Clamp(xRotation, -90f, 90f);

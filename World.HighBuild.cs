@@ -390,7 +390,7 @@ public partial class World
 
         MeshFilter mf = go.AddComponent<MeshFilter>();
         MeshRenderer mr = go.AddComponent<MeshRenderer>();
-        mr.sharedMaterials = Material;
+        mr.sharedMaterials = ActiveWorldMaterials;
         mr.shadowCastingMode = ShadowCastingMode.On;
         mr.receiveShadows = true;
         mr.lightProbeUsage = LightProbeUsage.Off;
@@ -450,7 +450,7 @@ public partial class World
             return;
 
         int materialMask = BuildHighBuildMaterialMask(opaqueIndexCount, transparentIndexCount, waterIndexCount);
-        Material[] currentSourceMaterials = Material ?? System.Array.Empty<Material>();
+        Material[] currentSourceMaterials = ActiveWorldMaterials ?? System.Array.Empty<Material>();
         if (!ReferenceEquals(data.sourceMaterials, currentSourceMaterials))
         {
             data.sourceMaterials = currentSourceMaterials;
@@ -464,6 +464,28 @@ public partial class World
         Material[] desiredMaterials = GetCachedHighBuildActiveMaterialArray(data, materialMask);
         data.meshRenderer.sharedMaterials = desiredMaterials;
         data.activeMaterialMask = materialMask;
+    }
+
+    private void RefreshHighBuildSourceMaterials(HighBuildMeshData data, Material[] materials)
+    {
+        if (data == null || data.meshRenderer == null)
+            return;
+
+        int previousMaterialMask = data.activeMaterialMask;
+        Material[] currentSourceMaterials = materials ?? System.Array.Empty<Material>();
+        if (!ReferenceEquals(data.sourceMaterials, currentSourceMaterials))
+        {
+            data.sourceMaterials = currentSourceMaterials;
+            System.Array.Clear(data.activeMaterialCache, 0, data.activeMaterialCache.Length);
+            data.activeMaterialMask = -1;
+        }
+
+        if (previousMaterialMask <= 0)
+            return;
+
+        Material[] desiredMaterials = GetCachedHighBuildActiveMaterialArray(data, previousMaterialMask);
+        data.meshRenderer.sharedMaterials = desiredMaterials;
+        data.activeMaterialMask = previousMaterialMask;
     }
 
     private static int BuildHighBuildMaterialMask(int opaqueIndexCount, int transparentIndexCount, int waterIndexCount)
