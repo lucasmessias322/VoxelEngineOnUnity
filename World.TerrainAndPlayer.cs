@@ -155,8 +155,37 @@ public partial class World : MonoBehaviour
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
         emissiveBlockLightController?.NotifyBlockChanged(worldPos, current, type);
+        TryConvertCoveredGrassToDirt(worldPos, type, placedByPlayer);
 
         RequestBlockEditRefresh(worldPos, chunkCoord, current, type);
+    }
+
+    private void TryConvertCoveredGrassToDirt(Vector3Int worldPos, BlockType placedType, bool placedByPlayer)
+    {
+        if (!placedByPlayer || !DoesBlockShadeGrass(placedType) || worldPos.y <= 0)
+            return;
+
+        Vector3Int belowPos = worldPos + Vector3Int.down;
+        if (GetBlockAt(belowPos) != BlockType.Grass)
+            return;
+
+        SetBlockAt(belowPos, BlockType.Dirt);
+    }
+
+    private bool DoesBlockShadeGrass(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        if (blockData == null)
+            return IsSolidBlock(blockType);
+
+        BlockTextureMapping? mapping = blockData.GetMapping(blockType);
+        if (mapping == null)
+            return IsSolidBlock(blockType);
+
+        BlockTextureMapping value = mapping.Value;
+        return value.isSolid && !value.isTransparent && !value.isLiquid;
     }
 
     private void RequestBlockEditRefresh(
