@@ -1,74 +1,78 @@
-using System;
 using System.Collections.Generic;
 using UnityEngine;
 
 [CreateAssetMenu(fileName = "BlockItemMappingSO", menuName = "ScriptableObjects/Block Item Mapping SO", order = 2)]
 public class BlockItemMappingSO : ScriptableObject
 {
-    [System.Serializable]
-    public struct BlockItemMapping
-    {
-        public BlockType blockType;
-        public Item item;
-    }
-
-    [SerializeField] private BlockItemMapping[] blockItemMappings;
-
     public bool TryGetItemForBlock(BlockType blockType, out Item item)
     {
-        item = null;
-        if (blockItemMappings == null)
-            return false;
-
-        if (TryGetExplicitItemForBlock(blockType, out item))
-            return true;
-
-        BlockType fallbackBlockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
-        return fallbackBlockType != blockType &&
-               TryGetExplicitItemForBlock(fallbackBlockType, out item);
+        return BlockItemCatalog.TryGetItemForBlock(blockType, out item);
     }
 
     public bool TryGetBlockForItem(Item item, out BlockType blockType)
     {
-        blockType = BlockType.Air;
-        if (item == null || blockItemMappings == null)
-            return false;
-
-        for (int i = 0; i < blockItemMappings.Length; i++)
-        {
-            if (blockItemMappings[i].item != item)
-                continue;
-
-            blockType = blockItemMappings[i].blockType;
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.itemName) &&
-            item.itemName.Equals("torch", StringComparison.OrdinalIgnoreCase))
-        {
-            blockType = BlockType.glowstone;
-            return true;
-        }
-
-        if (!string.IsNullOrWhiteSpace(item.itemName) &&
-            item.itemName.Equals("wire", StringComparison.OrdinalIgnoreCase))
-        {
-            blockType = BlockType.wire;
-            return true;
-        }
-
-        return false;
+        return BlockItemCatalog.TryGetBlockForItem(item, out blockType);
     }
 
     public void AppendMappedItems(List<Item> output, bool includeDuplicates = false)
     {
-        if (output == null || blockItemMappings == null)
+        BlockItemCatalog.AppendBlockItems(output, includeDuplicates);
+    }
+}
+
+public static class BlockItemCatalog
+{
+    public const string DefaultBlockItemsResourcePath = "Itens/Blocks";
+
+    private static bool isInitialized;
+    private static Item[] cachedBlockItems = System.Array.Empty<Item>();
+    private static readonly Dictionary<BlockType, Item> itemByBlockType = new Dictionary<BlockType, Item>();
+
+    public static void ClearCache()
+    {
+        isInitialized = false;
+        cachedBlockItems = System.Array.Empty<Item>();
+        itemByBlockType.Clear();
+    }
+
+    public static bool TryGetItemForBlock(BlockType blockType, out Item item)
+    {
+        EnsureInitialized();
+
+        if (itemByBlockType.TryGetValue(blockType, out item) && item != null)
+            return true;
+
+        if (TryGetFallbackInventoryBlockType(blockType, out BlockType fallbackBlockType) &&
+            itemByBlockType.TryGetValue(fallbackBlockType, out item) &&
+            item != null)
+        {
+            return true;
+        }
+
+        item = null;
+        return false;
+    }
+
+    public static bool TryGetBlockForItem(Item item, out BlockType blockType)
+    {
+        if (item != null && item.TryGetBlockType(out blockType))
+            return true;
+
+        blockType = BlockType.Air;
+        return false;
+    }
+
+    public static void AppendBlockItems(List<Item> output, bool includeDuplicates = false)
+    {
+        if (output == null)
             return;
 
+        EnsureInitialized();
+
         HashSet<Item> seen = includeDuplicates ? null : new HashSet<Item>(output);
-        for (int i = 0; i < blockItemMappings.Length; i++)
+        for (int i = 0; i < cachedBlockItems.Length; i++)
         {
-            Item item = blockItemMappings[i].item;
+            Item item = cachedBlockItems[i];
             if (item == null)
                 continue;
 
@@ -79,21 +83,44 @@ public class BlockItemMappingSO : ScriptableObject
         }
     }
 
-    private bool TryGetExplicitItemForBlock(BlockType blockType, out Item item)
+    private static void EnsureInitialized()
     {
-        item = null;
-        if (blockItemMappings == null)
-            return false;
+        if (isInitialized)
+            return;
 
-        for (int i = 0; i < blockItemMappings.Length; i++)
+        isInitialized = true;
+        itemByBlockType.Clear();
+
+        Item[] loadedItems = Resources.LoadAll<Item>(DefaultBlockItemsResourcePath);
+        if (loadedItems == null || loadedItems.Length == 0)
         {
-            if (blockItemMappings[i].blockType != blockType)
-                continue;
-
-            item = blockItemMappings[i].item;
-            return item != null;
+            cachedBlockItems = System.Array.Empty<Item>();
+            return;
         }
 
-        return false;
+        List<Item> validBlockItems = new List<Item>(loadedItems.Length);
+        for (int i = 0; i < loadedItems.Length; i++)
+        {
+            Item item = loadedItems[i];
+            if (item == null || !item.TryGetBlockType(out BlockType blockType))
+                continue;
+
+            if (itemByBlockType.TryGetValue(blockType, out Item existingItem) && existingItem != item)
+            {
+                Debug.LogWarning($"[BlockItemCatalog] BlockType '{blockType}' esta duplicado entre '{existingItem.name}' e '{item.name}'. O primeiro item carregado sera mantido.");
+                continue;
+            }
+
+            itemByBlockType[blockType] = item;
+            validBlockItems.Add(item);
+        }
+
+        cachedBlockItems = validBlockItems.ToArray();
+    }
+
+    private static bool TryGetFallbackInventoryBlockType(BlockType blockType, out BlockType fallbackBlockType)
+    {
+        fallbackBlockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
+        return fallbackBlockType != blockType;
     }
 }

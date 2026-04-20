@@ -5,7 +5,6 @@ using UnityEngine;
 public class PlayerInventory : MonoBehaviour
 {
     public event Action ContentsChanged;
-    private const string DefaultBlockItemMappingResourcePath = "BlockItemMappingSO";
     private const string DefaultItemAtlasDataResourcePath = "ItemAtlasDataSO";
 
     public static PlayerInventory Instance { get; private set; }
@@ -38,9 +37,6 @@ public class PlayerInventory : MonoBehaviour
     [Range(0f, 1f)] [SerializeField] private float addItemVolume = 1f;
     [Min(0f)] [SerializeField] private float addItemSoundMinInterval = 0.06f;
 
-    [Header("Block Drop Mapping")]
-    [SerializeField] private BlockItemMappingSO blockItemMappingSO;
-
     [Header("Item Atlas")]
     [SerializeField] private ItemAtlasDataSO itemAtlasData;
 
@@ -61,7 +57,6 @@ public class PlayerInventory : MonoBehaviour
         if (audioSource == null)
             audioSource = GetComponent<AudioSource>();
 
-        InitializeBlockItemMappingReference();
         InitializeItemAtlasLookup();
 
         if (autoMapOnAwake)
@@ -93,7 +88,6 @@ public class PlayerInventory : MonoBehaviour
 
     private void OnValidate()
     {
-        InitializeBlockItemMappingReference();
         InitializeItemAtlasLookup();
 
         if (!Application.isPlaying && autoMapOnAwake)
@@ -520,16 +514,12 @@ public class PlayerInventory : MonoBehaviour
 
     public bool TryGetItemForBlock(BlockType blockType, out Item item)
     {
-        InitializeBlockItemMappingReference();
-        item = null;
-        return blockItemMappingSO != null && blockItemMappingSO.TryGetItemForBlock(blockType, out item);
+        return BlockItemCatalog.TryGetItemForBlock(blockType, out item);
     }
 
     public bool TryGetBlockForItem(Item item, out BlockType blockType)
     {
-        InitializeBlockItemMappingReference();
-        blockType = BlockType.Air;
-        return blockItemMappingSO != null && blockItemMappingSO.TryGetBlockForItem(item, out blockType);
+        return BlockItemCatalog.TryGetBlockForItem(item, out blockType);
     }
 
     public bool TryGetItemAtlasData(out ItemAtlasDataSO atlasData)
@@ -652,14 +642,6 @@ public class PlayerInventory : MonoBehaviour
     private void BeginContentChangeBatch()
     {
         contentChangeBatchDepth++;
-    }
-
-    private void InitializeBlockItemMappingReference()
-    {
-        if (blockItemMappingSO != null)
-            return;
-
-        blockItemMappingSO = Resources.Load<BlockItemMappingSO>(DefaultBlockItemMappingResourcePath);
     }
 
     private void InitializeItemAtlasLookup()

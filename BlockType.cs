@@ -59,7 +59,10 @@ public enum BlockType
     pipe = 54,
     blueGowstone = 55,
     redGowstone = 56,
-    
+    Builders_Workbench = 57,
+    Stone_Ramp = 58,
+    Stone_VerticalRamp = 59,
+    Stone_Leader = 60,
 }
 
 public static class FluidBlockUtility

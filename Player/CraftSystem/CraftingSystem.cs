@@ -29,8 +29,6 @@ public class Recipe
 
 public class CraftingSystem : MonoBehaviour
 {
-    private const string DefaultBlockItemMappingResourcePath = "BlockItemMappingSO";
-
     public static CraftingSystem Instance { get; private set; }
 
     public CraftRecipesSO craftRecipesSO;
@@ -307,7 +305,7 @@ public class CraftingSystem : MonoBehaviour
 
         List<Item> creativeBlockItems = new List<Item>(64);
         if (includeMappedBlocksInCreativePanel)
-            AppendMappedCreativeBlockItems(creativeBlockItems);
+            AppendCatalogCreativeBlockItems(creativeBlockItems);
 
         if (includeBlockItemsFromResources && !string.IsNullOrWhiteSpace(blockItemsResourcePath))
             AppendResourceCreativeBlockItems(creativeBlockItems);
@@ -324,14 +322,12 @@ public class CraftingSystem : MonoBehaviour
         creativeRecipesCache.Sort(CompareRecipesByDisplayName);
     }
 
-    private static void AppendMappedCreativeBlockItems(List<Item> output)
+    private static void AppendCatalogCreativeBlockItems(List<Item> output)
     {
         if (output == null)
             return;
 
-        BlockItemMappingSO blockItemMapping = Resources.Load<BlockItemMappingSO>(DefaultBlockItemMappingResourcePath);
-        if (blockItemMapping != null)
-            blockItemMapping.AppendMappedItems(output);
+        BlockItemCatalog.AppendBlockItems(output);
     }
 
     private void AppendResourceCreativeBlockItems(List<Item> output)
@@ -347,7 +343,7 @@ public class CraftingSystem : MonoBehaviour
         for (int i = 0; i < items.Length; i++)
         {
             Item item = items[i];
-            if (item == null || !seen.Add(item))
+            if (item == null || !item.IsBlockItem || !seen.Add(item))
                 continue;
 
             output.Add(item);

@@ -1,4 +1,5 @@
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public enum InventoryIconMode
 {
@@ -12,6 +13,10 @@ public class Item : ScriptableObject
 {
     [Header("Info")]
     public string itemName;
+    [Tooltip("Quando ligado, este item representa um bloco colocavel e usa o BlockType abaixo.")]
+    public bool isBlockItem;
+    [Tooltip("Bloco associado a este item quando ele for um bloco.")]
+    public BlockType blockType = BlockType.Air;
     [Tooltip("Auto usa sprite direto quando existir, senao bloco isometrico para itens mapeados como bloco. ItemIconOnly ignora o bloco e usa sprite/atlas. IsometricBlockOnly sempre usa o bloco.")]
     public InventoryIconMode inventoryIconMode = InventoryIconMode.Auto;
 
@@ -24,6 +29,7 @@ public class Item : ScriptableObject
 
     [Header("Visual")]
     [Tooltip("Sprite principal do item. Quando definido, UI, drop no mundo e item plano na mao usam este sprite direto, sem depender de coordenadas de atlas.")]
+    [FormerlySerializedAs("icon")]
     public Sprite itemSprite;
 
     [Header("Held Visual")]
@@ -40,6 +46,25 @@ public class Item : ScriptableObject
     public Vector3 heldLocalPosition = new Vector3(0.35f, -0.3f, 0.55f);
     public Vector3 heldLocalEulerAngles = new Vector3(20f, -25f, -8f);
     public Vector3 heldLocalScale = Vector3.one;
+
+    public bool IsBlockItem => isBlockItem && blockType != BlockType.Air;
+
+    public bool TryGetBlockType(out BlockType resolvedBlockType)
+    {
+        if (IsBlockItem)
+        {
+            resolvedBlockType = blockType;
+            return true;
+        }
+
+        resolvedBlockType = BlockType.Air;
+        return false;
+    }
+
+    private void OnValidate()
+    {
+        BlockItemCatalog.ClearCache();
+    }
 }
 
 public static class ItemIconResolver
@@ -76,9 +101,7 @@ public static class ItemIconResolver
         if (item == null || item.inventoryIconMode == InventoryIconMode.ItemIconOnly)
             return false;
 
-        PlayerInventory inventory = PlayerInventory.Instance;
-        return inventory != null &&
-               inventory.TryGetBlockForItem(item, out BlockType blockType) &&
+        return item.TryGetBlockType(out BlockType blockType) &&
                BlockItemIconCache.TryGetIcon(blockType, out icon) &&
                icon != null;
     }
