@@ -1,12 +1,24 @@
 
 
 using UnityEngine;
+using UnityEngine.Rendering;
+using UnityEngine.Rendering.Universal;
 
 [RequireComponent(typeof(CharacterController))]
 public class FPSController : MonoBehaviour
 {
     private const int ThirdPersonHitBufferSize = 16;
     private const float LegacyMouseSensitivityReferenceFps = 60f;
+
+    private struct WaterState
+    {
+        public bool feetInWater;
+        public bool bodyInWater;
+        public bool headInWater;
+
+        public bool IsInWater => feetInWater || bodyInWater || headInWater;
+        public bool CanSwim => bodyInWater;
+    }
 
     private enum CameraViewMode
     {
@@ -60,6 +72,28 @@ public class FPSController : MonoBehaviour
     [Tooltip("Quão rápido a velocidade horizontal do voo alcança a velocidade alvo (em segundos inversos).")]
     [SerializeField] private float flyAcceleration = 8f;
 
+    [Header("Water Settings")]
+    [SerializeField] private float swimSpeed = 3.5f;
+    [SerializeField] private float swimSprintMultiplier = 1.35f;
+    [SerializeField] private float swimVerticalSpeed = 4f;
+    [SerializeField] private float swimSinkSpeed = 1.25f;
+    [Tooltip("Quao rapido o movimento na agua responde ao input.")]
+    [SerializeField] private float swimAcceleration = 10f;
+
+    [Header("Underwater Post Process")]
+    [SerializeField] private bool enableUnderwaterPostProcess = true;
+    [SerializeField] private Color underwaterColorFilter = new Color(0.6f, 0.78f, 0.95f, 1f);
+    [SerializeField] private float underwaterPostExposure = -0.15f;
+    [SerializeField] private float underwaterSaturation = -30f;
+    [SerializeField] private float underwaterContrast = -12f;
+    [SerializeField] private Color underwaterVignetteColor = new Color(0.04f, 0.16f, 0.22f, 1f);
+    [SerializeField] private float underwaterVignetteIntensity = 0.22f;
+    [SerializeField] private float underwaterVignetteSmoothness = 0.85f;
+    [SerializeField] private float underwaterChromaticAberration = 0.08f;
+    [SerializeField] private float underwaterBlendSpeed = 6f;
+    [SerializeField] private float underwaterEnterDepth = 0.08f;
+    [SerializeField] private float underwaterExitDepth = 0.12f;
+
     [Header("Minecraft-like Settings")]
     [Tooltip("Tempo máximo entre dois taps para reconhecer double-tap (sprint/voo).")]
     [SerializeField] private float doubleTapTime = 0.25f;
@@ -80,6 +114,10 @@ public class FPSController : MonoBehaviour
 
     private Vector3 currentFlyHorizontal = Vector3.zero;
     private Vector3 flySmoothVelocity = Vector3.zero;
+    private Vector3 currentSwimHorizontal = Vector3.zero;
+    private Vector3 swimSmoothVelocity = Vector3.zero;
+    private bool isSwimming;
+    private bool isCameraUnderwater;
 
     private bool isCrouching = false;
     private float targetHeight;
@@ -95,6 +133,12 @@ public class FPSController : MonoBehaviour
     private readonly RaycastHit[] thirdPersonHitBuffer = new RaycastHit[ThirdPersonHitBufferSize];
     private bool spentStaminaThisFrame;
     private bool loggedMissingPlayerStatus;
+    private GameObject underwaterVolumeHost;
+    private Volume underwaterVolume;
+    private VolumeProfile underwaterVolumeProfile;
+    private ColorAdjustments underwaterColorAdjustments;
+    private Vignette underwaterVignette;
+    private ChromaticAberration underwaterChromaticAberrationComponent;
 
     void Start()
     {
@@ -124,6 +168,9 @@ public class FPSController : MonoBehaviour
             UpdateCameraTransform(forceVisualRefresh: true);
             UpdateCameraCulling();
         }
+
+        EnsureUnderwaterPostProcess();
+        ApplyUnderwaterPostProcessSettings();
     }
 
     void Update()
@@ -133,6 +180,10 @@ public class FPSController : MonoBehaviour
             velocity = Vector3.zero;
             currentFlyHorizontal = Vector3.zero;
             flySmoothVelocity = Vector3.zero;
+            currentSwimHorizontal = Vector3.zero;
+            swimSmoothVelocity = Vector3.zero;
+            isSwimming = false;
+            UpdateUnderwaterPostProcess(false, true);
             return;
         }
 
@@ -143,8 +194,19 @@ public class FPSController : MonoBehaviour
         HandleFlightToggle();
         spentStaminaThisFrame = false;
         HandleMovement();
+        UpdateUnderwaterPostProcess();
         HandleStaminaRecovery();
        // SmoothCrouchTransition();
+    }
+
+    private void OnValidate()
+    {
+        ApplyUnderwaterPostProcessSettings();
+    }
+
+    private void OnDestroy()
+    {
+        CleanupUnderwaterPostProcess();
     }
 
     private void HandleRotation()
@@ -416,6 +478,8 @@ private bool CanStandUp()
     private void HandleMovement()
     {
         bool isGrounded = characterController.isGrounded;
+        WaterState waterState = EvaluateWaterState();
+        isSwimming = waterState.CanSwim;
 
         bool holdSprint = Input.GetKey(KeyCode.LeftShift);
         bool forwardPressed = Input.GetKey(KeyCode.W) || Input.GetKey(KeyCode.UpArrow);
@@ -438,6 +502,7 @@ private bool CanStandUp()
         float currentSpeed;
         if (isCrouching) currentSpeed = crouchSpeed;
         else if (isFlying) currentSpeed = flySpeed;
+        else if (waterState.CanSwim) currentSpeed = swimSpeed * (sprintActive ? swimSprintMultiplier : 1f);
         else if (sprintActive) currentSpeed = sprintSpeed;
         else currentSpeed = walkSpeed;
 
@@ -445,6 +510,9 @@ private bool CanStandUp()
 
         if (isFlying)
         {
+            currentSwimHorizontal = Vector3.zero;
+            swimSmoothVelocity = Vector3.zero;
+
             Vector3 camForward = cameraTransform != null ? cameraTransform.forward : transform.forward;
             Vector3 camRight = cameraTransform != null ? cameraTransform.right : transform.right;
 
@@ -476,8 +544,49 @@ private bool CanStandUp()
             return;
         }
 
+        if (waterState.CanSwim)
+        {
+            characterController.stepOffset = 0f;
+
+            Vector3 swimInputMove = transform.right * inputDir.x + transform.forward * inputDir.z;
+            Vector3 targetHorizontal = Vector3.zero;
+            if (swimInputMove.sqrMagnitude > 0.001f)
+                targetHorizontal = swimInputMove.normalized * swimInputMove.magnitude * currentSpeed;
+
+            currentSwimHorizontal = Vector3.SmoothDamp(
+                currentSwimHorizontal,
+                targetHorizontal,
+                ref swimSmoothVelocity,
+                1f / Mathf.Max(0.0001f, swimAcceleration));
+
+            float verticalInput = 0f;
+            if (Input.GetButton("Jump")) verticalInput += 1f;
+            if (Input.GetKey(KeyCode.LeftControl)) verticalInput -= 1f;
+
+            float targetVerticalVelocity = verticalInput != 0f
+                ? verticalInput * swimVerticalSpeed
+                : -swimSinkSpeed;
+
+            velocity.y = Mathf.Clamp(velocity.y, -swimVerticalSpeed, swimVerticalSpeed);
+            velocity.y = Mathf.MoveTowards(
+                velocity.y,
+                targetVerticalVelocity,
+                swimAcceleration * swimVerticalSpeed * Time.deltaTime);
+
+            Vector3 swimMove = new Vector3(currentSwimHorizontal.x, velocity.y, currentSwimHorizontal.z);
+            characterController.Move(swimMove * Time.deltaTime);
+            return;
+        }
+
+        currentSwimHorizontal = Vector3.zero;
+        swimSmoothVelocity = Vector3.zero;
+        characterController.stepOffset = isCrouching ? 0f : stepOffset;
+
         Vector3 move = transform.right * inputDir.x + transform.forward * inputDir.z;
         Vector3 horizontalMove = move.normalized * move.magnitude * currentSpeed;
+
+        if (waterState.IsInWater)
+            horizontalMove *= 0.75f;
 
         if (isCrouching && horizontalMove.sqrMagnitude > 0.001f)
         {
@@ -607,6 +716,226 @@ private bool CanStandUp()
         return playerStatus.GetStamina() >= staminaDrainJump;
     }
 
+    private WaterState EvaluateWaterState()
+    {
+        if (characterController == null)
+            return default;
+
+        Bounds bounds = characterController.bounds;
+        float feetY = bounds.min.y + 0.08f;
+        float bodyY = bounds.min.y + bounds.size.y * 0.5f;
+        float headY = bounds.max.y - 0.08f;
+
+        return new WaterState
+        {
+            feetInWater = HasLiquidAtHeight(bounds, feetY),
+            bodyInWater = HasLiquidAtHeight(bounds, bodyY),
+            headInWater = HasLiquidAtHeight(bounds, headY)
+        };
+    }
+
+    private bool HasLiquidAtHeight(Bounds bounds, float sampleY)
+    {
+        Vector3 center = bounds.center;
+        float sampleX = Mathf.Max(0.05f, bounds.extents.x * 0.6f);
+        float sampleZ = Mathf.Max(0.05f, bounds.extents.z * 0.6f);
+
+        if (IsLiquidAtPoint(new Vector3(center.x, sampleY, center.z))) return true;
+        if (IsLiquidAtPoint(new Vector3(center.x + sampleX, sampleY, center.z))) return true;
+        if (IsLiquidAtPoint(new Vector3(center.x - sampleX, sampleY, center.z))) return true;
+        if (IsLiquidAtPoint(new Vector3(center.x, sampleY, center.z + sampleZ))) return true;
+        if (IsLiquidAtPoint(new Vector3(center.x, sampleY, center.z - sampleZ))) return true;
+
+        return false;
+    }
+
+    private bool IsLiquidAtPoint(Vector3 worldPoint)
+    {
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int voxel = new Vector3Int(
+            Mathf.FloorToInt(worldPoint.x),
+            Mathf.FloorToInt(worldPoint.y),
+            Mathf.FloorToInt(worldPoint.z));
+
+        BlockType blockType = world.GetBlockAt(voxel);
+        if (!world.IsLiquidBlock(blockType))
+            return false;
+
+        if (!FluidBlockUtility.IsWater(blockType))
+            return true;
+
+        float localHeight = worldPoint.y - voxel.y;
+        return localHeight <= FluidBlockUtility.GetWaterSurfaceHeight01(blockType) + 0.02f;
+    }
+
+    private void EnsureUnderwaterPostProcess()
+    {
+        if (cameraTransform == null && Camera.main != null)
+            cameraTransform = Camera.main.transform;
+
+        if (!Application.isPlaying || !enableUnderwaterPostProcess || cameraTransform == null || underwaterVolume != null)
+            return;
+
+        underwaterVolumeHost = new GameObject("Underwater Post Process");
+        underwaterVolumeHost.transform.SetParent(cameraTransform, false);
+        underwaterVolumeHost.transform.localPosition = Vector3.zero;
+        underwaterVolumeHost.transform.localRotation = Quaternion.identity;
+        underwaterVolumeHost.transform.localScale = Vector3.one;
+
+        underwaterVolume = underwaterVolumeHost.AddComponent<Volume>();
+        underwaterVolume.isGlobal = true;
+        underwaterVolume.priority = 100f;
+        underwaterVolume.blendDistance = 0f;
+        underwaterVolume.weight = 0f;
+        underwaterVolume.enabled = false;
+
+        underwaterVolumeProfile = ScriptableObject.CreateInstance<VolumeProfile>();
+        underwaterVolumeProfile.name = "Runtime Underwater Profile";
+        underwaterVolumeProfile.hideFlags = HideFlags.HideAndDontSave;
+        underwaterVolume.sharedProfile = underwaterVolumeProfile;
+
+        underwaterColorAdjustments = underwaterVolumeProfile.Add<ColorAdjustments>(true);
+        underwaterVignette = underwaterVolumeProfile.Add<Vignette>(true);
+        underwaterChromaticAberrationComponent = underwaterVolumeProfile.Add<ChromaticAberration>(true);
+    }
+
+    private void ApplyUnderwaterPostProcessSettings()
+    {
+        underwaterVignetteIntensity = Mathf.Clamp01(underwaterVignetteIntensity);
+        underwaterVignetteSmoothness = Mathf.Clamp01(underwaterVignetteSmoothness);
+        underwaterChromaticAberration = Mathf.Clamp01(underwaterChromaticAberration);
+        underwaterBlendSpeed = Mathf.Max(0.01f, underwaterBlendSpeed);
+        underwaterEnterDepth = Mathf.Max(0f, underwaterEnterDepth);
+        underwaterExitDepth = Mathf.Max(underwaterEnterDepth, underwaterExitDepth);
+
+        EnsureUnderwaterPostProcess();
+
+        if (underwaterColorAdjustments == null || underwaterVignette == null || underwaterChromaticAberrationComponent == null)
+            return;
+
+        underwaterColorAdjustments.active = true;
+        underwaterColorAdjustments.colorFilter.Override(underwaterColorFilter);
+        underwaterColorAdjustments.postExposure.Override(underwaterPostExposure);
+        underwaterColorAdjustments.saturation.Override(underwaterSaturation);
+        underwaterColorAdjustments.contrast.Override(underwaterContrast);
+
+        underwaterVignette.active = true;
+        underwaterVignette.color.Override(underwaterVignetteColor);
+        underwaterVignette.intensity.Override(underwaterVignetteIntensity);
+        underwaterVignette.smoothness.Override(underwaterVignetteSmoothness);
+
+        underwaterChromaticAberrationComponent.active = true;
+        underwaterChromaticAberrationComponent.intensity.Override(underwaterChromaticAberration);
+    }
+
+    private void UpdateUnderwaterPostProcess()
+    {
+        bool cameraInWater = enableUnderwaterPostProcess &&
+                             cameraTransform != null &&
+                             IsCameraSubmerged(cameraTransform.position);
+
+        UpdateUnderwaterPostProcess(cameraInWater, false);
+    }
+
+    private void UpdateUnderwaterPostProcess(bool targetActive, bool forceInstant)
+    {
+        isCameraUnderwater = targetActive;
+
+        if (!enableUnderwaterPostProcess)
+        {
+            if (underwaterVolume != null)
+            {
+                underwaterVolume.weight = 0f;
+                underwaterVolume.enabled = false;
+            }
+
+            isCameraUnderwater = false;
+            return;
+        }
+
+        EnsureUnderwaterPostProcess();
+        if (underwaterVolume == null)
+            return;
+
+        float targetWeight = targetActive ? 1f : 0f;
+        if (forceInstant)
+        {
+            underwaterVolume.weight = targetWeight;
+        }
+        else
+        {
+            float blendStep = underwaterBlendSpeed * Time.deltaTime;
+            underwaterVolume.weight = Mathf.MoveTowards(underwaterVolume.weight, targetWeight, blendStep);
+        }
+
+        underwaterVolume.enabled = underwaterVolume.weight > 0.001f || targetActive;
+    }
+
+    private bool IsCameraSubmerged(Vector3 worldPoint)
+    {
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int currentVoxel = new Vector3Int(
+            Mathf.FloorToInt(worldPoint.x),
+            Mathf.FloorToInt(worldPoint.y),
+            Mathf.FloorToInt(worldPoint.z));
+
+        if (IsCameraSubmergedInVoxel(world, worldPoint, currentVoxel))
+            return true;
+
+        return IsCameraSubmergedInVoxel(world, worldPoint, currentVoxel + Vector3Int.down);
+    }
+
+    private bool IsCameraSubmergedInVoxel(World world, Vector3 worldPoint, Vector3Int voxel)
+    {
+        BlockType blockType = world.GetBlockAt(voxel);
+        if (!world.IsLiquidBlock(blockType))
+            return false;
+
+        if (!FluidBlockUtility.IsWater(blockType))
+            return true;
+
+        float surfaceWorldY = voxel.y + FluidBlockUtility.GetWaterSurfaceHeight01(blockType);
+        float enterThreshold = surfaceWorldY - underwaterEnterDepth;
+        float exitThreshold = surfaceWorldY + underwaterExitDepth;
+
+        if (isCameraUnderwater)
+            return worldPoint.y <= exitThreshold;
+
+        return worldPoint.y <= enterThreshold;
+    }
+
+    private void CleanupUnderwaterPostProcess()
+    {
+        if (underwaterVolumeProfile != null)
+        {
+            if (Application.isPlaying)
+                Destroy(underwaterVolumeProfile);
+            else
+                DestroyImmediate(underwaterVolumeProfile);
+        }
+
+        if (underwaterVolumeHost != null)
+        {
+            if (Application.isPlaying)
+                Destroy(underwaterVolumeHost);
+            else
+                DestroyImmediate(underwaterVolumeHost);
+        }
+
+        underwaterVolumeProfile = null;
+        underwaterVolumeHost = null;
+        underwaterVolume = null;
+        underwaterColorAdjustments = null;
+        underwaterVignette = null;
+        underwaterChromaticAberrationComponent = null;
+    }
+
     private bool EnsurePlayerStatus()
     {
         if (playerStatus != null)
@@ -647,6 +976,8 @@ private bool CanStandUp()
     public bool IsCrouching() => isCrouching;
     public bool IsSprinting() => sprintToggled || Input.GetKey(KeyCode.LeftShift);
     public bool IsFlying() => isFlying;
+    public bool IsSwimming() => isSwimming;
+    public bool IsCameraUnderwater() => isCameraUnderwater;
     public bool IsThirdPerson() => currentViewMode == CameraViewMode.ThirdPerson;
     public Transform CameraTransform => cameraTransform;
 
@@ -659,9 +990,15 @@ private bool CanStandUp()
         velocity = Vector3.zero;
         currentFlyHorizontal = Vector3.zero;
         flySmoothVelocity = Vector3.zero;
+        currentSwimHorizontal = Vector3.zero;
+        swimSmoothVelocity = Vector3.zero;
         sprintToggled = false;
         flightToggled = false;
         isFlying = false;
+        isSwimming = false;
+        isCameraUnderwater = false;
+
+        UpdateUnderwaterPostProcess(false, true);
 
         if (isLoading && characterController != null && characterController.enabled)
             characterController.Move(Vector3.zero);
@@ -675,16 +1012,21 @@ private bool CanStandUp()
         velocity = Vector3.zero;
         currentFlyHorizontal = Vector3.zero;
         flySmoothVelocity = Vector3.zero;
+        currentSwimHorizontal = Vector3.zero;
+        swimSmoothVelocity = Vector3.zero;
+        isSwimming = false;
 
         if (characterController != null && characterController.enabled)
         {
             characterController.enabled = false;
             transform.position = worldPosition;
             characterController.enabled = true;
+            UpdateUnderwaterPostProcess(cameraTransform != null && IsCameraSubmerged(cameraTransform.position), true);
             return;
         }
 
         transform.position = worldPosition;
+        UpdateUnderwaterPostProcess(cameraTransform != null && IsCameraSubmerged(cameraTransform.position), true);
     }
 
     private void UpdateCameraCulling()

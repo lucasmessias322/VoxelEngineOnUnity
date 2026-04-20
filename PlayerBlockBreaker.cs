@@ -116,6 +116,8 @@ public class PlayerBlockBreaker : MonoBehaviour
     private int lastCrackStage = -1;
     private int placeActionVersion;
     private float nextHoldPlaceTime;
+    private bool hasHoldPlacementContinuation;
+    private PlacementAttempt holdPlacementContinuation;
 
     public bool IsBreakInProgress => breakingBlock.x != int.MinValue;
     public float BreakProgressNormalized => Mathf.Clamp01(breakProgress01);
@@ -138,12 +140,14 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (World.Instance != null && !World.Instance.IsInitialWorldReady)
         {
             CancelBreak();
+            ResetHoldPlacementContinuation();
             return;
         }
 
         if (PlayerInventory.Instance != null && PlayerInventory.Instance.IsInventoryOpen)
         {
             CancelBreak();
+            ResetHoldPlacementContinuation();
             return;
         }
 
@@ -1691,6 +1695,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     void OnDisable()
     {
         CancelBreak();
+        ResetHoldPlacementContinuation();
     }
 
     void OnDestroy()
@@ -1712,11 +1717,15 @@ public class PlayerBlockBreaker : MonoBehaviour
     {
         bool placePressedThisFrame = Input.GetMouseButtonDown(1);
         bool placeHeld = Input.GetMouseButton(1);
-        if (!placePressedThisFrame && !placeHeld)
+        if (!placeHeld)
+        {
+            ResetHoldPlacementContinuation();
             return;
+        }
 
         if (placePressedThisFrame)
         {
+            ResetHoldPlacementContinuation();
             if (TryHandleRightClickInteractions())
             {
                 CancelBreak();
@@ -1729,7 +1738,8 @@ public class PlayerBlockBreaker : MonoBehaviour
 
         CancelBreak();
 
-        if (!TryResolveSelectedPlacementAttempt(out PlacementAttempt attempt))
+        bool preferHoldPlacementContinuation = !placePressedThisFrame && hasHoldPlacementContinuation;
+        if (!TryResolvePlacementAttempt(preferHoldPlacementContinuation, out PlacementAttempt attempt))
             return;
 
         if (!IsCreativeModeActive() && hotbar != null && !hotbar.TryConsumeSelected(1))
@@ -1748,6 +1758,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         {
             world.SetBlockAt(attempt.placePos, attempt.placedBlockType, true, attempt.placementAxis);
         }
+
+        CacheHoldPlacementContinuation(attempt);
 
         unchecked
         {
@@ -1776,13 +1788,28 @@ public class PlayerBlockBreaker : MonoBehaviour
                craftingStationUI.TryHandleCrafterInteraction(selector);
     }
 
-    private bool TryResolveSelectedPlacementAttempt(out PlacementAttempt attempt)
+    private bool TryResolvePlacementAttempt(bool preferHoldPlacementContinuation, out PlacementAttempt attempt)
     {
         attempt = default;
 
-        BlockType selectedBlockType = placeBlockType;
-        if (hotbar != null && !hotbar.TryGetSelectedBlockType(out selectedBlockType))
+        if (!TryGetSelectedPlaceBlockType(out BlockType selectedBlockType))
             return false;
+
+        if (preferHoldPlacementContinuation)
+            return TryResolveHeldPlacementAttempt(selectedBlockType, out attempt);
+
+        return TryResolveSelectedPlacementAttempt(selectedBlockType, out attempt);
+    }
+
+    private bool TryGetSelectedPlaceBlockType(out BlockType selectedBlockType)
+    {
+        selectedBlockType = placeBlockType;
+        return hotbar == null || hotbar.TryGetSelectedBlockType(out selectedBlockType);
+    }
+
+    private bool TryResolveSelectedPlacementAttempt(BlockType selectedBlockType, out PlacementAttempt attempt)
+    {
+        attempt = default;
 
         if (!TryResolvePlacementInput(
                 out Vector3Int targetBlock,
@@ -1989,6 +2016,34 @@ public class PlayerBlockBreaker : MonoBehaviour
         }
 
         return foundAttempt;
+    }
+
+    private bool TryResolveHeldPlacementAttempt(BlockType selectedBlockType, out PlacementAttempt attempt)
+    {
+        attempt = default;
+
+        if (!hasHoldPlacementContinuation)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int targetBlock = holdPlacementContinuation.placePos;
+        Vector3Int hitNormal = holdPlacementContinuation.hitNormal;
+        BlockType targetType = world.GetBlockAt(targetBlock);
+        if (targetType == BlockType.Air || IsLiquid(targetType))
+            return false;
+
+        Vector3 hitPoint = ResolveFaceCenter(ResolveBlockBounds(targetBlock, targetType), hitNormal);
+        return TryBuildPlacementAttempt(
+            selectedBlockType,
+            targetBlock,
+            hitNormal,
+            hitPoint,
+            targetType,
+            false,
+            out attempt);
     }
 
     private bool TryResolvePlacementInput(
@@ -2226,6 +2281,38 @@ public class PlayerBlockBreaker : MonoBehaviour
             projected.z = targetBounds.min.z;
 
         return projected;
+    }
+
+    private static Vector3 ResolveFaceCenter(Bounds targetBounds, Vector3Int faceNormal)
+    {
+        Vector3 center = targetBounds.center;
+
+        if (faceNormal.x > 0)
+            center.x = targetBounds.max.x;
+        else if (faceNormal.x < 0)
+            center.x = targetBounds.min.x;
+        else if (faceNormal.y > 0)
+            center.y = targetBounds.max.y;
+        else if (faceNormal.y < 0)
+            center.y = targetBounds.min.y;
+        else if (faceNormal.z > 0)
+            center.z = targetBounds.max.z;
+        else if (faceNormal.z < 0)
+            center.z = targetBounds.min.z;
+
+        return center;
+    }
+
+    private void CacheHoldPlacementContinuation(PlacementAttempt attempt)
+    {
+        holdPlacementContinuation = attempt;
+        hasHoldPlacementContinuation = true;
+    }
+
+    private void ResetHoldPlacementContinuation()
+    {
+        holdPlacementContinuation = default;
+        hasHoldPlacementContinuation = false;
     }
 
     private Vector3 ResolvePlacementViewDirection()
