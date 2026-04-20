@@ -6,7 +6,6 @@ using UnityEngine;
 [CustomEditor(typeof(ItemAtlasDataSO))]
 public sealed class ItemAtlasDataSOEditor : Editor
 {
-    private SerializedProperty atlasSizeProp;
     private SerializedProperty atlasTextureProp;
     private SerializedProperty atlasMaterialProp;
     private SerializedProperty textureDatabaseProp;
@@ -16,7 +15,6 @@ public sealed class ItemAtlasDataSOEditor : Editor
 
     private void OnEnable()
     {
-        atlasSizeProp = serializedObject.FindProperty("atlasSize");
         atlasTextureProp = serializedObject.FindProperty("atlasTexture");
         atlasMaterialProp = serializedObject.FindProperty("atlasMaterial");
         textureDatabaseProp = serializedObject.FindProperty("textureDatabase");
@@ -46,7 +44,6 @@ public sealed class ItemAtlasDataSOEditor : Editor
     private void DrawAtlasSection(HashSet<string> databaseIds)
     {
         EditorGUILayout.LabelField("Atlas", EditorStyles.boldLabel);
-        EditorGUILayout.PropertyField(atlasSizeProp);
         EditorGUILayout.PropertyField(atlasTextureProp);
         EditorGUILayout.PropertyField(atlasMaterialProp);
         EditorGUILayout.PropertyField(textureDatabaseProp);
@@ -56,13 +53,21 @@ public sealed class ItemAtlasDataSOEditor : Editor
         if (textureDatabaseProp.objectReferenceValue == null)
         {
             EditorGUILayout.HelpBox(
-                "Sem TextureAtlasDatabaseSO, os itens continuam dependendo de tile/tileSpan como fallback legado.",
+                "Sem TextureAtlasDatabaseSO, os itens nao conseguem resolver entryIds nem reconstruir o atlas runtime.",
+                MessageType.Error);
+            return;
+        }
+
+        if (databaseIds.Count == 0)
+        {
+            EditorGUILayout.HelpBox(
+                "O TextureAtlasDatabaseSO atual nao possui entryIds validos.",
                 MessageType.Warning);
             return;
         }
 
         EditorGUILayout.HelpBox(
-            $"Database carregado com {databaseIds.Count} entryIds. Prefira IDs como 'item/stick' no lugar de coordenadas manuais.",
+            $"Database carregado com {databaseIds.Count} entryIds. Os mappings abaixo usam apenas entryIds.",
             MessageType.Info);
     }
 
@@ -95,7 +100,11 @@ public sealed class ItemAtlasDataSOEditor : Editor
     private void DrawValidationSection(HashSet<string> databaseIds)
     {
         List<string> issues = new List<string>();
-        int legacyFallbackCount = 0;
+
+        if (textureDatabaseProp.objectReferenceValue == null)
+            issues.Add("TextureAtlasDatabaseSO ausente.");
+        else if (databaseIds.Count == 0)
+            issues.Add("TextureAtlasDatabaseSO sem entryIds validos.");
 
         for (int i = 0; i < itemMappingsProp.arraySize; i++)
         {
@@ -114,15 +123,10 @@ public sealed class ItemAtlasDataSOEditor : Editor
             if (string.IsNullOrEmpty(entryId))
             {
                 if (TryFindSuggestedEntryId(item, databaseIds, out string suggestedEntryId))
-                {
                     issues.Add($"{item.name}: sem entryId. Sugestao: {suggestedEntryId}.");
-                }
                 else
-                {
-                    issues.Add($"{item.name}: sem entryId valido. Vai cair no fallback legado por tile.");
-                }
+                    issues.Add($"{item.name}: sem entryId valido.");
 
-                legacyFallbackCount++;
                 continue;
             }
 
@@ -130,21 +134,11 @@ public sealed class ItemAtlasDataSOEditor : Editor
                 issues.Add($"{item.name}: entryId '{entryId}' nao existe no TextureAtlasDatabaseSO.");
         }
 
-        if (legacyFallbackCount == 0 && issues.Count == 0)
+        if (issues.Count == 0)
         {
             EditorGUILayout.HelpBox("Todos os mappings atuais estao resolvendo por entryId.", MessageType.Info);
             return;
         }
-
-        if (legacyFallbackCount > 0)
-        {
-            EditorGUILayout.HelpBox(
-                $"{legacyFallbackCount} mapping(s) ainda dependem de fallback legado. O ideal e preencher entryId em todos.",
-                MessageType.Warning);
-        }
-
-        if (issues.Count == 0)
-            return;
 
         EditorGUILayout.LabelField("Validation", EditorStyles.boldLabel);
         for (int i = 0; i < issues.Count; i++)

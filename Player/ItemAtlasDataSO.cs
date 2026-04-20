@@ -7,10 +7,9 @@ public class ItemAtlasDataSO : ScriptableObject
     private const int MinimumRuntimePaddingPixels = 2;
 
     [Header("Atlas")]
-    public Vector2Int atlasSize = new Vector2Int(4, 4);
     public Texture2D atlasTexture;
     public Material atlasMaterial;
-    [Tooltip("Database opcional para resolver entryIds como item/stick e reconstruir o atlas em runtime.")]
+    [Tooltip("Database usada para resolver entryIds como item/stick e reconstruir o atlas em runtime.")]
     public TextureAtlasDatabaseSO textureDatabase;
     [Min(0)] public int paddingPixels = 0;
     [Min(0f)] public float fallbackUvInset = 0.001f;
@@ -22,6 +21,18 @@ public class ItemAtlasDataSO : ScriptableObject
     [System.NonSerialized] private AtlasBuildResult runtimeAtlasResult;
     [System.NonSerialized] private bool runtimeAtlasBuildAttempted;
     [System.NonSerialized] private Texture2D appliedRuntimeAtlasTexture;
+
+    private void OnEnable()
+    {
+        InitializeLookup();
+        ResetRuntimeAtlasState();
+    }
+
+    private void OnValidate()
+    {
+        InitializeLookup();
+        ResetRuntimeAtlasState();
+    }
 
     public void InitializeLookup()
     {
@@ -40,21 +51,9 @@ public class ItemAtlasDataSO : ScriptableObject
         }
     }
 
-    public bool TryGetMapping(Item item, out ItemAtlasMapping mapping)
-    {
-        mapping = default;
-        if (item == null)
-            return false;
-
-        if (lookup == null)
-            InitializeLookup();
-
-        return lookup != null && lookup.TryGetValue(item, out mapping);
-    }
-
     public bool HasMapping(Item item)
     {
-        return TryGetMapping(item, out _);
+        return TryGetTextureEntryId(item, out _);
     }
 
     public bool TryGetTextureEntryId(Item item, out string entryId)
@@ -73,7 +72,7 @@ public class ItemAtlasDataSO : ScriptableObject
         if (TryGetResolvedAtlasTexture(out Texture2D resolvedTexture) && resolvedTexture != null)
             ApplyResolvedAtlasTexture(material, resolvedTexture);
 
-        return material != null;
+        return true;
     }
 
     public bool TryGetTexture(out Texture2D texture)
@@ -81,18 +80,7 @@ public class ItemAtlasDataSO : ScriptableObject
         if (TryGetResolvedAtlasTexture(out texture) && texture != null)
             return true;
 
-        if (atlasMaterial == null)
-            return false;
-
-        Texture candidate = null;
-        if (atlasMaterial.HasProperty("_BaseMap"))
-            candidate = atlasMaterial.GetTexture("_BaseMap");
-        if (candidate == null && atlasMaterial.HasProperty("_MainTex"))
-            candidate = atlasMaterial.GetTexture("_MainTex");
-        if (candidate == null)
-            candidate = atlasMaterial.mainTexture;
-
-        texture = candidate as Texture2D;
+        texture = ResolveTextureFromMaterial(atlasMaterial);
         return texture != null;
     }
 
@@ -104,33 +92,26 @@ public class ItemAtlasDataSO : ScriptableObject
     public bool TryGetUvRect(Item item, out Rect uvRect, bool applyInset)
     {
         uvRect = default;
-        if (!TryGetMapping(item, out ItemAtlasMapping mapping))
-            return false;
-
-        return TryGetUvRect(mapping, out uvRect, applyInset);
+        return TryGetTextureEntryId(item, out string entryId) &&
+               TryGetResolvedUvRect(entryId, out uvRect, applyInset);
     }
 
     public bool TryGetAspect(Item item, out float aspect)
     {
         aspect = 1f;
-        if (!TryGetMapping(item, out ItemAtlasMapping mapping))
-            return false;
-
-        if (TryGetResolvedPixelRect(mapping, out Rect resolvedPixelRect, applyInset: false))
+        if (TryGetPixelRect(item, out Rect resolvedPixelRect, applyInset: false))
         {
             aspect = Mathf.Max(0.01f, resolvedPixelRect.width / Mathf.Max(1f, resolvedPixelRect.height));
             return true;
         }
 
-        if (TryGetResolvedUvRect(mapping, out Rect resolvedUvRect, applyInset: false))
+        if (TryGetUvRect(item, out Rect resolvedUvRect, applyInset: false))
         {
             aspect = Mathf.Max(0.01f, resolvedUvRect.width / Mathf.Max(1e-5f, resolvedUvRect.height));
             return true;
         }
 
-        Vector2Int span = GetClampedSpan(mapping.tileSpan);
-        aspect = Mathf.Max(0.01f, (float)span.x / Mathf.Max(1, span.y));
-        return true;
+        return false;
     }
 
     public bool TryGetPixelRect(Item item, out Rect pixelRect)
@@ -141,87 +122,26 @@ public class ItemAtlasDataSO : ScriptableObject
     public bool TryGetPixelRect(Item item, out Rect pixelRect, bool applyInset)
     {
         pixelRect = default;
-        if (!TryGetMapping(item, out ItemAtlasMapping mapping))
-            return false;
-
-        if (!TryGetTexture(out Texture2D texture) || texture == null)
-            return false;
-
-        return TryGetPixelRect(mapping, texture, out pixelRect, applyInset);
+        return TryGetTextureEntryId(item, out string entryId) &&
+               TryGetResolvedPixelRect(entryId, out pixelRect, applyInset);
     }
 
-    private bool TryGetUvRect(ItemAtlasMapping mapping, out Rect uvRect, bool applyInset)
+    private bool TryGetMapping(Item item, out ItemAtlasMapping mapping)
     {
-        if (TryGetResolvedUvRect(mapping, out uvRect, applyInset))
-            return true;
-
-        uvRect = default;
-
-        int tilesX = Mathf.Max(1, atlasSize.x);
-        int tilesY = Mathf.Max(1, atlasSize.y);
-        Vector2Int tile = new Vector2Int(
-            Mathf.Clamp(mapping.tile.x, 0, tilesX - 1),
-            Mathf.Clamp(mapping.tile.y, 0, tilesY - 1));
-
-        Vector2Int span = GetClampedSpan(mapping.tileSpan);
-        span.x = Mathf.Min(span.x, tilesX - tile.x);
-        span.y = Mathf.Min(span.y, tilesY - tile.y);
-
-        float cellWidth = 1f / tilesX;
-        float cellHeight = 1f / tilesY;
-        Vector2 inset = CalculateUvInset(cellWidth, cellHeight, applyInset);
-
-        float minX = tile.x * cellWidth + inset.x;
-        float minY = tile.y * cellHeight + inset.y;
-        float maxX = (tile.x + span.x) * cellWidth - inset.x;
-        float maxY = (tile.y + span.y) * cellHeight - inset.y;
-
-        if (maxX <= minX || maxY <= minY)
+        mapping = default;
+        if (item == null)
             return false;
 
-        uvRect = Rect.MinMaxRect(minX, minY, maxX, maxY);
-        return true;
+        if (lookup == null)
+            InitializeLookup();
+
+        return lookup != null && lookup.TryGetValue(item, out mapping);
     }
 
-    private bool TryGetPixelRect(ItemAtlasMapping mapping, Texture2D texture, out Rect pixelRect, bool applyInset)
-    {
-        if (TryGetResolvedPixelRect(mapping, out pixelRect, applyInset))
-            return true;
-
-        pixelRect = default;
-        if (texture == null)
-            return false;
-
-        int tilesX = Mathf.Max(1, atlasSize.x);
-        int tilesY = Mathf.Max(1, atlasSize.y);
-        Vector2Int tile = new Vector2Int(
-            Mathf.Clamp(mapping.tile.x, 0, tilesX - 1),
-            Mathf.Clamp(mapping.tile.y, 0, tilesY - 1));
-
-        Vector2Int span = GetClampedSpan(mapping.tileSpan);
-        span.x = Mathf.Min(span.x, tilesX - tile.x);
-        span.y = Mathf.Min(span.y, tilesY - tile.y);
-
-        float cellWidth = (float)texture.width / tilesX;
-        float cellHeight = (float)texture.height / tilesY;
-        Vector2 inset = CalculatePixelInset(texture, cellWidth, cellHeight, applyInset);
-
-        float minX = tile.x * cellWidth + inset.x;
-        float minY = tile.y * cellHeight + inset.y;
-        float maxX = (tile.x + span.x) * cellWidth - inset.x;
-        float maxY = (tile.y + span.y) * cellHeight - inset.y;
-
-        if (maxX <= minX || maxY <= minY)
-            return false;
-
-        pixelRect = Rect.MinMaxRect(minX, minY, maxX, maxY);
-        return true;
-    }
-
-    private bool TryGetResolvedUvRect(ItemAtlasMapping mapping, out Rect uvRect, bool applyInset)
+    private bool TryGetResolvedUvRect(string entryId, out Rect uvRect, bool applyInset)
     {
         uvRect = default;
-        if (!TryResolveEntryId(mapping, out string entryId))
+        if (string.IsNullOrEmpty(entryId))
             return false;
 
         if (!EnsureRuntimeAtlasBuilt() ||
@@ -231,28 +151,28 @@ public class ItemAtlasDataSO : ScriptableObject
             return false;
         }
 
-        if (applyInset)
+        if (!applyInset)
         {
-            Vector2 inset = CalculateResolvedUvInset(resolvedUvRect);
-            float minX = resolvedUvRect.xMin + inset.x;
-            float minY = resolvedUvRect.yMin + inset.y;
-            float maxX = resolvedUvRect.xMax - inset.x;
-            float maxY = resolvedUvRect.yMax - inset.y;
-            if (maxX <= minX || maxY <= minY)
-                return false;
-
-            uvRect = Rect.MinMaxRect(minX, minY, maxX, maxY);
+            uvRect = resolvedUvRect;
             return true;
         }
 
-        uvRect = resolvedUvRect;
+        Vector2 inset = CalculateResolvedUvInset(resolvedUvRect);
+        float minX = resolvedUvRect.xMin + inset.x;
+        float minY = resolvedUvRect.yMin + inset.y;
+        float maxX = resolvedUvRect.xMax - inset.x;
+        float maxY = resolvedUvRect.yMax - inset.y;
+        if (maxX <= minX || maxY <= minY)
+            return false;
+
+        uvRect = Rect.MinMaxRect(minX, minY, maxX, maxY);
         return true;
     }
 
-    private bool TryGetResolvedPixelRect(ItemAtlasMapping mapping, out Rect pixelRect, bool applyInset)
+    private bool TryGetResolvedPixelRect(string entryId, out Rect pixelRect, bool applyInset)
     {
         pixelRect = default;
-        if (!TryResolveEntryId(mapping, out string entryId))
+        if (string.IsNullOrEmpty(entryId))
             return false;
 
         if (!EnsureRuntimeAtlasBuilt() || runtimeAtlasResult == null)
@@ -320,7 +240,9 @@ public class ItemAtlasDataSO : ScriptableObject
 
     private bool TryGetResolvedAtlasTexture(out Texture2D texture)
     {
-        if (EnsureRuntimeAtlasBuilt() && runtimeAtlasResult != null && runtimeAtlasResult.atlasTexture != null)
+        if (EnsureRuntimeAtlasBuilt() &&
+            runtimeAtlasResult != null &&
+            runtimeAtlasResult.atlasTexture != null)
         {
             texture = runtimeAtlasResult.atlasTexture;
             return true;
@@ -330,7 +252,8 @@ public class ItemAtlasDataSO : ScriptableObject
         if (texture != null)
             return true;
 
-        return false;
+        texture = ResolveTextureFromMaterial(atlasMaterial);
+        return texture != null;
     }
 
     private bool EnsureRuntimeAtlasBuilt()
@@ -380,19 +303,9 @@ public class ItemAtlasDataSO : ScriptableObject
         settings.paddingPixels = Mathf.Max(MinimumRuntimePaddingPixels, paddingPixels);
         settings.wrapMode = TextureWrapMode.Clamp;
 
-        Texture2D referenceTexture = atlasTexture;
-        if (referenceTexture == null && atlasMaterial != null)
-        {
-            Texture candidate = null;
-            if (atlasMaterial.HasProperty("_BaseMap"))
-                candidate = atlasMaterial.GetTexture("_BaseMap");
-            if (candidate == null && atlasMaterial.HasProperty("_MainTex"))
-                candidate = atlasMaterial.GetTexture("_MainTex");
-            if (candidate == null)
-                candidate = atlasMaterial.mainTexture;
-
-            referenceTexture = candidate as Texture2D;
-        }
+        Texture2D referenceTexture = atlasTexture != null
+            ? atlasTexture
+            : ResolveTextureFromMaterial(atlasMaterial);
 
         if (referenceTexture != null)
         {
@@ -404,7 +317,6 @@ public class ItemAtlasDataSO : ScriptableObject
         }
 
         settings.generateMipmapsPerTile = settings.generateMipmaps;
-
         return settings;
     }
 
@@ -425,6 +337,13 @@ public class ItemAtlasDataSO : ScriptableObject
         appliedRuntimeAtlasTexture = texture;
     }
 
+    private void ResetRuntimeAtlasState()
+    {
+        runtimeAtlasResult = null;
+        runtimeAtlasBuildAttempted = false;
+        appliedRuntimeAtlasTexture = null;
+    }
+
     private static bool TryResolveEntryId(ItemAtlasMapping mapping, out string entryId)
     {
         entryId = ItemAtlasEntryIdUtility.SanitizeEntryId(mapping.entryId);
@@ -434,41 +353,20 @@ public class ItemAtlasDataSO : ScriptableObject
         return ItemAtlasEntryIdUtility.TryBuildDefaultEntryId(mapping.item, out entryId);
     }
 
-    private Vector2 CalculateUvInset(float cellWidth, float cellHeight, bool applyInset)
+    private static Texture2D ResolveTextureFromMaterial(Material material)
     {
-        if (!applyInset)
-            return Vector2.zero;
+        if (material == null)
+            return null;
 
-        if (TryGetTexture(out Texture2D texture) && texture != null && paddingPixels > 0)
-        {
-            return new Vector2(
-                paddingPixels / Mathf.Max(1f, texture.width),
-                paddingPixels / Mathf.Max(1f, texture.height));
-        }
+        Texture candidate = null;
+        if (material.HasProperty("_BaseMap"))
+            candidate = material.GetTexture("_BaseMap");
+        if (candidate == null && material.HasProperty("_MainTex"))
+            candidate = material.GetTexture("_MainTex");
+        if (candidate == null)
+            candidate = material.mainTexture;
 
-        float safeInset = Mathf.Max(0f, fallbackUvInset);
-        return new Vector2(
-            Mathf.Min(safeInset, cellWidth * 0.49f),
-            Mathf.Min(safeInset, cellHeight * 0.49f));
-    }
-
-    private Vector2 CalculatePixelInset(Texture2D texture, float cellWidth, float cellHeight, bool applyInset)
-    {
-        if (!applyInset)
-            return Vector2.zero;
-
-        if (texture != null && paddingPixels > 0)
-        {
-            return new Vector2(
-                Mathf.Min(paddingPixels, cellWidth * 0.49f),
-                Mathf.Min(paddingPixels, cellHeight * 0.49f));
-        }
-
-        float safeInsetX = Mathf.Max(0f, fallbackUvInset) * Mathf.Max(1f, texture != null ? texture.width : 0f);
-        float safeInsetY = Mathf.Max(0f, fallbackUvInset) * Mathf.Max(1f, texture != null ? texture.height : 0f);
-        return new Vector2(
-            Mathf.Min(safeInsetX, cellWidth * 0.49f),
-            Mathf.Min(safeInsetY, cellHeight * 0.49f));
+        return candidate as Texture2D;
     }
 
     private Vector2 CalculateResolvedUvInset(Rect uvRect)
@@ -487,23 +385,14 @@ public class ItemAtlasDataSO : ScriptableObject
             Mathf.Min(safeInsetX, width * 0.49f),
             Mathf.Min(safeInsetY, height * 0.49f));
     }
-
-    private static Vector2Int GetClampedSpan(Vector2Int requestedSpan)
-    {
-        return new Vector2Int(
-            Mathf.Max(1, requestedSpan.x),
-            Mathf.Max(1, requestedSpan.y));
-    }
 }
 
 [System.Serializable]
 public struct ItemAtlasMapping
 {
     public Item item;
-    [Tooltip("ID logico da textura dentro do atlas. Ex.: item/stick. Quando vazio, tile/tileSpan continuam como fallback legado.")]
+    [Tooltip("ID logico da textura dentro do atlas. Ex.: item/stick.")]
     public string entryId;
-    public Vector2Int tile;
-    public Vector2Int tileSpan;
 }
 
 public static class ItemAtlasEntryIdUtility
