@@ -34,6 +34,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
         [ToggleUI] _ReceiveShadows("Receive Shadows", Float) = 1.0
         [ToggleUI] _CastShadows("Cast Shadows", Float) = 1.0
         _ShadowStrength("Shadow Strength", Range(0.0, 1.0)) = 1.0
+        _ShadowReceiverBias("Shadow Receiver Bias", Range(0.0, 0.1)) = 0.02
         _RealtimeShadowFillStrength("Realtime Shadow Fill Strength", Range(0.0, 1.0)) = 0.85
         _VoxelShadowBlend("Voxel Shadow Blend", Range(0.0, 1.0)) = 0.85
         _VoxelShadowLightThreshold("Voxel Shadow Light Threshold", Range(0.0, 1.0)) = 0.97
@@ -128,6 +129,7 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             float _ReceiveShadows;
             float _CastShadows;
             float _ShadowStrength;
+            float _ShadowReceiverBias;
             float _RealtimeShadowFillStrength;
             float _VoxelShadowBlend;
             float _VoxelShadowLightThreshold;
@@ -395,6 +397,11 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
             return saturate((ndl + wrap) / (1.0h + wrap));
         }
 
+        float3 GetShadowSamplingPositionWS(float3 positionWS, half3 normalWS)
+        {
+            return positionWS + (float3)normalWS * _ShadowReceiverBias;
+        }
+
         half3 ComputeMainDynamicLighting(float3 positionWS, half3 normalWS, out half mainShadow)
         {
             half3 dynamicLighting = 0.0h;
@@ -402,7 +409,8 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
 
             Light mainLight = GetMainLight();
             #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
-                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+                float3 shadowPositionWS = GetShadowSamplingPositionWS(positionWS, normalWS);
+                mainLight = GetMainLight(TransformWorldToShadowCoord(shadowPositionWS), positionWS, half4(1.0h, 1.0h, 1.0h, 1.0h));
             #endif
 
             mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
@@ -486,7 +494,8 @@ Shader "Voxel/URP/Voxel Blocks Unlit Lit"
 
             Light mainLight = GetMainLight();
             #if defined(_MAIN_LIGHT_SHADOWS) || defined(_MAIN_LIGHT_SHADOWS_CASCADE) || defined(_MAIN_LIGHT_SHADOWS_SCREEN)
-                mainLight = GetMainLight(TransformWorldToShadowCoord(positionWS));
+                float3 shadowPositionWS = GetShadowSamplingPositionWS(positionWS, normalWS);
+                mainLight = GetMainLight(TransformWorldToShadowCoord(shadowPositionWS), positionWS, half4(1.0h, 1.0h, 1.0h, 1.0h));
             #endif
 
             half mainShadow = lerp(1.0h, mainLight.shadowAttenuation, receiveShadowStrength);
