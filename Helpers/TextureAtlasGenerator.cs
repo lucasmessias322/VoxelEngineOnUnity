@@ -6,7 +6,7 @@ using UnityEngine;
 using UnityEditor;
 #endif
 
-public class TextureAtlasGenerator : MonoBehaviour
+public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiver
 {
     public enum BlockKeyMode
     {
@@ -103,8 +103,19 @@ public class TextureAtlasGenerator : MonoBehaviour
 
     private void Start()
     {
+        RestoreSerializedGeneratedState();
+
+        if (TryApplyPersistedAtlasWithoutRebuild())
+            return;
+
         if (generateOnStart)
             GenerateAtlas();
+    }
+
+    private void OnEnable()
+    {
+        RestoreSerializedGeneratedState();
+        TryRefreshGeneratedAtlasReferenceFromSavedAsset();
     }
 
     private void OnValidate()
@@ -235,9 +246,7 @@ public class TextureAtlasGenerator : MonoBehaviour
         {
             Texture2D importedAtlas = SaveAtlasToDisk(generatedAtlas);
 #if UNITY_EDITOR
-            if (!Application.isPlaying &&
-                !generateMipmapsPerTile &&
-                importedAtlas != null)
+            if (importedAtlas != null)
             {
                 atlasToApply = importedAtlas;
             }
@@ -245,6 +254,7 @@ public class TextureAtlasGenerator : MonoBehaviour
         }
 
         generatedAtlas = atlasToApply;
+        RestoreSerializedGeneratedState();
         ApplyAtlasToTargets(generatedAtlas);
 
         if (generateEmissionAtlas)
@@ -599,6 +609,65 @@ public class TextureAtlasGenerator : MonoBehaviour
         return atlas;
     }
 
+    private bool TryApplyPersistedAtlasWithoutRebuild()
+    {
+        if (!saveToFile)
+            return false;
+
+        if (!TryRefreshGeneratedAtlasReferenceFromSavedAsset() &&
+            generatedAtlas == null)
+        {
+            return false;
+        }
+
+        if (generatedAtlas == null || uvMap.Count == 0)
+            return false;
+
+        ApplyAtlasToTargets(generatedAtlas);
+
+        if (generateEmissionAtlas && generatedEmissionAtlas != null)
+            ApplyEmissionAtlasToTargets(generatedEmissionAtlas);
+
+        return true;
+    }
+
+    private void RestoreSerializedGeneratedState()
+    {
+        uvMap.Clear();
+        if (generatedUvEntries != null)
+        {
+            for (int i = 0; i < generatedUvEntries.Count; i++)
+            {
+                AtlasUvEntry entry = generatedUvEntries[i];
+                if (string.IsNullOrWhiteSpace(entry.id))
+                    continue;
+
+                uvMap[entry.id.Trim()] = entry.uv;
+            }
+        }
+
+        BuildBlockTypeLookupFromUvMap();
+    }
+
+    private bool TryRefreshGeneratedAtlasReferenceFromSavedAsset()
+    {
+        if (!saveToFile || string.IsNullOrWhiteSpace(savePath))
+            return false;
+
+        Texture2D persistedAtlas = LoadSavedAtlasReference();
+        if (persistedAtlas == null || persistedAtlas == generatedAtlas)
+            return false;
+
+        generatedAtlas = persistedAtlas;
+
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+            EditorUtility.SetDirty(this);
+#endif
+
+        return true;
+    }
+
     public List<AtlasTextureEntry> GetWritableTextureEntries()
     {
         if (textureDatabase != null)
@@ -793,6 +862,15 @@ public class TextureAtlasGenerator : MonoBehaviour
                material.GetFloat("_AlphaClip") > 0.5f;
     }
 
+    public void OnBeforeSerialize()
+    {
+    }
+
+    public void OnAfterDeserialize()
+    {
+        RestoreSerializedGeneratedState();
+    }
+
     private static string ResolveAbsoluteSavePath(string normalizedPath)
     {
         if (Path.IsPathRooted(normalizedPath))
@@ -803,6 +881,16 @@ public class TextureAtlasGenerator : MonoBehaviour
     }
 
 #if UNITY_EDITOR
+    private Texture2D LoadSavedAtlasReference()
+    {
+        string normalizedPath = savePath.Replace('\\', '/');
+        string absolutePath = ResolveAbsoluteSavePath(normalizedPath);
+        string assetPath = TryGetAssetPath(absolutePath);
+        return string.IsNullOrEmpty(assetPath)
+            ? null
+            : AssetDatabase.LoadAssetAtPath<Texture2D>(assetPath);
+    }
+
     private void ConfigureSavedAtlasImporter(string assetPath)
     {
         if (!(AssetImporter.GetAtPath(assetPath) is TextureImporter importer))
@@ -869,6 +957,11 @@ public class TextureAtlasGenerator : MonoBehaviour
 
         string relativePath = normalizedAbsolutePath.Substring(normalizedAssetsPath.Length).TrimStart('/');
         return string.IsNullOrEmpty(relativePath) ? "Assets" : $"Assets/{relativePath}";
+    }
+#else
+    private Texture2D LoadSavedAtlasReference()
+    {
+        return null;
     }
 #endif
 }

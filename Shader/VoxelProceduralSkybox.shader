@@ -198,6 +198,23 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
                 return value;
             }
 
+            float CloudFbm(float2 p)
+            {
+                float value = 0.0;
+                float amplitude = 0.58;
+                float2 shift = float2(13.17, 29.41);
+
+                [unroll]
+                for (int octave = 0; octave < 3; octave++)
+                {
+                    value += amplitude * ValueNoise(p);
+                    p = p * 2.08 + shift;
+                    amplitude *= 0.5;
+                }
+
+                return value;
+            }
+
             float2 DirectionToEquirect(float3 direction)
             {
                 float longitude = atan2(direction.x, direction.z) * VOXEL_SKY_INV_TAU + 0.5;
@@ -260,13 +277,12 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
 
             float SampleCloudShape(float2 uv)
             {
-                float primary = Fbm(uv);
-                float secondary = Fbm(uv * 1.73 + float2(31.7, -19.4));
-                float detail = Fbm(uv * 4.6 + float2(-74.6, 48.3));
-                float wisps = Fbm(uv * 8.2 + float2(113.5, -67.1));
+                float primary = CloudFbm(uv);
+                float secondary = CloudFbm(uv * 2.12 + float2(31.7, -19.4));
+                float detail = ValueNoise(uv * 5.4 + float2(-74.6, 48.3));
 
-                float layered = lerp(primary, primary * 0.74 + secondary * 0.42, saturate(_CloudLayerMix));
-                return layered * 0.74 + detail * 0.2 + wisps * 0.06;
+                float layered = lerp(primary, primary * 0.76 + secondary * 0.36, saturate(_CloudLayerMix));
+                return layered * 0.86 + detail * 0.14;
             }
 
             CloudData SampleCloudData(float3 rayDirection, float3 sunDirection, float timeSeconds)
@@ -277,6 +293,11 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
                 data.lighting = 0.0;
                 data.rim = 0.0;
                 data.height = 0.0;
+
+                if (_CloudIntensity <= 0.001 || _CloudCoverage <= 0.001)
+                {
+                    return data;
+                }
 
                 float horizonFade = smoothstep(-0.04, 0.14, rayDirection.y);
                 float zenithFade = lerp(1.0, 0.72, smoothstep(0.88, 1.0, rayDirection.y));
@@ -296,14 +317,12 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
                 float2 baseUv = (rayDirection.xz / denominator) * cloudScale;
                 float2 viewDepthOffset = (rayDirection.xz / max(rayDirection.y + 0.42, 0.14)) * (0.08 * (0.35 + cloudParallax));
 
-                float2 lowUv = baseUv * 0.78 + windDirection * (motionTime * 0.55) - viewDepthOffset * 0.65 + float2(-27.3, 14.1);
-                float2 midUv = baseUv + windDirection * motionTime + float2(31.2, -18.6);
-                float2 topUv = baseUv * 1.26 + windDirection * (motionTime * 1.35) + viewDepthOffset * 1.1 + float2(19.7, -11.4);
+                float2 baseLayerUv = baseUv + windDirection * motionTime + float2(31.2, -18.6);
+                float2 detailLayerUv = baseUv * 1.24 + windDirection * (motionTime * 1.22) + viewDepthOffset * (0.75 + cloudParallax * 0.32) + float2(19.7, -11.4);
 
-                float lowClouds = SampleCloudShape(lowUv);
-                float midClouds = SampleCloudShape(midUv);
-                float topClouds = SampleCloudShape(topUv);
-                float clouds = lowClouds * 0.28 + midClouds * 0.47 + topClouds * 0.25;
+                float baseClouds = SampleCloudShape(baseLayerUv);
+                float detailClouds = SampleCloudShape(detailLayerUv);
+                float clouds = lerp(baseClouds, baseClouds * 0.72 + detailClouds * 0.4, 0.46 + 0.24 * saturate(cloudDepth));
 
                 float threshold = lerp(0.82, 0.28, saturate(_CloudCoverage));
                 float softness = max(_CloudSoftness, 0.001);
@@ -317,10 +336,7 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
 
                 float2 sunPlanar = NormalizeSafe2(sunDirection.xz + windDirection * 0.15, windDirection);
                 float2 sunStep = sunPlanar * (0.06 + cloudDepth * 0.08) / max(denominator, 0.12);
-                float shadowVolume =
-                    SampleCloudShape(midUv + sunStep * 1.1) * 0.5 +
-                    SampleCloudShape(topUv + sunStep * 2.0) * 0.35 +
-                    SampleCloudShape(lowUv + sunStep * 0.65) * 0.15;
+                float shadowVolume = SampleCloudShape(detailLayerUv + sunStep * (1.2 + cloudDepth * 0.4));
 
                 float shadowDensity = saturate((shadowVolume - threshold) / max(1.0 - threshold, 0.001));
                 float shadowBlend = saturate(_CloudShadowStrength * 0.65);
@@ -532,7 +548,10 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
                 color += _SunsetHorizonColor.rgb * warmHorizon * twilightMask * _SunsetGlow;
 
                 float timeSeconds = _Time.y;
-                color += SampleStars(rayDirection, nightMask, timeSeconds);
+                if (nightMask > 0.0001 && _StarAmount > 0.0001)
+                {
+                    color += SampleStars(rayDirection, nightMask, timeSeconds);
+                }
 
                 float sunVisibility = smoothstep(-0.055, 0.035, sunDirection.y);
                 float moonVisibility = smoothstep(-0.045, 0.04, moonDirection.y) * saturate(nightMask + twilightMask * 0.35);
@@ -542,18 +561,28 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
                 color += _SunColor.rgb * sunGlow;
                 color += _MoonColor.rgb * moonGlow * 0.55;
 
-                float3 skyColorBeforeClouds = color;
-                CloudData cloudData = SampleCloudData(rayDirection, sunDirection, timeSeconds);
-                float3 cloudBaseColor = _CloudColor.rgb * dayMask + _CloudEveningColor.rgb * twilightMask + _CloudNightColor.rgb * nightMask;
-                float3 cloudShadowColor = lerp(skyColorBeforeClouds * 0.52, cloudBaseColor * 0.48, 0.45 + nightMask * 0.2);
-                float3 cloudLightColor = lerp(cloudBaseColor, _SunColor.rgb, dayMask * 0.32 + twilightMask * 0.58);
-                float3 cloudVolumeColor = lerp(cloudShadowColor, cloudBaseColor, cloudData.lighting);
-                cloudVolumeColor += skyColorBeforeClouds * (0.08 + cloudData.height * 0.08) * cloudData.density;
-                cloudVolumeColor = lerp(cloudVolumeColor, cloudLightColor, cloudData.rim);
+                CloudData cloudData;
+                cloudData.mask = 0.0;
+                cloudData.density = 0.0;
+                cloudData.lighting = 0.0;
+                cloudData.rim = 0.0;
+                cloudData.height = 0.0;
 
-                float cloudThickness = saturate(cloudData.density * (0.7 + _CloudDepth * 0.3));
-                float3 cloudFinal = lerp(skyColorBeforeClouds * (1.0 - 0.12 * cloudData.height), cloudVolumeColor, cloudThickness);
-                color = lerp(color, cloudFinal, cloudData.mask * saturate(_CloudIntensity));
+                if (_CloudIntensity > 0.001 && _CloudCoverage > 0.001)
+                {
+                    float3 skyColorBeforeClouds = color;
+                    cloudData = SampleCloudData(rayDirection, sunDirection, timeSeconds);
+                    float3 cloudBaseColor = _CloudColor.rgb * dayMask + _CloudEveningColor.rgb * twilightMask + _CloudNightColor.rgb * nightMask;
+                    float3 cloudShadowColor = lerp(skyColorBeforeClouds * 0.52, cloudBaseColor * 0.48, 0.45 + nightMask * 0.2);
+                    float3 cloudLightColor = lerp(cloudBaseColor, _SunColor.rgb, dayMask * 0.32 + twilightMask * 0.58);
+                    float3 cloudVolumeColor = lerp(cloudShadowColor, cloudBaseColor, cloudData.lighting);
+                    cloudVolumeColor += skyColorBeforeClouds * (0.08 + cloudData.height * 0.08) * cloudData.density;
+                    cloudVolumeColor = lerp(cloudVolumeColor, cloudLightColor, cloudData.rim);
+
+                    float cloudThickness = saturate(cloudData.density * (0.7 + _CloudDepth * 0.3));
+                    float3 cloudFinal = lerp(skyColorBeforeClouds * (1.0 - 0.12 * cloudData.height), cloudVolumeColor, cloudThickness);
+                    color = lerp(color, cloudFinal, cloudData.mask * saturate(_CloudIntensity));
+                }
 
                 float2 sunCoordinates;
                 float sunDisc = DiscBodyMask(rayDirection, sunDirection, _SunSize, _SunEdgeSoftness, sunCoordinates) * sunVisibility;
@@ -564,8 +593,11 @@ Shader "Voxel/URP/Procedural Voxel Skybox"
 
                 float2 moonCoordinates;
                 float moonDisc = DiscBodyMask(rayDirection, moonDirection, _MoonSize, _MoonEdgeSoftness, moonCoordinates) * moonVisibility;
-                float3 moonSurface = ShadeMoon(moonDirection, sunDirection, moonCoordinates);
-                color += moonSurface * moonDisc * (1.0 - cloudData.mask * 0.55);
+                if (moonDisc > 0.0001)
+                {
+                    float3 moonSurface = ShadeMoon(moonDirection, sunDirection, moonCoordinates);
+                    color += moonSurface * moonDisc * (1.0 - cloudData.mask * 0.55);
+                }
 
                 return half4(color * _Exposure, 1.0);
             }
