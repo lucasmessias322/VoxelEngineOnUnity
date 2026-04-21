@@ -1834,6 +1834,9 @@ public class PlayerBlockBreaker : MonoBehaviour
             attempt = baseAttempt;
         }
 
+        if (FluidBlockUtility.IsWater(selectedBlockType))
+            return hasBaseAttempt;
+
         if (!ShouldUsePlacementAimAssist(targetType, isBillboardTarget))
             return hasBaseAttempt;
 

@@ -548,6 +548,12 @@ public static partial class MeshGenerator
             if (HasWaterAbove(x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize))
                 return 1f;
 
+            if (FluidBlockUtility.IsStillWater(blockType) ||
+                FluidBlockUtility.IsFallingWater(blockType))
+            {
+                return GetWaterOwnHeight01(blockType, x, y, z, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            }
+
             ResolveWaterCornerOffsets(axis, normalSign, cornerUOffset, cornerVOffset, out int cornerXOffset, out int cornerZOffset);
             return GetWaterCornerHeight01(x, y, z, cornerXOffset, cornerZOffset, voxelSizeX, voxelSizeZ, voxelPlaneSize);
         }

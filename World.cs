@@ -716,6 +716,7 @@ public partial class World : MonoBehaviour
     private Dictionary<Vector3Int, BlockType> blockOverrides = new Dictionary<Vector3Int, BlockType>(InitialBlockEditCapacity);
     private readonly Dictionary<Vector3Int, BlockPlacementAxis> blockPlacementAxes = new Dictionary<Vector3Int, BlockPlacementAxis>(InitialBlockEditCapacity);
     private HashSet<Vector3Int> suppressedGrassBillboards = new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly HashSet<Vector3Int> permanentGrassBillboardSuppressions = new HashSet<Vector3Int>(InitialBlockEditCapacity);
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> suppressedGrassBillboardsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(InitialBlockEditChunkIndexCapacity);
     // private Dictionary<Vector3Int, byte> globalLightMap = new Dictionary<Vector3Int, byte>();
     private Dictionary<Vector2Int, ushort[]> globalLightColumns = new Dictionary<Vector2Int, ushort[]>(InitialLightColumnCapacity);
@@ -3837,8 +3838,13 @@ public partial class World : MonoBehaviour
         set.Add(pos);
     }
 
-    private bool RemoveSuppressedGrassBillboard(Vector3Int pos)
+    private bool RemoveSuppressedGrassBillboard(Vector3Int pos, bool allowPermanentRemoval = false)
     {
+        if (allowPermanentRemoval)
+            permanentGrassBillboardSuppressions.Remove(pos);
+        else if (permanentGrassBillboardSuppressions.Contains(pos))
+            return false;
+
         if (!suppressedGrassBillboards.Remove(pos))
             return false;
 

@@ -77,13 +77,28 @@ public partial class World : MonoBehaviour
 
     public void SuppressGrassBillboardAt(Vector3Int billboardPos)
     {
+        SetGrassBillboardSuppressed(billboardPos, permanent: false, requestRebuild: true);
+    }
+
+    private void PermanentlySuppressGrassBillboardAt(Vector3Int billboardPos, bool requestRebuild = true)
+    {
+        SetGrassBillboardSuppressed(billboardPos, permanent: true, requestRebuild: requestRebuild);
+    }
+
+    private void SetGrassBillboardSuppressed(Vector3Int billboardPos, bool permanent, bool requestRebuild)
+    {
         if (billboardPos.y <= 0) return;
+        if (permanent)
+            permanentGrassBillboardSuppressions.Add(billboardPos);
+
         if (!suppressedGrassBillboards.Add(billboardPos)) return;
         IndexSuppressedGrassBillboard(billboardPos);
 
-        Vector2Int coord = GetChunkCoordFromWorldXZ(billboardPos.x, billboardPos.z);
-
-        RequestChunkRebuild(coord, GetDirtySubchunkMaskForWorldY(billboardPos.y), false);
+        if (requestRebuild)
+        {
+            Vector2Int coord = GetChunkCoordFromWorldXZ(billboardPos.x, billboardPos.z);
+            RequestChunkRebuild(coord, GetDirtySubchunkMaskForWorldY(billboardPos.y), false);
+        }
     }
 
 
@@ -103,6 +118,11 @@ public partial class World : MonoBehaviour
         }
 
         BlockType current = GetBlockAt(worldPos);
+        bool waterWillPermanentlyDestroyBillboard =
+            current == BlockType.Air &&
+            FluidBlockUtility.IsWater(type) &&
+            TryResolveVegetationBillboardAt(worldPos, out _, out _);
+
         if (current == BlockType.Bedrock)
         {
             Debug.Log("Tentativa de modificar Bedrock ignorada: " + worldPos);
@@ -129,12 +149,13 @@ public partial class World : MonoBehaviour
             return;
         }
 
-        // If this position gets occupied, it cannot host a billboard anymore.
+        // Occupied positions clear temporary billboard suppression, but permanent
+        // water destruction stays until the supporting ground changes.
         if (type != BlockType.Air)
             RemoveSuppressedGrassBillboard(worldPos);
 
         // Ground changed: clear suppression above so biome vegetation can be re-evaluated.
-        RemoveSuppressedGrassBillboard(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z));
+        RemoveSuppressedGrassBillboard(new Vector3Int(worldPos.x, worldPos.y + 1, worldPos.z), allowPermanentRemoval: true);
 
         // Keep explicit Air overrides so broken procedural terrain stays removed.
         // Removing the key would make GetBlockAt() fall back to procedural data again.
@@ -153,6 +174,8 @@ public partial class World : MonoBehaviour
         HandlePlayerPlacedLogBlockChange(worldPos, current, type, placedByPlayer);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
+        if (waterWillPermanentlyDestroyBillboard)
+            PermanentlySuppressGrassBillboardAt(worldPos, requestRebuild: false);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
         emissiveBlockLightController?.NotifyBlockChanged(worldPos, current, type);
         TryConvertCoveredGrassToDirt(worldPos, type, placedByPlayer);
@@ -197,8 +220,9 @@ public partial class World : MonoBehaviour
         int chunksToRebuildCount = CollectBlockEditRebuildChunks(worldPos, chunkCoord);
         int localX = worldPos.x - (chunkCoord.x * Chunk.SizeX);
         int localZ = worldPos.z - (chunkCoord.y * Chunk.SizeZ);
-        float refreshDelay = GetInteractiveBlockEditRefreshDelaySeconds();
-        bool smoothRefresh = ShouldSmoothInteractiveBlockEditRefresh(refreshDelay);
+        bool isWaterChange = FluidBlockUtility.IsWater(previousType) || FluidBlockUtility.IsWater(newType);
+        float refreshDelay = isWaterChange ? 0f : GetInteractiveBlockEditRefreshDelaySeconds();
+        bool smoothRefresh = !isWaterChange && ShouldSmoothInteractiveBlockEditRefresh(refreshDelay);
 
         // Fora da altura simulada por chunk, mantemos apenas override:
         // evita custo de light propagation/rebuild de terrain data que nao cobre esse Y.
@@ -883,9 +907,9 @@ public partial class World : MonoBehaviour
 
     [Header("Fluid Simulation")]
     [SerializeField] private bool enableWaterSimulation = true;
-    [SerializeField, Min(1)] private int waterUpdatesPerFrame = 48;
+    [SerializeField, Min(1)] private int waterUpdatesPerFrame = 16;
     [SerializeField, Min(0f)] private float waterUpdateTimeBudgetMS = 1f;
-    [SerializeField, Min(0.01f)] private float waterTickInterval = 0.05f;
+    [SerializeField, Min(0.01f)] private float waterTickInterval = 0.25f;
     [SerializeField, Min(1)] private int waterSlopeSearchDistance = 4;
 
     private readonly Queue<WaterUpdateCandidate> queuedWaterUpdates = new Queue<WaterUpdateCandidate>(InitialInteractiveBlockLightRefreshCapacity);
@@ -924,13 +948,16 @@ public partial class World : MonoBehaviour
         if (!enableWater || !enableWaterSimulation || queuedWaterUpdates.Count == 0)
             return;
 
+        int queuedCount = queuedWaterUpdates.Count;
         float now = Time.time;
         float stepStartTime = Time.realtimeSinceStartup;
-        float timeBudgetSeconds = waterUpdateTimeBudgetMS > 0f ? waterUpdateTimeBudgetMS / 1000f : 0f;
+        float effectiveWaterBudgetMS = waterUpdateTimeBudgetMS + Mathf.Clamp((queuedCount - waterUpdatesPerFrame) * 0.03f, 0f, 3f);
+        float timeBudgetSeconds = effectiveWaterBudgetMS > 0f ? effectiveWaterBudgetMS / 1000f : 0f;
         Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
         int processed = 0;
-        int attempts = queuedWaterUpdates.Count;
-        int perFrameLimit = Mathf.Max(1, waterUpdatesPerFrame);
+        int attempts = queuedCount;
+        int backlogBoost = Mathf.Clamp(queuedCount / 8, 0, 64);
+        int perFrameLimit = Mathf.Clamp(Mathf.Max(8, waterUpdatesPerFrame) + backlogBoost, 8, 96);
 
         while (processed < perFrameLimit && attempts-- > 0)
         {
@@ -1008,11 +1035,12 @@ public partial class World : MonoBehaviour
     {
         int bestDistance = int.MaxValue;
         bool found = false;
+        bool targetShouldFall = CanWaterFlowDownInto(GetBlockAt(worldPos + Vector3Int.down));
 
         for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
         {
             Vector3Int sourcePos = worldPos + HorizontalWaterOffsets[i];
-            if (!TryGetHorizontalWaterContribution(sourcePos, worldPos, out int candidateDistance))
+            if (!TryGetHorizontalWaterContribution(sourcePos, worldPos, targetShouldFall, out int candidateDistance))
                 continue;
 
             if (candidateDistance < bestDistance)
@@ -1028,11 +1056,21 @@ public partial class World : MonoBehaviour
             return false;
         }
 
+        if (targetShouldFall)
+        {
+            state = FluidBlockUtility.GetWaterBlockType(0, true);
+            return true;
+        }
+
         state = FluidBlockUtility.GetWaterBlockType(bestDistance, false);
         return true;
     }
 
-    private bool TryGetHorizontalWaterContribution(Vector3Int sourcePos, Vector3Int targetPos, out int candidateDistance)
+    private bool TryGetHorizontalWaterContribution(
+        Vector3Int sourcePos,
+        Vector3Int targetPos,
+        bool targetShouldFall,
+        out int candidateDistance)
     {
         candidateDistance = int.MaxValue;
 
@@ -1048,6 +1086,10 @@ public partial class World : MonoBehaviour
         if (directionIndex < 0)
             return false;
 
+        // Suspended sources/waterfalls still cannot branch sideways because
+        // CanWaterSpreadHorizontallyFrom() rejects any source that can already
+        // flow downward. This keeps side-placed tower water vertical, while
+        // still allowing supported surface water to spill over edges.
         if (!IsOptimalWaterSpreadDirection(sourcePos, directionIndex))
             return false;
 
@@ -1065,6 +1107,10 @@ public partial class World : MonoBehaviour
 
         BlockType below = GetBlockAt(sourcePos + Vector3Int.down);
         if (CanWaterFlowDownInto(below))
+            return false;
+
+        bool supportedBelow = IsSolidBlock(below) || IsSourceWaterState(sourcePos + Vector3Int.down);
+        if (!supportedBelow && FluidBlockUtility.IsWater(below))
             return false;
 
         // Falling columns should only spill at the bottom-most blocked cell, not from
@@ -1273,7 +1319,7 @@ public partial class World : MonoBehaviour
 
     private void HandleWaterBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType, bool placedByPlayer)
     {
-        if (newType != BlockType.Water)
+        if (!FluidBlockUtility.IsWater(newType))
         {
             persistentWaterSources.Remove(worldPos);
         }
@@ -1286,7 +1332,24 @@ public partial class World : MonoBehaviour
             return;
 
         float delay = Mathf.Max(0f, waterTickInterval);
-        TryQueueWaterUpdate(worldPos, delay);
+        bool isWaterNow = FluidBlockUtility.IsWater(newType);
+        bool wasWater = FluidBlockUtility.IsWater(previousType);
+        bool becameWater = isWaterNow && !wasWater;
+
+        TryQueueWaterUpdate(worldPos, becameWater ? 0f : delay);
+
+        if (isWaterNow)
+        {
+            // Waterfalls should extend downward immediately instead of waiting for
+            // the generic neighbor delay, which removes the odd "hanging surface"
+            // feeling when placing water high on a wall.
+            TryQueueWaterUpdate(worldPos + Vector3Int.down, 0f);
+            TryQueueWaterUpdate(worldPos + Vector3Int.up, delay);
+            for (int i = 0; i < HorizontalWaterOffsets.Length; i++)
+                TryQueueWaterUpdate(worldPos + HorizontalWaterOffsets[i], delay);
+            return;
+        }
+
         for (int i = 0; i < WaterNeighborOffsets.Length; i++)
             TryQueueWaterUpdate(worldPos + WaterNeighborOffsets[i], delay);
     }
