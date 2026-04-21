@@ -1663,6 +1663,13 @@ public static class BlockPlacementRotationUtility
         if (!mapping.usePlacementAxisRotation)
             return BlockPlacementAxis.Y;
 
+        if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal &&
+            (shape == BlockRenderShape.Cube || shape == BlockRenderShape.MultiCuboid))
+        {
+            // Furnace/chest-style blocks should face the player, not look away.
+            return ResolveHorizontalAxisFacingPlayer(lookForward);
+        }
+
         if (BlockShapeUtility.IsFlatShape(mapping) &&
             mapping.placementRotationAxes == BlockPlacementRotationAxes.Both)
         {
@@ -1808,6 +1815,18 @@ public static class BlockPlacementRotationUtility
             return lookForward.x >= 0f ? BlockPlacementAxis.X : BlockPlacementAxis.XNegative;
 
         return lookForward.z >= 0f ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative;
+    }
+
+    private static BlockPlacementAxis ResolveHorizontalAxisFacingPlayer(Vector3 lookForward)
+    {
+        return ResolveHorizontalAxisFromLookForward(lookForward) switch
+        {
+            BlockPlacementAxis.X => BlockPlacementAxis.XNegative,
+            BlockPlacementAxis.XNegative => BlockPlacementAxis.X,
+            BlockPlacementAxis.Z => BlockPlacementAxis.ZNegative,
+            BlockPlacementAxis.ZNegative => BlockPlacementAxis.Z,
+            _ => BlockPlacementAxis.Y
+        };
     }
 
     private static BlockPlacementAxis ResolveFlatPlanePlacementAxis(Vector3Int hitNormal, Vector3 lookForward)

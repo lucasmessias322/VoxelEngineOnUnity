@@ -29,6 +29,8 @@ public class PlayerInventory : MonoBehaviour
     [SerializeField] private Transform dropOrigin;
     [Min(0f)] [SerializeField] private float dropForwardOffset = 0.8f;
     [SerializeField] private float dropVerticalOffset = -0.15f;
+    [Min(1f)] [SerializeField] private float dropLaunchStrength = 2.15f;
+    [SerializeField] private float dropLaunchUpwardBias = 0.35f;
     [SerializeField] private HotbarMirror hotbarMirror;
 
     [Header("Audio")]
@@ -310,6 +312,7 @@ public class PlayerInventory : MonoBehaviour
             return false;
 
         Vector3 dropDirection = ResolveDropDirection();
+        Vector3 dropLaunchVector = ResolveDropLaunchVector(dropDirection);
         Vector3 dropPosition = ResolveDropPosition(dropDirection);
 
         if (TryGetBlockForItem(itemToDrop, out BlockType mappedBlockType))
@@ -319,10 +322,10 @@ public class PlayerInventory : MonoBehaviour
                 return false;
 
             int clampedAmount = Mathf.Clamp(amount, 1, Mathf.Max(1, itemToDrop.maxStack));
-            return BlockDrop.Spawn(world, dropPosition, mappedBlockType, clampedAmount, dropDirection);
+            return BlockDrop.Spawn(world, dropPosition, mappedBlockType, clampedAmount, dropLaunchVector);
         }
 
-        return InventoryItemDrop.Spawn(itemToDrop, amount, dropPosition, dropDirection);
+        return InventoryItemDrop.Spawn(itemToDrop, amount, dropPosition, dropLaunchVector);
     }
 
     public void ToggleInventoryUI()
@@ -430,6 +433,14 @@ public class PlayerInventory : MonoBehaviour
         return false;
     }
 
+    public bool TryDropEntireStackFromSlot(Slot sourceSlot)
+    {
+        if (sourceSlot == null)
+            return false;
+
+        return TryDropFromSlot(sourceSlot, sourceSlot.amount);
+    }
+
     private int ResolveSelectedHotbarSlotIndex()
     {
         if (slots == null || slots.Length == 0)
@@ -465,9 +476,24 @@ public class PlayerInventory : MonoBehaviour
         return basePosition + direction * dropForwardOffset + Vector3.up * dropVerticalOffset;
     }
 
+    private Vector3 ResolveDropLaunchVector(Vector3 direction)
+    {
+        Transform source = dropOrigin != null ? dropOrigin : (Camera.main != null ? Camera.main.transform : transform);
+        Vector3 upward = source != null ? source.up : Vector3.up;
+        if (upward.sqrMagnitude < 0.0001f)
+            upward = Vector3.up;
+
+        Vector3 launchVector = direction.normalized * Mathf.Max(1f, dropLaunchStrength);
+        launchVector += upward.normalized * dropLaunchUpwardBias;
+        return launchVector;
+    }
+
     private static bool IsFullStackDropModifierHeld()
     {
-        return Input.GetKey(KeyCode.LeftControl) || Input.GetKey(KeyCode.RightControl);
+        return Input.GetKey(KeyCode.LeftControl) ||
+               Input.GetKey(KeyCode.RightControl) ||
+               Input.GetKey(KeyCode.LeftShift) ||
+               Input.GetKey(KeyCode.RightShift);
     }
 
     private void CollectSlotsRecursive(Transform current, List<Slot> output)

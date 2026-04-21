@@ -10,7 +10,7 @@ public class BlockDrop : MonoBehaviour
     [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
     [SerializeField] private float launchForce = 2.2f;
-    [SerializeField] private float pickupDelaySeconds = 0.25f;
+    [SerializeField] private float pickupDelaySeconds = 0.5f;
     [SerializeField] private string playerTag = "Player";
     [SerializeField] private bool requirePlayerTag = false;
     [SerializeField] private bool debugPickupLogs = false;
@@ -1913,10 +1913,11 @@ public class BlockDrop : MonoBehaviour
         EnsureRuntimeComponents();
 
         Vector3 launchBase = throwDirection.sqrMagnitude > 0.0001f ? throwDirection.normalized : Vector3.forward;
+        float launchSpeedMultiplier = Mathf.Max(1f, throwDirection.magnitude);
         Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
         Vector3 launchDir = (launchBase + randomDir + Vector3.up * 0.4f).normalized;
 
-        velocity = launchDir * launchForce;
+        velocity = launchDir * (launchForce * launchSpeedMultiplier);
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;
@@ -2553,10 +2554,11 @@ public class InventoryItemDrop : MonoBehaviour
         EnsureRuntimeComponents();
 
         Vector3 launchBase = throwDirection.sqrMagnitude > 0.0001f ? throwDirection.normalized : Vector3.forward;
+        float launchSpeedMultiplier = Mathf.Max(1f, throwDirection.magnitude);
         Vector3 randomDir = new Vector3(Random.Range(-0.35f, 0.35f), 0f, Random.Range(-0.35f, 0.35f));
         Vector3 launchDir = (launchBase + randomDir + Vector3.up * 0.4f).normalized;
 
-        velocity = launchDir * launchForce;
+        velocity = launchDir * (launchForce * launchSpeedMultiplier);
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;

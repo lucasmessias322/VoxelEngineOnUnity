@@ -298,7 +298,7 @@ public partial class World : MonoBehaviour
         if (caveSpaghettiSettings.LooksUninitialized || caveSpaghettiSettings.LooksLikeInitialSurfaceClosedDefault)
             caveSpaghettiSettings = SpaghettiCaveSettings.Default;
 
-        EnsureShaderFallbackBuffersBound();
+        VoxelShaderFallbackBuffers.EnsureBound();
         EnsureLoadingBootstrapExists();
         EnsureTorchFireParticleControllerExists();
         EnsureEmissiveBlockLightControllerExists();
@@ -2467,6 +2467,12 @@ public partial class World : MonoBehaviour
         if (generator == null)
             return;
 
+        // In builds, relying on the imported saved atlas can diverge from the
+        // runtime-compatible UV data used by the world. Rebuild a fresh runtime
+        // atlas during play so the terrain and inventory icons sample the same texture.
+        if (Application.isPlaying && generator.HasConfiguredTextureEntries())
+            generator.GenerateAtlas();
+
         Vector2Int legacyAtlasTiles = new Vector2Int(
             Mathf.Max(1, atlasTilesX),
             Mathf.Max(1, atlasTilesY));
@@ -2668,7 +2674,6 @@ public partial class World : MonoBehaviour
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
         MeshGenerator.ClearDataJobTempBufferPool();
         DisposeNativeGenerationCaches();
-        ReleaseShaderFallbackBuffers();
 
         if (Instance == this)
             Instance = null;

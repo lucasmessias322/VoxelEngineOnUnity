@@ -229,6 +229,9 @@ public static class BlockItemIconCache
             );
         }
 
+        if (TryGetRuntimeCompatibleIconAtlasTexture(world, out atlasTexture))
+            return true;
+
         if (world.blockItemIconAtlasTexture != null)
         {
             atlasTexture = world.blockItemIconAtlasTexture;
@@ -257,6 +260,20 @@ public static class BlockItemIconCache
         }
 
         return false;
+    }
+
+    private static bool TryGetRuntimeCompatibleIconAtlasTexture(World world, out Texture atlasTexture)
+    {
+        atlasTexture = null;
+        if (world == null)
+            return false;
+
+        TextureAtlasGenerator generator = world.blockAtlasGenerator;
+        if (generator == null || generator.GeneratedAtlas == null)
+            return false;
+
+        atlasTexture = generator.GeneratedAtlas;
+        return true;
     }
 
     private static bool TryGetAtlasTextureFromMaterial(Material material, out Texture atlasTexture)
@@ -1284,6 +1301,12 @@ public static class BlockItemIconCache
             Mathf.Max(1, world.atlasTilesX > 0 ? world.atlasTilesX : configuredTileSize.x),
             Mathf.Max(1, world.atlasTilesY > 0 ? world.atlasTilesY : configuredTileSize.y)
         );
+
+        if (TryGetRuntimeCompatibleIconAtlasTexture(world, out Texture runtimeAtlasTexture) && runtimeAtlasTexture != null)
+        {
+            atlasTextureInstanceId = runtimeAtlasTexture.GetInstanceID();
+            return true;
+        }
 
         if (world.blockItemIconAtlasTexture != null)
         {

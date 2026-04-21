@@ -242,16 +242,16 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
         BuildBlockTypeLookupFromUvMap();
 
         Texture2D atlasToApply = generatedAtlas;
+#if UNITY_EDITOR
         if (saveToFile && generatedAtlas != null)
         {
             Texture2D importedAtlas = SaveAtlasToDisk(generatedAtlas);
-#if UNITY_EDITOR
             if (importedAtlas != null)
             {
                 atlasToApply = importedAtlas;
             }
-#endif
         }
+#endif
 
         generatedAtlas = atlasToApply;
         RestoreSerializedGeneratedState();

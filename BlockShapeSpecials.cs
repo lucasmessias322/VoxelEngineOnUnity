@@ -339,9 +339,10 @@ public static class StairShapeUtility
     {
         return facing switch
         {
-            StairFacing.East => new Vector2(1f - z, x),
+            // Canonical stairs sobe em +Z. East precisa girar +90 graus para subir em +X.
+            StairFacing.East => new Vector2(z, 1f - x),
             StairFacing.South => new Vector2(1f - x, 1f - z),
-            StairFacing.West => new Vector2(z, 1f - x),
+            StairFacing.West => new Vector2(1f - z, x),
             _ => new Vector2(x, z)
         };
     }

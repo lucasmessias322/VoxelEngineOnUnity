@@ -135,6 +135,23 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         return true;
     }
 
+    public bool TryDropEntireStack()
+    {
+        if (IsEmpty)
+            return false;
+
+        PlayerInventory inventory = PlayerInventory.Instance;
+        if (inventory == null || !inventory.IsInventoryOpen || !CanUseSlotWithCurrentInventory(inventory))
+            return false;
+
+        return inventory.TryDropEntireStackFromSlot(this);
+    }
+
+    public void DropEntireStack()
+    {
+        TryDropEntireStack();
+    }
+
     public void SetContents(Item newItem, int newAmount)
     {
         if (newItem == null || newAmount <= 0)
@@ -648,9 +665,6 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         if (target == null)
         {
-            PlayerInventory inventory = PlayerInventory.Instance;
-            if (inventory != null && inventory.IsInventoryOpen)
-                TryDropCarriedStack(inventory, true);
             return;
         }
 
