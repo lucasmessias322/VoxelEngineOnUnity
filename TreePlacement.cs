@@ -35,6 +35,7 @@ public static partial class TreePlacement
             TreeInstance t = treeInstances[i];
             bool isTaigaSpruce = t.treeStyle == TreeStyle.TaigaSpruce;
             bool isCactus = t.treeStyle == TreeStyle.Cactus;
+            bool isBirchBroadleaf = t.treeStyle == TreeStyle.BirchBroadleaf;
             bool isSavannaAcacia = t.treeStyle == TreeStyle.SavannaAcacia;
             bool isFancyOak = t.treeStyle == TreeStyle.FancyOak;
 
@@ -119,6 +120,14 @@ public static partial class TreePlacement
             else if (isSavannaAcacia)
             {
                 PlaceSavannaAcaciaCanopy(
+                    ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
+                    blockTypes, solids, blockMappings,
+                    chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, trunkType
+                );
+            }
+            else if (isBirchBroadleaf)
+            {
+                PlaceBirchBroadleafCanopy(
                     ix, iz, surfaceY, t.trunkHeight, canopyH, canopyR, treeHash,
                     blockTypes, solids, blockMappings,
                     chunkSizeY, voxelSizeX, voxelSizeZ, voxelPlaneSize, trunkType
