@@ -65,6 +65,7 @@ public class BlockSelector : MonoBehaviour
             out BlockType hitType,
             out bool isBillboard,
             out Vector3Int billboardGroundPos,
+            true,
             false))
         {
             currentBlock = blockPos;
@@ -264,6 +265,35 @@ public class BlockSelector : MonoBehaviour
             out blockType,
             out isBillboard,
             out _,
+            true,
+            false);
+    }
+
+    public bool TryGetPlacementSupportTarget(
+        out Vector3Int blockPos,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint,
+        out BlockType blockType)
+    {
+        blockPos = default;
+        hitNormal = default;
+        hitPoint = default;
+        blockType = BlockType.Air;
+
+        if (cam == null || World.Instance == null)
+            return false;
+
+        Ray ray = new Ray(cam.transform.position, cam.transform.forward);
+        return TryRaycastVoxel(
+            ray,
+            reach,
+            out blockPos,
+            out hitNormal,
+            out hitPoint,
+            out blockType,
+            out _,
+            out _,
+            true,
             true);
     }
 
@@ -276,7 +306,8 @@ public class BlockSelector : MonoBehaviour
         out BlockType hitType,
         out bool isBillboardHit,
         out Vector3Int billboardGroundPos,
-        bool ignoreLiquidsForPlacement)
+        bool ignoreLiquidsForPlacement,
+        bool ignoreNonSolidBlocksForPlacement)
     {
         hitBlock = default;
         hitNormal = Vector3Int.zero;
@@ -318,7 +349,8 @@ public class BlockSelector : MonoBehaviour
         {
             bool hasLoadedBlock = world.TryGetLoadedBlockAt(voxel, out BlockType blockType);
             bool ignoreLiquidHit = ignoreLiquidsForPlacement && world.IsLiquidBlock(blockType);
-            if (blockType != BlockType.Air && !ignoreLiquidHit)
+            bool ignoreNonSolidHit = ignoreNonSolidBlocksForPlacement && ShouldIgnoreNonSolidPlacementHit(world, blockType);
+            if (blockType != BlockType.Air && !ignoreLiquidHit && !ignoreNonSolidHit)
             {
                 if (TryHitCustomBlock(ray, maxDistance, voxel, blockType, lastNormal, out Vector3Int customNormal, out Vector3 customPoint))
                 {
@@ -364,6 +396,7 @@ public class BlockSelector : MonoBehaviour
                     maxDistance,
                     voxel,
                     lastNormal,
+                    ignoreNonSolidBlocksForPlacement,
                     out Vector3Int overflowBlock,
                     out BlockType overflowType,
                     out Vector3Int overflowNormal,
@@ -378,7 +411,8 @@ public class BlockSelector : MonoBehaviour
                 return true;
             }
 
-            if (hasLoadedBlock &&
+            if (!ignoreNonSolidBlocksForPlacement &&
+                hasLoadedBlock &&
                 TryHitGrassBillboardInVoxel(
                     ray,
                     maxDistance,
@@ -420,6 +454,13 @@ public class BlockSelector : MonoBehaviour
         }
 
         return false;
+    }
+
+    private static bool ShouldIgnoreNonSolidPlacementHit(World world, BlockType blockType)
+    {
+        return blockType != BlockType.Air &&
+               !world.IsLiquidBlock(blockType) &&
+               !world.IsSolidBlock(blockType);
     }
 
     private bool IsCustomShapeBlock(BlockType blockType)
@@ -586,6 +627,7 @@ public class BlockSelector : MonoBehaviour
         float maxDistance,
         Vector3Int voxel,
         Vector3Int lastNormal,
+        bool ignoreNonSolidBlocksForPlacement,
         out Vector3Int hitBlock,
         out BlockType hitType,
         out Vector3Int hitNormal,
@@ -621,6 +663,12 @@ public class BlockSelector : MonoBehaviour
                     if (!world.TryGetLoadedBlockAt(candidatePos, out BlockType candidateType) ||
                         candidateType == BlockType.Air ||
                         world.IsLiquidBlock(candidateType))
+                    {
+                        continue;
+                    }
+
+                    if (ignoreNonSolidBlocksForPlacement &&
+                        ShouldIgnoreNonSolidPlacementHit(world, candidateType))
                     {
                         continue;
                     }

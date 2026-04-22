@@ -18,6 +18,10 @@ Shader "Voxel/URP/VoxelWaterURP"
         _WaterNormalScaleB("Water Normal Scale B", Range(0.1, 4.0)) = 2.2
         _WaterNormalSpeed("Water Normal Speed", Vector) = (0.06, 0.04, 0, 0)
         _WaterNormalSpeedBMultiplier("Water Normal Speed B Multiplier", Range(0.1, 4.0)) = 1.35
+        _WaterNormalRotationA("Water Normal Rotation A", Range(-180.0, 180.0)) = 18.0
+        _WaterNormalRotationB("Water Normal Rotation B", Range(-180.0, 180.0)) = -32.0
+        _WaterNormalWarpScale("Water Normal Warp Scale", Range(0.01, 2.0)) = 0.2
+        _WaterNormalWarpStrength("Water Normal Warp Strength", Range(0.0, 1.0)) = 0.3
         _RefractionStrength("Refraction Strength", Range(0.0, 0.15)) = 0.025
         _RefractionBlend("Refraction Blend", Range(0.0, 1.0)) = 0.65
         _DepthShallowColor("Shallow Color", Color) = (0.3, 0.82, 0.78, 1.0)
@@ -103,6 +107,10 @@ Shader "Voxel/URP/VoxelWaterURP"
             half _WaterNormalScaleA;
             half _WaterNormalScaleB;
             half _WaterNormalSpeedBMultiplier;
+            half _WaterNormalRotationA;
+            half _WaterNormalRotationB;
+            half _WaterNormalWarpScale;
+            half _WaterNormalWarpStrength;
             half _RefractionStrength;
             half _RefractionBlend;
             half _DepthStartDistance;
@@ -135,6 +143,21 @@ Shader "Voxel/URP/VoxelWaterURP"
         float2 RepeatTileUV(float2 uv)
         {
             return uv - floor(uv);
+        }
+
+        float2 RotateUV(float2 uv, float angleRadians)
+        {
+            float sinAngle = sin(angleRadians);
+            float cosAngle = cos(angleRadians);
+            return float2(
+                cosAngle * uv.x - sinAngle * uv.y,
+                sinAngle * uv.x + cosAngle * uv.y);
+        }
+
+        half3 RotateTangentNormalXY(half3 normalTS, float angleRadians)
+        {
+            float2 rotatedXY = RotateUV(normalTS.xy, angleRadians);
+            return normalize(half3((half)rotatedXY.x, (half)rotatedXY.y, normalTS.z));
         }
 
         float2 ResolveAtlasUV(float2 localUV, float2 atlasOrigin, float2 atlasSize)
@@ -180,7 +203,35 @@ Shader "Voxel/URP/VoxelWaterURP"
                 normalWS.z >= 0.0h ? 1.0 : -1.0);
         }
 
-        half3 SampleTriplanarNormalWS(float3 positionWS, half3 baseNormalWS, float tilingMultiplier)
+        half3 SampleWaterNormalMap(float2 uv, float rotationRadians)
+        {
+            half3 normalTS = UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, RotateUV(uv, rotationRadians)), _BumpScale);
+            return RotateTangentNormalXY(normalTS, rotationRadians);
+        }
+
+        float3 GetWaterNormalWarp(float3 positionWS, float time)
+        {
+            float warpStrength = max((float)_WaterNormalWarpStrength, 0.0);
+            if (warpStrength <= 0.0001)
+                return float3(0.0, 0.0, 0.0);
+
+            float warpScale = max((float)_WaterNormalWarpScale, 0.0001);
+            float3 warpInput = positionWS * warpScale + float3(time * 0.11, time * 0.07, time * 0.09);
+
+            float3 warpA = float3(
+                sin(warpInput.y * 1.17 + warpInput.z * 1.31),
+                sin(warpInput.z * 1.23 + warpInput.x * 1.41),
+                sin(warpInput.x * 1.11 + warpInput.y * 1.53));
+
+            float3 warpB = float3(
+                cos(warpInput.z * 0.87 - warpInput.y * 1.09),
+                cos(warpInput.x * 0.93 - warpInput.z * 1.03),
+                cos(warpInput.y * 0.91 - warpInput.x * 1.13));
+
+            return (warpA + warpB * 0.5) * warpStrength;
+        }
+
+        half3 SampleTriplanarNormalWS(float3 positionWS, half3 baseNormalWS, float tilingMultiplier, float rotationRadians)
         {
             half3 normalizedBaseNormal = NormalizeNormalPerPixel(baseNormalWS);
             if (_BumpScale <= 0.0001h)
@@ -196,9 +247,13 @@ Shader "Voxel/URP/VoxelWaterURP"
             float2 uvY = positionWS.xz * float2(1.0, -normalSigns.y) * normalScale;
             float2 uvZ = positionWS.xy * float2(normalSigns.z, 1.0) * normalScale;
 
-            half3 normalX = UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uvX), _BumpScale);
-            half3 normalY = UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uvY), _BumpScale);
-            half3 normalZ = UnpackNormalScale(SAMPLE_TEXTURE2D(_BumpMap, sampler_BumpMap, uvZ), _BumpScale);
+            float rotationX = rotationRadians;
+            float rotationY = -rotationRadians * 0.82;
+            float rotationZ = rotationRadians * 1.18;
+
+            half3 normalX = SampleWaterNormalMap(uvX, rotationX);
+            half3 normalY = SampleWaterNormalMap(uvY, rotationY);
+            half3 normalZ = SampleWaterNormalMap(uvZ, rotationZ);
 
             half3 worldNormalX = half3((half)normalSigns.x * normalX.z, normalX.y, (half)(-normalSigns.x) * normalX.x);
             half3 worldNormalY = half3(normalY.x, (half)normalSigns.y * normalY.z, (half)(-normalSigns.y) * normalY.y);
@@ -222,9 +277,12 @@ Shader "Voxel/URP/VoxelWaterURP"
             float time = _Time.y;
             float3 scrollA = float3(_WaterNormalSpeed.x, 0.0, _WaterNormalSpeed.y) * time;
             float3 scrollB = float3(-_WaterNormalSpeed.x, 0.0, -_WaterNormalSpeed.y) * (time * _WaterNormalSpeedBMultiplier);
+            float3 warp = GetWaterNormalWarp(positionWS, time);
+            float rotationA = radians((float)_WaterNormalRotationA);
+            float rotationB = radians((float)_WaterNormalRotationB);
 
-            half3 layerA = SampleTriplanarNormalWS(positionWS + scrollA, normalizedBaseNormal, _WaterNormalScaleA);
-            half3 layerB = SampleTriplanarNormalWS(positionWS + scrollB, normalizedBaseNormal, _WaterNormalScaleB);
+            half3 layerA = SampleTriplanarNormalWS(positionWS + scrollA + warp, normalizedBaseNormal, _WaterNormalScaleA, rotationA);
+            half3 layerB = SampleTriplanarNormalWS(positionWS + scrollB - warp * 0.85, normalizedBaseNormal, _WaterNormalScaleB, rotationB);
 
             layerA = normalize(normalizedBaseNormal + (layerA - normalizedBaseNormal) * _WaterNormalStrengthA);
             layerB = normalize(normalizedBaseNormal + (layerB - normalizedBaseNormal) * _WaterNormalStrengthB);

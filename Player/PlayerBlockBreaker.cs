@@ -2046,7 +2046,9 @@ public class PlayerBlockBreaker : MonoBehaviour
             hitPoint,
             targetType,
             false,
-            out attempt);
+            out attempt,
+            holdPlacementContinuation.placedBlockType,
+            holdPlacementContinuation.placementAxis);
     }
 
     private bool TryResolvePlacementInput(
@@ -2065,6 +2067,12 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (selector != null &&
             selector.TryGetPlacementTarget(out targetBlock, out hitNormal, out hitPoint, out targetType, out isBillboardTarget))
         {
+            TryPromoteBillboardPlacementTargetToSolidSupport(
+                ref targetBlock,
+                ref hitNormal,
+                ref hitPoint,
+                ref targetType,
+                ref isBillboardTarget);
             return true;
         }
 
@@ -2073,11 +2081,44 @@ public class PlayerBlockBreaker : MonoBehaviour
             return false;
 
         targetType = world.GetBlockAt(targetBlock);
+        if (IsLiquid(targetType))
+            return false;
+
         hitPoint = selector.CurrentHitPoint != Vector3.zero
             ? selector.CurrentHitPoint
             : targetBlock + Vector3.one * 0.5f;
         isBillboardTarget = selector.IsBillboardHit;
         return true;
+    }
+
+    private void TryPromoteBillboardPlacementTargetToSolidSupport(
+        ref Vector3Int targetBlock,
+        ref Vector3Int hitNormal,
+        ref Vector3 hitPoint,
+        ref BlockType targetType,
+        ref bool isBillboardTarget)
+    {
+        if (!isBillboardTarget || selector == null)
+            return;
+
+        if (!selector.TryGetPlacementSupportTarget(
+                out Vector3Int solidTargetBlock,
+                out Vector3Int solidHitNormal,
+                out Vector3 solidHitPoint,
+                out BlockType solidTargetType))
+        {
+            return;
+        }
+
+        World world = World.Instance;
+        if (world == null || solidTargetType == BlockType.Air || IsLiquid(solidTargetType) || !world.IsSolidBlock(solidTargetType))
+            return;
+
+        targetBlock = solidTargetBlock;
+        hitNormal = solidHitNormal;
+        hitPoint = solidHitPoint;
+        targetType = solidTargetType;
+        isBillboardTarget = false;
     }
 
     private bool TryBuildPlacementAttempt(
@@ -2087,7 +2128,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         Vector3 hitPoint,
         BlockType targetType,
         bool isBillboardTarget,
-        out PlacementAttempt attempt)
+        out PlacementAttempt attempt,
+        BlockType lockedPlacedBlockType = BlockType.Air,
+        BlockPlacementAxis lockedPlacementAxis = BlockPlacementAxis.Y)
     {
         attempt = default;
 
@@ -2103,12 +2146,15 @@ public class PlayerBlockBreaker : MonoBehaviour
         BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
         BlockType blockAtPlacePos = world.GetBlockAt(placePos);
 
-        Vector3 lookForward = ResolvePlacementLookForward();
-        BlockPlacementAxis placementAxis = world.ResolvePlacementAxisForPlacement(
-            placedBlockType,
-            hitNormal,
-            lookForward,
-            hitPoint);
+        bool preserveLockedPlacementAxis = lockedPlacedBlockType != BlockType.Air &&
+                                          placedBlockType == lockedPlacedBlockType;
+        BlockPlacementAxis placementAxis = preserveLockedPlacementAxis
+            ? lockedPlacementAxis
+            : world.ResolvePlacementAxisForPlacement(
+                placedBlockType,
+                hitNormal,
+                ResolvePlacementLookForward(),
+                hitPoint);
 
         bool canMergeWireState = placedBlockType == BlockType.wire &&
                                  blockAtPlacePos == BlockType.wire &&
