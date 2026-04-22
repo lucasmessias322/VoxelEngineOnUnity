@@ -177,7 +177,6 @@ public partial class World : MonoBehaviour
         if (waterWillPermanentlyDestroyBillboard)
             PermanentlySuppressGrassBillboardAt(worldPos, requestRebuild: false);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
-        emissiveBlockLightController?.NotifyBlockChanged(worldPos, current, type);
         TryConvertCoveredGrassToDirt(worldPos, type, placedByPlayer);
 
         RequestBlockEditRefresh(worldPos, chunkCoord, current, type);

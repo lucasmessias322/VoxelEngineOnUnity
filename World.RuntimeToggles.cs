@@ -48,17 +48,13 @@ public partial class World
     private void HandleRealisticShaderToggle()
     {
         bool realisticShaderChanged = lastEnableRealisticShader != enableRealisticShader;
-        bool emissivePointLightsChanged = lastEnableEmissiveBlockPointLights != enableEmissiveBlockPointLights;
-        if (!realisticShaderChanged && !emissivePointLightsChanged)
+        if (!realisticShaderChanged)
             return;
 
         lastEnableRealisticShader = enableRealisticShader;
-        lastEnableEmissiveBlockPointLights = enableEmissiveBlockPointLights;
 
         if (realisticShaderChanged)
             RefreshRealisticShaderModeOnRenderers();
-
-        emissiveBlockLightController?.RefreshEmissivePointLightState();
     }
 
     private void HandleWorldMaterialProfileToggle()
@@ -69,7 +65,6 @@ public partial class World
 
         lastWorldMaterialProfileHash = currentMaterialProfileHash;
         RefreshWorldMaterialProfileOnRenderers();
-        emissiveBlockLightController?.RefreshEmissivePointLightState();
     }
 
     private void RefreshRealisticShaderModeOnRenderers()

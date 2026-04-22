@@ -277,11 +277,9 @@ public partial class World : MonoBehaviour
     public const int MinRenderDistance = 2;
     public const int MaxRenderDistance = 32;
     internal bool IsShuttingDown => isShuttingDown;
-    public bool ShouldUseEmissiveBlockPointLights => !IsMobileMaterialProfileSelected && enableRealisticShader && enableEmissiveBlockPointLights;
 
     private bool isShuttingDown;
     private TorchFireParticleController torchFireParticleController;
-    private EmissiveBlockLightController emissiveBlockLightController;
 
     private void Awake()
     {
@@ -301,7 +299,6 @@ public partial class World : MonoBehaviour
         VoxelShaderFallbackBuffers.EnsureBound();
         EnsureLoadingBootstrapExists();
         EnsureTorchFireParticleControllerExists();
-        EnsureEmissiveBlockLightControllerExists();
     }
 
     #endregion
@@ -532,8 +529,6 @@ public partial class World : MonoBehaviour
     [Header("Features Toggle")]
     [Tooltip("Liga/desliga o caminho de iluminacao realista dos shaders voxel. Quando desligado, usa uma iluminacao voxel simples.")]
     public bool enableRealisticShader = true;
-    [Tooltip("Quando ativo, blocos luminosos proximos podem criar Point Lights realtime. Ainda depende do shader realista estar ligado.")]
-    public bool enableEmissiveBlockPointLights = true;
     public bool enableTrees = true;
     [Tooltip("Quando ativo, quebrar um tronco quebra a arvore inteira de forma gradual (tipo treecapitator).")]
     public bool enableTreeCapitator = true;
@@ -727,7 +722,6 @@ public partial class World : MonoBehaviour
     private float frameTimeAccumulator = 0f;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableRealisticShader = true;
-    private bool lastEnableEmissiveBlockPointLights = true;
     private bool lastEnableVoxelLighting = true;
     private bool lastEnableHorizontalSkylight = true;
     private bool lastEnableAmbientOcclusion = true;
@@ -2415,7 +2409,6 @@ public partial class World : MonoBehaviour
         {
             lastWorldMaterialProfileHash = currentMaterialProfileHash;
             RefreshWorldMaterialProfileOnRenderers();
-            emissiveBlockLightController?.RefreshEmissivePointLightState();
         }
 
         loadedChunkCoordsBuffer.Clear();
@@ -2445,7 +2438,6 @@ public partial class World : MonoBehaviour
 
         lastEnableBlockColliders = enableBlockColliders;
         lastEnableRealisticShader = enableRealisticShader;
-        lastEnableEmissiveBlockPointLights = enableEmissiveBlockPointLights;
         lastEnableVoxelLighting = enableVoxelLighting;
         lastEnableHorizontalSkylight = enableHorizontalSkylight;
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
@@ -2780,13 +2772,6 @@ public partial class World : MonoBehaviour
         torchFireParticleController = GetComponent<TorchFireParticleController>();
         if (torchFireParticleController == null)
             torchFireParticleController = gameObject.AddComponent<TorchFireParticleController>();
-    }
-
-    private void EnsureEmissiveBlockLightControllerExists()
-    {
-        emissiveBlockLightController = GetComponent<EmissiveBlockLightController>();
-        if (emissiveBlockLightController == null)
-            emissiveBlockLightController = gameObject.AddComponent<EmissiveBlockLightController>();
     }
 
     private void HandleTerrainLayerProfileChanged(TerrainLayerProfileSO changedProfile)
