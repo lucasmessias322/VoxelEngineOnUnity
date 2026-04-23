@@ -45,6 +45,10 @@ public partial class World
     private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> highOverridePositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(InitialBlockEditChunkIndexCapacity);
     private readonly Queue<Vector2Int> queuedHighBuildRebuilds = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private readonly HashSet<Vector2Int> queuedHighBuildRebuildsSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly Dictionary<int, List<Vector3Int>> highBuildSectionPositionsBuffer = new Dictionary<int, List<Vector3Int>>(4);
+    private readonly List<int> highBuildSectionKeysBuffer = new List<int>(4);
+    private readonly List<Vector3Int> highBuildStaleMeshKeysBuffer = new List<Vector3Int>(8);
+    private readonly List<Vector3Int> highBuildChunkMeshKeysBuffer = new List<Vector3Int>(8);
     [SerializeField, Min(0f)] private float highBuildRebuildTimeBudgetMS = 0.75f;
 
     private void IndexHighOverride(Vector3Int worldPos, Vector2Int coord, BlockType type)
@@ -145,7 +149,7 @@ public partial class World
             return;
         }
 
-        Dictionary<int, List<Vector3Int>> bySection = new Dictionary<int, List<Vector3Int>>();
+        ClearHighBuildSectionBuffers();
         foreach (Vector3Int p in positions)
         {
             if (!blockOverrides.TryGetValue(p, out BlockType t)) continue;
@@ -153,38 +157,36 @@ public partial class World
             if (t == BlockType.Air) continue;
             int section = GetHighSectionIndex(p.y);
             if (section < 0) continue;
-            if (!bySection.TryGetValue(section, out List<Vector3Int> list))
-            {
-                list = new List<Vector3Int>();
-                bySection[section] = list;
-            }
+            List<Vector3Int> list = GetOrCreateHighBuildSectionBuffer(section);
+            if (list.Count == 0)
+                highBuildSectionKeysBuffer.Add(section);
             list.Add(p);
         }
 
-        if (bySection.Count == 0)
+        if (highBuildSectionKeysBuffer.Count == 0)
         {
             RemoveHighBuildMesh(coord);
             return;
         }
 
         // Disable sections no longer used for this chunk coord.
-        List<Vector3Int> stale = null;
+        highBuildStaleMeshKeysBuffer.Clear();
         foreach (var kv in highBuildMeshes)
         {
             Vector3Int key = kv.Key;
             if (key.x != coord.x || key.z != coord.y) continue;
-            if (bySection.ContainsKey(key.y)) continue;
-            if (stale == null) stale = new List<Vector3Int>();
-            stale.Add(key);
-        }
-        if (stale != null)
-        {
-            for (int i = 0; i < stale.Count; i++)
-                DisableHighBuildMesh(stale[i]);
+            if (IsHighBuildSectionBuffered(key.y)) continue;
+            highBuildStaleMeshKeysBuffer.Add(key);
         }
 
-        foreach (var sec in bySection)
-            RebuildHighBuildSectionMesh(coord, sec.Key, sec.Value);
+        for (int i = 0; i < highBuildStaleMeshKeysBuffer.Count; i++)
+            DisableHighBuildMesh(highBuildStaleMeshKeysBuffer[i]);
+
+        for (int i = 0; i < highBuildSectionKeysBuffer.Count; i++)
+        {
+            int section = highBuildSectionKeysBuffer[i];
+            RebuildHighBuildSectionMesh(coord, section, highBuildSectionPositionsBuffer[section]);
+        }
     }
 
     private void RebuildHighBuildSectionMesh(Vector2Int coord, int section, List<Vector3Int> positions)
@@ -354,18 +356,16 @@ public partial class World
 
     private void RemoveHighBuildMesh(Vector2Int coord)
     {
-        List<Vector3Int> keys = null;
+        highBuildChunkMeshKeysBuffer.Clear();
         foreach (var kv in highBuildMeshes)
         {
             Vector3Int key = kv.Key;
             if (key.x != coord.x || key.z != coord.y) continue;
-            if (keys == null) keys = new List<Vector3Int>();
-            keys.Add(key);
+            highBuildChunkMeshKeysBuffer.Add(key);
         }
 
-        if (keys == null) return;
-        for (int i = 0; i < keys.Count; i++)
-            DisableHighBuildMesh(keys[i]);
+        for (int i = 0; i < highBuildChunkMeshKeysBuffer.Count; i++)
+            DisableHighBuildMesh(highBuildChunkMeshKeysBuffer[i]);
     }
 
     private void DisableHighBuildMesh(Vector3Int key)
@@ -375,6 +375,33 @@ public partial class World
         data.canHaveColliders = false;
         if (data.mesh != null) data.mesh.Clear();
         if (data.root != null) data.root.SetActive(false);
+    }
+
+    private void ClearHighBuildSectionBuffers()
+    {
+        foreach (var kv in highBuildSectionPositionsBuffer)
+            kv.Value.Clear();
+
+        highBuildSectionKeysBuffer.Clear();
+    }
+
+    private List<Vector3Int> GetOrCreateHighBuildSectionBuffer(int section)
+    {
+        if (!highBuildSectionPositionsBuffer.TryGetValue(section, out List<Vector3Int> positions))
+        {
+            positions = new List<Vector3Int>(InitialPerChunkBlockEditCapacity);
+            highBuildSectionPositionsBuffer[section] = positions;
+        }
+
+        return positions;
+    }
+
+    private bool IsHighBuildSectionBuffered(int section)
+    {
+        if (!highBuildSectionPositionsBuffer.TryGetValue(section, out List<Vector3Int> positions))
+            return false;
+
+        return positions.Count > 0;
     }
 
     private HighBuildMeshData GetOrCreateHighBuildMesh(Vector2Int coord, int section)

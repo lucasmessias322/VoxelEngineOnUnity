@@ -732,10 +732,7 @@ public static partial class MeshGenerator
         };
         disposePrefilledColumnsHandle = disposePrefilledSpaghettiColumnsJob.Schedule(carveMaskHandle);
 
-        NativeArray<byte> cachedMaskCopy = new NativeArray<byte>(
-            totalVoxels,
-            Allocator.Persistent,
-            NativeArrayOptions.UninitializedMemory);
+        NativeArray<byte> cachedMaskCopy = RentByteBuffer(totalVoxels);
         var copySpaghettiMaskToCacheJob = new CopyByteArrayJob
         {
             source = carveMask,

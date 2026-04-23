@@ -422,10 +422,10 @@ public partial class World
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
         bool useDetailedGeneration = ShouldChunkUseDetailedGeneration(coord);
-        chunk.requestedDetailedGeneration = useDetailedGeneration;
+        PrepareChunkDetailGenerationTarget(chunk, useDetailedGeneration, expectedGen);
 
         if (HasCompatibleGenerationDataForRequestedDetail(chunk, useDetailedGeneration) &&
-            TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders))
+            TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders, useDetailedGeneration))
             return;
 
         chunk.hasVoxelData = false;
@@ -540,6 +540,7 @@ public partial class World
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
+            targetDetailedGeneration = useDetailedGeneration,
             chunkLightData = chunkLightData,
             blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,
@@ -615,7 +616,10 @@ public partial class World
         chunk.currentJob = default;
 
         if (chunk.state == Chunk.ChunkState.MeshReady)
+        {
+            chunk.TryCommitPendingDetailedGenerationSwap(chunk.generation);
             chunk.state = Chunk.ChunkState.Active;
+        }
     }
 
     private void EnqueueChunkJobTrackingRefresh(Vector2Int coord)

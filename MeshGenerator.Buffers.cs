@@ -21,8 +21,14 @@ public static partial class MeshGenerator
         public int lastTouchedFrame;
     }
 
+    private struct SpaghettiCarveMaskCacheTouchRecord
+    {
+        public Vector2Int coord;
+        public int touchStamp;
+    }
+
     private static readonly Dictionary<Vector2Int, SpaghettiCarveMaskCacheEntry> spaghettiCarveMaskNeighborCache = new Dictionary<Vector2Int, SpaghettiCarveMaskCacheEntry>();
-    private static readonly List<KeyValuePair<Vector2Int, int>> spaghettiCarveMaskCacheSortBuffer = new List<KeyValuePair<Vector2Int, int>>(SpaghettiCarveMaskCacheMaxEntries + 8);
+    private static readonly Queue<SpaghettiCarveMaskCacheTouchRecord> spaghettiCarveMaskCacheTouchQueue = new Queue<SpaghettiCarveMaskCacheTouchRecord>(SpaghettiCarveMaskCacheMaxEntries * 2);
     private static readonly Dictionary<int, Stack<NativeArray<byte>>> pooledTempByteArrays = new Dictionary<int, Stack<NativeArray<byte>>>();
     private static readonly Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>> pooledTempDensitySettingsArrays = new Dictionary<int, Stack<NativeArray<TerrainDensitySettings>>>();
     private static readonly Dictionary<int, Stack<NativeArray<TerrainColumnContext>>> pooledTempColumnContextArrays = new Dictionary<int, Stack<NativeArray<TerrainColumnContext>>>();
@@ -46,7 +52,10 @@ public static partial class MeshGenerator
     public static void ClearSpaghettiCarveMaskNeighborCache()
     {
         if (spaghettiCarveMaskNeighborCache.Count == 0)
+        {
+            spaghettiCarveMaskCacheTouchQueue.Clear();
             return;
+        }
 
         foreach (KeyValuePair<Vector2Int, SpaghettiCarveMaskCacheEntry> pair in spaghettiCarveMaskNeighborCache)
         {
@@ -55,7 +64,8 @@ public static partial class MeshGenerator
         }
 
         spaghettiCarveMaskNeighborCache.Clear();
-        spaghettiCarveMaskCacheSortBuffer.Clear();
+        spaghettiCarveMaskCacheTouchQueue.Clear();
+        spaghettiCarveMaskCacheTouchSequence = 0;
     }
 
     public static void ClearDataJobTempBufferPool()
@@ -338,7 +348,7 @@ public static partial class MeshGenerator
         if (entry.mask.IsCreated)
         {
             entry.readyHandle.Complete();
-            entry.mask.Dispose();
+            ReturnByteBuffer(ref entry.mask);
         }
 
         entry = default;
@@ -355,7 +365,46 @@ public static partial class MeshGenerator
 
     private static int GetSpaghettiCacheTouchStamp()
     {
-        return Application.isPlaying ? Time.frameCount : Environment.TickCount;
+        unchecked
+        {
+            spaghettiCarveMaskCacheTouchSequence++;
+            if (spaghettiCarveMaskCacheTouchSequence == 0)
+                spaghettiCarveMaskCacheTouchSequence = 1;
+
+            return spaghettiCarveMaskCacheTouchSequence;
+        }
+    }
+
+    private static int spaghettiCarveMaskCacheTouchSequence;
+
+    private static void TouchSpaghettiCarveMaskCacheEntry(Vector2Int coord, ref SpaghettiCarveMaskCacheEntry entry)
+    {
+        entry.lastTouchedFrame = GetSpaghettiCacheTouchStamp();
+        spaghettiCarveMaskNeighborCache[coord] = entry;
+        spaghettiCarveMaskCacheTouchQueue.Enqueue(new SpaghettiCarveMaskCacheTouchRecord
+        {
+            coord = coord,
+            touchStamp = entry.lastTouchedFrame
+        });
+
+        CompactSpaghettiCarveMaskTouchQueueIfNeeded();
+    }
+
+    private static void CompactSpaghettiCarveMaskTouchQueueIfNeeded()
+    {
+        int maxQueuedTouches = SpaghettiCarveMaskCacheMaxEntries * 4;
+        if (spaghettiCarveMaskCacheTouchQueue.Count <= maxQueuedTouches)
+            return;
+
+        spaghettiCarveMaskCacheTouchQueue.Clear();
+        foreach (KeyValuePair<Vector2Int, SpaghettiCarveMaskCacheEntry> pair in spaghettiCarveMaskNeighborCache)
+        {
+            spaghettiCarveMaskCacheTouchQueue.Enqueue(new SpaghettiCarveMaskCacheTouchRecord
+            {
+                coord = pair.Key,
+                touchStamp = pair.Value.lastTouchedFrame
+            });
+        }
     }
 
     private static int ComputeSpaghettiCarveMaskSettingsHash(int oreSeed, int borderSize, in SpaghettiCaveSettings settings)
@@ -469,8 +518,7 @@ public static partial class MeshGenerator
             return false;
 
         entry.readyHandle.Complete();
-        entry.lastTouchedFrame = GetSpaghettiCacheTouchStamp();
-        spaghettiCarveMaskNeighborCache[coord] = entry;
+        TouchSpaghettiCarveMaskCacheEntry(coord, ref entry);
         return true;
     }
 
@@ -657,16 +705,44 @@ public static partial class MeshGenerator
         if (spaghettiCarveMaskNeighborCache.Count <= SpaghettiCarveMaskCacheMaxEntries)
             return;
 
-        spaghettiCarveMaskCacheSortBuffer.Clear();
-        foreach (KeyValuePair<Vector2Int, SpaghettiCarveMaskCacheEntry> pair in spaghettiCarveMaskNeighborCache)
-            spaghettiCarveMaskCacheSortBuffer.Add(new KeyValuePair<Vector2Int, int>(pair.Key, pair.Value.lastTouchedFrame));
+        int overflowCount = spaghettiCarveMaskNeighborCache.Count - SpaghettiCarveMaskCacheMaxEntries;
+        int touchRecordsToScan = spaghettiCarveMaskCacheTouchQueue.Count;
+        while (overflowCount > 0 &&
+               touchRecordsToScan-- > 0 &&
+               spaghettiCarveMaskCacheTouchQueue.Count > 0)
+        {
+            SpaghettiCarveMaskCacheTouchRecord touchRecord = spaghettiCarveMaskCacheTouchQueue.Dequeue();
+            if (!spaghettiCarveMaskNeighborCache.TryGetValue(touchRecord.coord, out SpaghettiCarveMaskCacheEntry entry))
+                continue;
 
-        spaghettiCarveMaskCacheSortBuffer.Sort((a, b) => a.Value.CompareTo(b.Value));
-        int removeCount = spaghettiCarveMaskNeighborCache.Count - SpaghettiCarveMaskCacheMaxEntries;
-        for (int i = 0; i < removeCount && i < spaghettiCarveMaskCacheSortBuffer.Count; i++)
-            RemoveSpaghettiCarveMaskCacheEntry(spaghettiCarveMaskCacheSortBuffer[i].Key);
+            if (entry.lastTouchedFrame != touchRecord.touchStamp)
+                continue;
 
-        spaghettiCarveMaskCacheSortBuffer.Clear();
+            RemoveSpaghettiCarveMaskCacheEntry(touchRecord.coord);
+            overflowCount--;
+        }
+
+        while (spaghettiCarveMaskNeighborCache.Count > SpaghettiCarveMaskCacheMaxEntries)
+        {
+            bool foundOldest = false;
+            Vector2Int oldestCoord = default;
+            int oldestTouchStamp = int.MaxValue;
+
+            foreach (KeyValuePair<Vector2Int, SpaghettiCarveMaskCacheEntry> pair in spaghettiCarveMaskNeighborCache)
+            {
+                if (!foundOldest || pair.Value.lastTouchedFrame < oldestTouchStamp)
+                {
+                    foundOldest = true;
+                    oldestCoord = pair.Key;
+                    oldestTouchStamp = pair.Value.lastTouchedFrame;
+                }
+            }
+
+            if (!foundOldest)
+                break;
+
+            RemoveSpaghettiCarveMaskCacheEntry(oldestCoord);
+        }
     }
 
     private static void StoreSpaghettiCarveMaskNeighborCacheEntry(
@@ -681,7 +757,7 @@ public static partial class MeshGenerator
     {
         RemoveSpaghettiCarveMaskCacheEntry(coord);
 
-        spaghettiCarveMaskNeighborCache[coord] = new SpaghettiCarveMaskCacheEntry
+        SpaghettiCarveMaskCacheEntry entry = new SpaghettiCarveMaskCacheEntry
         {
             mask = mask,
             readyHandle = readyHandle,
@@ -690,8 +766,10 @@ public static partial class MeshGenerator
             voxelPlaneSize = voxelPlaneSize,
             borderSize = borderSize,
             settingsHash = settingsHash,
-            lastTouchedFrame = GetSpaghettiCacheTouchStamp()
+            lastTouchedFrame = 0
         };
+
+        TouchSpaghettiCarveMaskCacheEntry(coord, ref entry);
 
         PruneSpaghettiCarveMaskNeighborCache();
     }

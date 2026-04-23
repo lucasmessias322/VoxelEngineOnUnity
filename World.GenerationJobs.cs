@@ -47,6 +47,7 @@ public partial class World : MonoBehaviour
         public Chunk chunk;
         public Vector2Int coord;
         public int expectedGen;
+        public bool targetDetailedGeneration;
         public NativeArray<ushort> chunkLightData;
         public NativeArray<ushort> blockEmissionData;
         public NativeArray<byte> lightOpacityData;

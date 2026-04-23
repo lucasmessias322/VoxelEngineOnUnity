@@ -101,8 +101,13 @@ public partial class World
 
     private void ProcessPendingChunkDataBufferReturns()
     {
+        int processed = 0;
+        int perFrameLimit = Math.Max(1, maxChunkDataBufferReturnsPerFrame);
         for (int i = pendingChunkDataBufferReturns.Count - 1; i >= 0; i--)
         {
+            if (processed >= perFrameLimit)
+                break;
+
             PendingChunkDataBufferReturn pendingReturn = pendingChunkDataBufferReturns[i];
             if (!pendingReturn.handle.IsCompleted)
                 continue;
@@ -110,6 +115,7 @@ public partial class World
             pendingReturn.handle.Complete();
             ReturnChunkDataBuffers(ref pendingReturn);
             RemovePendingChunkDataBufferReturnAtSwapBack(i);
+            processed++;
         }
     }
 

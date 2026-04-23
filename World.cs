@@ -315,6 +315,23 @@ public partial class World : MonoBehaviour
     [Min(0)]
     public int colliderDistance = 3;
     public int poolSize = 200;
+    [Tooltip("Aumenta automaticamente o pool minimo de chunks com base no renderDistance para evitar Instantiate/AddComponent durante o gameplay.")]
+    public bool autoSizeChunkPool = true;
+    [Tooltip("Raio extra usado no calculo automatico do pool para cobrir movimento rapido e chunks aguardando recycle.")]
+    [Min(0)]
+    public int chunkPoolExtraRadius = 2;
+    [Tooltip("Buffer extra de entradas do pool acima da cobertura minima calculada.")]
+    [Min(0)]
+    public int chunkPoolSafetyBuffer = 24;
+    [Tooltip("Orcamento em ms para crescer o pool aos poucos durante o Update quando ele ficar abaixo do alvo.")]
+    [Min(0f)]
+    public float chunkPoolWarmupBudgetMS = 0.35f;
+    [Tooltip("Quantidade maxima de novas entradas do pool criadas por frame no warmup incremental.")]
+    [Min(1)]
+    public int maxChunkPoolEntriesCreatedPerFrame = 1;
+    [Tooltip("Quantidade maxima de criacoes emergenciais permitidas no mesmo frame se o pool secar completamente.")]
+    [Min(0)]
+    public int maxEmergencyChunkPoolCreatesPerFrame = 1;
     [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
     [Min(1)]
     public int visualSubchunksPerRenderer = 4;
@@ -492,6 +509,12 @@ public partial class World : MonoBehaviour
     [Tooltip("Orcamento total (ms) para os processos do Update. Use 0 para desativar o limite.")]
     [Min(0f)]
     public float updateWorkBudgetMS = 6f;
+    [Tooltip("Quantidade maxima de chunks aposentados que podem ser reciclados por frame no Update. Valores baixos suavizam faxinas de pool apos caminhada longa.")]
+    [Min(1)]
+    public int maxRetiredChunkRecyclesPerFrame = 2;
+    [Tooltip("Quantidade maxima de retornos de buffers de chunk processados por frame. Reduz picos quando muitos meshes terminam quase juntos.")]
+    [Min(1)]
+    public int maxChunkDataBufferReturnsPerFrame = 4;
     [Tooltip("Orcamento (ms) para agendar novos jobs de dados de chunk. Use 0 para sem limite.")]
     [Min(0f)]
     public float chunkDataScheduleBudgetMS = 0.75f;
@@ -672,6 +695,22 @@ public partial class World : MonoBehaviour
     [Tooltip("Quantidade maxima de chunks simplificados promovidos para detalhados por frame.")]
     [Min(1)]
     public int maxChunkDetailPromotionsPerFrame = 1;
+    [Tooltip("Velocidade horizontal maxima do player para permitir promocoes de LOD. Use 0 para ignorar movimento real e considerar apenas a troca de chunk.")]
+    [Min(0f)]
+    public float chunkDetailPromotionMaxPlayerSpeed = 0.4f;
+    [Tooltip("Intervalo minimo entre duas promocoes de chunk LOD. Ajuda a espalhar o custo quando o player para de andar.")]
+    [Min(0f)]
+    public float chunkDetailPromotionIntervalSeconds = 0.08f;
+    [Tooltip("Quando ativo, promocoes de chunk LOD priorizam chunks dentro do frustum e na frente da camera do player.")]
+    public bool enableChunkDetailPromotionCameraPrioritization = true;
+    [Tooltip("Quando o backlog de promocoes fica alto, chunks fora da visao da camera ficam na fila ate os chunks visiveis serem atendidos primeiro.")]
+    public bool deferOutOfViewChunkDetailPromotions = true;
+    [Tooltip("Quantidade de promocoes enfileiradas a partir da qual chunks fora da visao passam a esperar os visiveis. 0 desativa esse atraso.")]
+    [Min(0)]
+    public int chunkDetailPromotionOutOfViewBacklogThreshold = 12;
+    [Tooltip("Limite de candidatos avaliados por frame ao priorizar promocoes de chunk LOD. 0 avalia toda a fila.")]
+    [Min(0)]
+    public int chunkDetailPromotionPriorityScanLimit = 0;
 
     #endregion
 
@@ -734,6 +773,7 @@ public partial class World : MonoBehaviour
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
     private int colliderPrewarmedChunkCount;
+    private int chunkPoolCreatesThisFrame;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableRealisticShader = true;
     private bool lastEnableVoxelLighting = true;
@@ -762,6 +802,12 @@ public partial class World : MonoBehaviour
     private bool nativeGenerationConfigDirty = true;
     private int lastResolvedVisualSubchunksPerRenderer = int.MinValue;
     private float lastPlayerChunkCoordChangeTime = float.NegativeInfinity;
+    private float lastPlayerChunkDetailMovementTime = float.NegativeInfinity;
+    private float lastChunkDetailPromotionRequestTime = float.NegativeInfinity;
+    private Vector2Int lastChunkDetailPromotionQueueCenter = new Vector2Int(int.MinValue, int.MinValue);
+    private Vector3 lastChunkDetailPromotionSamplePosition = Vector3.zero;
+    private float lastChunkDetailPromotionSampleRealtime = float.NegativeInfinity;
+    private bool hasChunkDetailPromotionMovementSample = false;
 
     // Vulkan requires every declared StructuredBuffer to be bound, even when that code path is disabled at runtime.
     private static readonly int PulledOpaqueFacesBufferPropertyId = Shader.PropertyToID("_PulledOpaqueFaces");
@@ -793,6 +839,7 @@ public partial class World : MonoBehaviour
     private readonly Plane[] meshApplyPriorityFrustumPlanes = new Plane[6];
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
     private readonly List<Vector2Int> pendingChunkQueuePruneBuffer = new List<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private readonly List<ChunkDetailPromotionCandidate> chunkDetailPromotionCandidateBuffer = new List<ChunkDetailPromotionCandidate>(128);
     private Comparison<PendingData> pendingDataDistanceComparison;
     private Comparison<PendingMesh> pendingMeshDistanceComparison;
     private readonly List<Vector2Int> loadedChunkCoordsBuffer = new List<Vector2Int>(256);
@@ -807,6 +854,22 @@ public partial class World : MonoBehaviour
     private readonly Queue<(Vector3Int pos, ushort lightLevel)> removeLightDarkQueueBuffer = new Queue<(Vector3Int, ushort)>(InitialLightWorkCollectionCapacity);
     private readonly Queue<Vector3Int> removeLightRefillQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
     private readonly Dictionary<Vector3Int, ushort> removeLightAffectedContributionsBuffer = new Dictionary<Vector3Int, ushort>(InitialLightWorkCollectionCapacity);
+
+    private enum ChunkDetailPromotionCandidateState : byte
+    {
+        Drop = 0,
+        RequeueBlocked = 1,
+        Ready = 2
+    }
+
+    private struct ChunkDetailPromotionCandidate
+    {
+        public Vector2Int coord;
+        public Chunk chunk;
+        public float score;
+        public bool preferredView;
+        public ChunkDetailPromotionCandidateState state;
+    }
     private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
     private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
     private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>(InitialLightWorkCollectionCapacity);
@@ -1117,6 +1180,32 @@ public partial class World : MonoBehaviour
         return !useDetailedGeneration || chunk.hasDetailedGenerationData;
     }
 
+    private static bool ShouldDeferChunkDetailGenerationSwap(Chunk chunk, bool targetDetailedGeneration)
+    {
+        if (chunk == null || chunk.requestedDetailedGeneration == targetDetailedGeneration)
+            return false;
+
+        if (!chunk.HasInitializedSubchunks)
+            return false;
+
+        return chunk.state == Chunk.ChunkState.Active || chunk.state == Chunk.ChunkState.MeshReady;
+    }
+
+    private static void PrepareChunkDetailGenerationTarget(Chunk chunk, bool targetDetailedGeneration, int expectedGen)
+    {
+        if (chunk == null)
+            return;
+
+        if (ShouldDeferChunkDetailGenerationSwap(chunk, targetDetailedGeneration))
+        {
+            chunk.SetPendingDetailedGenerationSwap(targetDetailedGeneration, expectedGen);
+            return;
+        }
+
+        chunk.requestedDetailedGeneration = targetDetailedGeneration;
+        chunk.ClearPendingDetailedGenerationSwap();
+    }
+
     private bool ShouldGenerateGrassBillboardsForChunk(bool useDetailedGeneration)
     {
         return enableGrassBillboards && useDetailedGeneration;
@@ -1127,7 +1216,11 @@ public partial class World : MonoBehaviour
         if (!enableChunkDetailLod)
             return true;
 
-        if (Time.time - lastPlayerChunkCoordChangeTime < Mathf.Max(0f, chunkDetailPromotionDelaySeconds))
+        float lastRelevantMovementTime = lastPlayerChunkCoordChangeTime;
+        if (chunkDetailPromotionMaxPlayerSpeed > 0f)
+            lastRelevantMovementTime = Mathf.Max(lastRelevantMovementTime, lastPlayerChunkDetailMovementTime);
+
+        if (Time.time - lastRelevantMovementTime < Mathf.Max(0f, chunkDetailPromotionDelaySeconds))
             return true;
 
         int pendingDataInRange = CountPendingDataJobsInRenderDistance(center);
@@ -1149,25 +1242,114 @@ public partial class World : MonoBehaviour
         return false;
     }
 
-    private void RefreshChunkDetailPromotionCandidates(Vector2Int center)
+    private void RebuildChunkDetailPromotionQueue(Vector2Int center)
     {
+        ClearChunkDetailPromotionQueue();
+        lastChunkDetailPromotionQueueCenter = center;
+
         if (!enableChunkDetailLod || activeChunks == null || activeChunks.Count == 0)
             return;
 
         foreach (var kv in activeChunks)
+            EnqueueChunkDetailPromotionIfActiveAndNeeded(kv.Key, center);
+    }
+
+    private void AppendChunkDetailPromotionFrontier(Vector2Int previousCenter, Vector2Int currentCenter)
+    {
+        lastChunkDetailPromotionQueueCenter = currentCenter;
+        if (!enableChunkDetailLod)
         {
-            Chunk activeChunk = kv.Value;
-            if (activeChunk == null)
-                continue;
-
-            if (!ShouldChunkUseDetailedGeneration(kv.Key, center))
-                continue;
-
-            if (activeChunk.requestedDetailedGeneration)
-                continue;
-
-            EnqueueChunkDetailPromotion(kv.Key);
+            ClearChunkDetailPromotionQueue();
+            return;
         }
+
+        int radius = Mathf.Max(0, chunkDetailLodDistance);
+        int minX = currentCenter.x - radius;
+        int maxX = currentCenter.x + radius;
+        int minZ = currentCenter.y - radius;
+        int maxZ = currentCenter.y + radius;
+
+        for (int z = minZ; z <= maxZ; z++)
+        {
+            for (int x = minX; x <= maxX; x++)
+            {
+                Vector2Int coord = new Vector2Int(x, z);
+                if (!IsCoordInsideCircularDistance(coord, currentCenter, radius))
+                    continue;
+
+                if (IsCoordInsideCircularDistance(coord, previousCenter, radius))
+                    continue;
+
+                EnqueueChunkDetailPromotionIfActiveAndNeeded(coord, currentCenter);
+            }
+        }
+    }
+
+    private void EnqueueChunkDetailPromotionIfActiveAndNeeded(Vector2Int coord, Vector2Int center)
+    {
+        if (!activeChunks.TryGetValue(coord, out Chunk activeChunk) || activeChunk == null)
+            return;
+
+        if (!ShouldChunkUseDetailedGeneration(coord, center))
+            return;
+
+        if (activeChunk.IsTargetingDetailedGeneration)
+            return;
+
+        EnqueueChunkDetailPromotion(coord);
+    }
+
+    private void SyncChunkDetailPromotionSettings(Vector2Int center)
+    {
+        bool settingsChanged = lastEnableChunkDetailLod != enableChunkDetailLod ||
+                               lastChunkDetailLodDistance != chunkDetailLodDistance;
+        if (!settingsChanged)
+            return;
+
+        lastEnableChunkDetailLod = enableChunkDetailLod;
+        lastChunkDetailLodDistance = chunkDetailLodDistance;
+
+        if (!enableChunkDetailLod)
+        {
+            ClearChunkDetailPromotionQueue();
+            lastChunkDetailPromotionQueueCenter = center;
+            return;
+        }
+
+        RebuildChunkDetailPromotionQueue(center);
+    }
+
+    private void UpdateChunkDetailPromotionMovementState()
+    {
+        if (player == null)
+        {
+            hasChunkDetailPromotionMovementSample = false;
+            lastChunkDetailPromotionSampleRealtime = float.NegativeInfinity;
+            return;
+        }
+
+        Vector3 currentPosition = player.position;
+        currentPosition.y = 0f;
+        float currentRealtime = Time.unscaledTime;
+
+        if (!hasChunkDetailPromotionMovementSample)
+        {
+            hasChunkDetailPromotionMovementSample = true;
+            lastChunkDetailPromotionSamplePosition = currentPosition;
+            lastChunkDetailPromotionSampleRealtime = currentRealtime;
+            return;
+        }
+
+        float deltaTime = currentRealtime - lastChunkDetailPromotionSampleRealtime;
+        if (deltaTime > 0f && chunkDetailPromotionMaxPlayerSpeed > 0f)
+        {
+            float horizontalSpeed = Vector3.Distance(currentPosition, lastChunkDetailPromotionSamplePosition) / deltaTime;
+            if (horizontalSpeed >= chunkDetailPromotionMaxPlayerSpeed)
+                lastPlayerChunkDetailMovementTime = Time.time;
+        }
+
+        lastChunkDetailPromotionSamplePosition = currentPosition;
+        lastChunkDetailPromotionSampleRealtime = currentRealtime;
     }
 
     private void EnqueueChunkDetailPromotion(Vector2Int coord)
@@ -1182,6 +1364,277 @@ public partial class World : MonoBehaviour
     {
         queuedChunkDetailPromotions.Clear();
         queuedChunkDetailPromotionsSet.Clear();
+    }
+
+    private static void CommitChunkDetailGenerationTargetWithoutRebuild(Chunk chunk, bool targetDetailedGeneration)
+    {
+        if (chunk == null)
+            return;
+
+        chunk.requestedDetailedGeneration = targetDetailedGeneration;
+        chunk.ClearPendingDetailedGenerationSwap();
+    }
+
+    private bool TryGetVisualOnlyChunkDetailPromotionMask(Vector2Int coord, Chunk chunk, out int dirtySubchunkMask)
+    {
+        dirtySubchunkMask = 0;
+        if (!HasCompatibleGenerationDataForRequestedDetail(chunk, true) ||
+            !CanChunkProvideVoxelSnapshot(chunk))
+        {
+            return false;
+        }
+
+        dirtySubchunkMask = GetGrassBillboardPromotionDirtySubchunkMask(coord, chunk);
+        return true;
+    }
+
+    private int GetGrassBillboardPromotionDirtySubchunkMask(Vector2Int coord, Chunk chunk)
+    {
+        if (!enableGrassBillboards ||
+            grassBillboardChance <= 0f ||
+            !CanChunkProvideVoxelSnapshot(chunk))
+        {
+            return 0;
+        }
+
+        VegetationBillboardRuleData[] vegetationRules = GetActiveVegetationBillboardRules();
+        BiomeNoiseSettings biomeNoiseSettings = GetBiomeNoiseSettings();
+        NativeArray<byte> voxelData = chunk.voxelData;
+        int voxelPlaneSize = Chunk.SizeX * Chunk.SizeZ;
+        int chunkMinX = coord.x * Chunk.SizeX;
+        int chunkMinZ = coord.y * Chunk.SizeZ;
+        int dirtySubchunkMask = 0;
+        int fullMask = GetFullSubchunkMask();
+
+        for (int localZ = 0; localZ < Chunk.SizeZ; localZ++)
+        {
+            for (int localX = 0; localX < Chunk.SizeX; localX++)
+            {
+                int voxelIndex = localX + localZ * Chunk.SizeX;
+                for (int y = 0; y + 1 < Chunk.SizeY; y++, voxelIndex += voxelPlaneSize)
+                {
+                    BlockType groundBlockType = ResolveWaterStateForDebug((BlockType)voxelData[voxelIndex]);
+                    if (groundBlockType == BlockType.Air)
+                        continue;
+
+                    BlockType aboveBlockType = ResolveWaterStateForDebug((BlockType)voxelData[voxelIndex + voxelPlaneSize]);
+                    if (aboveBlockType != BlockType.Air)
+                        continue;
+
+                    int worldX = chunkMinX + localX;
+                    int worldY = y + 1;
+                    int worldZ = chunkMinZ + localZ;
+                    if (IsGrassBillboardSuppressed(new Vector3Int(worldX, worldY, worldZ)))
+                        continue;
+
+                    if (!VegetationBillboardUtility.TryResolveBillboardRule(
+                            biomeNoiseSettings,
+                            vegetationRules,
+                            worldX,
+                            worldY,
+                            worldZ,
+                            groundBlockType,
+                            grassBillboardChance,
+                            grassBillboardNoiseScale,
+                            grassBillboardBlockType,
+                            out _,
+                            out _))
+                    {
+                        continue;
+                    }
+
+                    int billboardSubchunkIndex = Mathf.Clamp(worldY / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
+                    dirtySubchunkMask |= 1 << billboardSubchunkIndex;
+                    if (dirtySubchunkMask == fullMask)
+                        return dirtySubchunkMask;
+                }
+            }
+        }
+
+        return dirtySubchunkMask;
+    }
+
+    private ChunkDetailPromotionCandidate EvaluateChunkDetailPromotionCandidate(
+        Vector2Int coord,
+        Vector2Int center,
+        Camera priorityCamera,
+        bool hasPriorityCamera)
+    {
+        ChunkDetailPromotionCandidate candidate = new ChunkDetailPromotionCandidate
+        {
+            coord = coord,
+            chunk = null,
+            score = float.NegativeInfinity,
+            preferredView = false,
+            state = ChunkDetailPromotionCandidateState.Drop
+        };
+
+        if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
+            return candidate;
+
+        if (!ShouldChunkUseDetailedGeneration(coord, center))
+            return candidate;
+
+        if (chunk.IsTargetingDetailedGeneration)
+            return candidate;
+
+        candidate.chunk = chunk;
+        if (HasQueuedChunkRebuild(coord) || IsChunkJobPending(coord))
+        {
+            candidate.state = ChunkDetailPromotionCandidateState.RequeueBlocked;
+            return candidate;
+        }
+
+        candidate.score = ComputeChunkDetailPromotionPriority(coord, chunk, priorityCamera, hasPriorityCamera, out bool preferredView);
+        candidate.preferredView = preferredView;
+        candidate.state = ChunkDetailPromotionCandidateState.Ready;
+        return candidate;
+    }
+
+    private float ComputeChunkDetailPromotionPriority(
+        Vector2Int coord,
+        Chunk chunk,
+        Camera priorityCamera,
+        bool hasPriorityCamera,
+        out bool preferredView)
+    {
+        float score = -GetChunkDistanceSqToPlayer(coord) * 700f;
+        Bounds chunkBounds = GetChunkDetailPromotionBounds(coord, chunk);
+
+        if (ChunkHasAnyVisibleRenderer(chunk))
+            score += 80000f;
+
+        preferredView = false;
+        if (!enableChunkDetailPromotionCameraPrioritization || !hasPriorityCamera || priorityCamera == null)
+            return score;
+
+        bool isInsideFrustum = GeometryUtility.TestPlanesAABB(meshApplyPriorityFrustumPlanes, chunkBounds);
+        Transform cameraTransform = priorityCamera.transform;
+        Vector3 toChunk = chunkBounds.center - cameraTransform.position;
+        float distanceSq = toChunk.sqrMagnitude;
+        float forwardDot = 1f;
+        if (distanceSq > 0.001f)
+            forwardDot = Vector3.Dot(cameraTransform.forward, toChunk / Mathf.Sqrt(distanceSq));
+
+        preferredView = isInsideFrustum || forwardDot >= 0.2f;
+        score += isInsideFrustum ? 55000f : -45000f;
+        score -= distanceSq * 0.018f;
+        score += forwardDot >= 0f ? forwardDot * 18000f : forwardDot * 32000f;
+
+        float cameraY = cameraTransform.position.y;
+        if (cameraY >= chunkBounds.min.y - Chunk.SubchunkHeight &&
+            cameraY <= chunkBounds.max.y + Chunk.SubchunkHeight)
+        {
+            score += 6000f;
+        }
+
+        return score;
+    }
+
+    private Bounds GetChunkDetailPromotionBounds(Vector2Int coord, Chunk chunk)
+    {
+        if (chunk != null)
+        {
+            Bounds bounds = chunk.worldBounds;
+            bounds.Expand(new Vector3(2f, 2f, 2f));
+            return bounds;
+        }
+
+        return new Bounds(
+            new Vector3(coord.x * Chunk.SizeX + Chunk.SizeX * 0.5f, Chunk.SizeY * 0.5f, coord.y * Chunk.SizeZ + Chunk.SizeZ * 0.5f),
+            new Vector3(Chunk.SizeX + 2f, Chunk.SizeY + 2f, Chunk.SizeZ + 2f));
+    }
+
+    private bool ChunkHasAnyVisibleRenderer(Chunk chunk)
+    {
+        if (chunk == null || chunk.subRenderers == null)
+            return false;
+
+        for (int i = 0; i < chunk.subRenderers.Length; i++)
+        {
+            MeshRenderer renderer = chunk.subRenderers[i];
+            if (renderer != null && renderer.enabled && renderer.isVisible)
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool TryDequeueBestChunkDetailPromotion(
+        Vector2Int center,
+        Camera priorityCamera,
+        bool hasPriorityCamera,
+        out Vector2Int coord,
+        out Chunk chunk)
+    {
+        coord = InvalidChunkCoord;
+        chunk = null;
+        int queuedCount = queuedChunkDetailPromotions.Count;
+        if (queuedCount == 0)
+            return false;
+
+        int scanLimit = Mathf.Max(0, chunkDetailPromotionPriorityScanLimit);
+        int scanCount = scanLimit > 0 ? Mathf.Min(queuedCount, scanLimit) : queuedCount;
+        if (scanCount <= 0)
+            scanCount = queuedCount;
+
+        chunkDetailPromotionCandidateBuffer.Clear();
+        for (int i = 0; i < scanCount && queuedChunkDetailPromotions.Count > 0; i++)
+        {
+            Vector2Int candidateCoord = queuedChunkDetailPromotions.Dequeue();
+            queuedChunkDetailPromotionsSet.Remove(candidateCoord);
+            chunkDetailPromotionCandidateBuffer.Add(EvaluateChunkDetailPromotionCandidate(candidateCoord, center, priorityCamera, hasPriorityCamera));
+        }
+
+        bool preferVisibleCandidates =
+            enableChunkDetailPromotionCameraPrioritization &&
+            deferOutOfViewChunkDetailPromotions &&
+            chunkDetailPromotionOutOfViewBacklogThreshold > 0 &&
+            queuedCount >= chunkDetailPromotionOutOfViewBacklogThreshold;
+
+        int bestOverallIndex = -1;
+        int bestPreferredIndex = -1;
+        float bestOverallScore = float.NegativeInfinity;
+        float bestPreferredScore = float.NegativeInfinity;
+        for (int i = 0; i < chunkDetailPromotionCandidateBuffer.Count; i++)
+        {
+            ChunkDetailPromotionCandidate candidate = chunkDetailPromotionCandidateBuffer[i];
+            if (candidate.state != ChunkDetailPromotionCandidateState.Ready)
+                continue;
+
+            if (candidate.score > bestOverallScore)
+            {
+                bestOverallScore = candidate.score;
+                bestOverallIndex = i;
+            }
+
+            if (candidate.preferredView && candidate.score > bestPreferredScore)
+            {
+                bestPreferredScore = candidate.score;
+                bestPreferredIndex = i;
+            }
+        }
+
+        int selectedIndex = preferVisibleCandidates && bestPreferredIndex >= 0
+            ? bestPreferredIndex
+            : bestOverallIndex;
+
+        for (int i = 0; i < chunkDetailPromotionCandidateBuffer.Count; i++)
+        {
+            ChunkDetailPromotionCandidate candidate = chunkDetailPromotionCandidateBuffer[i];
+            if (i == selectedIndex)
+            {
+                coord = candidate.coord;
+                chunk = candidate.chunk;
+                continue;
+            }
+
+            if (candidate.state != ChunkDetailPromotionCandidateState.Drop)
+                EnqueueChunkDetailPromotion(candidate.coord);
+        }
+
+        chunkDetailPromotionCandidateBuffer.Clear();
+        return selectedIndex >= 0;
     }
 
     private int GetEffectiveSimulationDistance()
@@ -1306,12 +1759,14 @@ public partial class World : MonoBehaviour
     {
         Vector2Int colliderCenter = GetCurrentPlayerChunkCoord();
         int effectiveDistance = GetEffectiveColliderDistance();
+        Vector2Int previousColliderCenter = _lastColliderCenter;
+        int previousColliderDistance = _lastColliderDistance;
         if (colliderCenter == _lastColliderCenter && effectiveDistance == _lastColliderDistance)
             return;
 
         _lastColliderCenter = colliderCenter;
         _lastColliderDistance = effectiveDistance;
-        RefreshColliderDistanceState(colliderCenter);
+        RefreshColliderDistanceState(previousColliderCenter, previousColliderDistance, colliderCenter, effectiveDistance);
     }
 
     private bool IsChunkInsideSimulationDistance(Vector2Int coord)
@@ -2600,7 +3055,8 @@ public partial class World : MonoBehaviour
 
         // Pre-instantiate pool
         colliderPrewarmedChunkCount = 0;
-        for (int i = 0; i < poolSize; i++)
+        int initialChunkPoolTarget = GetResolvedChunkPoolTargetSize();
+        for (int i = 0; i < initialChunkPoolTarget; i++)
         {
             Chunk chunk = CreateChunkPoolEntry();
             chunkPool.Enqueue(chunk);
@@ -2618,6 +3074,8 @@ public partial class World : MonoBehaviour
         lastTreeLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
         lastHorizontalSkylightStepLoss = horizontalSkylightStepLoss;
         lastSunlightSmoothingPadding = sunlightSmoothingPadding;
+        lastChunkDetailPromotionQueueCenter = InvalidChunkCoord;
+        lastPlayerChunkDetailMovementTime = Time.time;
     }
 
     [ContextMenu("Rebuild Block Atlas Compatibility")]
@@ -2844,10 +3302,15 @@ public partial class World : MonoBehaviour
 
     private void Update()
     {
-        ProcessRetiredChunksAwaitingRecycle();
+        ProcessRetiredChunksAwaitingRecycle(Mathf.Max(1, maxRetiredChunkRecyclesPerFrame));
 
         float updateFrameStartTime = Time.realtimeSinceStartup;
         float updateBudgetSeconds = updateWorkBudgetMS > 0f ? updateWorkBudgetMS / 1000f : 0f;
+        chunkPoolCreatesThisFrame = 0;
+        UpdateChunkDetailPromotionMovementState();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            MaintainChunkPool();
 
         HandleBlockColliderToggle();
         HandleWorldMaterialProfileToggle();
@@ -2889,7 +3352,7 @@ public partial class World : MonoBehaviour
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessChunkQueue(GetRemainingUpdateBudgetSeconds(updateFrameStartTime, updateBudgetSeconds));
 
-        ProcessQueuedChunkDetailPromotions();
+        ProcessQueuedChunkDetailPromotions(updateFrameStartTime, updateBudgetSeconds);
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedChunkJobTrackingRefreshes();
@@ -3104,18 +3567,32 @@ public partial class World : MonoBehaviour
             ProcessCompletedMeshApplyStage(pipelineStartTime, pipelineBudgetSeconds);
     }
 
-    private void ProcessQueuedChunkDetailPromotions()
+    private void ProcessQueuedChunkDetailPromotions(float updateFrameStartTime, float updateBudgetSeconds)
     {
         if (!enableChunkDetailLod)
             return;
 
         Vector2Int center = GetCurrentPlayerChunkCoord();
-        RefreshChunkDetailPromotionCandidates(center);
+        SyncChunkDetailPromotionSettings(center);
         if (queuedChunkDetailPromotions.Count == 0)
+            return;
+
+        if (!HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             return;
 
         if (ShouldPauseDetailedChunkPromotions(center))
             return;
+
+        Camera priorityCamera = enableChunkDetailPromotionCameraPrioritization ? ResolveMeshApplyPriorityCamera() : null;
+        bool hasPriorityCamera = priorityCamera != null;
+        if (hasPriorityCamera)
+            GeometryUtility.CalculateFrustumPlanes(priorityCamera, meshApplyPriorityFrustumPlanes);
+
+        if (chunkDetailPromotionIntervalSeconds > 0f &&
+            Time.time - lastChunkDetailPromotionRequestTime < chunkDetailPromotionIntervalSeconds)
+        {
+            return;
+        }
 
         int processed = 0;
         int perFrameLimit = Mathf.Max(1, maxChunkDetailPromotionsPerFrame);
@@ -3123,25 +3600,30 @@ public partial class World : MonoBehaviour
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedChunkDetailPromotions.Count > 0)
         {
-            Vector2Int coord = queuedChunkDetailPromotions.Dequeue();
-            queuedChunkDetailPromotionsSet.Remove(coord);
+            if (!HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+                break;
 
-            if (!activeChunks.TryGetValue(coord, out Chunk chunk) || chunk == null)
-                continue;
+            if (!TryDequeueBestChunkDetailPromotion(center, priorityCamera, hasPriorityCamera, out Vector2Int coord, out Chunk chunk))
+                break;
 
-            if (!ShouldChunkUseDetailedGeneration(coord, center))
-                continue;
-
-            if (chunk.requestedDetailedGeneration)
-                continue;
-
-            if (HasQueuedChunkRebuild(coord) || IsChunkJobPending(coord))
+            if (TryGetVisualOnlyChunkDetailPromotionMask(coord, chunk, out int dirtySubchunkMask))
             {
-                EnqueueChunkDetailPromotion(coord);
+                if (dirtySubchunkMask == 0)
+                {
+                    CommitChunkDetailGenerationTargetWithoutRebuild(chunk, true);
+                    processed++;
+                    continue;
+                }
+
+                RequestChunkRebuildImmediate(coord, dirtySubchunkMask, false);
+                lastChunkDetailPromotionRequestTime = Time.time;
+                processed++;
                 continue;
             }
 
-            RequestChunkRebuildImmediate(coord, GetFullSubchunkMask(), true);
+            bool rebuildColliders = enableBlockColliders && IsChunkInsideColliderDistance(coord);
+            RequestChunkRebuildImmediate(coord, GetFullSubchunkMask(), rebuildColliders);
+            lastChunkDetailPromotionRequestTime = Time.time;
             processed++;
         }
     }
@@ -3206,7 +3688,12 @@ public partial class World : MonoBehaviour
             if (activeChunks.ContainsKey(coord) || HasScheduledChunkPipelineWork(coord))
                 continue;
 
-            RequestChunk(coord);
+            if (!RequestChunk(coord))
+            {
+                EnqueuePendingChunk(coord);
+                break;
+            }
+
             pendingDataInRange++;
             processed++;
         }
@@ -3326,7 +3813,7 @@ public partial class World : MonoBehaviour
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
                     activeChunk.hasVoxelData = true;
-                    activeChunk.hasDetailedGenerationData = ShouldGenerateSpaghettiCavesForChunk(activeChunk.requestedDetailedGeneration);
+                    activeChunk.hasDetailedGenerationData = ShouldGenerateSpaghettiCavesForChunk(pd.targetDetailedGeneration);
                     activeChunk.state = Chunk.ChunkState.MeshReady;
                     if (completedPostOverrideRefresh)
                         SyncCurrentBlockOverridesToVoxelSnapshot(pd.coord, pd.borderSize, activeChunk.voxelData);
@@ -3544,6 +4031,86 @@ public partial class World : MonoBehaviour
 
         int diameter = GetEffectiveColliderDistance() * 2 + 1;
         return Mathf.Max(1, diameter * diameter);
+    }
+
+    private static int CountCoordsInsideCircularDistance(int radius)
+    {
+        int clampedRadius = Mathf.Max(0, radius);
+        int count = 0;
+        int radiusSq = clampedRadius * clampedRadius;
+
+        for (int z = -clampedRadius; z <= clampedRadius; z++)
+        {
+            for (int x = -clampedRadius; x <= clampedRadius; x++)
+            {
+                if (x * x + z * z <= radiusSq)
+                    count++;
+            }
+        }
+
+        return count;
+    }
+
+    private int GetRecommendedChunkPoolSize()
+    {
+        int baseRadius = Mathf.Max(0, renderDistance);
+        int expandedRadius = baseRadius + Mathf.Max(0, chunkPoolExtraRadius);
+        int activeCoverage = CountCoordsInsideCircularDistance(expandedRadius);
+        int retireCoverage = Mathf.Max(8,
+            CountCoordsInsideCircularDistance(baseRadius + 1) - CountCoordsInsideCircularDistance(baseRadius));
+        int pipelineBuffer = Mathf.Max(
+            Mathf.Max(8, maxChunksPerFrame * 4),
+            Mathf.Max(maxPendingDataJobs * 4, maxMeshBuildRequestBacklog + maxPendingMeshJobBacklog));
+
+        return activeCoverage + retireCoverage + pipelineBuffer + Mathf.Max(0, chunkPoolSafetyBuffer);
+    }
+
+    private int GetResolvedChunkPoolTargetSize()
+    {
+        int manualSize = Mathf.Max(1, poolSize);
+        if (!autoSizeChunkPool)
+            return manualSize;
+
+        return Mathf.Max(manualSize, GetRecommendedChunkPoolSize());
+    }
+
+    private int GetLiveChunkEntryCount()
+    {
+        return activeChunks.Count + chunkPool.Count + retiredChunksAwaitingRecycle.Count;
+    }
+
+    private bool TryCreateChunkPoolEntryForRuntime()
+    {
+        Chunk chunk = CreateChunkPoolEntry();
+        if (chunk == null)
+            return false;
+
+        chunkPool.Enqueue(chunk);
+        chunkPoolCreatesThisFrame++;
+        return true;
+    }
+
+    private void MaintainChunkPool()
+    {
+        int targetSize = GetResolvedChunkPoolTargetSize();
+        if (GetLiveChunkEntryCount() >= targetSize)
+            return;
+
+        float startTime = Time.realtimeSinceStartup;
+        float budgetSeconds = GetBudgetSeconds(chunkPoolWarmupBudgetMS);
+        int created = 0;
+        int perFrameLimit = Mathf.Max(1, maxChunkPoolEntriesCreatedPerFrame);
+
+        while (created < perFrameLimit && GetLiveChunkEntryCount() < targetSize)
+        {
+            if (budgetSeconds > 0f && Time.realtimeSinceStartup - startTime >= budgetSeconds)
+                break;
+
+            if (!TryCreateChunkPoolEntryForRuntime())
+                break;
+
+            created++;
+        }
     }
 
     private bool ShouldPrewarmCollidersForNextChunkPoolEntry()
@@ -3883,7 +4450,7 @@ public partial class World : MonoBehaviour
         bool hasScheduledMeshJobs = false;
         if (affectedVisualSliceMask != 0)
         {
-            bool useDetailedGeneration = activeChunk.requestedDetailedGeneration;
+            bool useDetailedGeneration = pd.targetDetailedGeneration;
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
             float leafFoliageSpawnChance = Mathf.Clamp01(treeLeafFoliageSpawnChance);
             float leafFoliageHeightMin = Mathf.Clamp(treeLeafFoliageHeightMin, 0.2f, 2f);
@@ -4114,10 +4681,14 @@ public partial class World : MonoBehaviour
 
     #region Requesting Chunks & Rebuilds
 
-    private void ProcessRetiredChunksAwaitingRecycle()
+    private void ProcessRetiredChunksAwaitingRecycle(int maxToProcess = int.MaxValue)
     {
+        int processed = 0;
         for (int i = retiredChunksAwaitingRecycle.Count - 1; i >= 0; i--)
         {
+            if (processed >= maxToProcess)
+                break;
+
             Chunk chunk = retiredChunksAwaitingRecycle[i];
             if (chunk == null)
             {
@@ -4129,6 +4700,7 @@ public partial class World : MonoBehaviour
                 continue;
 
             retiredChunksAwaitingRecycle.RemoveAt(i);
+            processed++;
         }
     }
 
@@ -4254,26 +4826,16 @@ public partial class World : MonoBehaviour
                 AppendPendingChunkFrontier(previousChunkCoord, currentChunkCoord);
 
             // D. Reordenar fila por distÃ¢ncia
-            foreach (var kv in activeChunks)
-            {
-                Chunk activeChunk = kv.Value;
-                if (activeChunk == null)
-                    continue;
-
-                if (!ShouldChunkUseDetailedGeneration(kv.Key, currentChunkCoord))
-                    continue;
-
-                if (activeChunk.requestedDetailedGeneration)
-                    continue;
-
-                EnqueueChunkDetailPromotion(kv.Key);
-            }
+            if (!hadPreviousChunkCoord)
+                RebuildChunkDetailPromotionQueue(currentChunkCoord);
+            else
+                AppendChunkDetailPromotionFrontier(previousChunkCoord, currentChunkCoord);
         }
 
         // O scheduler central consome pendingChunks com orcamento proprio em ProcessChunkQueue.
     }
 
-    private void RequestChunk(Vector2Int coord)
+    private bool RequestChunk(Vector2Int coord)
     {
         if (chunkPool.Count == 0)
             ProcessRetiredChunksAwaitingRecycle();
@@ -4292,7 +4854,14 @@ public partial class World : MonoBehaviour
         }
         else
         {
+            if (chunkPoolCreatesThisFrame >= Mathf.Max(0, maxEmergencyChunkPoolCreatesPerFrame))
+                return false;
+
             chunk = CreateChunkPoolEntry();
+            if (chunk == null)
+                return false;
+
+            chunkPoolCreatesThisFrame++;
         }
 
         Vector3 pos = new Vector3(coord.x * Chunk.SizeX, 0, coord.y * Chunk.SizeZ);
@@ -4303,8 +4872,11 @@ public partial class World : MonoBehaviour
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
         Vector2Int currentChunkCoord = GetCurrentPlayerChunkCoord();
-        bool useDetailedGeneration = ShouldChunkUseDetailedGeneration(coord, currentChunkCoord);
-        chunk.requestedDetailedGeneration = useDetailedGeneration;
+        bool useDetailedGeneration = ShouldChunkStartDetailedGeneration(coord, currentChunkCoord);
+        bool shouldQueueDetailPromotion = enableChunkDetailLod &&
+                                         !useDetailedGeneration &&
+                                         ShouldChunkUseDetailedGeneration(coord, currentChunkCoord);
+        PrepareChunkDetailGenerationTarget(chunk, useDetailedGeneration, expectedGen);
 
         if (!chunk.voxelData.IsCreated)
         {
@@ -4313,6 +4885,8 @@ public partial class World : MonoBehaviour
         }
 
         activeChunks.Add(coord, chunk);
+        if (shouldQueueDetailPromotion)
+            EnqueueChunkDetailPromotion(coord);
         RequestHighBuildMeshRebuild(coord);
 
         // Coleta overrides do jogador antes da geracao para que o chunk ja nasca consistente.
@@ -4425,6 +4999,7 @@ public partial class World : MonoBehaviour
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
+            targetDetailedGeneration = useDetailedGeneration,
             chunkLightData = chunkLightData,
             blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,
@@ -4445,9 +5020,10 @@ public partial class World : MonoBehaviour
         chunk.currentJob = dataHandle;
         chunk.jobScheduled = true;
         chunk.gameObject.SetActive(true);
+        return true;
     }
 
-    private bool TryScheduleFastChunkRebuild(Vector2Int coord, Chunk chunk, int expectedGen, int dirtySubchunkMask, bool rebuildColliders)
+    private bool TryScheduleFastChunkRebuild(Vector2Int coord, Chunk chunk, int expectedGen, int dirtySubchunkMask, bool rebuildColliders, bool targetDetailedGeneration)
     {
         if (blockData == null || blockData.mappings == null || blockData.mappings.Length == 0)
             return false;
@@ -4677,6 +5253,7 @@ public partial class World : MonoBehaviour
             chunk = chunk,
             coord = coord,
             expectedGen = expectedGen,
+            targetDetailedGeneration = targetDetailedGeneration,
             chunkLightData = blockLightData,
             blockEmissionData = blockEmissionData,
             lightOpacityData = lightOpacityData,

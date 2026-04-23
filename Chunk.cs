@@ -36,6 +36,9 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public bool pendingRecycle = false;
     [NonSerialized] public bool hasDetailedGenerationData = true;
     [NonSerialized] public bool requestedDetailedGeneration = true;
+    [NonSerialized] public bool pendingDetailedGenerationSwap = false;
+    [NonSerialized] public bool pendingDetailedGenerationTarget = true;
+    [NonSerialized] public int pendingDetailedGenerationExpectedGen = -1;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
@@ -70,6 +73,12 @@ public class Chunk : MonoBehaviour
     }
 
     public ChunkState state;
+
+    public bool HasPendingDetailedGenerationSwap =>
+        pendingDetailedGenerationSwap && pendingDetailedGenerationExpectedGen >= 0;
+
+    public bool IsTargetingDetailedGeneration =>
+        HasPendingDetailedGenerationSwap ? pendingDetailedGenerationTarget : requestedDetailedGeneration;
 
 
     private void Awake()
@@ -411,6 +420,9 @@ public class Chunk : MonoBehaviour
         hasLightSnapshot = false;
         hasDetailedGenerationData = true;
         requestedDetailedGeneration = true;
+        pendingDetailedGenerationSwap = false;
+        pendingDetailedGenerationTarget = true;
+        pendingDetailedGenerationExpectedGen = -1;
         ClearAllSubchunkVisibilityData();
         lightingContextHashValid = false;
         lastLightingContextHash = 0;
@@ -434,6 +446,31 @@ public class Chunk : MonoBehaviour
         }
 
         gameObject.SetActive(false);
+    }
+
+    public void SetPendingDetailedGenerationSwap(bool targetDetailedGeneration, int expectedGen)
+    {
+        pendingDetailedGenerationSwap = true;
+        pendingDetailedGenerationTarget = targetDetailedGeneration;
+        pendingDetailedGenerationExpectedGen = expectedGen;
+    }
+
+    public void ClearPendingDetailedGenerationSwap()
+    {
+        pendingDetailedGenerationSwap = false;
+        pendingDetailedGenerationTarget = requestedDetailedGeneration;
+        pendingDetailedGenerationExpectedGen = -1;
+    }
+
+    public bool TryCommitPendingDetailedGenerationSwap(int expectedGen)
+    {
+        if (!HasPendingDetailedGenerationSwap || pendingDetailedGenerationExpectedGen != expectedGen)
+            return false;
+
+        requestedDetailedGeneration = pendingDetailedGenerationTarget;
+        pendingDetailedGenerationSwap = false;
+        pendingDetailedGenerationExpectedGen = -1;
+        return true;
     }
     public int generation;
 

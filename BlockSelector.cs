@@ -74,7 +74,7 @@ public class BlockSelector : MonoBehaviour
             CurrentBlock = hitType;
             IsBillboardHit = isBillboard;
             BillboardGroundBlockPos = billboardGroundPos;
-           // DrawSelection(blockPos, hitType, isBillboard);
+            DrawSelection(blockPos, hitType, isBillboard);
             hasBlock = true;
         }
         else
