@@ -185,15 +185,14 @@ public static partial class MeshGenerator
             while (stack.Count > 0)
             {
                 NativeArray<T> candidate = stack.Pop();
-                if (candidate.IsCreated && candidate.Length == length)
+                if (TryGetNativeArrayLength(candidate, out int candidateLength) && candidateLength == length)
                 {
                     if (clearMemory)
                         ClearNativeArray(candidate);
                     return candidate;
                 }
 
-                if (candidate.IsCreated)
-                    candidate.Dispose();
+                SafeDisposeNativeArrayCopy(ref candidate);
             }
         }
 
@@ -207,17 +206,15 @@ public static partial class MeshGenerator
         Dictionary<int, Stack<NativeArray<T>>> pool,
         ref NativeArray<T> array) where T : struct
     {
-        if (!array.IsCreated)
+        if (!TryGetNativeArrayLength(array, out int length))
         {
             array = default;
             return;
         }
 
-        int length = array.Length;
         if (length <= 0)
         {
-            array.Dispose();
-            array = default;
+            SafeDisposeNativeArrayCopy(ref array);
             return;
         }
 
@@ -228,7 +225,7 @@ public static partial class MeshGenerator
         }
 
         if (stack.Count >= TempGenerationPoolMaxArraysPerSize)
-            array.Dispose();
+            SafeDisposeNativeArrayCopy(ref array);
         else
             stack.Push(array);
 
@@ -255,14 +252,25 @@ public static partial class MeshGenerator
             while (stack.Count > 0)
             {
                 NativeList<T> candidate = stack.Pop();
-                if (candidate.IsCreated && candidate.Capacity >= minCapacity)
+                if (TryGetNativeListCapacity(candidate, out int candidateCapacity) && candidateCapacity >= minCapacity)
                 {
-                    candidate.Clear();
+                    try
+                    {
+                        candidate.Clear();
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        continue;
+                    }
+                    catch (InvalidOperationException)
+                    {
+                        continue;
+                    }
+
                     return candidate;
                 }
 
-                if (candidate.IsCreated)
-                    candidate.Dispose();
+                SafeDisposeNativeListCopy(ref candidate);
             }
         }
 
@@ -273,14 +281,28 @@ public static partial class MeshGenerator
         Dictionary<int, Stack<NativeList<T>>> pool,
         ref NativeList<T> list) where T : unmanaged
     {
-        if (!list.IsCreated)
+        if (!TryGetNativeListCapacity(list, out int capacity))
         {
             list = default;
             return;
         }
 
-        list.Clear();
-        int capacity = math.max(1, list.Capacity);
+        try
+        {
+            list.Clear();
+        }
+        catch (ObjectDisposedException)
+        {
+            list = default;
+            return;
+        }
+        catch (InvalidOperationException)
+        {
+            list = default;
+            return;
+        }
+
+        capacity = math.max(1, capacity);
         if (!pool.TryGetValue(capacity, out Stack<NativeList<T>> stack))
         {
             stack = new Stack<NativeList<T>>(TempGenerationPoolMaxArraysPerSize);
@@ -288,9 +310,95 @@ public static partial class MeshGenerator
         }
 
         if (stack.Count >= TempGenerationPoolMaxArraysPerSize)
-            list.Dispose();
+            SafeDisposeNativeListCopy(ref list);
         else
             stack.Push(list);
+
+        list = default;
+    }
+
+    private static bool TryGetNativeArrayLength<T>(NativeArray<T> array, out int length) where T : struct
+    {
+        length = 0;
+        if (!array.IsCreated)
+            return false;
+
+        try
+        {
+            length = array.Length;
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void SafeDisposeNativeArrayCopy<T>(ref NativeArray<T> array) where T : struct
+    {
+        if (!array.IsCreated)
+        {
+            array = default;
+            return;
+        }
+
+        try
+        {
+            array.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
+
+        array = default;
+    }
+
+    private static bool TryGetNativeListCapacity<T>(NativeList<T> list, out int capacity) where T : unmanaged
+    {
+        capacity = 0;
+        if (!list.IsCreated)
+            return false;
+
+        try
+        {
+            capacity = list.Capacity;
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void SafeDisposeNativeListCopy<T>(ref NativeList<T> list) where T : unmanaged
+    {
+        if (!list.IsCreated)
+        {
+            list = default;
+            return;
+        }
+
+        try
+        {
+            list.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (InvalidOperationException)
+        {
+        }
 
         list = default;
     }
@@ -309,8 +417,7 @@ public static partial class MeshGenerator
             while (stack.Count > 0)
             {
                 NativeArray<T> array = stack.Pop();
-                if (array.IsCreated)
-                    array.Dispose();
+                SafeDisposeNativeArrayCopy(ref array);
             }
         }
 
@@ -325,8 +432,7 @@ public static partial class MeshGenerator
             while (stack.Count > 0)
             {
                 NativeList<T> list = stack.Pop();
-                if (list.IsCreated)
-                    list.Dispose();
+                SafeDisposeNativeListCopy(ref list);
             }
         }
 
@@ -335,10 +441,10 @@ public static partial class MeshGenerator
 
     private static void DisposeSpaghettiCarveMaskCacheEntry(ref SpaghettiCarveMaskCacheEntry entry)
     {
-        if (entry.mask.IsCreated)
+        if (TryGetNativeArrayLength(entry.mask, out _))
         {
             entry.readyHandle.Complete();
-            entry.mask.Dispose();
+            SafeDisposeNativeArrayCopy(ref entry.mask);
         }
 
         entry = default;

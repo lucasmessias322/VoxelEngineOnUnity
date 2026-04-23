@@ -421,7 +421,11 @@ public partial class World
 
         int expectedGen = nextChunkGeneration++;
         chunk.generation = expectedGen;
-        bool useDetailedGeneration = ShouldChunkUseDetailedGeneration(coord);
+        Vector2Int currentChunkCoord = GetCurrentPlayerChunkCoord();
+        bool useDetailedGeneration = ResolveRequestedDetailedGeneration(coord, currentChunkCoord, chunk);
+        rebuildColliders = rebuildColliders &&
+                           enableBlockColliders &&
+                           IsCoordInsideSimulationDistance(coord, currentChunkCoord);
         chunk.requestedDetailedGeneration = useDetailedGeneration;
 
         if (chunk.hasDetailedGenerationData == useDetailedGeneration &&

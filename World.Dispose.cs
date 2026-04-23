@@ -71,7 +71,7 @@ public partial class World
         MeshGenerator.ReturnMeshIndexList(ref pm.transparentTriangles);
         MeshGenerator.ReturnMeshIndexList(ref pm.billboardTriangles);
         MeshGenerator.ReturnMeshIndexList(ref pm.waterTriangles);
-        if (pm.suppressedBillboards.IsCreated) pm.suppressedBillboards.Dispose();
+        SafeDisposeNativeArray(ref pm.suppressedBillboards);
         MeshGenerator.ReturnSubchunkRangeBuffer(ref pm.subchunkRanges);
         MeshGenerator.ReturnUlongBuffer(ref pm.subchunkVisibilityMasks);
     }

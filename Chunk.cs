@@ -36,6 +36,7 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public bool pendingRecycle = false;
     [NonSerialized] public bool hasDetailedGenerationData = true;
     [NonSerialized] public bool requestedDetailedGeneration = true;
+    [NonSerialized] public float lastDetailGenerationStateChangeTime = float.NegativeInfinity;
 
     [HideInInspector] public MeshRenderer[] subRenderers;
     [NonSerialized] private SubchunkColliderBuilder[] subchunkColliderBuilders;
@@ -395,6 +396,7 @@ public class Chunk : MonoBehaviour
         hasLightSnapshot = false;
         hasDetailedGenerationData = true;
         requestedDetailedGeneration = true;
+        lastDetailGenerationStateChangeTime = float.NegativeInfinity;
         ClearAllSubchunkVisibilityData();
         lightingContextHashValid = false;
         lastLightingContextHash = 0;
@@ -544,35 +546,72 @@ public class Chunk : MonoBehaviour
     {
         EnsureSubchunkStorage();
 
-        if (!occupancyBits.IsCreated || occupancyBits.Length < SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk)
+        int requiredLength = SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk;
+        if (!TryGetNativeArrayLengthSafe(occupancyBits, out int occupancyLength) || occupancyLength < requiredLength)
+        {
+            ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+            return;
+        }
+
+        try
         {
             for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
             {
                 if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
                     continue;
 
-                ClearSubchunkColliderOccupancy(subchunkIndex);
+                int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
+                bool hasSolids = false;
+                for (int wordIndex = 0; wordIndex < ColliderOccupancyWordsPerSubchunk; wordIndex++)
+                {
+                    ulong word = occupancyBits[wordOffset + wordIndex];
+                    subchunkColliderOccupancyBits[wordOffset + wordIndex] = word;
+                    hasSolids |= word != 0UL;
+                }
+
+                subchunkColliderOccupancyValid[subchunkIndex] = true;
+                subchunkColliderOccupancyHasSolids[subchunkIndex] = hasSolids;
             }
-
-            return;
         }
+        catch (ObjectDisposedException)
+        {
+            ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+        }
+        catch (InvalidOperationException)
+        {
+            ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+        }
+    }
 
+    private void ClearDirtySubchunkColliderOccupancy(int dirtySubchunkMask)
+    {
         for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
         {
             if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
                 continue;
 
-            int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
-            bool hasSolids = false;
-            for (int wordIndex = 0; wordIndex < ColliderOccupancyWordsPerSubchunk; wordIndex++)
-            {
-                ulong word = occupancyBits[wordOffset + wordIndex];
-                subchunkColliderOccupancyBits[wordOffset + wordIndex] = word;
-                hasSolids |= word != 0UL;
-            }
+            ClearSubchunkColliderOccupancy(subchunkIndex);
+        }
+    }
 
-            subchunkColliderOccupancyValid[subchunkIndex] = true;
-            subchunkColliderOccupancyHasSolids[subchunkIndex] = hasSolids;
+    private static bool TryGetNativeArrayLengthSafe<T>(NativeArray<T> array, out int length) where T : struct
+    {
+        length = 0;
+        if (!array.IsCreated)
+            return false;
+
+        try
+        {
+            length = array.Length;
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
         }
     }
 
