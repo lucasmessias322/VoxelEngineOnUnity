@@ -424,7 +424,7 @@ public partial class World
         bool useDetailedGeneration = ShouldChunkUseDetailedGeneration(coord);
         chunk.requestedDetailedGeneration = useDetailedGeneration;
 
-        if (chunk.hasDetailedGenerationData == useDetailedGeneration &&
+        if (HasCompatibleGenerationDataForRequestedDetail(chunk, useDetailedGeneration) &&
             TryScheduleFastChunkRebuild(coord, chunk, expectedGen, dirtySubchunkMask, rebuildColliders))
             return;
 

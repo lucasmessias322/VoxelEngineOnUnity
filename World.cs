@@ -646,11 +646,13 @@ public partial class World : MonoBehaviour
     public int detailedGenerationPadding = 1;
 
     [Header("Chunk Detail LOD")]
-    [Tooltip("Quando ativo, chunks alem deste raio sao gerados em modo simplificado: sem cavernas spaghetti e sem billboards de grama. Ao se aproximar, chunks simplificados sao reconstruidos com detalhes completos.")]
+    [Tooltip("Quando ativo, chunks alem deste raio usam visual simplificado. Billboards de grama continuam reservados para chunks detalhados; cavernas spaghetti nos voxels podem ser mantidas pela opcao abaixo para acelerar a promocao.")]
     public bool enableChunkDetailLod = true;
     [Tooltip("Raio, em chunks, onde a geracao usa todos os detalhes. Fora dele, chunks novos usam geracao simplificada.")]
     [Min(0)]
     public int chunkDetailLodDistance = 10;
+    [Tooltip("Quando ativo, chunks LOD distantes ainda geram cavernas spaghetti no voxel data. Isso reduz o custo da promocao para chunk detalhado, mas aumenta o custo inicial dos chunks distantes.")]
+    public bool generateSpaghettiCavesInLodChunks = true;
     [Tooltip("Raio mais proximo que sempre tenta nascer detalhado, mesmo durante movimento e backlog de geracao.")]
     [Min(0)]
     public int chunkImmediateDetailDistance = 4;
@@ -1079,12 +1081,28 @@ public partial class World : MonoBehaviour
 
     private SpaghettiCaveSettings GetSpaghettiCaveSettingsForChunk(bool useDetailedGeneration)
     {
-        if (useDetailedGeneration)
+        if (ShouldGenerateSpaghettiCavesForChunk(useDetailedGeneration))
             return caveSpaghettiSettings;
 
         SpaghettiCaveSettings simplifiedSettings = caveSpaghettiSettings;
         simplifiedSettings.enabled = false;
         return simplifiedSettings;
+    }
+
+    private bool ShouldGenerateSpaghettiCavesForChunk(bool useDetailedGeneration)
+    {
+        return useDetailedGeneration || generateSpaghettiCavesInLodChunks;
+    }
+
+    private bool HasCompatibleGenerationDataForRequestedDetail(Chunk chunk, bool useDetailedGeneration)
+    {
+        if (chunk == null)
+            return false;
+
+        // Detailed voxel data is a superset of the simplified visual LOD data, so it
+        // can be reused for both paths. Only the promotion to detailed visuals needs
+        // to verify that the detailed voxel variant already exists.
+        return !useDetailedGeneration || chunk.hasDetailedGenerationData;
     }
 
     private bool ShouldGenerateGrassBillboardsForChunk(bool useDetailedGeneration)
@@ -1133,7 +1151,7 @@ public partial class World : MonoBehaviour
             if (!ShouldChunkUseDetailedGeneration(kv.Key, center))
                 continue;
 
-            if (activeChunk.requestedDetailedGeneration || activeChunk.hasDetailedGenerationData)
+            if (activeChunk.requestedDetailedGeneration)
                 continue;
 
             EnqueueChunkDetailPromotion(kv.Key);
@@ -2962,7 +2980,7 @@ public partial class World : MonoBehaviour
             if (!ShouldChunkUseDetailedGeneration(coord, center))
                 continue;
 
-            if (chunk.hasDetailedGenerationData || chunk.requestedDetailedGeneration)
+            if (chunk.requestedDetailedGeneration)
                 continue;
 
             if (HasQueuedChunkRebuild(coord) || IsChunkJobPending(coord))
@@ -3150,7 +3168,7 @@ public partial class World : MonoBehaviour
                         activeChunk.UpdateWorldBounds();
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
                     activeChunk.hasVoxelData = true;
-                    activeChunk.hasDetailedGenerationData = activeChunk.requestedDetailedGeneration;
+                    activeChunk.hasDetailedGenerationData = ShouldGenerateSpaghettiCavesForChunk(activeChunk.requestedDetailedGeneration);
                     activeChunk.state = Chunk.ChunkState.MeshReady;
                     if (completedPostOverrideRefresh)
                         SyncCurrentBlockOverridesToVoxelSnapshot(pd.coord, pd.borderSize, activeChunk.voxelData);
@@ -4081,7 +4099,7 @@ public partial class World : MonoBehaviour
                 if (!ShouldChunkUseDetailedGeneration(kv.Key, currentChunkCoord))
                     continue;
 
-                if (activeChunk.requestedDetailedGeneration || activeChunk.hasDetailedGenerationData)
+                if (activeChunk.requestedDetailedGeneration)
                     continue;
 
                 EnqueueChunkDetailPromotion(kv.Key);
