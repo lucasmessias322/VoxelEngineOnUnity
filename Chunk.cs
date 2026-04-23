@@ -219,6 +219,22 @@ public class Chunk : MonoBehaviour
         UpdateWorldBounds();
     }
 
+    public void PrewarmSubchunkColliders(int collidersPerSubchunk)
+    {
+        if (collidersPerSubchunk <= 0)
+            return;
+
+        EnsureSubchunkStorage();
+        for (int i = 0; i < subchunkColliderBuilders.Length; i++)
+        {
+            SubchunkColliderBuilder colliderBuilder = subchunkColliderBuilders[i];
+            if (colliderBuilder == null)
+                continue;
+
+            colliderBuilder.PrewarmBoxColliders(gameObject, collidersPerSubchunk);
+        }
+    }
+
     private ChunkRenderSlice CreateVisualSlice(int sliceIndex, Material[] materials, int startSubchunkIndex, int sliceSubchunkCount)
     {
         GameObject sliceObj = new GameObject($"ChunkSlice_{sliceIndex}");

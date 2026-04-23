@@ -8,7 +8,7 @@ public partial class World
             return;
 
         lastEnableBlockColliders = enableBlockColliders;
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        Vector2Int colliderCenter = GetCurrentPlayerChunkCoord();
 
         foreach (var kv in activeChunks)
         {
@@ -16,12 +16,12 @@ public partial class World
             if (chunk == null || chunk.SubchunkCount == 0)
                 continue;
 
-            bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
+            bool chunkIsInsideColliderRange = enableBlockColliders && IsCoordInsideColliderDistance(kv.Key, colliderCenter);
             for (int i = 0; i < chunk.SubchunkCount; i++)
             {
-                chunk.SetSubchunkColliderSystemEnabled(i, chunkIsSimulated);
+                chunk.SetSubchunkColliderSystemEnabled(i, chunkIsInsideColliderRange);
 
-                if (chunkIsSimulated &&
+                if (chunkIsInsideColliderRange &&
                     chunk.hasVoxelData &&
                     chunk.HasSubchunkGeometry(i) &&
                     chunk.CanSubchunkHaveColliders(i) &&
@@ -134,7 +134,7 @@ public partial class World
             RequestFullChunkRebuild(kv.Key, false);
     }
 
-    private void RefreshSimulationDistanceState(Vector2Int simulationCenter)
+    private void RefreshColliderDistanceState(Vector2Int colliderCenter)
     {
         foreach (var kv in activeChunks)
         {
@@ -142,10 +142,10 @@ public partial class World
             if (chunk == null || chunk.SubchunkCount == 0)
                 continue;
 
-            bool chunkIsSimulated = enableBlockColliders && IsCoordInsideSimulationDistance(kv.Key, simulationCenter);
+            bool chunkIsInsideColliderRange = enableBlockColliders && IsCoordInsideColliderDistance(kv.Key, colliderCenter);
             for (int i = 0; i < chunk.SubchunkCount; i++)
             {
-                if (!chunkIsSimulated)
+                if (!chunkIsInsideColliderRange)
                 {
                     chunk.SetSubchunkColliderSystemEnabled(i, false);
                     continue;

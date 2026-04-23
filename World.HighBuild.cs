@@ -309,7 +309,7 @@ public partial class World
         data.root.SetActive(true);
 
         bool shouldBuildColliders = enableBlockColliders &&
-                                    IsChunkInsideSimulationDistance(coord) &&
+                                    IsChunkInsideColliderDistance(coord) &&
                                     (opaqueTris.Count > 0 || transparentTris.Count > 0);
         data.canHaveColliders = opaqueTris.Count > 0 || transparentTris.Count > 0;
 
@@ -321,7 +321,7 @@ public partial class World
 
     private void SetHighBuildCollidersEnabled(bool enabled)
     {
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        Vector2Int colliderCenter = GetCurrentPlayerChunkCoord();
 
         foreach (var kv in highBuildMeshes)
         {
@@ -329,10 +329,10 @@ public partial class World
             if (data == null) continue;
 
             Vector2Int coord = new Vector2Int(kv.Key.x, kv.Key.z);
-            bool isSimulated = IsCoordInsideSimulationDistance(coord, simulationCenter);
+            bool isInsideColliderRange = IsCoordInsideColliderDistance(coord, colliderCenter);
 
             if (enabled &&
-                isSimulated &&
+                isInsideColliderRange &&
                 data.canHaveColliders &&
                 !data.hasColliderData &&
                 data.root != null &&
@@ -343,7 +343,7 @@ public partial class World
 
             bool shouldEnable = enabled &&
                                 data.hasColliderData &&
-                                isSimulated;
+                                isInsideColliderRange;
             for (int i = 0; i < data.activeBoxColliderCount; i++)
             {
                 BoxCollider box = data.boxColliders[i];

@@ -87,6 +87,19 @@ internal sealed class SubchunkColliderBuilder
         }
     }
 
+    public void PrewarmBoxColliders(GameObject owner, int targetColliderCount)
+    {
+        if (owner == null || targetColliderCount <= 0)
+            return;
+
+        for (int i = 0; i < targetColliderCount; i++)
+        {
+            BoxCollider box = GetOrCreateBoxCollider(owner, i);
+            if (box != null)
+                box.enabled = false;
+        }
+    }
+
     public void Clear()
     {
         activeBoxColliderCount = 0;

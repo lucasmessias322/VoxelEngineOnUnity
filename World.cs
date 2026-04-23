@@ -289,7 +289,6 @@ public partial class World : MonoBehaviour
             return;
         }
         Instance = this;
-        pendingChunkDistanceComparison = ComparePendingChunkByDistance;
         pendingDataDistanceComparison = ComparePendingDataByDistance;
         pendingMeshDistanceComparison = ComparePendingMeshByDistance;
 
@@ -312,12 +311,23 @@ public partial class World : MonoBehaviour
     [Tooltip("Raio em chunks usado pelos sistemas de simulacao. Limitado automaticamente pela renderDistance.")]
     [Min(0)]
     public int simulationDistance = 4;
+    [Tooltip("Raio em chunks usado apenas para gerar e ativar colliders dos chunks. Limitado automaticamente pela renderDistance.")]
+    [Min(0)]
+    public int colliderDistance = 3;
     public int poolSize = 200;
     [Tooltip("Agrupa varias secoes 16x16x16 em um unico MeshRenderer. Valores maiores reduzem batches, mas deixam o culling vertical menos granular.")]
     [Min(1)]
     public int visualSubchunksPerRenderer = 4;
     [Tooltip("Cria subchunks logicos, render slices e meshes do pool no Start para evitar picos quando novas areas entram em cena.")]
     public bool prewarmPooledChunkVisuals = true;
+    [Tooltip("Prealoca BoxColliders nos primeiros chunks do pool para reduzir spikes quando os colliders de subchunk aparecem pela primeira vez.")]
+    public bool prewarmPooledChunkColliders = true;
+    [Tooltip("Quantidade de BoxColliders prealocados por subchunk nos chunks prewarmed do pool. Valores baixos reduzem spikes sem inflar muita memoria.")]
+    [Min(0)]
+    public int prewarmColliderBoxesPerSubchunk = 2;
+    [Tooltip("Quantidade maxima de chunks do pool que recebem prewarm de colliders. 0 usa automaticamente a cobertura do colliderDistance atual.")]
+    [Min(0)]
+    public int prewarmColliderChunkCount = 0;
 
     [Header("Atlas / Materials")]
     [Tooltip("Escolhe qual lista de materiais o World usa para chunks, high-build e renderers do terreno.")]
@@ -683,7 +693,8 @@ public partial class World : MonoBehaviour
     private Queue<Chunk> chunkPool = new Queue<Chunk>(InitialChunkPoolCapacity);
 
     // Pending work
-    private List<(Vector2Int coord, float distSq)> pendingChunks = new List<(Vector2Int, float)>(InitialQueuedChunkWorkCapacity);
+    private Queue<Vector2Int> pendingChunks = new Queue<Vector2Int>(InitialQueuedChunkWorkCapacity);
+    private HashSet<Vector2Int> pendingChunkSet = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private List<PendingMesh> pendingMeshes = new List<PendingMesh>(InitialQueuedChunkWorkCapacity);
     private List<PendingData> pendingDataJobs = new List<PendingData>(InitialChunkWorkCollectionCapacity);
     private List<PendingData> pendingMeshBuildRequests = new List<PendingData>(InitialChunkWorkCollectionCapacity);
@@ -722,6 +733,7 @@ public partial class World : MonoBehaviour
     private int nextChunkGeneration = 0;
     private int meshesAppliedThisFrame = 0;
     private float frameTimeAccumulator = 0f;
+    private int colliderPrewarmedChunkCount;
     private bool lastEnableBlockColliders = true;
     private bool lastEnableRealisticShader = true;
     private bool lastEnableVoxelLighting = true;
@@ -771,16 +783,16 @@ public partial class World : MonoBehaviour
 
 
     // Optimization temporaries
-    private Vector2Int _lastChunkCoord = new Vector2Int(-99999, -99999);
-    private Vector2Int _lastSimulationCenter = new Vector2Int(int.MinValue, int.MinValue);
-    private int _lastSimulationDistance = -1;
+    private static readonly Vector2Int InvalidChunkCoord = new Vector2Int(int.MinValue, int.MinValue);
+    private Vector2Int _lastChunkCoord = InvalidChunkCoord;
+    private Vector2Int _lastColliderCenter = new Vector2Int(int.MinValue, int.MinValue);
+    private int _lastColliderDistance = -1;
     private Vector2Int _lastPendingJobPriorityCenter = new Vector2Int(int.MinValue, int.MinValue);
     private bool pendingJobPrioritiesDirty = true;
     private Camera cachedMeshApplyPriorityCamera;
     private readonly Plane[] meshApplyPriorityFrustumPlanes = new Plane[6];
-    private readonly HashSet<Vector2Int> _tempNeededCoords = new HashSet<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private readonly List<Vector2Int> _tempToRemove = new List<Vector2Int>();
-    private Comparison<(Vector2Int coord, float distSq)> pendingChunkDistanceComparison;
+    private readonly List<Vector2Int> pendingChunkQueuePruneBuffer = new List<Vector2Int>(InitialQueuedChunkWorkCapacity);
     private Comparison<PendingData> pendingDataDistanceComparison;
     private Comparison<PendingMesh> pendingMeshDistanceComparison;
     private readonly List<Vector2Int> loadedChunkCoordsBuffer = new List<Vector2Int>(256);
@@ -1177,6 +1189,11 @@ public partial class World : MonoBehaviour
         return Mathf.Clamp(simulationDistance, 0, Mathf.Max(0, renderDistance));
     }
 
+    private int GetEffectiveColliderDistance()
+    {
+        return Mathf.Clamp(colliderDistance, 0, Mathf.Max(0, renderDistance));
+    }
+
     public void SetRenderDistance(int value)
     {
         int clampedDistance = Mathf.Clamp(value, MinRenderDistance, MaxRenderDistance);
@@ -1185,7 +1202,7 @@ public partial class World : MonoBehaviour
 
         renderDistance = clampedDistance;
         simulationDistance = Mathf.Clamp(simulationDistance, 0, renderDistance);
-        _lastChunkCoord = new Vector2Int(int.MinValue, int.MinValue);
+        _lastChunkCoord = InvalidChunkCoord;
         pendingJobPrioritiesDirty = true;
     }
 
@@ -1208,6 +1225,11 @@ public partial class World : MonoBehaviour
     private bool IsCoordInsideSimulationDistance(Vector2Int coord, Vector2Int center)
     {
         return IsCoordInsideDistance(coord, center, GetEffectiveSimulationDistance());
+    }
+
+    private bool IsCoordInsideColliderDistance(Vector2Int coord, Vector2Int center)
+    {
+        return IsCoordInsideDistance(coord, center, GetEffectiveColliderDistance());
     }
 
     private void InvalidateNativeGenerationCaches()
@@ -1280,21 +1302,26 @@ public partial class World : MonoBehaviour
         nativeGenerationConfigDirty = false;
     }
 
-    private void RefreshSimulationDistanceStateIfNeeded()
+    private void RefreshColliderDistanceStateIfNeeded()
     {
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
-        int effectiveDistance = GetEffectiveSimulationDistance();
-        if (simulationCenter == _lastSimulationCenter && effectiveDistance == _lastSimulationDistance)
+        Vector2Int colliderCenter = GetCurrentPlayerChunkCoord();
+        int effectiveDistance = GetEffectiveColliderDistance();
+        if (colliderCenter == _lastColliderCenter && effectiveDistance == _lastColliderDistance)
             return;
 
-        _lastSimulationCenter = simulationCenter;
-        _lastSimulationDistance = effectiveDistance;
-        RefreshSimulationDistanceState(simulationCenter);
+        _lastColliderCenter = colliderCenter;
+        _lastColliderDistance = effectiveDistance;
+        RefreshColliderDistanceState(colliderCenter);
     }
 
     private bool IsChunkInsideSimulationDistance(Vector2Int coord)
     {
         return IsCoordInsideSimulationDistance(coord, GetCurrentPlayerChunkCoord());
+    }
+
+    private bool IsChunkInsideColliderDistance(Vector2Int coord)
+    {
+        return IsCoordInsideColliderDistance(coord, GetCurrentPlayerChunkCoord());
     }
 
     private bool IsWorldPositionInsideSimulationDistance(Vector3Int worldPos)
@@ -1373,28 +1400,17 @@ public partial class World : MonoBehaviour
         return false;
     }
 
-    private void RefreshPendingChunkPriorities()
-    {
-        for (int i = 0; i < pendingChunks.Count; i++)
-        {
-            var item = pendingChunks[i];
-            pendingChunks[i] = (item.coord, GetChunkDistanceSqToPlayer(item.coord));
-        }
-
-        if (pendingChunkDistanceComparison == null)
-            pendingChunkDistanceComparison = ComparePendingChunkByDistance;
-
-        pendingChunks.Sort(pendingChunkDistanceComparison);
-    }
-
     private void PrioritizePendingJobsByDistance()
     {
         Vector2Int priorityCenter = GetCurrentPlayerChunkCoord();
-        if (!pendingJobPrioritiesDirty && priorityCenter == _lastPendingJobPriorityCenter)
+        if (!pendingJobPrioritiesDirty &&
+            priorityCenter == _lastPendingJobPriorityCenter &&
+            pendingChunks.Count == pendingChunkSet.Count)
             return;
 
         _lastPendingJobPriorityCenter = priorityCenter;
         pendingJobPrioritiesDirty = false;
+        ReprioritizePendingChunkQueue(priorityCenter);
 
         if (pendingDataJobs.Count > 1)
         {
@@ -1419,11 +1435,6 @@ public partial class World : MonoBehaviour
 
             pendingMeshes.Sort(pendingMeshDistanceComparison);
         }
-    }
-
-    private static int ComparePendingChunkByDistance((Vector2Int coord, float distSq) a, (Vector2Int coord, float distSq) b)
-    {
-        return a.distSq.CompareTo(b.distSq);
     }
 
     private int ComparePendingDataByDistance(PendingData a, PendingData b)
@@ -1593,6 +1604,147 @@ public partial class World : MonoBehaviour
         return 1;
     }
 
+    private void ClearPendingChunkQueue()
+    {
+        pendingChunks.Clear();
+        pendingChunkSet.Clear();
+        pendingJobPrioritiesDirty = true;
+    }
+
+    private void EnqueuePendingChunk(Vector2Int coord)
+    {
+        if (activeChunks.ContainsKey(coord) || !pendingChunkSet.Add(coord))
+            return;
+
+        pendingChunks.Enqueue(coord);
+        pendingJobPrioritiesDirty = true;
+    }
+
+    private void EnqueuePendingChunkRing(Vector2Int center, int ring)
+    {
+        if (ring <= 0)
+        {
+            if (IsCoordInsideRenderDistance(center, center))
+                EnqueuePendingChunk(center);
+            return;
+        }
+
+        int minX = center.x - ring;
+        int maxX = center.x + ring;
+        int minZ = center.y - ring;
+        int maxZ = center.y + ring;
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            Vector2Int top = new Vector2Int(x, minZ);
+            if (IsCoordInsideRenderDistance(top, center))
+                EnqueuePendingChunk(top);
+        }
+
+        for (int z = minZ + 1; z <= maxZ - 1; z++)
+        {
+            Vector2Int right = new Vector2Int(maxX, z);
+            if (IsCoordInsideRenderDistance(right, center))
+                EnqueuePendingChunk(right);
+        }
+
+        for (int x = maxX; x >= minX; x--)
+        {
+            Vector2Int bottom = new Vector2Int(x, maxZ);
+            if (IsCoordInsideRenderDistance(bottom, center))
+                EnqueuePendingChunk(bottom);
+        }
+
+        for (int z = maxZ - 1; z >= minZ + 1; z--)
+        {
+            Vector2Int left = new Vector2Int(minX, z);
+            if (IsCoordInsideRenderDistance(left, center))
+                EnqueuePendingChunk(left);
+        }
+    }
+
+    private void RebuildPendingChunkQueue(Vector2Int center)
+    {
+        ClearPendingChunkQueue();
+
+        for (int ring = 0; ring <= renderDistance; ring++)
+            EnqueuePendingChunkRing(center, ring);
+    }
+
+    private void EnsurePendingChunkCoverage(Vector2Int center)
+    {
+        for (int ring = 0; ring <= renderDistance; ring++)
+            EnqueuePendingChunkRing(center, ring);
+    }
+
+    private void AppendPendingChunkFrontier(Vector2Int previousCenter, Vector2Int currentCenter)
+    {
+        int deltaX = currentCenter.x - previousCenter.x;
+        int deltaZ = currentCenter.y - previousCenter.y;
+        if (deltaX == 0 && deltaZ == 0)
+            return;
+
+        EnsurePendingChunkCoverage(currentCenter);
+    }
+
+    private void EnqueuePendingChunkFromSet(Vector2Int coord, Vector2Int center)
+    {
+        if (!IsCoordInsideRenderDistance(coord, center) || !pendingChunkSet.Contains(coord))
+            return;
+
+        pendingChunks.Enqueue(coord);
+    }
+
+    private void EnqueuePendingChunkRingFromSet(Vector2Int center, int ring)
+    {
+        if (ring <= 0)
+        {
+            EnqueuePendingChunkFromSet(center, center);
+            return;
+        }
+
+        int minX = center.x - ring;
+        int maxX = center.x + ring;
+        int minZ = center.y - ring;
+        int maxZ = center.y + ring;
+
+        for (int x = minX; x <= maxX; x++)
+            EnqueuePendingChunkFromSet(new Vector2Int(x, minZ), center);
+
+        for (int z = minZ + 1; z <= maxZ - 1; z++)
+            EnqueuePendingChunkFromSet(new Vector2Int(maxX, z), center);
+
+        for (int x = maxX; x >= minX; x--)
+            EnqueuePendingChunkFromSet(new Vector2Int(x, maxZ), center);
+
+        for (int z = maxZ - 1; z >= minZ + 1; z--)
+            EnqueuePendingChunkFromSet(new Vector2Int(minX, z), center);
+    }
+
+    private void ReprioritizePendingChunkQueue(Vector2Int center)
+    {
+        pendingChunkQueuePruneBuffer.Clear();
+        foreach (Vector2Int coord in pendingChunkSet)
+        {
+            if (!IsCoordInsideRenderDistance(coord, center) ||
+                activeChunks.ContainsKey(coord) ||
+                HasScheduledChunkPipelineWork(coord))
+            {
+                pendingChunkQueuePruneBuffer.Add(coord);
+            }
+        }
+
+        for (int i = 0; i < pendingChunkQueuePruneBuffer.Count; i++)
+            pendingChunkSet.Remove(pendingChunkQueuePruneBuffer[i]);
+
+        pendingChunks.Clear();
+        if (pendingChunkSet.Count == 0)
+            return;
+
+        for (int ring = 0; ring <= renderDistance; ring++)
+            EnqueuePendingChunkRingFromSet(center, ring);
+    }
+
     private int GetDetailedGenerationBorderSize()
     {
         return Mathf.Max(GetMeshNeighborPadding(), detailedGenerationPadding);
@@ -1680,7 +1832,7 @@ public partial class World : MonoBehaviour
         int attempts = queuedColliderBuilds.Count;
         BlockTextureMapping[] blockMappings = blockData != null ? blockData.mappings : null;
         BlockModelCuboid[] blockModelCuboids = blockData != null ? blockData.runtimeMultiCuboidBoxes : null;
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        Vector2Int colliderCenter = GetCurrentPlayerChunkCoord();
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedColliderBuilds.Count > 0)
         {
@@ -1704,10 +1856,9 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
-            if (!IsCoordInsideSimulationDistance(request.coord, simulationCenter))
+            if (!IsCoordInsideColliderDistance(request.coord, colliderCenter))
             {
                 chunk.SetSubchunkColliderSystemEnabled(request.subchunkIndex, false);
-                EnqueueColliderBuild(request.coord, request.expectedGen, request.subchunkIndex);
                 continue;
             }
 
@@ -2448,6 +2599,7 @@ public partial class World : MonoBehaviour
         lastWorldMaterialProfileHash = ComputeWorldMaterialProfileHash();
 
         // Pre-instantiate pool
+        colliderPrewarmedChunkCount = 0;
         for (int i = 0; i < poolSize; i++)
         {
             Chunk chunk = CreateChunkPoolEntry();
@@ -2732,7 +2884,7 @@ public partial class World : MonoBehaviour
             UpdateChunks();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
-            RefreshSimulationDistanceStateIfNeeded();
+            RefreshColliderDistanceStateIfNeeded();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessChunkQueue(GetRemainingUpdateBudgetSeconds(updateFrameStartTime, updateBudgetSeconds));
@@ -3011,14 +3163,17 @@ public partial class World : MonoBehaviour
 
     private void ProcessPendingChunkRequests(float pipelineStartTime, float pipelineBudgetSeconds)
     {
-        if (pendingChunks.Count == 0)
-            return;
-
         float stageStartTime = Time.realtimeSinceStartup;
         float stageBudgetSeconds = GetBudgetSeconds(chunkDataScheduleBudgetMS);
         int processed = 0;
         int subchunksPerChunk = Mathf.Max(1, Chunk.SubchunksPerColumn);
         Vector2Int currentChunkCoord = GetCurrentPlayerChunkCoord();
+        if (pendingChunks.Count == 0)
+            EnsurePendingChunkCoverage(currentChunkCoord);
+
+        if (pendingChunks.Count == 0)
+            return;
+
         if (ShouldPauseChunkDataScheduling(currentChunkCoord))
             return;
 
@@ -3042,13 +3197,16 @@ public partial class World : MonoBehaviour
             if (pendingDataInRange >= maxPendingDataJobs || pendingDataJobs.Count >= hardPendingDataLimit)
                 break;
 
-            var item = pendingChunks[0];
-            pendingChunks.RemoveAt(0);
+            Vector2Int coord = pendingChunks.Dequeue();
+            pendingChunkSet.Remove(coord);
 
-            if (activeChunks.ContainsKey(item.coord) || IsChunkJobPending(item.coord))
+            if (!IsCoordInsideRenderDistance(coord, currentChunkCoord))
                 continue;
 
-            RequestChunk(item.coord);
+            if (activeChunks.ContainsKey(coord) || HasScheduledChunkPipelineWork(coord))
+                continue;
+
+            RequestChunk(coord);
             pendingDataInRange++;
             processed++;
         }
@@ -3308,7 +3466,7 @@ public partial class World : MonoBehaviour
 
                                 if (pm.buildColliders)
                                 {
-                                    if (hasSolidColliderGeometry && IsChunkInsideSimulationDistance(pm.coord))
+                                    if (hasSolidColliderGeometry && IsChunkInsideColliderDistance(pm.coord))
                                     {
                                         if (!activeChunk.TryActivateCachedSubchunkColliders(subchunkIndex))
                                         {
@@ -3376,6 +3534,32 @@ public partial class World : MonoBehaviour
             default);
     }
 
+    private int GetResolvedColliderPrewarmChunkCount()
+    {
+        if (!prewarmPooledChunkColliders || prewarmColliderBoxesPerSubchunk <= 0)
+            return 0;
+
+        if (prewarmColliderChunkCount > 0)
+            return prewarmColliderChunkCount;
+
+        int diameter = GetEffectiveColliderDistance() * 2 + 1;
+        return Mathf.Max(1, diameter * diameter);
+    }
+
+    private bool ShouldPrewarmCollidersForNextChunkPoolEntry()
+    {
+        return colliderPrewarmedChunkCount < GetResolvedColliderPrewarmChunkCount();
+    }
+
+    private void TryPrewarmChunkColliderPool(Chunk chunk)
+    {
+        if (chunk == null || !ShouldPrewarmCollidersForNextChunkPoolEntry())
+            return;
+
+        chunk.PrewarmSubchunkColliders(prewarmColliderBoxesPerSubchunk);
+        colliderPrewarmedChunkCount++;
+    }
+
     private Chunk CreateChunkPoolEntry()
     {
         GameObject obj = Instantiate(chunkPrefab, Vector3.zero, Quaternion.identity, transform);
@@ -3387,6 +3571,8 @@ public partial class World : MonoBehaviour
             chunk.InitializeSubchunks(ActiveWorldMaterials, GetResolvedVisualSubchunksPerRenderer());
             chunk.ResetChunk();
         }
+
+        TryPrewarmChunkColliderPool(chunk);
 
         return chunk;
     }
@@ -4030,28 +4216,17 @@ public partial class World : MonoBehaviour
 
         if (currentChunkCoord != _lastChunkCoord)
         {
+            Vector2Int previousChunkCoord = _lastChunkCoord;
+            bool hadPreviousChunkCoord = previousChunkCoord != InvalidChunkCoord;
             _lastChunkCoord = currentChunkCoord;
             lastPlayerChunkCoordChangeTime = Time.time;
-            _tempNeededCoords.Clear();
             bool activeSectionSetChanged = false;
-
-            for (int x = -renderDistance; x <= renderDistance; x++)
-            {
-                for (int z = -renderDistance; z <= renderDistance; z++)
-                {
-                    Vector2Int coord = new Vector2Int(currentChunkCoord.x + x, currentChunkCoord.y + z);
-                    if (!IsCoordInsideRenderDistance(coord, currentChunkCoord))
-                        continue;
-
-                    _tempNeededCoords.Add(coord);
-                }
-            }
 
             // A. Remover chunks distantes
             _tempToRemove.Clear();
             foreach (var kv in activeChunks)
             {
-                if (!_tempNeededCoords.Contains(kv.Key))
+                if (!IsCoordInsideRenderDistance(kv.Key, currentChunkCoord))
                     _tempToRemove.Add(kv.Key);
             }
 
@@ -4073,21 +4248,10 @@ public partial class World : MonoBehaviour
                 InvalidateSectionOcclusionGraph();
 
             // B. Limpar pendentes desnecessÃ¡rios
-            for (int i = pendingChunks.Count - 1; i >= 0; i--)
-            {
-                if (!_tempNeededCoords.Contains(pendingChunks[i].coord))
-                    pendingChunks.RemoveAt(i);
-            }
-
-            // C. Encontrar novos chunks para gerar
-            foreach (Vector2Int coord in _tempNeededCoords)
-            {
-                if (activeChunks.ContainsKey(coord)) continue;
-                if (IsChunkJobPending(coord)) continue;
-
-                float distSq = GetChunkDistanceSqToPlayer(coord);
-                pendingChunks.Add((coord, distSq));
-            }
+            if (!hadPreviousChunkCoord)
+                RebuildPendingChunkQueue(currentChunkCoord);
+            else
+                AppendPendingChunkFrontier(previousChunkCoord, currentChunkCoord);
 
             // D. Reordenar fila por distÃ¢ncia
             foreach (var kv in activeChunks)
@@ -4104,8 +4268,6 @@ public partial class World : MonoBehaviour
 
                 EnqueueChunkDetailPromotion(kv.Key);
             }
-
-            RefreshPendingChunkPriorities();
         }
 
         // O scheduler central consome pendingChunks com orcamento proprio em ProcessChunkQueue.

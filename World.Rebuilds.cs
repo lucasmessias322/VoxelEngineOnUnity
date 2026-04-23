@@ -561,7 +561,7 @@ public partial class World
         chunk.jobScheduled = true;
     }
 
-    private bool IsChunkJobPending(Vector2Int coord)
+    private bool HasScheduledChunkPipelineWork(Vector2Int coord)
     {
         for (int i = 0; i < pendingMeshes.Count; i++)
         {
@@ -581,13 +581,15 @@ public partial class World
                 return true;
         }
 
-        for (int i = 0; i < pendingChunks.Count; i++)
-        {
-            if (pendingChunks[i].coord == coord)
-                return true;
-        }
-
         return false;
+    }
+
+    private bool IsChunkJobPending(Vector2Int coord)
+    {
+        if (HasScheduledChunkPipelineWork(coord))
+            return true;
+
+        return pendingChunkSet.Contains(coord);
     }
 
     private bool HasQueuedChunkRebuild(Vector2Int coord)

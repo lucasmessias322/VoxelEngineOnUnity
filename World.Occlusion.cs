@@ -235,7 +235,7 @@ public partial class World : MonoBehaviour
         }
 
         if (cameraSection.y >= 0 && cameraSection.y < Chunk.SubchunksPerColumn)
-            return false;
+            return TryInitializeSectionOcclusionQueueFromNearbyLoadedSections(cameraPosition, cameraSection, cameraChunkCoord);
 
         bool isBelowWorld = cameraSection.y < 0;
         int seedSubchunk = isBelowWorld ? 0 : Chunk.SubchunksPerColumn - 1;
@@ -268,6 +268,138 @@ public partial class World : MonoBehaviour
                 sectionOcclusionSeedBuffer.Add(node);
             }
         }
+
+        return FlushSectionOcclusionSeedBuffer(cameraPosition);
+    }
+
+    private bool TryInitializeSectionOcclusionQueueFromNearbyLoadedSections(Vector3 cameraPosition, Vector3Int cameraSection, Vector2Int cameraChunkCoord)
+    {
+        for (int ring = 0; ring <= renderDistance; ring++)
+        {
+            AddNearbySectionOcclusionSeedsForRing(cameraSection, cameraChunkCoord, ring);
+            if (sectionOcclusionSeedBuffer.Count > 0)
+                break;
+        }
+
+        return FlushSectionOcclusionSeedBuffer(cameraPosition);
+    }
+
+    private void AddNearbySectionOcclusionSeedsForRing(Vector3Int cameraSection, Vector2Int cameraChunkCoord, int ring)
+    {
+        if (ring <= 0)
+        {
+            TryAddNearbySectionOcclusionSeed(cameraSection, cameraChunkCoord, cameraChunkCoord);
+            return;
+        }
+
+        int minX = cameraChunkCoord.x - ring;
+        int maxX = cameraChunkCoord.x + ring;
+        int minZ = cameraChunkCoord.y - ring;
+        int maxZ = cameraChunkCoord.y + ring;
+
+        for (int x = minX; x <= maxX; x++)
+            TryAddNearbySectionOcclusionSeed(cameraSection, cameraChunkCoord, new Vector2Int(x, minZ));
+
+        for (int z = minZ + 1; z <= maxZ - 1; z++)
+            TryAddNearbySectionOcclusionSeed(cameraSection, cameraChunkCoord, new Vector2Int(maxX, z));
+
+        for (int x = maxX; x >= minX; x--)
+            TryAddNearbySectionOcclusionSeed(cameraSection, cameraChunkCoord, new Vector2Int(x, maxZ));
+
+        for (int z = maxZ - 1; z >= minZ + 1; z--)
+            TryAddNearbySectionOcclusionSeed(cameraSection, cameraChunkCoord, new Vector2Int(minX, z));
+    }
+
+    private void TryAddNearbySectionOcclusionSeed(Vector3Int cameraSection, Vector2Int cameraChunkCoord, Vector2Int coord)
+    {
+        if (!IsCoordInsideRenderDistance(coord, cameraChunkCoord))
+            return;
+
+        int preferredSubchunk = Mathf.Clamp(cameraSection.y, 0, Chunk.SubchunksPerColumn - 1);
+        if (!TryFindClosestLoadedSeedSubchunk(coord, preferredSubchunk, out int seedSubchunk))
+            return;
+
+        sectionOcclusionSeedBuffer.Add(CreateNearbySectionOcclusionSeed(coord, seedSubchunk, cameraSection));
+    }
+
+    private bool TryFindClosestLoadedSeedSubchunk(Vector2Int coord, int preferredSubchunk, out int seedSubchunk)
+    {
+        int clampedPreferredSubchunk = Mathf.Clamp(preferredSubchunk, 0, Chunk.SubchunksPerColumn - 1);
+        int maxOffset = Chunk.SubchunksPerColumn - 1;
+        if (matchMinecraftVerticalOcclusionDistance)
+            maxOffset = Mathf.Min(maxOffset, renderDistance);
+
+        for (int offset = 0; offset <= maxOffset; offset++)
+        {
+            int lower = clampedPreferredSubchunk - offset;
+            if (lower >= 0 && TryGetLoadedSection(coord, lower, out _))
+            {
+                seedSubchunk = lower;
+                return true;
+            }
+
+            int upper = clampedPreferredSubchunk + offset;
+            if (offset > 0 &&
+                upper < Chunk.SubchunksPerColumn &&
+                TryGetLoadedSection(coord, upper, out _))
+            {
+                seedSubchunk = upper;
+                return true;
+            }
+        }
+
+        seedSubchunk = -1;
+        return false;
+    }
+
+    private SectionOcclusionNode CreateNearbySectionOcclusionSeed(Vector2Int coord, int subchunkIndex, Vector3Int cameraSection)
+    {
+        SectionOcclusionNode node = new SectionOcclusionNode(coord, subchunkIndex, -1, 0);
+
+        int deltaX = coord.x - cameraSection.x;
+        int deltaY = subchunkIndex - cameraSection.y;
+        int deltaZ = coord.y - cameraSection.z;
+
+        if (deltaX > 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.East);
+            node.SetDirections(node.directions, SubchunkOcclusion.East);
+        }
+        else if (deltaX < 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.West);
+            node.SetDirections(node.directions, SubchunkOcclusion.West);
+        }
+
+        if (deltaY > 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.Up);
+            node.SetDirections(node.directions, SubchunkOcclusion.Up);
+        }
+        else if (deltaY < 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.Down);
+            node.SetDirections(node.directions, SubchunkOcclusion.Down);
+        }
+
+        if (deltaZ > 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.South);
+            node.SetDirections(node.directions, SubchunkOcclusion.South);
+        }
+        else if (deltaZ < 0)
+        {
+            node.AddSourceDirection(SubchunkOcclusion.North);
+            node.SetDirections(node.directions, SubchunkOcclusion.North);
+        }
+
+        return node;
+    }
+
+    private bool FlushSectionOcclusionSeedBuffer(Vector3 cameraPosition)
+    {
+        if (sectionOcclusionSeedBuffer.Count == 0)
+            return false;
 
         sectionOcclusionSeedBuffer.Sort((a, b) =>
             (GetSectionCenter(a.chunkCoord, a.subchunkIndex) - cameraPosition).sqrMagnitude
