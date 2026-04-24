@@ -2449,6 +2449,12 @@ public partial class World : MonoBehaviour
             return (byte)axis;
         }
 
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Ramp &&
+            RampShapeUtility.IsEncodedState((byte)axis))
+        {
+            return (byte)axis;
+        }
+
         return BlockPlacementRotationUtility.SanitizeStoredAxisByte((byte)axis);
     }
 
@@ -2465,6 +2471,12 @@ public partial class World : MonoBehaviour
 
         if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Stairs &&
             StairPlacementUtility.IsEncodedState((byte)axis))
+        {
+            return axis;
+        }
+
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Ramp &&
+            RampShapeUtility.IsEncodedState((byte)axis))
         {
             return axis;
         }
@@ -2499,6 +2511,16 @@ public partial class World : MonoBehaviour
 
             blockPlacementAxes[worldPos] = (BlockPlacementAxis)rawState;
             return;
+        }
+
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Ramp)
+        {
+            byte rawState = (byte)axis;
+            if (RampShapeUtility.IsEncodedState(rawState))
+            {
+                blockPlacementAxes[worldPos] = (BlockPlacementAxis)rawState;
+                return;
+            }
         }
 
         BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);

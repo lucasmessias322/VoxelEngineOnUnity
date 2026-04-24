@@ -169,7 +169,7 @@ public static partial class MeshGenerator
                                         AddRampShape(
                                             origin,
                                             mapping,
-                                            placementAxis,
+                                            (BlockPlacementAxis)rawPlacementData,
                                             x,
                                             y,
                                             z,
@@ -786,9 +786,9 @@ public static partial class MeshGenerator
             float invAtlasTilesY,
             float light01)
         {
-            BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
+            bool rampTopHalf = RampShapeUtility.IsTopHalf(placementAxis);
             RampShapeVariant rampVariant = ResolveRampShapeVariant(
-                rampAxis,
+                placementAxis,
                 voxelX,
                 voxelY,
                 voxelZ,
@@ -798,21 +798,23 @@ public static partial class MeshGenerator
                 voxelPlaneSize);
             NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
 
-            RampShapeUtility.ResolveBottomQuad(rampAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
+            BlockFace flatFace = rampTopHalf ? BlockFace.Top : BlockFace.Bottom;
+            Vector3 flatNormal = rampTopHalf ? Vector3.up : Vector3.down;
+            RampShapeUtility.ResolveBottomQuad(placementAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
             AddAmbientOccludedCustomQuad(
                 origin,
                 mapping,
-                BlockFace.Bottom,
+                flatFace,
                 bottom0,
                 bottom1,
                 bottom2,
                 bottom3,
-                ResolveShapeProjectedUv(BlockFace.Bottom, bottom0),
-                ResolveShapeProjectedUv(BlockFace.Bottom, bottom1),
-                ResolveShapeProjectedUv(BlockFace.Bottom, bottom2),
-                ResolveShapeProjectedUv(BlockFace.Bottom, bottom3),
-                Vector3.down,
-                Vector3.down,
+                ResolveShapeProjectedUv(flatFace, bottom0),
+                ResolveShapeProjectedUv(flatFace, bottom1),
+                ResolveShapeProjectedUv(flatFace, bottom2),
+                ResolveShapeProjectedUv(flatFace, bottom3),
+                flatNormal,
+                flatNormal,
                 Vector3.right,
                 Vector3.forward,
                 light01,
@@ -826,22 +828,23 @@ public static partial class MeshGenerator
                 invAtlasTilesY,
                 tris,
                 BlockRenderShape.Ramp,
-                rampAxis,
+                placementAxis,
                 rampVariant,
                 false);
 
-            RampShapeUtility.ResolveTopTriangles(rampAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
+            BlockFace slopeFace = rampTopHalf ? BlockFace.Bottom : BlockFace.Top;
+            RampShapeUtility.ResolveTopTriangles(placementAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
             Vector3 topNormal0 = Vector3.Normalize(Vector3.Cross(top0b - top0a, top0c - top0a));
             AddAmbientOccludedCustomTriangle(
                 origin,
                 mapping,
-                BlockFace.Top,
+                slopeFace,
                 top0a,
                 top0b,
                 top0c,
-                ResolveShapeProjectedUv(BlockFace.Top, top0a),
-                ResolveShapeProjectedUv(BlockFace.Top, top0b),
-                ResolveShapeProjectedUv(BlockFace.Top, top0c),
+                ResolveShapeProjectedUv(slopeFace, top0a),
+                ResolveShapeProjectedUv(slopeFace, top0b),
+                ResolveShapeProjectedUv(slopeFace, top0c),
                 topNormal0,
                 topNormal0,
                 (top0b - top0a).normalized,
@@ -857,7 +860,7 @@ public static partial class MeshGenerator
                 invAtlasTilesY,
                 tris,
                 BlockRenderShape.Ramp,
-                rampAxis,
+                placementAxis,
                 rampVariant,
                 true);
 
@@ -865,13 +868,13 @@ public static partial class MeshGenerator
             AddAmbientOccludedCustomTriangle(
                 origin,
                 mapping,
-                BlockFace.Top,
+                slopeFace,
                 top1a,
                 top1b,
                 top1c,
-                ResolveShapeProjectedUv(BlockFace.Top, top1a),
-                ResolveShapeProjectedUv(BlockFace.Top, top1b),
-                ResolveShapeProjectedUv(BlockFace.Top, top1c),
+                ResolveShapeProjectedUv(slopeFace, top1a),
+                ResolveShapeProjectedUv(slopeFace, top1b),
+                ResolveShapeProjectedUv(slopeFace, top1c),
                 topNormal1,
                 topNormal1,
                 (top1b - top1a).normalized,
@@ -887,20 +890,20 @@ public static partial class MeshGenerator
                 invAtlasTilesY,
                 tris,
                 BlockRenderShape.Ramp,
-                rampAxis,
+                placementAxis,
                 rampVariant,
                 true);
 
-            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Left, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
-            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Right, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
-            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Front, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
-            AppendRampEdgeSurface(origin, mapping, rampAxis, rampVariant, RampEdge.Back, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, placementAxis, rampVariant, RampEdge.Left, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, placementAxis, rampVariant, RampEdge.Right, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, placementAxis, rampVariant, RampEdge.Front, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
+            AppendRampEdgeSurface(origin, mapping, placementAxis, rampVariant, RampEdge.Back, light01, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, tris);
         }
 
         private void AppendRampEdgeSurface(
             Vector3 origin,
             BlockTextureMapping mapping,
-            BlockPlacementAxis rampAxis,
+            BlockPlacementAxis rampState,
             RampShapeVariant rampVariant,
             RampEdge edge,
             float light01,
@@ -914,7 +917,7 @@ public static partial class MeshGenerator
             float invAtlasTilesY,
             NativeList<int> tris)
         {
-            if (!RampShapeUtility.ResolveEdgeSurface(rampAxis, rampVariant, edge, out int vertexCount, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace))
+            if (!RampShapeUtility.ResolveEdgeSurface(rampState, rampVariant, edge, out int vertexCount, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out BlockFace sampledFace))
                 return;
 
             Vector3 normal = ResolveShapeFaceNormal(sampledFace);
@@ -947,7 +950,7 @@ public static partial class MeshGenerator
                     invAtlasTilesY,
                     tris,
                     BlockRenderShape.Ramp,
-                    rampAxis,
+                    rampState,
                     rampVariant,
                     false);
                 return;
@@ -978,12 +981,12 @@ public static partial class MeshGenerator
                 invAtlasTilesY,
                 tris,
                 BlockRenderShape.Ramp,
-                rampAxis,
+                rampState,
                 rampVariant);
         }
 
         private RampShapeVariant ResolveRampShapeVariant(
-            BlockPlacementAxis placementAxis,
+            BlockPlacementAxis placementState,
             int voxelX,
             int voxelY,
             int voxelZ,
@@ -992,13 +995,13 @@ public static partial class MeshGenerator
             int voxelSizeZ,
             int voxelPlaneSize)
         {
-            if (!RampShapeUtility.TryGetFacing(placementAxis, out StairFacing currentFacing))
+            if (!RampShapeUtility.TryDecode(placementState, out StairFacing currentFacing, out bool currentTopHalf))
                 return RampShapeVariant.Straight;
 
             Vector3Int frontOffset = StairPlacementUtility.ToOffset(currentFacing);
             Vector3Int backOffset = StairPlacementUtility.ToOffset(StairPlacementUtility.Opposite(currentFacing));
 
-            bool hasFrontNeighbor = TryGetNeighborRampFacing(
+            bool hasFrontNeighbor = TryGetNeighborRampState(
                 voxelX + frontOffset.x,
                 voxelY + frontOffset.y,
                 voxelZ + frontOffset.z,
@@ -1006,9 +1009,10 @@ public static partial class MeshGenerator
                 voxelSizeX,
                 voxelSizeZ,
                 voxelPlaneSize,
-                out StairFacing frontFacing);
+                out StairFacing frontFacing,
+                out bool frontTopHalf);
 
-            bool hasBackNeighbor = TryGetNeighborRampFacing(
+            bool hasBackNeighbor = TryGetNeighborRampState(
                 voxelX + backOffset.x,
                 voxelY + backOffset.y,
                 voxelZ + backOffset.z,
@@ -1016,17 +1020,21 @@ public static partial class MeshGenerator
                 voxelSizeX,
                 voxelSizeZ,
                 voxelPlaneSize,
-                out StairFacing backFacing);
+                out StairFacing backFacing,
+                out bool backTopHalf);
 
             return RampShapeUtility.ResolveShapeVariant(
                 currentFacing,
+                currentTopHalf,
                 hasFrontNeighbor,
                 frontFacing,
+                frontTopHalf,
                 hasBackNeighbor,
-                backFacing);
+                backFacing,
+                backTopHalf);
         }
 
-        private bool TryGetNeighborRampFacing(
+        private bool TryGetNeighborRampState(
             int x,
             int y,
             int z,
@@ -1034,9 +1042,11 @@ public static partial class MeshGenerator
             int voxelSizeX,
             int voxelSizeZ,
             int voxelPlaneSize,
-            out StairFacing facing)
+            out StairFacing facing,
+            out bool topHalf)
         {
             facing = StairFacing.North;
+            topHalf = false;
 
             if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
                 return false;
@@ -1050,7 +1060,7 @@ public static partial class MeshGenerator
             if (BlockShapeUtility.GetEffectiveRenderShape(blockMappings[mapIndex]) != BlockRenderShape.Ramp)
                 return false;
 
-            return RampShapeUtility.TryGetFacing(BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx)), out facing);
+            return RampShapeUtility.TryDecode(GetBlockPlacementAxisValue(idx), out facing, out topHalf);
         }
 
         private void AddVerticalRampShape(
@@ -3135,7 +3145,7 @@ public static partial class MeshGenerator
                     if (suppressNeighborRampAO)
                         return false;
 
-                    BlockPlacementAxis rampAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    BlockPlacementAxis rampAxis = (BlockPlacementAxis)GetBlockPlacementAxisValue(idx);
                     RampShapeVariant rampVariant = ResolveRampShapeVariant(
                         rampAxis,
                         voxelX,

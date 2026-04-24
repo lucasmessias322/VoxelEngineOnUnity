@@ -1655,7 +1655,15 @@ public static class BlockPlacementRotationUtility
             return StairPlacementUtility.ResolvePlacementCode(hitNormal, lookForward, hitPoint);
 
         if (shape == BlockRenderShape.Ramp)
+        {
+            if (mapping.usePlacementAxisRotation &&
+                mapping.placementRotationAxes == BlockPlacementRotationAxes.Both)
+            {
+                return RampShapeUtility.ResolvePlacementCode(hitNormal, lookForward, hitPoint);
+            }
+
             return RampShapeUtility.ResolvePlacementAxis(lookForward);
+        }
 
         if (shape == BlockRenderShape.VerticalRamp)
             return VerticalRampShapeUtility.ResolvePlacementAxis(lookForward);

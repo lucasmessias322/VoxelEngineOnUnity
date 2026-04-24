@@ -2512,9 +2512,8 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             case BlockRenderShape.Ramp:
             {
-                BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
-                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, rampAxis);
-                var rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
+                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, placementAxis);
+                var rampBoxes = RampShapeUtility.BuildColliderBoxes(placementAxis, rampVariant);
                 for (int i = 0; i < rampBoxes.Length; i++)
                 {
                     if (testBounds.Intersects(rampBoxes[i].ToWorldBounds(blockPos)))
@@ -2620,9 +2619,8 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             case BlockRenderShape.Ramp:
             {
-                BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
-                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, rampAxis);
-                var rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
+                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, placementAxis);
+                var rampBoxes = RampShapeUtility.BuildColliderBoxes(placementAxis, rampVariant);
                 Bounds bounds = rampBoxes[0].ToWorldBounds(blockPos);
                 for (int i = 1; i < rampBoxes.Length; i++)
                     bounds.Encapsulate(rampBoxes[i].ToWorldBounds(blockPos));

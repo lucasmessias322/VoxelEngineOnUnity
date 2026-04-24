@@ -535,17 +535,25 @@ public class VoxelProceduralSkyController : MonoBehaviour
             twilightFogEnd * twilightWeight +
             nightFogEnd * nightWeight;
 
-        RenderSettings.fogColor = fogColor;
-        RenderSettings.fogDensity = fogDensity;
-        RenderSettings.fogStartDistance = fogStart;
-        RenderSettings.fogEndDistance = Mathf.Max(fogStart + 1f, fogEnd);
-
         if (fogControl != null)
         {
             fogControl.FogColorSurface = fogColor;
             fogControl.FogStart = Mathf.RoundToInt(fogStart);
             fogControl.FogEnd = Mathf.RoundToInt(Mathf.Max(fogStart + 1f, fogEnd));
+            fogControl.ApplyNow();
+            fogControl.GetActiveFogSettings(out Color activeFogColor, out float activeFogStart, out float activeFogEnd);
+
+            RenderSettings.fogColor = activeFogColor;
+            RenderSettings.fogDensity = fogDensity;
+            RenderSettings.fogStartDistance = activeFogStart;
+            RenderSettings.fogEndDistance = Mathf.Max(activeFogStart + 1f, activeFogEnd);
+            return;
         }
+
+        RenderSettings.fogColor = fogColor;
+        RenderSettings.fogDensity = fogDensity;
+        RenderSettings.fogStartDistance = fogStart;
+        RenderSettings.fogEndDistance = Mathf.Max(fogStart + 1f, fogEnd);
     }
 
     private DayPhase EvaluatePhase(float tick)

@@ -394,6 +394,51 @@ public static class RampShapeUtility
     public const int ColliderSliceCount = 4;
     private const float AmbientOcclusionSlopeInset = 0.125f;
 
+    public const byte FirstEncodedState = 40;
+    public const byte LastEncodedState = 47;
+
+    public static bool IsEncodedState(byte rawValue)
+    {
+        return rawValue >= FirstEncodedState && rawValue <= LastEncodedState;
+    }
+
+    public static BlockPlacementAxis ResolvePlacementCode(Vector3Int hitNormal, Vector3 lookForward, Vector3 hitPoint)
+    {
+        StairFacing facing = StairPlacementUtility.ResolveFacingFromLook(lookForward);
+        bool topHalf = StairPlacementUtility.ShouldPlaceTopHalf(hitNormal, hitPoint);
+        return Encode(facing, topHalf);
+    }
+
+    public static BlockPlacementAxis Encode(StairFacing facing, bool topHalf)
+    {
+        byte rawValue = (byte)(FirstEncodedState + (topHalf ? 4 : 0) + ((int)facing & 3));
+        return (BlockPlacementAxis)rawValue;
+    }
+
+    public static bool TryDecode(byte rawValue, out StairFacing facing, out bool topHalf)
+    {
+        if (IsEncodedState(rawValue))
+        {
+            int decoded = rawValue - FirstEncodedState;
+            topHalf = decoded >= 4;
+            facing = (StairFacing)(decoded & 3);
+            return true;
+        }
+
+        topHalf = false;
+        return TryGetFacingFromAxis((BlockPlacementAxis)rawValue, out facing);
+    }
+
+    public static bool TryDecode(BlockPlacementAxis rawValue, out StairFacing facing, out bool topHalf)
+    {
+        return TryDecode((byte)rawValue, out facing, out topHalf);
+    }
+
+    public static bool IsTopHalf(BlockPlacementAxis axis)
+    {
+        return TryDecode(axis, out _, out bool topHalf) && topHalf;
+    }
+
     public static BlockPlacementAxis ResolvePlacementAxis(Vector3 lookForward)
     {
         Vector3 horizontal = new Vector3(lookForward.x, 0f, lookForward.z);
@@ -408,46 +453,35 @@ public static class RampShapeUtility
 
     public static BlockPlacementAxis SanitizeAxis(BlockPlacementAxis axis)
     {
-        return axis switch
+        if (!TryDecode(axis, out StairFacing facing, out _))
+            return BlockPlacementAxis.Z;
+
+        return facing switch
         {
-            BlockPlacementAxis.X => BlockPlacementAxis.X,
-            BlockPlacementAxis.XNegative => BlockPlacementAxis.XNegative,
-            BlockPlacementAxis.ZNegative => BlockPlacementAxis.ZNegative,
+            StairFacing.East => BlockPlacementAxis.X,
+            StairFacing.South => BlockPlacementAxis.ZNegative,
+            StairFacing.West => BlockPlacementAxis.XNegative,
             _ => BlockPlacementAxis.Z
         };
     }
 
     public static bool TryGetFacing(BlockPlacementAxis axis, out StairFacing facing)
     {
-        axis = SanitizeAxis(axis);
-        switch (axis)
-        {
-            case BlockPlacementAxis.X:
-                facing = StairFacing.East;
-                return true;
-
-            case BlockPlacementAxis.XNegative:
-                facing = StairFacing.West;
-                return true;
-
-            case BlockPlacementAxis.ZNegative:
-                facing = StairFacing.South;
-                return true;
-
-            default:
-                facing = StairFacing.North;
-                return true;
-        }
+        return TryDecode(axis, out facing, out _);
     }
 
     public static RampShapeVariant ResolveShapeVariant(
         StairFacing currentFacing,
+        bool currentTopHalf,
         bool hasFrontNeighbor,
         StairFacing frontFacing,
+        bool frontTopHalf,
         bool hasBackNeighbor,
-        StairFacing backFacing)
+        StairFacing backFacing,
+        bool backTopHalf)
     {
         if (hasFrontNeighbor &&
+            frontTopHalf == currentTopHalf &&
             StairPlacementUtility.IsPerpendicular(currentFacing, frontFacing))
         {
             return frontFacing == StairPlacementUtility.RotateLeft(currentFacing)
@@ -456,6 +490,7 @@ public static class RampShapeUtility
         }
 
         if (hasBackNeighbor &&
+            backTopHalf == currentTopHalf &&
             StairPlacementUtility.IsPerpendicular(currentFacing, backFacing))
         {
             return backFacing == StairPlacementUtility.RotateLeft(currentFacing)
@@ -466,6 +501,24 @@ public static class RampShapeUtility
         return RampShapeVariant.Straight;
     }
 
+    public static RampShapeVariant ResolveShapeVariant(
+        StairFacing currentFacing,
+        bool hasFrontNeighbor,
+        StairFacing frontFacing,
+        bool hasBackNeighbor,
+        StairFacing backFacing)
+    {
+        return ResolveShapeVariant(
+            currentFacing,
+            false,
+            hasFrontNeighbor,
+            frontFacing,
+            false,
+            hasBackNeighbor,
+            backFacing,
+            false);
+    }
+
     public static void ResolveBottomQuad(
         BlockPlacementAxis axis,
         out Vector3 p0,
@@ -473,11 +526,14 @@ public static class RampShapeUtility
         out Vector3 p2,
         out Vector3 p3)
     {
+        bool topHalf = IsTopHalf(axis);
         axis = SanitizeAxis(axis);
-        p0 = RotateCanonicalPoint(new Vector3(0f, 0f, 0f), axis);
-        p1 = RotateCanonicalPoint(new Vector3(1f, 0f, 0f), axis);
-        p2 = RotateCanonicalPoint(new Vector3(1f, 0f, 1f), axis);
-        p3 = RotateCanonicalPoint(new Vector3(0f, 0f, 1f), axis);
+        float y = topHalf ? 1f : 0f;
+        p0 = RotateCanonicalPoint(new Vector3(0f, y, 0f), axis);
+        p1 = RotateCanonicalPoint(new Vector3(1f, y, 0f), axis);
+        p2 = RotateCanonicalPoint(new Vector3(1f, y, 1f), axis);
+        p3 = RotateCanonicalPoint(new Vector3(0f, y, 1f), axis);
+        EnsureFaceWinding(ref p0, ref p1, ref p2, ref p3, topHalf ? Vector3.up : Vector3.down);
     }
 
     public static void ResolveTopTriangles(
@@ -490,11 +546,12 @@ public static class RampShapeUtility
         out Vector3 tri1b,
         out Vector3 tri1c)
     {
+        bool topHalf = IsTopHalf(axis);
         axis = SanitizeAxis(axis);
-        Vector3 t00 = RotateCanonicalPoint(new Vector3(0f, GetCanonicalSurfaceHeight(0f, 0f, variant), 0f), axis);
-        Vector3 t10 = RotateCanonicalPoint(new Vector3(1f, GetCanonicalSurfaceHeight(1f, 0f, variant), 0f), axis);
-        Vector3 t01 = RotateCanonicalPoint(new Vector3(0f, GetCanonicalSurfaceHeight(0f, 1f, variant), 1f), axis);
-        Vector3 t11 = RotateCanonicalPoint(new Vector3(1f, GetCanonicalSurfaceHeight(1f, 1f, variant), 1f), axis);
+        Vector3 t00 = RotateCanonicalPoint(new Vector3(0f, ResolveCanonicalSlopeY(0f, 0f, variant, topHalf), 0f), axis);
+        Vector3 t10 = RotateCanonicalPoint(new Vector3(1f, ResolveCanonicalSlopeY(1f, 0f, variant, topHalf), 0f), axis);
+        Vector3 t01 = RotateCanonicalPoint(new Vector3(0f, ResolveCanonicalSlopeY(0f, 1f, variant, topHalf), 1f), axis);
+        Vector3 t11 = RotateCanonicalPoint(new Vector3(1f, ResolveCanonicalSlopeY(1f, 1f, variant, topHalf), 1f), axis);
 
         bool useLeftDiagonal = variant == RampShapeVariant.OuterLeft || variant == RampShapeVariant.InnerLeft;
         if (useLeftDiagonal)
@@ -516,8 +573,8 @@ public static class RampShapeUtility
             tri1c = t10;
         }
 
-        EnsureUpwardTriangle(ref tri0a, ref tri0b, ref tri0c);
-        EnsureUpwardTriangle(ref tri1a, ref tri1b, ref tri1c);
+        EnsureSlopeTriangleWinding(ref tri0a, ref tri0b, ref tri0c, topHalf);
+        EnsureSlopeTriangleWinding(ref tri1a, ref tri1b, ref tri1c, topHalf);
     }
 
     public static bool ResolveEdgeSurface(
@@ -531,6 +588,7 @@ public static class RampShapeUtility
         out Vector3 p3,
         out BlockFace sampledFace)
     {
+        bool topHalf = IsTopHalf(axis);
         axis = SanitizeAxis(axis);
         ResolveCanonicalEdge(edge, variant, out Vector3 bottom0, out Vector3 bottom1, out float height0, out float height1);
         sampledFace = ResolveEdgeFace(axis, edge);
@@ -546,21 +604,35 @@ public static class RampShapeUtility
             return false;
         }
 
-        p0 = RotateCanonicalPoint(bottom0, axis);
-        p1 = RotateCanonicalPoint(bottom1, axis);
+        Vector3 lower0 = new Vector3(bottom0.x, topHalf ? 1f - height0 : 0f, bottom0.z);
+        Vector3 lower1 = new Vector3(bottom1.x, topHalf ? 1f - height1 : 0f, bottom1.z);
+        Vector3 upper0 = new Vector3(bottom0.x, topHalf ? 1f : height0, bottom0.z);
+        Vector3 upper1 = new Vector3(bottom1.x, topHalf ? 1f : height1, bottom1.z);
 
         if (height0 > epsilon && height1 > epsilon)
         {
-            p2 = RotateCanonicalPoint(new Vector3(bottom1.x, height1, bottom1.z), axis);
-            p3 = RotateCanonicalPoint(new Vector3(bottom0.x, height0, bottom0.z), axis);
+            p0 = RotateCanonicalPoint(lower0, axis);
+            p1 = RotateCanonicalPoint(lower1, axis);
+            p2 = RotateCanonicalPoint(upper1, axis);
+            p3 = RotateCanonicalPoint(upper0, axis);
             vertexCount = 4;
             EnsureFaceWinding(ref p0, ref p1, ref p2, ref p3, ResolveFaceNormal(sampledFace));
             return true;
         }
 
-        p2 = height0 > epsilon
-            ? RotateCanonicalPoint(new Vector3(bottom0.x, height0, bottom0.z), axis)
-            : RotateCanonicalPoint(new Vector3(bottom1.x, height1, bottom1.z), axis);
+        if (height0 > epsilon)
+        {
+            p0 = RotateCanonicalPoint(topHalf ? lower0 : bottom0, axis);
+            p1 = RotateCanonicalPoint(topHalf ? upper1 : bottom1, axis);
+            p2 = RotateCanonicalPoint(upper0, axis);
+        }
+        else
+        {
+            p0 = RotateCanonicalPoint(topHalf ? upper0 : bottom0, axis);
+            p1 = RotateCanonicalPoint(topHalf ? lower1 : bottom1, axis);
+            p2 = RotateCanonicalPoint(upper1, axis);
+        }
+
         p3 = default;
         vertexCount = 3;
         EnsureFaceWinding(ref p0, ref p1, ref p2, ResolveFaceNormal(sampledFace));
@@ -592,8 +664,12 @@ public static class RampShapeUtility
             return false;
         }
 
+        bool topHalf = IsTopHalf(axis);
         Vector3 canonical = ToCanonical(localPos, axis);
-        return canonical.y < GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant) - epsilon;
+        float surfaceHeight = GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant);
+        return topHalf
+            ? canonical.y > 1f - surfaceHeight + epsilon
+            : canonical.y < surfaceHeight - epsilon;
     }
 
     public static bool ContainsAmbientOcclusionPoint(Vector3 localPos, BlockPlacementAxis axis, RampShapeVariant variant)
@@ -606,12 +682,17 @@ public static class RampShapeUtility
             return false;
         }
 
+        bool topHalf = IsTopHalf(axis);
         Vector3 canonical = ToCanonical(localPos, axis);
-        return canonical.y < GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant) - AmbientOcclusionSlopeInset - epsilon;
+        float surfaceHeight = GetCanonicalSurfaceHeight(canonical.x, canonical.z, variant);
+        return topHalf
+            ? canonical.y > 1f - surfaceHeight + AmbientOcclusionSlopeInset + epsilon
+            : canonical.y < surfaceHeight - AmbientOcclusionSlopeInset - epsilon;
     }
 
     public static FixedList512Bytes<ShapeBox> BuildColliderBoxes(BlockPlacementAxis axis, RampShapeVariant variant)
     {
+        bool topHalf = IsTopHalf(axis);
         axis = SanitizeAxis(axis);
         FixedList512Bytes<ShapeBox> boxes = default;
         const float epsilon = 0.0001f;
@@ -647,8 +728,8 @@ public static class RampShapeUtility
                 }
 
                 ShapeBox canonicalBox = new ShapeBox(
-                    new Vector3(minX, 0f, minZ),
-                    new Vector3(runEnd * step, maxHeight, maxZ));
+                    new Vector3(minX, topHalf ? 1f - maxHeight : 0f, minZ),
+                    new Vector3(runEnd * step, topHalf ? 1f : maxHeight, maxZ));
                 boxes.Add(RotateCanonicalBox(canonicalBox, axis));
                 xIndex = runEnd;
             }
@@ -770,9 +851,38 @@ public static class RampShapeUtility
         };
     }
 
-    private static void EnsureUpwardTriangle(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2)
+    private static bool TryGetFacingFromAxis(BlockPlacementAxis axis, out StairFacing facing)
     {
-        if (Vector3.Cross(p1 - p0, p2 - p0).y >= 0f)
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                facing = StairFacing.East;
+                return true;
+
+            case BlockPlacementAxis.XNegative:
+                facing = StairFacing.West;
+                return true;
+
+            case BlockPlacementAxis.ZNegative:
+                facing = StairFacing.South;
+                return true;
+
+            default:
+                facing = StairFacing.North;
+                return true;
+        }
+    }
+
+    private static float ResolveCanonicalSlopeY(float x, float z, RampShapeVariant variant, bool topHalf)
+    {
+        float surfaceHeight = GetCanonicalSurfaceHeight(x, z, variant);
+        return topHalf ? 1f - surfaceHeight : surfaceHeight;
+    }
+
+    private static void EnsureSlopeTriangleWinding(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, bool topHalf)
+    {
+        float normalY = Vector3.Cross(p1 - p0, p2 - p0).y;
+        if ((!topHalf && normalY >= 0f) || (topHalf && normalY <= 0f))
             return;
 
         (p1, p2) = (p2, p1);
@@ -824,26 +934,30 @@ public static class RampShapeRuntimeUtility
 {
     public static RampShapeVariant ResolveShapeVariant(World world, Vector3Int blockPos, BlockPlacementAxis placementAxis)
     {
-        if (world == null || !RampShapeUtility.TryGetFacing(placementAxis, out StairFacing currentFacing))
+        if (world == null || !RampShapeUtility.TryDecode(placementAxis, out StairFacing currentFacing, out bool currentTopHalf))
             return RampShapeVariant.Straight;
 
         Vector3Int frontPos = blockPos + StairPlacementUtility.ToOffset(currentFacing);
         Vector3Int backPos = blockPos + StairPlacementUtility.ToOffset(StairPlacementUtility.Opposite(currentFacing));
 
-        bool hasFrontNeighbor = TryGetNeighborState(world, frontPos, out StairFacing frontFacing);
-        bool hasBackNeighbor = TryGetNeighborState(world, backPos, out StairFacing backFacing);
+        bool hasFrontNeighbor = TryGetNeighborState(world, frontPos, out StairFacing frontFacing, out bool frontTopHalf);
+        bool hasBackNeighbor = TryGetNeighborState(world, backPos, out StairFacing backFacing, out bool backTopHalf);
 
         return RampShapeUtility.ResolveShapeVariant(
             currentFacing,
+            currentTopHalf,
             hasFrontNeighbor,
             frontFacing,
+            frontTopHalf,
             hasBackNeighbor,
-            backFacing);
+            backFacing,
+            backTopHalf);
     }
 
-    private static bool TryGetNeighborState(World world, Vector3Int blockPos, out StairFacing facing)
+    private static bool TryGetNeighborState(World world, Vector3Int blockPos, out StairFacing facing, out bool topHalf)
     {
         facing = StairFacing.North;
+        topHalf = false;
 
         if (world == null || world.blockData == null)
             return false;
@@ -853,7 +967,7 @@ public static class RampShapeRuntimeUtility
         if (mappingResult == null || BlockShapeUtility.GetEffectiveRenderShape(mappingResult.Value) != BlockRenderShape.Ramp)
             return false;
 
-        return RampShapeUtility.TryGetFacing(world.GetPlacementAxisAt(blockPos, blockType), out facing);
+        return RampShapeUtility.TryDecode(world.GetPlacementAxisAt(blockPos, blockType), out facing, out topHalf);
     }
 }
 

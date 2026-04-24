@@ -18,7 +18,7 @@ public class BlockSelector : MonoBehaviour
     private LineRenderer line;
     private Vector3Int currentBlock;
     private bool hasBlock;
-    private readonly Vector3[] selectionLinePoints = new Vector3[18];
+    private readonly Vector3[] selectionLinePoints = new Vector3[16];
 
     void Awake()
     {
@@ -26,10 +26,10 @@ public class BlockSelector : MonoBehaviour
         line.useWorldSpace = true;
         line.loop = false;
 
-        line.startWidth = 0.025f;
-        line.endWidth = 0.025f;
+        line.startWidth = 0.015f;
+        line.endWidth = 0.015f;
 
-        line.positionCount = 18;
+        line.positionCount = selectionLinePoints.Length;
         line.enabled = false;
         line.numCapVertices = 4;
         line.numCornerVertices = 4;
@@ -112,24 +112,24 @@ public class BlockSelector : MonoBehaviour
         Vector3 v011 = p + new Vector3(0f, size.y, size.z);
         Vector3 v111 = p + size;
 
+        // A single LineRenderer cannot "jump" between disconnected edges without drawing diagonals,
+        // so this walk stays on cube edges only and repeats a few of them when needed.
         selectionLinePoints[0] = v000;
         selectionLinePoints[1] = v100;
-        selectionLinePoints[2] = v110;
-        selectionLinePoints[3] = v010;
+        selectionLinePoints[2] = v101;
+        selectionLinePoints[3] = v001;
         selectionLinePoints[4] = v000;
-        selectionLinePoints[5] = v001;
-        selectionLinePoints[6] = v101;
-        selectionLinePoints[7] = v111;
-        selectionLinePoints[8] = v011;
-        selectionLinePoints[9] = v001;
-        selectionLinePoints[10] = v000;
-        selectionLinePoints[11] = v001;
-        selectionLinePoints[12] = v100;
-        selectionLinePoints[13] = v101;
-        selectionLinePoints[14] = v110;
-        selectionLinePoints[15] = v111;
-        selectionLinePoints[16] = v010;
-        selectionLinePoints[17] = v011;
+        selectionLinePoints[5] = v010;
+        selectionLinePoints[6] = v110;
+        selectionLinePoints[7] = v100;
+        selectionLinePoints[8] = v101;
+        selectionLinePoints[9] = v111;
+        selectionLinePoints[10] = v110;
+        selectionLinePoints[11] = v010;
+        selectionLinePoints[12] = v011;
+        selectionLinePoints[13] = v111;
+        selectionLinePoints[14] = v011;
+        selectionLinePoints[15] = v001;
 
         line.SetPositions(selectionLinePoints);
     }
@@ -885,20 +885,19 @@ public class BlockSelector : MonoBehaviour
         hitPoint = Vector3.zero;
         bool hit = false;
         Vector3 origin = voxel;
-        BlockPlacementAxis rampAxis = RampShapeUtility.SanitizeAxis(placementAxis);
-        RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, rampAxis);
+        RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, placementAxis);
 
-        RampShapeUtility.ResolveBottomQuad(rampAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
+        RampShapeUtility.ResolveBottomQuad(placementAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
         hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + bottom0, origin + bottom1, origin + bottom2, origin + bottom3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
 
-        RampShapeUtility.ResolveTopTriangles(rampAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
+        RampShapeUtility.ResolveTopTriangles(placementAxis, rampVariant, out Vector3 top0a, out Vector3 top0b, out Vector3 top0c, out Vector3 top1a, out Vector3 top1b, out Vector3 top1c);
         hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + top0a, origin + top0b, origin + top0c, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
         hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + top1a, origin + top1b, origin + top1c, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
 
-        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Left, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
-        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Right, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
-        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Front, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
-        hit = TryHitRampEdge(ray, maxDistance, origin, rampAxis, rampVariant, RampEdge.Back, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, placementAxis, rampVariant, RampEdge.Left, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, placementAxis, rampVariant, RampEdge.Right, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, placementAxis, rampVariant, RampEdge.Front, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitRampEdge(ray, maxDistance, origin, placementAxis, rampVariant, RampEdge.Back, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
 
         return hit;
     }

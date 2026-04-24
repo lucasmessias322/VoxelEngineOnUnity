@@ -94,6 +94,13 @@ public class FPSController : MonoBehaviour
     [SerializeField] private float underwaterEnterDepth = 0.08f;
     [SerializeField] private float underwaterExitDepth = 0.12f;
 
+    [Header("Underwater Fog")]
+    [SerializeField] private bool enableUnderwaterFog = true;
+    [SerializeField] private FogControl fogControl;
+    [SerializeField] private Color underwaterFogColor = new Color(0.16f, 0.42f, 0.78f, 1f);
+    [SerializeField, Min(0f)] private float underwaterFogStart = 0f;
+    [SerializeField, Min(1f)] private float underwaterFogEnd = 16f;
+
     [Header("Minecraft-like Settings")]
     [Tooltip("Tempo máximo entre dois taps para reconhecer double-tap (sprint/voo).")]
     [SerializeField] private float doubleTapTime = 0.25f;
@@ -152,6 +159,7 @@ public class FPSController : MonoBehaviour
             cameraTransform = Camera.main.transform;
 
         ResolvePlayerStatus(logWarning: true);
+        ResolveFogControl();
 
         CacheFirstPersonOnlyReferences();
 
@@ -204,8 +212,14 @@ public class FPSController : MonoBehaviour
         ApplyUnderwaterPostProcessSettings();
     }
 
+    private void OnDisable()
+    {
+        UpdateUnderwaterPostProcess(false, true);
+    }
+
     private void OnDestroy()
     {
+        ClearUnderwaterFogOverride();
         CleanupUnderwaterPostProcess();
     }
 
@@ -833,8 +847,7 @@ private bool CanStandUp()
 
     private void UpdateUnderwaterPostProcess()
     {
-        bool cameraInWater = enableUnderwaterPostProcess &&
-                             cameraTransform != null &&
+        bool cameraInWater = cameraTransform != null &&
                              IsCameraSubmerged(cameraTransform.position);
 
         UpdateUnderwaterPostProcess(cameraInWater, false);
@@ -852,13 +865,16 @@ private bool CanStandUp()
                 underwaterVolume.enabled = false;
             }
 
-            isCameraUnderwater = false;
+            UpdateUnderwaterFog(targetActive ? 1f : 0f);
             return;
         }
 
         EnsureUnderwaterPostProcess();
         if (underwaterVolume == null)
+        {
+            UpdateUnderwaterFog(targetActive ? 1f : 0f);
             return;
+        }
 
         float targetWeight = targetActive ? 1f : 0f;
         if (forceInstant)
@@ -872,6 +888,7 @@ private bool CanStandUp()
         }
 
         underwaterVolume.enabled = underwaterVolume.weight > 0.001f || targetActive;
+        UpdateUnderwaterFog(underwaterVolume.weight);
     }
 
     private bool IsCameraSubmerged(Vector3 worldPoint)
@@ -934,6 +951,48 @@ private bool CanStandUp()
         underwaterColorAdjustments = null;
         underwaterVignette = null;
         underwaterChromaticAberrationComponent = null;
+    }
+
+    private void ResolveFogControl()
+    {
+        if (fogControl != null)
+            return;
+
+#if UNITY_2023_1_OR_NEWER || UNITY_6000_0_OR_NEWER
+        fogControl = FindFirstObjectByType<FogControl>(FindObjectsInactive.Exclude);
+#else
+        fogControl = FindObjectOfType<FogControl>();
+#endif
+    }
+
+    private void UpdateUnderwaterFog(float blendWeight)
+    {
+        ResolveFogControl();
+        if (fogControl == null)
+            return;
+
+        if (!enableUnderwaterFog || blendWeight <= 0.001f)
+        {
+            ClearUnderwaterFogOverride();
+            return;
+        }
+
+        fogControl.SetRuntimeFogBlend(
+            underwaterFogColor,
+            underwaterFogStart,
+            underwaterFogEnd,
+            blendWeight);
+        fogControl.ApplyNow();
+    }
+
+    private void ClearUnderwaterFogOverride()
+    {
+        ResolveFogControl();
+        if (fogControl == null)
+            return;
+
+        fogControl.ClearRuntimeFogBlend();
+        fogControl.ApplyNow();
     }
 
     private bool EnsurePlayerStatus()
