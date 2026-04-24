@@ -20,6 +20,12 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
         _DepthShallowAlpha("Shallow Opacity", Range(0.0, 1.0)) = 0.34
         _DepthDeepAlpha("Deep Opacity", Range(0.0, 1.0)) = 0.94
 
+        [Header(Voxel Light)]
+        _MinLight("Minimum Light", Range(0.0, 1.0)) = 0.08
+        _VoxelSkyLightMultiplier("Sky Light Multiplier", Range(0.0, 1.0)) = 1.0
+        _VoxelLightStrength("Voxel Light Strength", Range(0.0, 2.0)) = 1.0
+        _AOStrength("Vertex AO Strength", Range(0.0, 2.0)) = 1.0
+
         [Header(Cutout)]
         [ToggleUI] _AlphaClip("Alpha Clip", Float) = 0.0
         _Cutoff("Alpha Cutoff", Range(0.0, 1.0)) = 0.5
@@ -74,6 +80,10 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
                 float _DepthAbsorptionStrength;
                 float _DepthShallowAlpha;
                 float _DepthDeepAlpha;
+                float _MinLight;
+                float _VoxelSkyLightMultiplier;
+                float _VoxelLightStrength;
+                float _AOStrength;
                 float _AlphaClip;
                 float _Cutoff;
             CBUFFER_END
@@ -89,7 +99,11 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
             struct Attributes
             {
                 float4 positionOS : POSITION;
+                float3 normalOS : NORMAL;
+                half4 blockLightColor : COLOR;
                 float2 uv0 : TEXCOORD0;
+                float4 uv2 : TEXCOORD2;
+                float4 uv3 : TEXCOORD3;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
             };
 
@@ -98,6 +112,8 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
                 float4 positionCS : SV_POSITION;
                 float3 positionWS : TEXCOORD0;
                 float2 localUV : TEXCOORD1;
+                half4 voxelData : TEXCOORD2;
+                half3 blockLightColor : TEXCOORD3;
                 UNITY_VERTEX_INPUT_INSTANCE_ID
                 UNITY_VERTEX_OUTPUT_STEREO
             };
@@ -223,6 +239,25 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
                 return lerp((half)_DepthShallowAlpha, (half)_DepthDeepAlpha, depthFactor);
             }
 
+            half3 ResolveBlockLightColor(half blockLight, half3 blockLightColor)
+            {
+                half hasColor = step(0.0001h, blockLight) * step(0.0001h, dot(blockLightColor, half3(1.0h, 1.0h, 1.0h)));
+                return lerp(blockLight.xxx, saturate(blockLightColor), hasColor);
+            }
+
+            half3 ComputeVoxelLightColor(half skyLight, half blockLight, half3 blockLightColor)
+            {
+                half skyVoxelLight = saturate(skyLight) * (half)_VoxelSkyLightMultiplier * (half)_VoxelLightStrength;
+                half3 resolvedBlockLight = ResolveBlockLightColor(blockLight, blockLightColor) * (half)_VoxelLightStrength;
+                half minLight = (half)_MinLight;
+                return saturate(max(half3(minLight, minLight, minLight), max(skyVoxelLight.xxx, resolvedBlockLight)));
+            }
+
+            half ComputeVoxelAO(half ao)
+            {
+                return lerp(1.0h, saturate(ao), (half)_AOStrength);
+            }
+
             half3 ApplyVoxelFog(half3 color, float3 positionWS)
             {
                 float fogRange = max(0.0001, _FogEnd - _FogStart);
@@ -242,6 +277,8 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
                 output.positionWS = TransformObjectToWorld(input.positionOS.xyz);
                 output.positionCS = TransformWorldToHClip(output.positionWS);
                 output.localUV = input.uv0;
+                output.voxelData = half4(saturate((half)input.uv2.x), saturate((half)input.uv2.z), saturate((half)input.uv3.z), 0.0h);
+                output.blockLightColor = saturate(input.blockLightColor.rgb);
                 return output;
             }
 
@@ -256,6 +293,10 @@ Shader "Voxel/URP Mobile/Water Unlit Static"
                 half depthAlpha = GetWaterDepthAlpha(depthFactor);
 
                 half3 color = sheet.rgb * (half3)_BaseColor.rgb * (half3)_Color.rgb * depthTint;
+                half3 voxelLight = ComputeVoxelLightColor(input.voxelData.x, input.voxelData.z, input.blockLightColor);
+                half voxelAO = ComputeVoxelAO(input.voxelData.y);
+                color *= voxelLight * voxelAO;
+
                 half alpha = saturate((half)_BaseColor.a * (half)_Color.a * (half)_alpha);
                 alpha = saturate(alpha * depthAlpha);
                 alpha = min(alpha, (half)_Maxalpha);

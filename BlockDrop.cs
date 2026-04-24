@@ -103,6 +103,7 @@ public class BlockDrop : MonoBehaviour
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
     private bool isPooled;
+    private int currentMaterialIndex;
 
     public static bool Spawn(World world, Vector3Int blockPos, BlockType blockType, Vector3 throwDirection)
     {
@@ -171,10 +172,27 @@ public class BlockDrop : MonoBehaviour
         if (mat == null)
             return false;
 
+        currentMaterialIndex = materialIndex;
         meshRenderer.sharedMaterial = mat;
         meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
         meshRenderer.receiveShadows = true;
         return true;
+    }
+
+    public void RefreshVisualMaterial()
+    {
+        if (!gameObject.activeInHierarchy || isPooled)
+            return;
+
+        EnsureRuntimeComponents();
+
+        World world = World.Instance;
+        Material material = ResolveMaterial(world, currentMaterialIndex);
+        if (material == null || meshRenderer == null)
+            return;
+
+        if (meshRenderer.sharedMaterial != material)
+            meshRenderer.sharedMaterial = material;
     }
 
     private static Mesh GetOrCreateSharedMesh(World world, BlockType blockType, out int materialIndex)

@@ -235,13 +235,17 @@ public class ChunkRenderSlice : MonoBehaviour
     public void UpdateSourceMaterials(Material[] materials)
     {
         Material[] sharedMaterials = materials ?? Array.Empty<Material>();
-        if (ReferenceEquals(sourceMaterials, sharedMaterials))
-            return;
-
         int previousMaterialMask = activeMaterialMask;
-        sourceMaterials = sharedMaterials;
-        Array.Clear(activeMaterialCache, 0, activeMaterialCache.Length);
-        activeMaterialMask = -1;
+        if (!ReferenceEquals(sourceMaterials, sharedMaterials))
+        {
+            sourceMaterials = sharedMaterials;
+            Array.Clear(activeMaterialCache, 0, activeMaterialCache.Length);
+            activeMaterialMask = -1;
+        }
+        else
+        {
+            sourceMaterials = sharedMaterials;
+        }
 
         if (!hasGeometry || meshRenderer == null || previousMaterialMask <= 0)
             return;

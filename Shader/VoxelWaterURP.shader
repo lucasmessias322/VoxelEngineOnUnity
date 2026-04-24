@@ -22,10 +22,15 @@ Shader "Voxel/URP/VoxelWaterURP"
         _WaterNormalRotationB("Water Normal Rotation B", Range(-180.0, 180.0)) = -32.0
         _WaterNormalWarpScale("Water Normal Warp Scale", Range(0.01, 2.0)) = 0.2
         _WaterNormalWarpStrength("Water Normal Warp Strength", Range(0.0, 1.0)) = 0.3
+        [ToggleUI] _UseWaterAlbedoTexture("Use Water Albedo Texture", Float) = 0.0
+        _WaterTextureAlphaInfluence("Water Texture Alpha Influence", Range(0.0, 1.0)) = 0.0
+        _ContactEdgeFadeDistance("Contact Edge Fade Distance", Range(0.01, 2.0)) = 0.35
+        _ContactEdgeFadeExponent("Contact Edge Fade Exponent", Range(0.25, 8.0)) = 2.4
+        _ContactEdgeMinAlpha("Contact Edge Min Alpha", Range(0.0, 1.0)) = 0.0
         _RefractionStrength("Refraction Strength", Range(0.0, 0.15)) = 0.025
         _RefractionBlend("Refraction Blend", Range(0.0, 1.0)) = 0.65
-        _DepthShallowColor("Shallow Color", Color) = (0.3, 0.82, 0.78, 1.0)
-        _DepthDeepColor("Deep Color", Color) = (0.08, 0.24, 0.42, 1.0)
+        [HDR] _DepthShallowColor("Shallow Color", Color) = (0.3, 0.82, 0.78, 1.0)
+        [HDR] _DepthDeepColor("Deep Color", Color) = (0.08, 0.24, 0.42, 1.0)
         _DepthStartDistance("Depth Offset", Range(0.0, 8.0)) = 0.15
         _DepthColorDistance("Depth Range", Range(0.05, 32.0)) = 4.5
         _DepthAbsorptionStrength("Depth Curve", Range(0.25, 4.0)) = 1.2
@@ -34,12 +39,15 @@ Shader "Voxel/URP/VoxelWaterURP"
         _VoxelSkyLightMultiplier("Voxel Sky Light Multiplier", Range(0.0, 1.0)) = 1.0
         _VoxelLightStrength("Voxel Light Strength", Range(0.0, 2.0)) = 1.0
         _MinLight("Voxel Min Light", Range(0.0, 1.0)) = 0.0
+        [HDR] _WaterNightColor("Water Night Visibility Color", Color) = (0.08, 0.32, 0.42, 1.0)
+        _AmbientStrength("Water Night Visibility", Range(0.0, 1.0)) = 0.28
 
         _Cutoff("Alpha Cutoff", Range(0.0, 1.0)) = 0.5
 
         [HideInInspector] _Surface("__surface", Float) = 1.0
-        [HideInInspector] _Cull("__cull", Float) = 2.0
+        [HideInInspector] _Cull("__cull", Float) = 0.0
         [HideInInspector] _ZWrite("__zw", Float) = 1.0
+        [ToggleUI] _UseAtlasForAlbedo("Use Atlas For Water Albedo", Float) = 0.0
         [HideInInspector][NoScaleOffset] _Atlas("Atlas", 2D) = "white" {}
         [HideInInspector] _AtlasSize("Atlas Size (Tiles XY)", Vector) = (32, 32, 0, 0)
         [HideInInspector] _AtlasOriginTopLeft("Atlas Origin Top Left", Float) = 0
@@ -100,6 +108,7 @@ Shader "Voxel/URP/VoxelWaterURP"
             half _PaddingUV;
             half _Cutoff;
             half _Smoothness;
+            half _UseAtlasForAlbedo;
             half _BumpScale;
             half _TriplanarBlendSharpness;
             half _WaterNormalStrengthA;
@@ -111,6 +120,11 @@ Shader "Voxel/URP/VoxelWaterURP"
             half _WaterNormalRotationB;
             half _WaterNormalWarpScale;
             half _WaterNormalWarpStrength;
+            half _UseWaterAlbedoTexture;
+            half _WaterTextureAlphaInfluence;
+            half _ContactEdgeFadeDistance;
+            half _ContactEdgeFadeExponent;
+            half _ContactEdgeMinAlpha;
             half _RefractionStrength;
             half _RefractionBlend;
             half _DepthStartDistance;
@@ -121,11 +135,14 @@ Shader "Voxel/URP/VoxelWaterURP"
             half _VoxelSkyLightMultiplier;
             half _VoxelLightStrength;
             half _MinLight;
+            half4 _WaterNightColor;
+            half _AmbientStrength;
             half _Surface;
         CBUFFER_END
 
         TEXTURE2D(_MainTexture);
         SAMPLER(sampler_MainTexture);
+        float4 _MainTexture_TexelSize;
         TEXTURE2D(_Atlas);
         SAMPLER(sampler_Atlas);
 
@@ -181,6 +198,26 @@ Shader "Voxel/URP/VoxelWaterURP"
 
         half4 SampleWaterAlbedoAlpha(float2 localUV, float2 atlasOrigin, float2 atlasSize)
         {
+            if (_UseWaterAlbedoTexture <= 0.5h)
+                return half4(1.0h, 1.0h, 1.0h, 1.0h);
+
+            if (_UseAtlasForAlbedo <= 0.5h)
+            {
+                float textureWidth = max(_MainTexture_TexelSize.z, 1.0);
+                float textureHeight = max(_MainTexture_TexelSize.w, 1.0);
+                float frameCount = max(floor(textureHeight / textureWidth + 0.5), 1.0);
+                float frameSizeY = rcp(frameCount);
+                float frameOffsetY = 1.0 - frameSizeY;
+                float2 localMainUV = RepeatTileUV(localUV);
+                float2 mainTextureUV = float2(localMainUV.x, frameOffsetY + localMainUV.y * frameSizeY);
+
+                half4 mainTextureSample = SAMPLE_TEXTURE2D(_MainTexture, sampler_MainTexture, mainTextureUV);
+                if (!LooksLikeDefaultWhite(mainTextureSample))
+                    return mainTextureSample;
+
+                return SAMPLE_TEXTURE2D(_BaseMap, sampler_BaseMap, localMainUV);
+            }
+
             float2 resolvedAtlasSize = max(atlasSize, GetAtlasTileSize());
             float2 atlasUV = ResolveAtlasUV(localUV, atlasOrigin, resolvedAtlasSize);
 
@@ -310,9 +347,45 @@ Shader "Voxel/URP/VoxelWaterURP"
             return (half)pow(normalizedDepth, depthCurve);
         }
 
-        half3 GetWaterDepthTint(half depthFactor)
+        half GetWaterContactEdgeFade(float waterDepth)
+        {
+            float fadeDistance = max((float)_ContactEdgeFadeDistance, 0.0001);
+            half edgeFade = (half)saturate(waterDepth / fadeDistance);
+            return (half)pow(edgeFade, max((float)_ContactEdgeFadeExponent, 0.0001));
+        }
+
+        half GetWaterContactEdgeAlpha(float2 normalizedScreenSpaceUV, float3 positionWS)
+        {
+            float waterDepth = GetWaterDepthDifference(normalizedScreenSpaceUV, positionWS);
+            return lerp(_ContactEdgeMinAlpha, 1.0h, GetWaterContactEdgeFade(waterDepth));
+        }
+
+        half GetWaterContactEdgeFade(float2 normalizedScreenSpaceUV, float3 positionWS)
+        {
+            float waterDepth = GetWaterDepthDifference(normalizedScreenSpaceUV, positionWS);
+            return GetWaterContactEdgeFade(waterDepth);
+        }
+
+        half3 ResolveWaterContactEdgeNormalWS(half3 baseNormalWS, half3 detailNormalWS, half contactEdgeFade)
+        {
+            half3 normalizedBaseNormal = NormalizeNormalPerPixel(baseNormalWS);
+            half3 normalizedDetailNormal = NormalizeNormalPerPixel(detailNormalWS);
+            return normalize(lerp(normalizedBaseNormal, normalizedDetailNormal, contactEdgeFade));
+        }
+
+        half3 GetWaterDepthColor(half depthFactor)
         {
             return lerp(_DepthShallowColor.rgb, _DepthDeepColor.rgb, depthFactor);
+        }
+
+        half3 GetWaterDepthTint(half depthFactor)
+        {
+            return saturate(GetWaterDepthColor(depthFactor));
+        }
+
+        half3 GetWaterDepthEmission(half depthFactor)
+        {
+            return max(GetWaterDepthColor(depthFactor) - 1.0h, 0.0h);
         }
 
         half GetWaterDepthAlpha(half depthFactor)
@@ -320,15 +393,17 @@ Shader "Voxel/URP/VoxelWaterURP"
             return lerp(_DepthShallowAlpha, _DepthDeepAlpha, depthFactor);
         }
 
-        void ApplyWaterDepthStyling(half depthFactor, inout SurfaceData surfaceData)
+        void ApplyWaterDepthStyling(half depthFactor, half contactEdgeAlpha, half contactEdgeFade, inout SurfaceData surfaceData)
         {
             half3 depthTint = GetWaterDepthTint(depthFactor);
             half depthAlpha = GetWaterDepthAlpha(depthFactor);
             surfaceData.albedo *= depthTint;
-            surfaceData.alpha *= depthAlpha;
+            surfaceData.alpha *= depthAlpha * contactEdgeAlpha;
+            surfaceData.smoothness *= contactEdgeFade;
+            surfaceData.emission += GetWaterDepthEmission(depthFactor) * (depthAlpha * contactEdgeAlpha);
         }
 
-        half3 SampleWaterRefractionDelta(float2 normalizedScreenSpaceUV, half3 normalWS, half depthFactor, half surfaceAlpha)
+        half3 SampleWaterRefractionDelta(float2 normalizedScreenSpaceUV, half3 normalWS, half depthFactor, half surfaceAlpha, half contactEdgeAlpha)
         {
             if (_RefractionStrength <= 0.0001h || _RefractionBlend <= 0.0001h)
                 return half3(0.0h, 0.0h, 0.0h);
@@ -340,7 +415,7 @@ Shader "Voxel/URP/VoxelWaterURP"
 
             half3 baseSceneColor = SampleSceneColor(sceneUV);
             half3 refractedSceneColor = SampleSceneColor(refractedUV);
-            half refractionVisibility = saturate((1.0h - surfaceAlpha) * _RefractionBlend);
+            half refractionVisibility = saturate((1.0h - surfaceAlpha) * _RefractionBlend) * contactEdgeAlpha;
 
             return (refractedSceneColor - baseSceneColor) * refractionVisibility;
         }
@@ -357,6 +432,21 @@ Shader "Voxel/URP/VoxelWaterURP"
             half3 resolvedBlockLight = ResolveWaterBlockLightColor(blockLight, blockLightColor) * (half)_VoxelLightStrength;
             half minLight = (half)_MinLight;
             return saturate(max(half3(minLight, minLight, minLight), max(skyVoxelLight.xxx, resolvedBlockLight)));
+        }
+
+        half3 GetWaterMinimumVisibilityColor(half depthFactor)
+        {
+            half3 depthTint = GetWaterDepthTint(depthFactor);
+            half3 nightTint = saturate(_WaterNightColor.rgb);
+            return max(depthTint, nightTint);
+        }
+
+        void ApplyWaterMinimumVisibility(half depthFactor, half surfaceAlpha, inout half3 color)
+        {
+            half visibilityStrength = saturate((half)_AmbientStrength);
+            // Keeps transparent water readable when night PBR and voxel light both collapse toward black.
+            half3 visibilityFloor = GetWaterMinimumVisibilityColor(depthFactor) * (visibilityStrength * saturate(surfaceAlpha));
+            color = max(color, visibilityFloor);
         }
 
         inline void InitializeStandardLitSurfaceData(float2 uv, out SurfaceData outSurfaceData)
@@ -378,7 +468,8 @@ Shader "Voxel/URP/VoxelWaterURP"
         inline void InitializeTriplanarLitSurfaceData(float2 localUV, float2 atlasOrigin, float2 atlasSize, float3 positionWS, half3 baseNormalWS, out SurfaceData outSurfaceData, out half3 triplanarNormalWS)
         {
             half4 albedoAlpha = SampleWaterAlbedoAlpha(localUV, atlasOrigin, atlasSize);
-            outSurfaceData.alpha = Alpha(albedoAlpha.a, _BaseColor, _Cutoff);
+            half resolvedAlpha = lerp(1.0h, albedoAlpha.a, saturate(_WaterTextureAlphaInfluence));
+            outSurfaceData.alpha = Alpha(resolvedAlpha, _BaseColor, _Cutoff);
             outSurfaceData.albedo = albedoAlpha.rgb * _BaseColor.rgb;
             outSurfaceData.albedo = AlphaModulate(outSurfaceData.albedo, outSurfaceData.alpha);
             outSurfaceData.metallic = 0.0h;
@@ -437,6 +528,27 @@ Shader "Voxel/URP/VoxelWaterURP"
             UNITY_VERTEX_OUTPUT_STEREO
         };
 
+        float2 GetWaterNormalizedScreenSpaceUV(float4 positionCS)
+        {
+            #if defined(UNITY_PRETRANSFORM_TO_DISPLAY_ORIENTATION)
+                float2 preRotatedScreenSpaceUV = GetNormalizedScreenSpaceUV(positionCS);
+                switch (UNITY_DISPLAY_ORIENTATION_PRETRANSFORM)
+                {
+                    default:
+                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_0:
+                        return preRotatedScreenSpaceUV;
+                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_90:
+                        return float2(1 - preRotatedScreenSpaceUV.y, preRotatedScreenSpaceUV.x);
+                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_180:
+                        return float2(1 - preRotatedScreenSpaceUV.x, 1 - preRotatedScreenSpaceUV.y);
+                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_270:
+                        return float2(preRotatedScreenSpaceUV.y, 1 - preRotatedScreenSpaceUV.x);
+                }
+            #else
+                return GetNormalizedScreenSpaceUV(positionCS);
+            #endif
+        }
+
         void InitializeWaterInputData(ForwardVaryings input, half3 normalWS, out InputData inputData)
         {
             inputData = (InputData)0;
@@ -463,28 +575,7 @@ Shader "Voxel/URP/VoxelWaterURP"
             #else
                 inputData.fogCoord = InitializeInputDataFog(float4(input.positionWS, 1.0), input.fogFactor);
             #endif
-
-            #if defined(UNITY_PRETRANSFORM_TO_DISPLAY_ORIENTATION)
-                float2 preRotatedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
-                switch (UNITY_DISPLAY_ORIENTATION_PRETRANSFORM)
-                {
-                    default:
-                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_0:
-                        inputData.normalizedScreenSpaceUV = preRotatedScreenSpaceUV;
-                        break;
-                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_90:
-                        inputData.normalizedScreenSpaceUV = float2(1 - preRotatedScreenSpaceUV.y, preRotatedScreenSpaceUV.x);
-                        break;
-                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_180:
-                        inputData.normalizedScreenSpaceUV = float2(1 - preRotatedScreenSpaceUV.x, 1 - preRotatedScreenSpaceUV.y);
-                        break;
-                    case UNITY_DISPLAY_ORIENTATION_PRETRANSFORM_270:
-                        inputData.normalizedScreenSpaceUV = float2(preRotatedScreenSpaceUV.y, 1 - preRotatedScreenSpaceUV.x);
-                        break;
-                }
-            #else
-                inputData.normalizedScreenSpaceUV = GetNormalizedScreenSpaceUV(input.positionCS);
-            #endif
+            inputData.normalizedScreenSpaceUV = GetWaterNormalizedScreenSpaceUV(input.positionCS);
 
             #if defined(DEBUG_DISPLAY)
                 #if defined(LIGHTMAP_ON)
@@ -575,17 +666,22 @@ Shader "Voxel/URP/VoxelWaterURP"
             SurfaceData surfaceData;
             half3 triplanarNormalWS;
             InitializeTriplanarLitSurfaceData(input.localUV, input.atlasData.xy, input.atlasData.zw, input.positionWS, input.normalWS, surfaceData, triplanarNormalWS);
+            float2 normalizedScreenSpaceUV = GetWaterNormalizedScreenSpaceUV(input.positionCS);
+            half contactEdgeAlpha = GetWaterContactEdgeAlpha(normalizedScreenSpaceUV, input.positionWS);
+            half contactEdgeFade = GetWaterContactEdgeFade(normalizedScreenSpaceUV, input.positionWS);
+            half3 resolvedNormalWS = ResolveWaterContactEdgeNormalWS(input.normalWS, triplanarNormalWS, contactEdgeFade);
 
             InputData inputData;
-            InitializeWaterInputData(input, triplanarNormalWS, inputData);
+            InitializeWaterInputData(input, resolvedNormalWS, inputData);
             InitializeWaterBakedGIData(input, inputData);
-            half depthFactor = GetWaterDepthFactor(inputData.normalizedScreenSpaceUV, input.positionWS);
-            ApplyWaterDepthStyling(depthFactor, surfaceData);
+            half depthFactor = GetWaterDepthFactor(normalizedScreenSpaceUV, input.positionWS);
+            ApplyWaterDepthStyling(depthFactor, contactEdgeAlpha, contactEdgeFade, surfaceData);
             half3 voxelLightColor = ComputeWaterVoxelLightColor(input.voxelSkyLight, input.voxelBlockLight, input.voxelBlockLightColor);
 
             half4 color = UniversalFragmentPBR(inputData, surfaceData);
-            color.rgb += SampleWaterRefractionDelta(inputData.normalizedScreenSpaceUV, triplanarNormalWS, depthFactor, surfaceData.alpha);
+            color.rgb += SampleWaterRefractionDelta(normalizedScreenSpaceUV, resolvedNormalWS, depthFactor, surfaceData.alpha, contactEdgeAlpha);
             color.rgb *= voxelLightColor;
+            ApplyWaterMinimumVisibility(depthFactor, surfaceData.alpha, color.rgb);
             color.rgb = MixFog(color.rgb, inputData.fogCoord);
             return color;
         }
@@ -638,7 +734,10 @@ Shader "Voxel/URP/VoxelWaterURP"
                 LODFadeCrossFade(input.positionCS);
             #endif
 
-            half3 normalWS = SampleWaterAnimatedNormalWS(input.positionWS, input.normalWS);
+            float2 normalizedScreenSpaceUV = GetWaterNormalizedScreenSpaceUV(input.positionCS);
+            half contactEdgeFade = GetWaterContactEdgeFade(normalizedScreenSpaceUV, input.positionWS);
+            half3 detailNormalWS = SampleWaterAnimatedNormalWS(input.positionWS, input.normalWS);
+            half3 normalWS = ResolveWaterContactEdgeNormalWS(input.normalWS, detailNormalWS, contactEdgeFade);
             outNormalWS = half4(NormalizeNormalPerPixel(normalWS), 0.0h);
 
             #ifdef _WRITE_RENDERING_LAYERS

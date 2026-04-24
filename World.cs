@@ -986,6 +986,17 @@ public partial class World : MonoBehaviour
             ApplyBiomeTintToRenderer(data.meshRenderer, new Vector2Int(kv.Key.x, kv.Key.z));
             ApplyRealisticShaderRendererSettings(data.meshRenderer);
         }
+
+        ChunkRenderSlice[] allChunkSlices = FindObjectsByType<ChunkRenderSlice>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        for (int i = 0; i < allChunkSlices.Length; i++)
+        {
+            ChunkRenderSlice slice = allChunkSlices[i];
+            if (slice == null)
+                continue;
+
+            slice.UpdateSourceMaterials(activeMaterials);
+            ApplyRealisticShaderRendererSettings(slice.meshRenderer);
+        }
     }
 
     private void EnsureShaderFallbackBuffersBound()
@@ -1209,6 +1220,11 @@ public partial class World : MonoBehaviour
     private bool ShouldGenerateGrassBillboardsForChunk(bool useDetailedGeneration)
     {
         return enableGrassBillboards && useDetailedGeneration;
+    }
+
+    private static bool ShouldGenerateDetailedLeafFoliageForChunk(bool useDetailedGeneration)
+    {
+        return useDetailedGeneration;
     }
 
     private bool ShouldPauseDetailedChunkPromotions(Vector2Int center)
@@ -1654,9 +1670,70 @@ public partial class World : MonoBehaviour
             return;
 
         renderDistance = clampedDistance;
+        GameSettingsStorage.SetRenderDistance(renderDistance);
         simulationDistance = Mathf.Clamp(simulationDistance, 0, renderDistance);
         _lastChunkCoord = InvalidChunkCoord;
         pendingJobPrioritiesDirty = true;
+    }
+
+    public WorldMaterialProfile GetMaterialProfile()
+    {
+        return materialProfile;
+    }
+
+    public TreeLeafQualityMode GetTreeLeafQuality()
+    {
+        return treeLeafQuality;
+    }
+
+    public void SetMaterialProfile(WorldMaterialProfile profile)
+    {
+        if (materialProfile == profile)
+            return;
+
+        materialProfile = profile;
+        GameSettingsStorage.SetMaterialProfile(materialProfile);
+        lastWorldMaterialProfileHash = ComputeWorldMaterialProfileHash();
+        RefreshWorldMaterialProfileOnRenderers();
+        RefreshRuntimeMaterialProfileConsumers();
+    }
+
+    public void SetTreeLeafQuality(TreeLeafQualityMode quality)
+    {
+        if (treeLeafQuality == quality)
+            return;
+
+        treeLeafQuality = quality;
+        GameSettingsStorage.SetTreeLeafQuality(treeLeafQuality);
+        lastTreeLeafQuality = treeLeafQuality;
+        lastTreeLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
+
+        if (!Application.isPlaying || activeChunks == null || activeChunks.Count == 0)
+            return;
+
+        loadedChunkCoordsBuffer.Clear();
+        foreach (var kv in activeChunks)
+            loadedChunkCoordsBuffer.Add(kv.Key);
+
+        for (int i = 0; i < loadedChunkCoordsBuffer.Count; i++)
+            RequestFullChunkRebuild(loadedChunkCoordsBuffer[i], false);
+    }
+
+    private void RefreshRuntimeMaterialProfileConsumers()
+    {
+        HeldBlockVisual[] heldBlockVisuals = FindObjectsByType<HeldBlockVisual>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        for (int i = 0; i < heldBlockVisuals.Length; i++)
+        {
+            if (heldBlockVisuals[i] != null)
+                heldBlockVisuals[i].RefreshNow();
+        }
+
+        BlockDrop[] blockDrops = FindObjectsByType<BlockDrop>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        for (int i = 0; i < blockDrops.Length; i++)
+        {
+            if (blockDrops[i] != null)
+                blockDrops[i].RefreshVisualMaterial();
+        }
     }
 
     private static bool IsCoordInsideCircularDistance(Vector2Int coord, Vector2Int center, int distanceInChunks)
@@ -3067,6 +3144,8 @@ public partial class World : MonoBehaviour
 
     private void Start()
     {
+        GameSettingsStorage.ApplyToWorld(this);
+
         if (blockData != null)
         {
             blockData.InitializeDictionary();
@@ -4473,6 +4552,7 @@ public partial class World : MonoBehaviour
         if (affectedVisualSliceMask != 0)
         {
             bool useDetailedGeneration = pd.targetDetailedGeneration;
+            bool generateDetailedLeafFoliage = ShouldGenerateDetailedLeafFoliageForChunk(useDetailedGeneration);
             float effectiveAoStrength = enableAmbientOcclusion ? aoStrength : 0f;
             float leafFoliageSpawnChance = Mathf.Clamp01(treeLeafFoliageSpawnChance);
             float leafFoliageHeightMin = Mathf.Clamp(treeLeafFoliageHeightMin, 0.2f, 2f);
@@ -4519,8 +4599,8 @@ public partial class World : MonoBehaviour
                     ShouldGenerateGrassBillboardsForChunk(useDetailedGeneration), grassBillboardChance, grassBillboardBlockType, grassBillboardHeight,
                     grassBillboardNoiseScale, grassBillboardJitter, cachedNativeVegetationBillboardRules, GetBiomeNoiseSettings(),
                     effectiveAoStrength, aoCurveExponent, aoMinLight, useFastBedrockStyleMeshing,
-                    treeLeafQuality == TreeLeafQualityMode.High,
-                    treeLeafQuality == TreeLeafQualityMode.Ultra,
+                    generateDetailedLeafFoliage && treeLeafQuality == TreeLeafQualityMode.High,
+                    generateDetailedLeafFoliage && treeLeafQuality == TreeLeafQualityMode.Ultra,
                     leafFoliageSpawnChance, leafFoliageHeightMin, leafFoliageHeightMax,
                     leafFoliageHalfWidthMin, leafFoliageHalfWidthMax,
                     leafFoliageBaseYOffsetMin, leafFoliageBaseYOffsetMax,
