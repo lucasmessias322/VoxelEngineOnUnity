@@ -74,7 +74,11 @@ public class VoxelProceduralSkyController : MonoBehaviour
     public Material[] extraVoxelMaterials;
     [Range(0f, 1f)] public float dayVoxelSkyLightMultiplier = 1f;
     [Range(0f, 1f)] public float twilightVoxelSkyLightMultiplier = 0.38f;
-    [Range(0f, 1f)] public float nightVoxelSkyLightMultiplier = 0.08f;
+    [Range(0f, 1f)] public float nightVoxelSkyLightMultiplier = 0.18f;
+    public bool useConstantVoxelMinLight = true;
+    [Range(0f, 1f)] public float voxelCaveMinLight = 0.1f;
+    public bool keepMoonlitSkyAboveCaveMinLight = true;
+    [Range(0f, 1f)] public float moonlitSkyLightExtra = 0.08f;
     [Range(0f, 1f)] public float dayVoxelMinLight = 0.075f;
     [Range(0f, 1f)] public float twilightVoxelMinLight = 0.025f;
     [Range(0f, 1f)] public float nightVoxelMinLight = 0.008f;
@@ -116,6 +120,7 @@ public class VoxelProceduralSkyController : MonoBehaviour
     private float previousTimeOfDay = -1f;
     private float previousMinecraftTime = -1f;
     private readonly HashSet<Material> appliedVoxelMaterials = new HashSet<Material>();
+    private readonly List<Material> worldVoxelMaterials = new List<Material>(8);
 
     private static readonly int MinLightId = Shader.PropertyToID("_MinLight");
     private static readonly int VoxelSkyLightMultiplierId = Shader.PropertyToID("_VoxelSkyLightMultiplier");
@@ -149,6 +154,8 @@ public class VoxelProceduralSkyController : MonoBehaviour
         dayFogEnd = Mathf.Max(dayFogStart, dayFogEnd);
         twilightFogEnd = Mathf.Max(twilightFogStart, twilightFogEnd);
         nightFogEnd = Mathf.Max(nightFogStart, nightFogEnd);
+        voxelCaveMinLight = Mathf.Clamp01(voxelCaveMinLight);
+        moonlitSkyLightExtra = Mathf.Clamp01(moonlitSkyLightExtra);
 
         SyncTimeFieldsFromInspector();
 
@@ -467,8 +474,16 @@ public class VoxelProceduralSkyController : MonoBehaviour
 
     private void ApplyVoxelMaterialLighting(float dayWeight, float twilightWeight, float nightWeight)
     {
-        float minLight = BlendByPhase(dayVoxelMinLight, twilightVoxelMinLight, nightVoxelMinLight, dayWeight, twilightWeight, nightWeight);
+        float minLight = useConstantVoxelMinLight
+            ? voxelCaveMinLight
+            : BlendByPhase(dayVoxelMinLight, twilightVoxelMinLight, nightVoxelMinLight, dayWeight, twilightWeight, nightWeight);
         float skyLightMultiplier = BlendByPhase(dayVoxelSkyLightMultiplier, twilightVoxelSkyLightMultiplier, nightVoxelSkyLightMultiplier, dayWeight, twilightWeight, nightWeight);
+        if (useConstantVoxelMinLight && keepMoonlitSkyAboveCaveMinLight)
+        {
+            float moonlitSkyMinimum = Mathf.Clamp01(minLight + moonlitSkyLightExtra);
+            skyLightMultiplier = Mathf.Max(skyLightMultiplier, moonlitSkyMinimum * nightWeight);
+        }
+
         float ambientStrength = BlendByPhase(dayVoxelAmbientStrength, twilightVoxelAmbientStrength, nightVoxelAmbientStrength, dayWeight, twilightWeight, nightWeight);
         float directionalStrength = BlendByPhase(dayVoxelDirectionalStrength, twilightVoxelDirectionalStrength, nightVoxelDirectionalStrength, dayWeight, twilightWeight, nightWeight);
         float wrapLighting = BlendByPhase(dayVoxelWrapLighting, twilightVoxelWrapLighting, nightVoxelWrapLighting, dayWeight, twilightWeight, nightWeight);
@@ -480,12 +495,27 @@ public class VoxelProceduralSkyController : MonoBehaviour
 
         appliedVoxelMaterials.Clear();
 
-        if (includeWorldMaterials && world != null && world.Material != null)
+        if (includeWorldMaterials && world != null)
         {
-            ApplyVoxelLightingToMaterials(world.Material, minLight, skyLightMultiplier, ambientStrength, directionalStrength, wrapLighting);
+            worldVoxelMaterials.Clear();
+            world.CollectWorldMaterials(worldVoxelMaterials);
+            ApplyVoxelLightingToMaterials(worldVoxelMaterials, minLight, skyLightMultiplier, ambientStrength, directionalStrength, wrapLighting);
         }
 
         ApplyVoxelLightingToMaterials(extraVoxelMaterials, minLight, skyLightMultiplier, ambientStrength, directionalStrength, wrapLighting);
+    }
+
+    private void ApplyVoxelLightingToMaterials(IList<Material> materials, float minLight, float skyLightMultiplier, float ambientStrength, float directionalStrength, float wrapLighting)
+    {
+        if (materials == null)
+        {
+            return;
+        }
+
+        for (int i = 0; i < materials.Count; i++)
+        {
+            ApplyVoxelLightingToMaterial(materials[i], minLight, skyLightMultiplier, ambientStrength, directionalStrength, wrapLighting);
+        }
     }
 
     private void ApplyVoxelLightingToMaterials(Material[] materials, float minLight, float skyLightMultiplier, float ambientStrength, float directionalStrength, float wrapLighting)
@@ -497,18 +527,22 @@ public class VoxelProceduralSkyController : MonoBehaviour
 
         for (int i = 0; i < materials.Length; i++)
         {
-            Material material = materials[i];
-            if (material == null || !appliedVoxelMaterials.Add(material))
-            {
-                continue;
-            }
-
-            SetFloatIfPresent(material, MinLightId, minLight);
-            SetFloatIfPresent(material, VoxelSkyLightMultiplierId, skyLightMultiplier);
-            SetFloatIfPresent(material, AmbientStrengthId, ambientStrength);
-            SetFloatIfPresent(material, DirectionalStrengthId, directionalStrength);
-            SetFloatIfPresent(material, WrapLightingId, wrapLighting);
+            ApplyVoxelLightingToMaterial(materials[i], minLight, skyLightMultiplier, ambientStrength, directionalStrength, wrapLighting);
         }
+    }
+
+    private void ApplyVoxelLightingToMaterial(Material material, float minLight, float skyLightMultiplier, float ambientStrength, float directionalStrength, float wrapLighting)
+    {
+        if (material == null || !appliedVoxelMaterials.Add(material))
+        {
+            return;
+        }
+
+        SetFloatIfPresent(material, MinLightId, minLight);
+        SetFloatIfPresent(material, VoxelSkyLightMultiplierId, skyLightMultiplier);
+        SetFloatIfPresent(material, AmbientStrengthId, ambientStrength);
+        SetFloatIfPresent(material, DirectionalStrengthId, directionalStrength);
+        SetFloatIfPresent(material, WrapLightingId, wrapLighting);
     }
 
     private static void SetFloatIfPresent(Material material, int propertyId, float value)

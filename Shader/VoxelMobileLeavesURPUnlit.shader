@@ -22,7 +22,7 @@ Shader "Voxel/URP Mobile/Leaves Unlit AO"
         _PaddingUV("Atlas Padding", Range(0.0, 0.01)) = 0.002
 
         [Header(Voxel Light)]
-        _MinLight("Minimum Light", Range(0.0, 1.0)) = 0.08
+        _MinLight("Minimum Light", Range(0.0, 1.0)) = 0.1
         _VoxelSkyLightMultiplier("Sky Light Multiplier", Range(0.0, 1.0)) = 1.0
         _VoxelLightStrength("Voxel Light Strength", Range(0.0, 2.0)) = 1.0
         _AOStrength("Vertex AO Strength", Range(0.0, 2.0)) = 0.8

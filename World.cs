@@ -934,6 +934,28 @@ public partial class World : MonoBehaviour
         return ContainsMaterial(pcMaterials, material) || ContainsMaterial(mobileMaterials, material);
     }
 
+    public void CollectWorldMaterials(List<Material> target)
+    {
+        if (target == null)
+            return;
+
+        AppendUniqueWorldMaterials(pcMaterials, target);
+        AppendUniqueWorldMaterials(mobileMaterials, target);
+    }
+
+    private static void AppendUniqueWorldMaterials(Material[] source, List<Material> target)
+    {
+        if (source == null)
+            return;
+
+        for (int i = 0; i < source.Length; i++)
+        {
+            Material material = source[i];
+            if (material != null && !target.Contains(material))
+                target.Add(material);
+        }
+    }
+
     private int ComputeWorldMaterialProfileHash()
     {
         unchecked

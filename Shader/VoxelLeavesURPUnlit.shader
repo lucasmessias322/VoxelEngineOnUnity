@@ -379,7 +379,9 @@ Shader "Voxel/URP/Voxel Leaves Unlit Lit"
 
         half ComputeVoxelDirectLightVisibility(half skyLight)
         {
-            return saturate(skyLight * 64.0h);
+            half fullSkyThreshold = max(saturate((half)_VoxelShadowLightThreshold), 1.0h / 15.0h);
+            half softStart = saturate(fullSkyThreshold - (1.0h / 15.0h));
+            return smoothstep(softStart, fullSkyThreshold, saturate(skyLight));
         }
 
         half ComputeWrappedDiffuse(half3 normalWS, half3 lightDirectionWS)

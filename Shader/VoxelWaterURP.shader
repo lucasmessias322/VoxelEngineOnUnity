@@ -441,11 +441,14 @@ Shader "Voxel/URP/VoxelWaterURP"
             return max(depthTint, nightTint);
         }
 
-        void ApplyWaterMinimumVisibility(half depthFactor, half surfaceAlpha, inout half3 color)
+        void ApplyWaterMinimumVisibility(half depthFactor, half surfaceAlpha, half skyLight, half blockLight, inout half3 color)
         {
             half visibilityStrength = saturate((half)_AmbientStrength);
-            // Keeps transparent water readable when night PBR and voxel light both collapse toward black.
-            half3 visibilityFloor = GetWaterMinimumVisibilityColor(depthFactor) * (visibilityStrength * saturate(surfaceAlpha));
+            half skyVisibility = saturate(skyLight * (half)_VoxelSkyLightMultiplier);
+            half blockVisibility = saturate(blockLight * (half)_VoxelLightStrength);
+            half lightVisibility = max(skyVisibility, blockVisibility);
+            // Keeps lit transparent water readable without leaking night visibility into closed caves.
+            half3 visibilityFloor = GetWaterMinimumVisibilityColor(depthFactor) * (visibilityStrength * saturate(surfaceAlpha) * lightVisibility);
             color = max(color, visibilityFloor);
         }
 
@@ -681,7 +684,7 @@ Shader "Voxel/URP/VoxelWaterURP"
             half4 color = UniversalFragmentPBR(inputData, surfaceData);
             color.rgb += SampleWaterRefractionDelta(normalizedScreenSpaceUV, resolvedNormalWS, depthFactor, surfaceData.alpha, contactEdgeAlpha);
             color.rgb *= voxelLightColor;
-            ApplyWaterMinimumVisibility(depthFactor, surfaceData.alpha, color.rgb);
+            ApplyWaterMinimumVisibility(depthFactor, surfaceData.alpha, input.voxelSkyLight, input.voxelBlockLight, color.rgb);
             color.rgb = MixFog(color.rgb, inputData.fogCoord);
             return color;
         }
