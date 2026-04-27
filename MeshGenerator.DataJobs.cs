@@ -19,6 +19,8 @@ public static partial class MeshGenerator
         [ReadOnly] public NativeArray<NoiseLayer> noiseLayers;
 
         public int baseHeight;
+        public bool useFlatWorld;
+        public int flatWorldHeight;
         public float offsetX;
         public float offsetZ;
         public int border;
@@ -40,6 +42,9 @@ public static partial class MeshGenerator
 
         private int GetSurfaceHeight(int worldX, int worldZ)
         {
+            if (useFlatWorld)
+                return math.clamp(flatWorldHeight, 3, SizeY - 1);
+
             return TerrainHeightSampler.SampleSurfaceHeight(
                 worldX,
                 worldZ,
@@ -275,6 +280,7 @@ public static partial class MeshGenerator
         [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
 
         public int border;
+        public bool useFlatWorld;
 
         public void Execute(int index)
         {
@@ -303,7 +309,7 @@ public static partial class MeshGenerator
                     continue;
                 }
 
-                blockTypes[voxelIndex] = (byte)(y > highestSolidY - TerrainSurfaceRules.StoneTransitionDepth
+                blockTypes[voxelIndex] = (byte)(useFlatWorld || y > highestSolidY - TerrainSurfaceRules.StoneTransitionDepth
                     ? BlockType.Stone
                     : BlockType.Deepslate);
             }
@@ -318,6 +324,7 @@ public static partial class MeshGenerator
         [NativeDisableParallelForRestriction] public NativeArray<byte> blockTypes;
 
         public int border;
+        public bool useFlatWorld;
 
         public void Execute(int index)
         {
@@ -331,7 +338,11 @@ public static partial class MeshGenerator
 
             int voxelSizeX = SizeX + 2 * border;
             int voxelPlaneSize = voxelSizeX * SizeY;
-            int maxSurfaceDepth = math.max(1, surface.surfaceLayerDepth);
+            int maxSurfaceDepth = useFlatWorld
+                ? FlatWorldUtility.SurfaceLayerDepth
+                : math.max(1, surface.surfaceLayerDepth);
+            BlockType surfaceBlock = useFlatWorld ? BlockType.Grass : surface.surfaceBlock;
+            BlockType subsurfaceBlock = useFlatWorld ? BlockType.Stone : surface.subsurfaceBlock;
             int solidLayersPainted = 0;
 
             for (int y = surfaceY; y >= 3 && solidLayersPainted < maxSurfaceDepth; y--)
@@ -340,7 +351,7 @@ public static partial class MeshGenerator
                 if (!solids[voxelIndex])
                     continue;
 
-                blockTypes[voxelIndex] = (byte)(solidLayersPainted == 0 ? surface.surfaceBlock : surface.subsurfaceBlock);
+                blockTypes[voxelIndex] = (byte)(solidLayersPainted == 0 ? surfaceBlock : subsurfaceBlock);
                 solidLayersPainted++;
             }
         }

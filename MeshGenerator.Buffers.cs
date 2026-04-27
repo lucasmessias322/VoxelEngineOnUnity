@@ -433,12 +433,16 @@ public static partial class MeshGenerator
         int baseHeight,
         float offsetX,
         float offsetZ,
-        in BiomeNoiseSettings biomeNoiseSettings)
+        in BiomeNoiseSettings biomeNoiseSettings,
+        bool useFlatWorld,
+        int flatWorldHeight)
     {
         unchecked
         {
             int hash = ComputeSpaghettiCarveMaskSettingsHash(oreSeed, borderSize, in settings);
             AddHash(ref hash, baseHeight);
+            AddHash(ref hash, useFlatWorld ? 1 : 0);
+            AddHash(ref hash, flatWorldHeight);
             AddHash(ref hash, math.asint(offsetX));
             AddHash(ref hash, math.asint(offsetZ));
             AddHash(ref hash, biomeNoiseSettings.GetHashCode());

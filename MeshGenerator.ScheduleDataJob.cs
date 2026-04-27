@@ -16,6 +16,8 @@ public static partial class MeshGenerator
         NativeArray<byte> effectiveOpacityByBlock,
         NativeArray<ushort> lightEmissionByBlock,
         int baseHeight,
+        bool useFlatWorld,
+        int flatWorldHeight,
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
@@ -101,6 +103,15 @@ public static partial class MeshGenerator
         NativeArray<byte> densityClassifications = tempBuffers.densityClassifications;
         NativeArray<TerrainDensitySettings> resolvedDensitySettingsByColumn = tempBuffers.resolvedDensitySettingsByColumn;
         NativeArray<byte> terrainSolidMaskByColumn = tempBuffers.terrainSolidMaskByColumn;
+        int resolvedFlatWorldHeight = math.clamp(flatWorldHeight, 3, SizeY - 1);
+        TerrainDensitySettings effectiveTerrainDensitySettings = terrainDensitySettings;
+        if (useFlatWorld)
+            effectiveTerrainDensitySettings.enabled = false;
+        bool effectiveEnableWater = enableWater && !useFlatWorld;
+        bool effectiveEnableTrees = enableTrees && !useFlatWorld;
+        SpaghettiCaveSettings effectiveSpaghettiCaveSettings = spaghettiCaveSettings;
+        if (useFlatWorld)
+            effectiveSpaghettiCaveSettings.enabled = false;
 
         // ==========================================
         // JOB 0: GeraÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o do Heightmap (Paralelo)
@@ -110,6 +121,8 @@ public static partial class MeshGenerator
             coord = coord,
             noiseLayers = noiseLayers,
             baseHeight = baseHeight,
+            useFlatWorld = useFlatWorld,
+            flatWorldHeight = resolvedFlatWorldHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             border = dataBorderSize,
@@ -129,7 +142,7 @@ public static partial class MeshGenerator
             resolvedDensitySettingsByColumn = resolvedDensitySettingsByColumn,
             border = borderSize,
             biomeNoiseSettings = biomeNoiseSettings,
-            terrainDensitySettings = terrainDensitySettings
+            terrainDensitySettings = effectiveTerrainDensitySettings
         };
 
         int paddedSize = SizeX + 2 * borderSize;
@@ -155,7 +168,8 @@ public static partial class MeshGenerator
             solidMaskByColumn = terrainSolidMaskByColumn,
             solids = solids,
             blockTypes = blockTypes,
-            border = borderSize
+            border = borderSize,
+            useFlatWorld = useFlatWorld
         };
         JobHandle postProcessTerrainSolidBlocksHandle = postProcessTerrainSolidBlocksJob.Schedule(totalColumns, 32, resolveTerrainSolidHandle);
 
@@ -178,7 +192,8 @@ public static partial class MeshGenerator
             columnContexts = dataColumnContexts,
             solids = solids,
             blockTypes = blockTypes,
-            border = borderSize
+            border = borderSize,
+            useFlatWorld = useFlatWorld
         };
         JobHandle surfaceMaterialHandle = applySurfaceMaterialsJob.Schedule(
             totalColumns,
@@ -193,11 +208,13 @@ public static partial class MeshGenerator
 
 
             baseHeight = baseHeight,
+            useFlatWorld = useFlatWorld,
+            flatWorldHeight = resolvedFlatWorldHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,
             biomeNoiseSettings = biomeNoiseSettings,
-            terrainDensitySettings = terrainDensitySettings,
+            terrainDensitySettings = effectiveTerrainDensitySettings,
 
 
             treeMargin = treeMargin,
@@ -212,9 +229,9 @@ public static partial class MeshGenerator
             treeSpawnRules = treeSpawnRules,
             oreSettings = oreSettings,
             oreSeed = oreSeed,
-            spaghettiCaveSettings = spaghettiCaveSettings,
+            spaghettiCaveSettings = effectiveSpaghettiCaveSettings,
 
-            enableTrees = enableTrees,
+            enableTrees = effectiveEnableTrees,
             columnContextCache = dataColumnContexts,
             columnContextCacheStride = dataHeightSize,
             spaghettiCarveMask = sharedSpaghettiCarveMask,
@@ -245,7 +262,7 @@ public static partial class MeshGenerator
             JobHandle dataSpaghettiMaskCacheStoreHandle = default;
             JobHandle dataDisposePrefilledSpaghettiColumnsHandle = default;
             bool useDataSharedSpaghettiCarveMask = false;
-            if (spaghettiCaveSettings.enabled)
+            if (effectiveSpaghettiCaveSettings.enabled)
             {
                 if (sharedSpaghettiCarveMask.IsCreated)
                     sharedSpaghettiCarveMask.Dispose();
@@ -257,8 +274,10 @@ public static partial class MeshGenerator
                     globalOffsetX,
                     globalOffsetZ,
                     biomeNoiseSettings,
+                    useFlatWorld,
+                    resolvedFlatWorldHeight,
                     oreSeed,
-                    spaghettiCaveSettings,
+                    effectiveSpaghettiCaveSettings,
                     heightCache,
                     heightHandle,
                     dataBorderSize,
@@ -293,7 +312,7 @@ public static partial class MeshGenerator
             oreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
             oreChunkDataHandle = oreChunkDataJob.Schedule(caveChunkDataHandle);
 
-            if (enableWater)
+            if (effectiveEnableWater)
             {
                 var fillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
                 {
@@ -316,7 +335,7 @@ public static partial class MeshGenerator
             }
 
             treeChunkDataHandle = waterChunkDataHandle;
-            if (enableTrees)
+            if (effectiveEnableTrees)
             {
                 var treeChunkDataJob = baseChunkDataJob;
                 treeChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Trees;
@@ -374,6 +393,8 @@ public static partial class MeshGenerator
             coord = coord,
             noiseLayers = noiseLayers,
             baseHeight = baseHeight,
+            useFlatWorld = useFlatWorld,
+            flatWorldHeight = resolvedFlatWorldHeight,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             border = lightBorderSize,
@@ -382,7 +403,7 @@ public static partial class MeshGenerator
             heightStride = lightHeightSize
         };
         JobHandle lightHeightHandle = lightHeightJob.Schedule(lightTotalHeightPoints, 32);
-        bool useSharedSpaghettiCarveMask = spaghettiCaveSettings.enabled;
+        bool useSharedSpaghettiCarveMask = effectiveSpaghettiCaveSettings.enabled;
         JobHandle spaghettiCarveMaskHandle = default;
         JobHandle disposePrefilledSpaghettiColumnsHandle = default;
         JobHandle spaghettiMaskCacheStoreHandle = default;
@@ -400,8 +421,10 @@ public static partial class MeshGenerator
                 globalOffsetX,
                 globalOffsetZ,
                 biomeNoiseSettings,
+                useFlatWorld,
+                resolvedFlatWorldHeight,
                 oreSeed,
-                spaghettiCaveSettings,
+                effectiveSpaghettiCaveSettings,
                 lightHeightCache,
                 lightHeightHandle,
                 lightBorderSize,
@@ -436,7 +459,7 @@ public static partial class MeshGenerator
         stagedOreChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Ores;
         oreChunkDataHandle = stagedOreChunkDataJob.Schedule(caveChunkDataHandle);
 
-        if (enableWater)
+        if (effectiveEnableWater)
         {
             var stagedFillWaterBelowSeaLevelJob = new ChunkData.FillTerrainVoidWaterBelowSeaLevelJob
             {
@@ -459,7 +482,7 @@ public static partial class MeshGenerator
         }
 
         treeChunkDataHandle = waterChunkDataHandle;
-        if (enableTrees)
+        if (effectiveEnableTrees)
         {
             var stagedTreeChunkDataJob = baseChunkDataJob;
             stagedTreeChunkDataJob.stages = ChunkData.ChunkDataStageFlags.Trees;
@@ -495,7 +518,7 @@ public static partial class MeshGenerator
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             biomeNoiseSettings = biomeNoiseSettings,
-            terrainDensitySettings = terrainDensitySettings,
+            terrainDensitySettings = effectiveTerrainDensitySettings,
             skipInnerMin = lightBorderSize > dataBorderSize ? lightBorderSize - dataBorderSize : 0,
             skipInnerMaxExclusive = lightBorderSize > dataBorderSize ? (lightBorderSize - dataBorderSize) + dataVoxelSizeX : 0
         };
@@ -641,6 +664,8 @@ public static partial class MeshGenerator
         float globalOffsetX,
         float globalOffsetZ,
         BiomeNoiseSettings biomeNoiseSettings,
+        bool useFlatWorld,
+        int flatWorldHeight,
         int oreSeed,
         SpaghettiCaveSettings spaghettiCaveSettings,
         NativeArray<int> heightCache,
@@ -681,7 +706,9 @@ public static partial class MeshGenerator
             baseHeight,
             globalOffsetX,
             globalOffsetZ,
-            in biomeNoiseSettings);
+            in biomeNoiseSettings,
+            useFlatWorld,
+            flatWorldHeight);
 
         if (TryGetReusableSpaghettiCarveMaskCacheEntry(
                 coord,

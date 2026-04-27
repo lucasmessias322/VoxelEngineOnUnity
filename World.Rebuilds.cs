@@ -473,6 +473,8 @@ public partial class World
             cachedNativeEffectiveLightOpacityByBlock,
             cachedNativeLightEmissionByBlock,
             baseHeight,
+            IsFlatWorldMode(),
+            GetResolvedFlatWorldHeight(),
             offsetX,
             offsetZ,
             seaLevel,

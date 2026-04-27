@@ -50,6 +50,8 @@ public static class ChunkData
         public int detailBorder;
         public int maxTreeRadius;
         public int baseHeight;
+        public bool useFlatWorld;
+        public int flatWorldHeight;
         public float offsetX;
         public float offsetZ;
         public float seaLevel;
@@ -575,6 +577,9 @@ public static class ChunkData
 
         private TerrainColumnContext GetColumnContextInternal(int worldX, int worldZ)
         {
+            if (useFlatWorld)
+                return FlatWorldUtility.CreateColumnContext(worldX, worldZ, flatWorldHeight, SizeY);
+
             if (TryGetColumnContextFromCache(worldX, worldZ, out TerrainColumnContext cachedColumnContext))
                 return cachedColumnContext;
 

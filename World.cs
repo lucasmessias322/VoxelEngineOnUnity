@@ -91,6 +91,75 @@ public enum WorldMaterialProfile : byte
     MobileUnlit = 1
 }
 
+public enum WorldTerrainMode : byte
+{
+    Normal = 0,
+    Flat = 1
+}
+
+public static class FlatWorldUtility
+{
+    public const int SurfaceLayerDepth = 1;
+
+    [BurstCompile]
+    public static TerrainColumnContext CreateColumnContext(
+        int worldX,
+        int worldZ,
+        int surfaceHeight,
+        int worldHeight)
+    {
+        surfaceHeight = math.clamp(surfaceHeight, 3, worldHeight - 1);
+        TerrainSurfaceData surfaceData = new TerrainSurfaceData
+        {
+            surfaceHeight = surfaceHeight,
+            surfaceLayerDepth = SurfaceLayerDepth,
+            waterDepth = 0,
+            biome = BiomeType.Meadow,
+            surfaceBlock = BlockType.Grass,
+            subsurfaceBlock = BlockType.Stone,
+            isBeach = false,
+            isUnderwater = false,
+            isCliff = false,
+            isHighMountain = false,
+            slope = 0f,
+            slope01 = 0f
+        };
+
+        return new TerrainColumnContext
+        {
+            worldX = worldX,
+            worldZ = worldZ,
+            surfaceHeight = surfaceHeight,
+            northHeight = surfaceHeight,
+            southHeight = surfaceHeight,
+            eastHeight = surfaceHeight,
+            westHeight = surfaceHeight,
+            northEastHeight = surfaceHeight,
+            northWestHeight = surfaceHeight,
+            southEastHeight = surfaceHeight,
+            southWestHeight = surfaceHeight,
+            slope = 0f,
+            slope01 = 0f,
+            surface = surfaceData
+        };
+    }
+
+    [BurstCompile]
+    public static BlockType GetBlockTypeAtHeight(int y, int surfaceHeight)
+    {
+        if (y <= 2)
+            return BlockType.Bedrock;
+
+        if (y == surfaceHeight)
+            return BlockType.Grass;
+
+        if (y > surfaceHeight - SurfaceLayerDepth)
+            return BlockType.Stone;
+
+        return BlockType.Stone;
+    }
+}
+
 
 
 #region Utilities
@@ -372,6 +441,12 @@ public partial class World : MonoBehaviour
     [SerializeField, HideInInspector] public NoiseLayer[] noiseLayers = Array.Empty<NoiseLayer>();
     [Tooltip("Shaper de terreno por splines inspirado no offset/factor/jaggedness do Minecraft moderno.")]
     public TerrainSplineShaperSettings terrainSplineShaper = TerrainSplineShaperSettings.MinecraftModernDefault;
+    [Header("Terrain Mode")]
+    [Tooltip("Normal usa relevo procedural. Flat gera um mundo plano estilo Minecraft com altura fixa.")]
+    public WorldTerrainMode terrainMode = WorldTerrainMode.Normal;
+    [Tooltip("Altura Y do bloco de superficie no modo Flat. Se ficar vazio/zerado, usa baseHeight ou 64.")]
+    [Min(3)]
+    public int flatWorldHeight = 64;
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;
@@ -879,7 +954,23 @@ public partial class World : MonoBehaviour
 
     private TerrainDensitySettings GetTerrainDensitySettings()
     {
-        return terrainDensity.Sanitized();
+        TerrainDensitySettings settings = terrainDensity.Sanitized();
+        if (IsFlatWorldMode())
+            settings.enabled = false;
+
+        return settings;
+    }
+
+    private bool IsFlatWorldMode()
+    {
+        return terrainMode == WorldTerrainMode.Flat;
+    }
+
+    private int GetResolvedFlatWorldHeight()
+    {
+        int fallbackHeight = baseHeight > 2 ? baseHeight : 64;
+        int requestedHeight = flatWorldHeight > 2 ? flatWorldHeight : fallbackHeight;
+        return Mathf.Clamp(requestedHeight, 3, Chunk.SizeY - 1);
     }
 
     public Material[] Material
@@ -1113,7 +1204,7 @@ public partial class World : MonoBehaviour
 
     private BlockType GetProceduralSeaBlockOrAir(int worldY)
     {
-        if (!enableWater || worldY > seaLevel)
+        if (IsFlatWorldMode() || !enableWater || worldY > seaLevel)
             return BlockType.Air;
 
         return BlockType.Water;
@@ -1241,7 +1332,7 @@ public partial class World : MonoBehaviour
 
     private bool ShouldGenerateGrassBillboardsForChunk(bool useDetailedGeneration)
     {
-        return enableGrassBillboards && useDetailedGeneration;
+        return enableGrassBillboards && useDetailedGeneration && !IsFlatWorldMode();
     }
 
     private static bool ShouldGenerateDetailedLeafFoliageForChunk(bool useDetailedGeneration)
@@ -1429,6 +1520,7 @@ public partial class World : MonoBehaviour
     private int GetGrassBillboardPromotionDirtySubchunkMask(Vector2Int coord, Chunk chunk)
     {
         if (!enableGrassBillboards ||
+            IsFlatWorldMode() ||
             grassBillboardChance <= 0f ||
             !CanChunkProvideVoxelSnapshot(chunk))
         {
@@ -2860,7 +2952,7 @@ public partial class World : MonoBehaviour
         billboardBlockType = grassBillboardBlockType;
         variationHash = 0u;
 
-        if (!enableGrassBillboards || grassBillboardChance <= 0f || billboardPos.y <= 0)
+        if (!enableGrassBillboards || IsFlatWorldMode() || grassBillboardChance <= 0f || billboardPos.y <= 0)
             return false;
         if (IsGrassBillboardSuppressed(billboardPos))
             return false;
@@ -3516,6 +3608,7 @@ public partial class World : MonoBehaviour
         ApplyTerrainLayerProfileIfAssigned();
         EnsureTerrainLayerArraysInitialized();
         EnsureTerrainSplineShaperInitialized();
+        flatWorldHeight = GetResolvedFlatWorldHeight();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;
@@ -5069,7 +5162,7 @@ public partial class World : MonoBehaviour
         // heightmap, superficie, cavernas, minerios, agua, arvores, edits e iluminacao.
         MeshGenerator.ScheduleDataJob(
             coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock, cachedNativeLightEmissionByBlock,
-            baseHeight, offsetX, offsetZ, seaLevel, enableWater,
+            baseHeight, IsFlatWorldMode(), GetResolvedFlatWorldHeight(), offsetX, offsetZ, seaLevel, enableWater,
             GetBiomeNoiseSettings(),
             GetTerrainDensitySettings(),
             seed,
@@ -5225,7 +5318,7 @@ public partial class World : MonoBehaviour
             snapshotLoadedChunks = snapshotLoadedChunks,
             blockTypes = blockTypes,
             knownVoxelData = knownVoxelData,
-            disableWater = !enableWater,
+            disableWater = !enableWater || IsFlatWorldMode(),
             borderSize = copyBorderSize,
             voxelSizeX = copyVoxelSizeX,
             voxelPlaneSize = copyVoxelPlaneSize,
@@ -5276,7 +5369,7 @@ public partial class World : MonoBehaviour
                 snapshotLoadedChunks = snapshotLoadedChunks,
                 effectiveOpacityByBlock = cachedNativeEffectiveLightOpacityByBlock,
                 opacity = lightOpacityData,
-                disableWater = !enableWater,
+                disableWater = !enableWater || IsFlatWorldMode(),
                 borderSize = lightBorderSize,
                 voxelSizeX = lightVoxelSizeX,
                 snapshotChunkRadius = snapshotChunkRadius,
@@ -5308,7 +5401,7 @@ public partial class World : MonoBehaviour
                 snapshotLoadedChunks = snapshotLoadedChunks,
                 lightEmissionByBlock = cachedNativeLightEmissionByBlock,
                 blockEmission = blockEmissionData,
-                disableWater = !enableWater,
+                disableWater = !enableWater || IsFlatWorldMode(),
                 borderSize = lightBorderSize,
                 voxelSizeX = lightVoxelSizeX,
                 snapshotChunkRadius = snapshotChunkRadius,

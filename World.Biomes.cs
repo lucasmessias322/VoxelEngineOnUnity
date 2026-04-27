@@ -101,6 +101,7 @@ public partial class World : MonoBehaviour
     private bool biomeTintCacheSettingsInitialized;
     private bool cachedEnableBiomeTintBlending;
     private BiomeTintQualityMode cachedBiomeTintQuality;
+    private WorldTerrainMode cachedBiomeTintTerrainMode;
     private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
     private BiomeDefinitionSO[] cachedBiomeDefinitions = Array.Empty<BiomeDefinitionSO>();
     private bool biomeDefinitionsDirty = true;
@@ -127,11 +128,13 @@ public partial class World : MonoBehaviour
     {
         if (!biomeTintCacheSettingsInitialized ||
             cachedEnableBiomeTintBlending != enableBiomeTintBlending ||
-            cachedBiomeTintQuality != biomeTintQuality)
+            cachedBiomeTintQuality != biomeTintQuality ||
+            cachedBiomeTintTerrainMode != terrainMode)
         {
             chunkBiomeTintCache.Clear();
             cachedEnableBiomeTintBlending = enableBiomeTintBlending;
             cachedBiomeTintQuality = biomeTintQuality;
+            cachedBiomeTintTerrainMode = terrainMode;
             biomeTintCacheSettingsInitialized = true;
         }
     }
@@ -569,17 +572,26 @@ public partial class World : MonoBehaviour
         int chunkMaxZ = chunkMinZ + Chunk.SizeZ;
         int centerX = chunkMinX + Chunk.SizeX / 2;
         int centerZ = chunkMinZ + Chunk.SizeZ / 2;
-        BiomeNoiseSettings settings = GetBiomeNoiseSettings();
-        BiomeTintPalette palette = BuildBiomeTintPalette();
         ChunkBiomeTints tints;
 
-        if (!enableBiomeTintBlending)
+        if (IsFlatWorldMode())
         {
+            BiomeTintSample meadow = new BiomeTintSample(
+                GetGrassTintForBiome(BiomeType.Meadow),
+                GetFoliageTintForBiome(BiomeType.Meadow));
+            tints = BuildChunkBiomeTints(meadow, meadow, meadow, meadow, meadow, chunkMinX, chunkMinZ);
+        }
+        else if (!enableBiomeTintBlending)
+        {
+            BiomeNoiseSettings settings = GetBiomeNoiseSettings();
+            BiomeTintPalette palette = BuildBiomeTintPalette();
             BiomeTintSample center = EvaluateDominantBiomeTintSample(centerX, centerZ, settings, palette);
             tints = BuildChunkBiomeTints(center, center, center, center, center, chunkMinX, chunkMinZ);
         }
         else
         {
+            BiomeNoiseSettings settings = GetBiomeNoiseSettings();
+            BiomeTintPalette palette = BuildBiomeTintPalette();
             switch (biomeTintQuality)
             {
                 case BiomeTintQualityMode.Ultra:

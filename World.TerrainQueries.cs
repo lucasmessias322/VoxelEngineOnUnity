@@ -130,6 +130,15 @@ public partial class World : MonoBehaviour
         BiomeNoiseSettings biomeSettings = GetBiomeNoiseSettings();
         TerrainDensitySettings densitySettings = GetTerrainDensitySettings();
 
+        if (IsFlatWorldMode())
+        {
+            TerrainColumnContext flatColumnContext = CreateFlatColumnContext(worldX, worldZ);
+            if (worldPos.y > flatColumnContext.surfaceHeight)
+                return BlockType.Air;
+
+            return FlatWorldUtility.GetBlockTypeAtHeight(worldPos.y, flatColumnContext.surfaceHeight);
+        }
+
         if (densitySettings.enabled)
         {
             int baseSurfaceHeight = TerrainHeightSampler.SampleSurfaceHeight(
@@ -176,8 +185,16 @@ public partial class World : MonoBehaviour
         return TerrainSurfaceRules.GetBlockTypeAtHeight(worldPos.y, columnContext.surface);
     }
 
+    private TerrainColumnContext CreateFlatColumnContext(int worldX, int worldZ)
+    {
+        return FlatWorldUtility.CreateColumnContext(worldX, worldZ, GetResolvedFlatWorldHeight(), Chunk.SizeY);
+    }
+
     private int GetSurfaceHeight(int worldX, int worldZ)
     {
+        if (IsFlatWorldMode())
+            return GetResolvedFlatWorldHeight();
+
         return TerrainDensitySampler.SampleSurfaceHeight(
             worldX,
             worldZ,
