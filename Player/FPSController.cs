@@ -59,7 +59,7 @@ public class FPSController : MonoBehaviour
     [SerializeField] private GameObject[] firstPersonOnlyObjects;
 
     [Header("Crouch Settings")]
-    [SerializeField] private float normalHeight = 2f;
+    [SerializeField] private float normalHeight = 1.7f;
     [SerializeField] private float crouchHeight = 1.2f;
     [Tooltip("Velocidade de transição entre alturas (segundos).")]
     [SerializeField] private float crouchTransitionSpeed = 8f;
@@ -105,7 +105,7 @@ public class FPSController : MonoBehaviour
     [Tooltip("Tempo máximo entre dois taps para reconhecer double-tap (sprint/voo).")]
     [SerializeField] private float doubleTapTime = 0.25f;
     [Tooltip("Número máximo de meshes aplicados por frame (não parte deste script, apenas referência).")]
-    [SerializeField] private float stepOffset = 0.5f;
+    [SerializeField] private float stepOffset = 0.25f;
 
     private CharacterController characterController;
     private Vector3 velocity = Vector3.zero;
@@ -163,6 +163,7 @@ public class FPSController : MonoBehaviour
 
         CacheFirstPersonOnlyReferences();
 
+        SyncCharacterControllerHeight(normalHeight);
         targetHeight = normalHeight;
         currentCameraPivotY = cameraTargetY;
         originalStepOffset = characterController.stepOffset;
@@ -387,7 +388,7 @@ public class FPSController : MonoBehaviour
             }
             isCrouching = false;
             targetHeight = normalHeight;
-            cameraTargetY = 2;
+            cameraTargetY = normalHeight;
             characterController.stepOffset = originalStepOffset;
         }
         else
@@ -667,15 +668,26 @@ private bool CanStandUp()
         float currentHeight = characterController.height;
         float newHeight = Mathf.Lerp(currentHeight, targetHeight, Time.deltaTime * crouchTransitionSpeed);
 
-        float heightDiff = newHeight - currentHeight;
-        characterController.height = newHeight;
-        characterController.center = new Vector3(characterController.center.x, newHeight / 2f, characterController.center.z);
+        SyncCharacterControllerHeight(newHeight);
 
         if (cameraTransform != null)
         {
             currentCameraPivotY = Mathf.Lerp(currentCameraPivotY, cameraTargetY, Time.deltaTime * crouchTransitionSpeed);
             UpdateCameraTransform();
         }
+    }
+
+    private void SyncCharacterControllerHeight(float height)
+    {
+        if (characterController == null)
+            return;
+
+        float resolvedHeight = Mathf.Max(0.5f, height);
+        characterController.height = resolvedHeight;
+        characterController.center = new Vector3(
+            characterController.center.x,
+            resolvedHeight * 0.5f,
+            characterController.center.z);
     }
 
     private void HandleStaminaRecovery()

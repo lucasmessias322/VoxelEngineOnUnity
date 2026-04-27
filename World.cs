@@ -3211,11 +3211,15 @@ public partial class World : MonoBehaviour
         if (generator == null)
             return;
 
-        // In builds, relying on the imported saved atlas can diverge from the
-        // runtime-compatible UV data used by the world. Rebuild a fresh runtime
-        // atlas during play so the terrain and inventory icons sample the same texture.
-        if (Application.isPlaying && generator.HasConfiguredTextureEntries())
+        // Prefer the imported saved atlas in builds so its TextureImporter mipmap
+        // settings are kept. Fall back to a runtime rebuild only when the saved
+        // atlas/UV state is missing.
+        if (Application.isPlaying &&
+            generator.HasConfiguredTextureEntries() &&
+            !generator.TryApplyPersistedAtlasWithoutRebuild())
+        {
             generator.GenerateAtlas();
+        }
 
         Vector2Int legacyAtlasTiles = new Vector2Int(
             Mathf.Max(1, atlasTilesX),

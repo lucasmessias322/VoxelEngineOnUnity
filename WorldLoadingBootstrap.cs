@@ -10,6 +10,8 @@ public class WorldLoadingBootstrap : MonoBehaviour
     [Header("Bootstrap")]
     [SerializeField] private World world;
     [SerializeField] private bool runInitialWorldBootstrap = true;
+    [Tooltip("Raio em chunks que precisa estar pronto para liberar o loading inicial. Use 0 para esperar a renderDistance inteira do World.")]
+    [SerializeField, Min(0)] private int initialLoadRequiredRenderDistance = 0;
     [SerializeField, Min(0)] private int initialSpawnSearchRadius = 48;
     [SerializeField] private float initialSpawnYOffset = 0.08f;
 
@@ -232,13 +234,14 @@ public class WorldLoadingBootstrap : MonoBehaviour
         if (world == null)
             return 0;
 
+        int loadRadius = GetInitialLoadRequiredRadius();
         int count = 0;
-        for (int x = -world.renderDistance; x <= world.renderDistance; x++)
+        for (int x = -loadRadius; x <= loadRadius; x++)
         {
-            for (int z = -world.renderDistance; z <= world.renderDistance; z++)
+            for (int z = -loadRadius; z <= loadRadius; z++)
             {
                 Vector2Int coord = new Vector2Int(initialLoadCenterChunk.x + x, initialLoadCenterChunk.y + z);
-                if (IsCoordInsideRenderDistance(coord, initialLoadCenterChunk))
+                if (IsCoordInsideInitialLoadDistance(coord, initialLoadCenterChunk))
                     count++;
             }
         }
@@ -251,14 +254,15 @@ public class WorldLoadingBootstrap : MonoBehaviour
         if (world == null)
             return 0;
 
+        int loadRadius = GetInitialLoadRequiredRadius();
         int readyChunks = 0;
 
-        for (int x = -world.renderDistance; x <= world.renderDistance; x++)
+        for (int x = -loadRadius; x <= loadRadius; x++)
         {
-            for (int z = -world.renderDistance; z <= world.renderDistance; z++)
+            for (int z = -loadRadius; z <= loadRadius; z++)
             {
                 Vector2Int coord = new Vector2Int(initialLoadCenterChunk.x + x, initialLoadCenterChunk.y + z);
-                if (world.IsChunkReady(coord))
+                if (IsCoordInsideInitialLoadDistance(coord, initialLoadCenterChunk) && world.IsChunkReady(coord))
                     readyChunks++;
             }
         }
@@ -313,7 +317,7 @@ public class WorldLoadingBootstrap : MonoBehaviour
             return false;
 
         Vector2Int coord = GetChunkCoordFromWorldXZ(worldX, worldZ);
-        if (!IsCoordInsideRenderDistance(coord, initialLoadCenterChunk))
+        if (!IsCoordInsideInitialLoadDistance(coord, initialLoadCenterChunk))
             return false;
 
         if (!world.IsChunkReady(coord))
@@ -626,15 +630,27 @@ public class WorldLoadingBootstrap : MonoBehaviour
             loadingScreenRoot.SetActive(isVisible);
     }
 
-    private bool IsCoordInsideRenderDistance(Vector2Int coord, Vector2Int center)
+    private int GetInitialLoadRequiredRadius()
+    {
+        if (world == null)
+            return 0;
+
+        int renderRadius = Mathf.Max(0, world.renderDistance);
+        if (initialLoadRequiredRenderDistance <= 0)
+            return renderRadius;
+
+        return Mathf.Min(initialLoadRequiredRenderDistance, renderRadius);
+    }
+
+    private bool IsCoordInsideInitialLoadDistance(Vector2Int coord, Vector2Int center)
     {
         if (world == null)
             return false;
 
         int dx = coord.x - center.x;
         int dz = coord.y - center.y;
-        int renderRadius = Mathf.Max(0, world.renderDistance);
-        return dx * dx + dz * dz <= renderRadius * renderRadius;
+        int loadRadius = GetInitialLoadRequiredRadius();
+        return dx * dx + dz * dz <= loadRadius * loadRadius;
     }
 
     private static Vector2Int GetChunkCoordFromWorldPosition(Vector3 worldPos)

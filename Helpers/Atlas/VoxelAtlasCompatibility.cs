@@ -23,8 +23,11 @@ public static class VoxelAtlasCompatibility
 
         blockData.InitializeDictionary();
 
-        if ((generator.GeneratedAtlas == null || generator.UvMap.Count == 0))
+        if ((generator.GeneratedAtlas == null || generator.UvMap.Count == 0) &&
+            !generator.TryApplyPersistedAtlasWithoutRebuild())
+        {
             generator.GenerateAtlas();
+        }
 
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
@@ -51,8 +54,11 @@ public static class VoxelAtlasCompatibility
 
         blockData.InitializeDictionary();
 
-        if ((generator.GeneratedAtlas == null || generator.UvMap.Count == 0))
+        if ((generator.GeneratedAtlas == null || generator.UvMap.Count == 0) &&
+            !generator.TryApplyPersistedAtlasWithoutRebuild())
+        {
             generator.GenerateAtlas();
+        }
 
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;

@@ -159,6 +159,9 @@ public class HotbarMirror : MonoBehaviour
 
     private void HandleSelectionInput()
     {
+        if (IsInventoryOpen())
+            return;
+
         if (enableNumberKeySelection)
         {
             int max = Mathf.Min(9, Mathf.Max(1, hotbarSize));
@@ -180,6 +183,14 @@ public class HotbarMirror : MonoBehaviour
             else if (scroll < -0.01f)
                 SetSelectedSlotIndex(selectedSlotIndex + 1);
         }
+    }
+
+    private bool IsInventoryOpen()
+    {
+        if (inventory == null)
+            inventory = PlayerInventory.Instance != null ? PlayerInventory.Instance : FindAnyObjectByType<PlayerInventory>();
+
+        return inventory != null && inventory.IsInventoryOpen;
     }
 
     private void RefreshSelectionVisuals()

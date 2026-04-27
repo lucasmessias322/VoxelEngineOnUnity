@@ -123,6 +123,11 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
         mipMapAlphaCutoff = Mathf.Clamp01(mipMapAlphaCutoff);
         shaderPaddingPixels = Mathf.Max(0f, shaderPaddingPixels);
         alphaClipShaderPaddingPixels = Mathf.Max(shaderPaddingPixels, alphaClipShaderPaddingPixels);
+
+#if UNITY_EDITOR
+        if (!Application.isPlaying)
+            TryApplySavedAtlasImporterSettings();
+#endif
     }
 
     public bool TryGetUv(string id, out Rect uvRect)
@@ -609,10 +614,12 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
         return atlas;
     }
 
-    private bool TryApplyPersistedAtlasWithoutRebuild()
+    public bool TryApplyPersistedAtlasWithoutRebuild()
     {
         if (!saveToFile)
             return false;
+
+        RestoreSerializedGeneratedState();
 
         if (!TryRefreshGeneratedAtlasReferenceFromSavedAsset() &&
             generatedAtlas == null)
@@ -881,6 +888,20 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
     }
 
 #if UNITY_EDITOR
+    private void TryApplySavedAtlasImporterSettings()
+    {
+        if (!saveToFile || string.IsNullOrWhiteSpace(savePath))
+            return;
+
+        string normalizedPath = savePath.Replace('\\', '/');
+        string absolutePath = ResolveAbsoluteSavePath(normalizedPath);
+        string assetPath = TryGetAssetPath(absolutePath);
+        if (string.IsNullOrEmpty(assetPath))
+            return;
+
+        ConfigureSavedAtlasImporter(assetPath);
+    }
+
     private Texture2D LoadSavedAtlasReference()
     {
         string normalizedPath = savePath.Replace('\\', '/');

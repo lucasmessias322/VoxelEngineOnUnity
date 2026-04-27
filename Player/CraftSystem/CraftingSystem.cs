@@ -65,6 +65,7 @@ public class CraftingSystem : MonoBehaviour
         }
 
         Instance = this;
+        creativeModeEnabled = GameSettingsStorage.GetCreativeModeEnabled(creativeModeEnabled);
     }
 
     private void Update()
@@ -86,9 +87,13 @@ public class CraftingSystem : MonoBehaviour
     public void SetCreativeMode(bool enabled)
     {
         if (creativeModeEnabled == enabled)
+        {
+            GameSettingsStorage.SetCreativeModeEnabled(enabled);
             return;
+        }
 
         creativeModeEnabled = enabled;
+        GameSettingsStorage.SetCreativeModeEnabled(creativeModeEnabled);
         CreativeModeChanged?.Invoke(creativeModeEnabled);
     }
 

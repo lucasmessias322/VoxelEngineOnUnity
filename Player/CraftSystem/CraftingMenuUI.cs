@@ -29,7 +29,7 @@ public class CraftingMenuUI : MonoBehaviour
 
             if (cachedButton != null)
             {
-                cachedButton.onClick.RemoveListener(HandleClick);
+                cachedButton.onClick = new Button.ButtonClickedEvent();
                 cachedButton.onClick.AddListener(HandleClick);
             }
         }
