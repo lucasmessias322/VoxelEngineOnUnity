@@ -52,6 +52,7 @@ public partial class World
 
         lastWorldMaterialProfileHash = currentMaterialProfileHash;
         RefreshWorldMaterialProfileOnRenderers();
+        RefreshRuntimeMaterialProfileConsumers();
     }
 
     private void RefreshRealisticShaderModeOnRenderers()

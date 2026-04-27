@@ -1076,18 +1076,18 @@ public partial class World : MonoBehaviour
         foreach (var kv in activeChunks)
         {
             Chunk chunk = kv.Value;
-            if (chunk == null || chunk.visualSlices == null)
+            if (chunk == null)
                 continue;
 
-            for (int i = 0; i < chunk.visualSlices.Length; i++)
-            {
-                ChunkRenderSlice visualSlice = chunk.visualSlices[i];
-                if (visualSlice != null)
-                    visualSlice.UpdateSourceMaterials(activeMaterials);
-            }
-
+            RefreshChunkMaterialProfile(chunk, activeMaterials);
             ApplyChunkBiomeTint(chunk, kv.Key);
         }
+
+        foreach (Chunk pooledChunk in chunkPool)
+            RefreshChunkMaterialProfile(pooledChunk, activeMaterials);
+
+        for (int i = 0; i < retiredChunksAwaitingRecycle.Count; i++)
+            RefreshChunkMaterialProfile(retiredChunksAwaitingRecycle[i], activeMaterials);
 
         foreach (var kv in highBuildMeshes)
         {
@@ -1100,7 +1100,7 @@ public partial class World : MonoBehaviour
             ApplyRealisticShaderRendererSettings(data.meshRenderer);
         }
 
-        ChunkRenderSlice[] allChunkSlices = FindObjectsByType<ChunkRenderSlice>(FindObjectsInactive.Exclude, FindObjectsSortMode.None);
+        ChunkRenderSlice[] allChunkSlices = FindObjectsByType<ChunkRenderSlice>(FindObjectsInactive.Include, FindObjectsSortMode.None);
         for (int i = 0; i < allChunkSlices.Length; i++)
         {
             ChunkRenderSlice slice = allChunkSlices[i];
@@ -1109,6 +1109,19 @@ public partial class World : MonoBehaviour
 
             slice.UpdateSourceMaterials(activeMaterials);
             ApplyRealisticShaderRendererSettings(slice.meshRenderer);
+        }
+    }
+
+    private static void RefreshChunkMaterialProfile(Chunk chunk, Material[] activeMaterials)
+    {
+        if (chunk == null || chunk.visualSlices == null)
+            return;
+
+        for (int i = 0; i < chunk.visualSlices.Length; i++)
+        {
+            ChunkRenderSlice visualSlice = chunk.visualSlices[i];
+            if (visualSlice != null)
+                visualSlice.UpdateSourceMaterials(activeMaterials);
         }
     }
 
@@ -3246,6 +3259,7 @@ public partial class World : MonoBehaviour
         {
             lastWorldMaterialProfileHash = currentMaterialProfileHash;
             RefreshWorldMaterialProfileOnRenderers();
+            RefreshRuntimeMaterialProfileConsumers();
         }
 
         loadedChunkCoordsBuffer.Clear();
@@ -4028,9 +4042,14 @@ public partial class World : MonoBehaviour
                     int resolvedVisualSubchunksPerRenderer = GetResolvedVisualSubchunksPerRenderer();
                     if (!activeChunk.HasInitializedSubchunks ||
                         activeChunk.visualSubchunksPerRenderer != resolvedVisualSubchunksPerRenderer)
+                    {
                         activeChunk.InitializeSubchunks(ActiveWorldMaterials, resolvedVisualSubchunksPerRenderer);
+                    }
                     else
+                    {
+                        RefreshChunkMaterialProfile(activeChunk, ActiveWorldMaterials);
                         activeChunk.UpdateWorldBounds();
+                    }
                     ApplyChunkBiomeTint(activeChunk, pd.coord);
                     activeChunk.hasVoxelData = true;
                     activeChunk.hasDetailedGenerationData = ShouldGenerateSpaghettiCavesForChunk(pd.targetDetailedGeneration);
