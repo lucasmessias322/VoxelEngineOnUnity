@@ -274,8 +274,15 @@ public class PlayerInventory : MonoBehaviour
         {
             Slot slot = slots[i];
             if (slot == null) continue;
-            if (slot.IsEmpty) capacity += stackLimit;
-            else if (slot.item == item) capacity += Mathf.Max(0, stackLimit - slot.amount);
+            if (slot.IsEmpty)
+            {
+                if (slot.CanAccept(item, 1))
+                    capacity += stackLimit;
+            }
+            else if (slot.item == item && slot.CanAccept(item, 1))
+            {
+                capacity += Mathf.Max(0, stackLimit - slot.amount);
+            }
         }
 
         return capacity;
@@ -504,7 +511,7 @@ public class PlayerInventory : MonoBehaviour
             return;
 
         Slot slot = current.GetComponent<Slot>();
-        if (slot != null)
+        if (slot != null && slot.RequiresInventorySlotMapping)
             output.Add(slot);
 
         for (int i = 0; i < current.childCount; i++)

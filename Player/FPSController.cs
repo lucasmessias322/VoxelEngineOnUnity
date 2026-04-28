@@ -147,6 +147,8 @@ public class FPSController : MonoBehaviour
     private Vignette underwaterVignette;
     private ChromaticAberration underwaterChromaticAberrationComponent;
 
+    [SerializeField] private Animator animator;
+
     void Start()
     {
         Cursor.lockState = CursorLockMode.Locked;
@@ -198,14 +200,29 @@ public class FPSController : MonoBehaviour
 
         HandleViewModeInput();
         HandleRotation();
-      //  HandleCrouchInput();
+        //  HandleCrouchInput();
         EnforceCreativeFlightPermission();
         HandleFlightToggle();
         spentStaminaThisFrame = false;
         HandleMovement();
         UpdateUnderwaterPostProcess();
         HandleStaminaRecovery();
-       // SmoothCrouchTransition();
+        // SmoothCrouchTransition();
+
+        if (animator != null)
+        {
+            float horizontalSpeed = new Vector3(characterController.velocity.x, 0f, characterController.velocity.z).magnitude;
+            if ( isFlying == false && horizontalSpeed > 0.1f)
+            {
+                animator.SetBool("isWalking", true);
+
+            }
+            else
+            {
+                animator.SetBool("isWalking", false);
+
+            }
+        }
     }
 
     private void OnValidate()
@@ -412,19 +429,19 @@ public class FPSController : MonoBehaviour
     // }
 
 
-private bool CanStandUp()
-{
-    float radius = characterController.radius * 0.95f;
+    private bool CanStandUp()
+    {
+        float radius = characterController.radius * 0.95f;
 
-    Vector3 center = transform.position + characterController.center;
+        Vector3 center = transform.position + characterController.center;
 
-    Vector3 bottom = center - Vector3.up * (characterController.height / 2f - 0.05f);
-    Vector3 top = center + Vector3.up * (normalHeight / 2f - 0.05f);
+        Vector3 bottom = center - Vector3.up * (characterController.height / 2f - 0.05f);
+        Vector3 top = center + Vector3.up * (normalHeight / 2f - 0.05f);
 
-    int mask = ~playerMeshLayer; // 👈 ignora o player
+        int mask = ~playerMeshLayer; // 👈 ignora o player
 
-    return !Physics.CheckCapsule(bottom, top, radius, mask, QueryTriggerInteraction.Ignore);
-}
+        return !Physics.CheckCapsule(bottom, top, radius, mask, QueryTriggerInteraction.Ignore);
+    }
 
 
     private void HandleFlightToggle()

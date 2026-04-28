@@ -169,12 +169,20 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         NotifyOwningInventoryChanged();
     }
 
+    public bool CanAccept(Item target, int incomingAmount = 1)
+    {
+        if (target == null || incomingAmount <= 0)
+            return false;
+
+        return CanPlaceIntoSlot(target, incomingAmount);
+    }
+
     public bool CanStack(Item target)
     {
         if (target == null) return false;
-        if (IsEmpty) return true;
+        if (IsEmpty) return CanAccept(target, 1);
         if (item != target) return false;
-        return amount < Mathf.Max(1, target.maxStack);
+        return amount < Mathf.Max(1, target.maxStack) && CanAccept(target, 1);
     }
 
     public int Add(Item target, int value)
@@ -184,8 +192,11 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         if (IsEmpty)
         {
-            item = target;
             int toStore = Mathf.Min(value, stackLimit);
+            if (!CanPlaceIntoSlot(target, toStore))
+                return value;
+
+            item = target;
             amount = toStore;
             RefreshUI();
             NotifyOwningInventoryChanged();
@@ -197,6 +208,9 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         int freeSpace = Mathf.Max(0, stackLimit - amount);
         int addNow = Mathf.Min(value, freeSpace);
         if (addNow <= 0)
+            return value;
+
+        if (!CanPlaceIntoSlot(target, addNow))
             return value;
 
         amount += addNow;

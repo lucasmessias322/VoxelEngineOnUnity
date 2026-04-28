@@ -8,6 +8,21 @@ public enum InventoryIconMode
     IsometricBlockOnly = 2
 }
 
+public enum ItemCategory
+{
+    Normal = 0,
+    Armor = 1
+}
+
+public enum ArmorType
+{
+    None = 0,
+    Helmet = 1,
+    Chestplate = 2,
+    Leggings = 3,
+    Boots = 4
+}
+
 [CreateAssetMenu(fileName = "NewItem", menuName = "Inventory/Item")]
 public class Item : ScriptableObject
 {
@@ -19,6 +34,12 @@ public class Item : ScriptableObject
     public BlockType blockType = BlockType.Air;
     [Tooltip("Auto usa sprite direto quando existir, senao bloco isometrico para itens mapeados como bloco. ItemIconOnly ignora o bloco e usa sprite/atlas. IsometricBlockOnly sempre usa o bloco.")]
     public InventoryIconMode inventoryIconMode = InventoryIconMode.Auto;
+
+    [Header("Item Type")]
+    [Tooltip("Normal = item comum. Armor = item que pode ser equipado em um slot de armadura.")]
+    public ItemCategory itemCategory = ItemCategory.Normal;
+    [Tooltip("Usado somente quando Item Category for Armor.")]
+    public ArmorType armorType = ArmorType.None;
 
     [Header("Stack")]
     [Min(1)] public int maxStack = 64;
@@ -48,6 +69,12 @@ public class Item : ScriptableObject
     public Vector3 heldLocalScale = Vector3.one;
 
     public bool IsBlockItem => isBlockItem && blockType != BlockType.Air;
+    public bool IsArmor => itemCategory == ItemCategory.Armor && armorType != ArmorType.None;
+
+    public bool IsArmorType(ArmorType targetArmorType)
+    {
+        return IsArmor && armorType == targetArmorType;
+    }
 
     public bool TryGetBlockType(out BlockType resolvedBlockType)
     {
@@ -63,6 +90,11 @@ public class Item : ScriptableObject
 
     private void OnValidate()
     {
+        if (itemCategory != ItemCategory.Armor)
+            armorType = ArmorType.None;
+        else
+            maxStack = 1;
+
         BlockItemCatalog.ClearCache();
     }
 }
