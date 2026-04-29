@@ -44,6 +44,7 @@ public class PlayerArmSwing : MonoBehaviour
 
     [Header("Block Action Settings")]
     [SerializeField] private PlayerBlockBreaker blockBreaker;
+    [SerializeField] private PlayerMobAttack mobAttack;
     [SerializeField] private bool enableBlockActionSwing = true;
     [SerializeField] private float breakActionSwingAngle = 92f;
     [SerializeField] private float breakActionSwingFrequency = 4.75f;
@@ -76,6 +77,7 @@ public class PlayerArmSwing : MonoBehaviour
     private float breakActionWeight;
     private float breakActionTimer;
     private int lastSeenPlaceActionVersion = -1;
+    private int lastSeenAttackActionVersion = -1;
     private float placeActionElapsed = float.PositiveInfinity;
 
     private void Awake()
@@ -209,6 +211,18 @@ public class PlayerArmSwing : MonoBehaviour
         if (blockBreaker == null)
             blockBreaker = FindAnyObjectByType<PlayerBlockBreaker>();
 
+        if (mobAttack == null)
+            mobAttack = GetComponent<PlayerMobAttack>();
+
+        if (mobAttack == null)
+            mobAttack = GetComponentInParent<PlayerMobAttack>();
+
+        if (mobAttack == null)
+            mobAttack = GetComponentInChildren<PlayerMobAttack>();
+
+        if (mobAttack == null)
+            mobAttack = FindAnyObjectByType<PlayerMobAttack>();
+
         if (headLookReference == null && fpsController != null)
             headLookReference = fpsController.CameraTransform;
 
@@ -257,6 +271,7 @@ public class PlayerArmSwing : MonoBehaviour
         }
 
         UpdatePlaceActionTrigger();
+        UpdateAttackActionTrigger();
 
         float actionBlendFactor = breakActionBlendSpeed <= 0f
             ? 1f
@@ -352,13 +367,8 @@ public class PlayerArmSwing : MonoBehaviour
 
     private void PrimeBlockActionTracking()
     {
-        if (blockBreaker == null)
-        {
-            lastSeenPlaceActionVersion = -1;
-            return;
-        }
-
-        lastSeenPlaceActionVersion = blockBreaker.PlaceActionVersion;
+        lastSeenPlaceActionVersion = blockBreaker != null ? blockBreaker.PlaceActionVersion : -1;
+        lastSeenAttackActionVersion = mobAttack != null ? mobAttack.AttackActionVersion : -1;
         placeActionElapsed = float.PositiveInfinity;
     }
 
@@ -385,6 +395,25 @@ public class PlayerArmSwing : MonoBehaviour
             return;
 
         lastSeenPlaceActionVersion = currentPlaceActionVersion;
+        placeActionElapsed = 0f;
+    }
+
+    private void UpdateAttackActionTrigger()
+    {
+        if (mobAttack == null)
+            return;
+
+        int currentAttackActionVersion = mobAttack.AttackActionVersion;
+        if (lastSeenAttackActionVersion < 0)
+        {
+            lastSeenAttackActionVersion = currentAttackActionVersion;
+            return;
+        }
+
+        if (currentAttackActionVersion == lastSeenAttackActionVersion)
+            return;
+
+        lastSeenAttackActionVersion = currentAttackActionVersion;
         placeActionElapsed = 0f;
     }
 

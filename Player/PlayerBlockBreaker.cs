@@ -5,6 +5,7 @@ using UnityEngine.Rendering;
 
 [RequireComponent(typeof(BlockSelector))]
 [RequireComponent(typeof(AudioSource))]
+[RequireComponent(typeof(PlayerMobAttack))]
 public class PlayerBlockBreaker : MonoBehaviour
 {
     private enum BreakCrackStyle
@@ -45,6 +46,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     public BlockSelector selector;
     public Camera cam;
     public HotbarMirror hotbar;
+    [SerializeField] private PlayerMobAttack mobAttack;
 
     [Header("Place settings")]
     public BlockType placeBlockType = BlockType.Stone; // fallback se nao houver hotbar configurada
@@ -129,6 +131,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (selector == null) selector = GetComponent<BlockSelector>();
         if (cam == null && selector != null) cam = selector.cam;
         if (hotbar == null) hotbar = FindAnyObjectByType<HotbarMirror>();
+        if (mobAttack == null) mobAttack = GetComponent<PlayerMobAttack>();
+        if (mobAttack == null) mobAttack = GetComponentInParent<PlayerMobAttack>();
+        if (mobAttack == null) mobAttack = GetComponentInChildren<PlayerMobAttack>();
 
         CreateCrackOverlay();
         CreateBreakVisualOverlay();
@@ -157,6 +162,12 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     void HandleBreakBlock()
     {
+        if (mobAttack != null && mobAttack.TryHandleAttackInput())
+        {
+            CancelBreak();
+            return;
+        }
+
         if (!Input.GetMouseButton(0))
         {
             CancelBreak();
