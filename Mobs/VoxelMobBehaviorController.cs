@@ -36,6 +36,15 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
     [SerializeField] private bool switchToNearestVisibleTargetWhileChasing = false;
     [SerializeField] private bool returnToPreviousBehaviorAfterChase = true;
 
+    [Header("Animation")]
+    [SerializeField] private Animator animator;
+    [SerializeField] private bool autoFindAnimator = true;
+    [SerializeField] private bool updateAnimatorBools = true;
+    [SerializeField] private string walkingBoolParameter = "isWalking";
+    [SerializeField] private string runningBoolParameter = "isRunning";
+    [SerializeField] private string idleBoolParameter = "isIdle";
+    [SerializeField, Min(0f)] private float movingSpeedThreshold = 0.03f;
+
     [Header("Debug")]
     [SerializeField] private bool drawWanderGizmos = true;
     [SerializeField] private bool drawChaseGizmos = true;
@@ -54,6 +63,18 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
     private float destinationExpireTime;
     private bool hasWanderDestination;
     private bool hasLastKnownTargetPosition;
+    private bool hasAnimationPositionSample;
+    private Vector3 lastAnimationPosition;
+    private Animator cachedAnimatorForParameters;
+    private string cachedWalkingBoolParameter;
+    private string cachedRunningBoolParameter;
+    private string cachedIdleBoolParameter;
+    private int walkingBoolHash;
+    private int runningBoolHash;
+    private int idleBoolHash;
+    private bool hasWalkingBoolParameter;
+    private bool hasRunningBoolParameter;
+    private bool hasIdleBoolParameter;
     private VoxelMobBehaviorType behaviorBeforeChase = VoxelMobBehaviorType.Wander;
 
     public VoxelMobBehaviorType CurrentBehavior => currentBehavior;
@@ -64,7 +85,22 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
     {
         agent = GetComponent<VoxelMobPathAgent>();
         ResolveVision();
+        ResolveAnimator();
         startPosition = transform.position;
+        lastAnimationPosition = transform.position;
+        hasAnimationPositionSample = true;
+    }
+
+    private void OnEnable()
+    {
+        lastAnimationPosition = transform.position;
+        hasAnimationPositionSample = true;
+    }
+
+    private void OnDisable()
+    {
+        ApplyAnimatorBools(false, false, true);
+        hasAnimationPositionSample = false;
     }
 
     private void OnValidate()
@@ -73,6 +109,7 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
         minWanderDistance = Mathf.Clamp(minWanderDistance, 0f, wanderRadius);
         maxIdleTime = Mathf.Max(minIdleTime, maxIdleTime);
         maxChaseDistance = Mathf.Max(1f, maxChaseDistance);
+        movingSpeedThreshold = Mathf.Max(0f, movingSpeedThreshold);
     }
 
     private void Update()
@@ -101,6 +138,11 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
                 hasWanderDestination = false;
                 break;
         }
+    }
+
+    private void LateUpdate()
+    {
+        UpdateAnimatorState();
     }
 
     public void SetBehavior(VoxelMobBehaviorType newBehavior)
@@ -281,6 +323,120 @@ public sealed class VoxelMobBehaviorController : MonoBehaviour
         vision = GetComponent<VoxelMobVision>();
         if (vision == null)
             vision = GetComponentInChildren<VoxelMobVision>();
+    }
+
+    private void ResolveAnimator()
+    {
+        if (!autoFindAnimator || animator != null)
+        {
+            RefreshAnimatorParameterCacheIfNeeded();
+            return;
+        }
+
+        animator = GetComponent<Animator>();
+        if (animator == null)
+            animator = GetComponentInChildren<Animator>();
+
+        RefreshAnimatorParameterCacheIfNeeded();
+    }
+
+    private void UpdateAnimatorState()
+    {
+        if (!updateAnimatorBools)
+            return;
+
+        ResolveAnimator();
+        if (animator == null)
+            return;
+
+        Vector3 currentPosition = transform.position;
+        if (!hasAnimationPositionSample)
+        {
+            lastAnimationPosition = currentPosition;
+            hasAnimationPositionSample = true;
+            ApplyAnimatorBools(false, false, true);
+            return;
+        }
+
+        Vector3 horizontalDelta = currentPosition - lastAnimationPosition;
+        horizontalDelta.y = 0f;
+        float horizontalSpeed = Time.deltaTime > 0.0001f
+            ? horizontalDelta.magnitude / Time.deltaTime
+            : 0f;
+
+        bool isMoving = horizontalSpeed > movingSpeedThreshold;
+        bool isRunning = isMoving && currentBehavior == VoxelMobBehaviorType.Chase;
+        bool isWalking = isMoving && currentBehavior == VoxelMobBehaviorType.Wander;
+        bool isIdle = !isWalking && !isRunning;
+
+        ApplyAnimatorBools(isWalking, isRunning, isIdle);
+        lastAnimationPosition = currentPosition;
+    }
+
+    private void RefreshAnimatorParameterCacheIfNeeded()
+    {
+        if (animator == cachedAnimatorForParameters &&
+            walkingBoolParameter == cachedWalkingBoolParameter &&
+            runningBoolParameter == cachedRunningBoolParameter &&
+            idleBoolParameter == cachedIdleBoolParameter)
+        {
+            return;
+        }
+
+        cachedAnimatorForParameters = animator;
+        cachedWalkingBoolParameter = walkingBoolParameter;
+        cachedRunningBoolParameter = runningBoolParameter;
+        cachedIdleBoolParameter = idleBoolParameter;
+
+        walkingBoolHash = string.IsNullOrWhiteSpace(walkingBoolParameter)
+            ? 0
+            : Animator.StringToHash(walkingBoolParameter);
+        runningBoolHash = string.IsNullOrWhiteSpace(runningBoolParameter)
+            ? 0
+            : Animator.StringToHash(runningBoolParameter);
+        idleBoolHash = string.IsNullOrWhiteSpace(idleBoolParameter)
+            ? 0
+            : Animator.StringToHash(idleBoolParameter);
+
+        hasWalkingBoolParameter = HasAnimatorBoolParameter(animator, walkingBoolHash);
+        hasRunningBoolParameter = HasAnimatorBoolParameter(animator, runningBoolHash);
+        hasIdleBoolParameter = HasAnimatorBoolParameter(animator, idleBoolHash);
+    }
+
+    private void ApplyAnimatorBools(bool isWalking, bool isRunning, bool isIdle)
+    {
+        if (animator == null || !updateAnimatorBools)
+            return;
+
+        RefreshAnimatorParameterCacheIfNeeded();
+
+        if (hasWalkingBoolParameter)
+            animator.SetBool(walkingBoolHash, isWalking);
+
+        if (hasRunningBoolParameter)
+            animator.SetBool(runningBoolHash, isRunning);
+
+        if (hasIdleBoolParameter)
+            animator.SetBool(idleBoolHash, isIdle);
+    }
+
+    private static bool HasAnimatorBoolParameter(Animator targetAnimator, int parameterHash)
+    {
+        if (targetAnimator == null || parameterHash == 0)
+            return false;
+
+        AnimatorControllerParameter[] parameters = targetAnimator.parameters;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            AnimatorControllerParameter parameter = parameters[i];
+            if (parameter.type == AnimatorControllerParameterType.Bool &&
+                parameter.nameHash == parameterHash)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private void ResetBehaviorState()
