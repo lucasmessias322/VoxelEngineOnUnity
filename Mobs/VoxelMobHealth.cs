@@ -244,8 +244,10 @@ public sealed class VoxelMobHealth : MonoBehaviour
             if (mobHealth != null && mobHealth != this)
                 return current.gameObject;
 
-            VoxelMobBehaviorController behavior = current.GetComponent<VoxelMobBehaviorController>();
-            if (behavior != null && current.gameObject != gameObject)
+         
+
+            MobController mobController = current.GetComponent<MobController>();
+            if (mobController != null && current.gameObject != gameObject)
                 return current.gameObject;
 
             VoxelMobPathAgent pathAgent = current.GetComponent<VoxelMobPathAgent>();

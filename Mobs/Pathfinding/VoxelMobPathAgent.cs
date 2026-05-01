@@ -97,6 +97,17 @@ public sealed class VoxelMobPathAgent : MonoBehaviour
                                       !hasPath &&
                                       HorizontalDistanceSqr(GetFeetWorldPosition(), destination) <= stopDistance * stopDistance;
     public VoxelPathResult LastPathResult { get; private set; }
+    public float MoveSpeed
+    {
+        get => moveSpeed;
+        set => moveSpeed = Mathf.Max(0f, value);
+    }
+
+    public float StopDistance
+    {
+        get => stopDistance;
+        set => stopDistance = Mathf.Max(0.05f, value);
+    }
 
     private Vector3 destination;
     private bool hasDestination;
