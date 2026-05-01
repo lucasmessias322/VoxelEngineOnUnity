@@ -643,9 +643,12 @@ public static partial class MeshGenerator
             if (blockMappings[(int)neighbor].isEmpty)
                 return true;
 
-            bool neighborOpaque = BlockShapeUtility.GetEffectiveRenderShape(blockMappings[(int)neighbor]) == BlockRenderShape.Cube &&
-                                  blockMappings[(int)neighbor].isSolid &&
-                                  !blockMappings[(int)neighbor].isTransparent;
+            BlockTextureMapping neighborMapping = blockMappings[(int)neighbor];
+            bool neighborBehavesAsFullVoxel = neighborMapping.renderAsDynamicPrefab ||
+                                              BlockShapeUtility.GetEffectiveRenderShape(neighborMapping) == BlockRenderShape.Cube;
+            bool neighborOpaque = neighborBehavesAsFullVoxel &&
+                                  neighborMapping.isSolid &&
+                                  !neighborMapping.isTransparent;
             return !neighborOpaque;
         }
     }

@@ -137,7 +137,6 @@ public partial class World
 
             if (!chunk.hasVoxelData ||
                 !chunk.voxelData.IsCreated ||
-                !chunk.HasSubchunkGeometry(i) ||
                 !chunk.CanSubchunkHaveColliders(i))
             {
                 chunk.SetSubchunkColliderSystemEnabled(i, false);

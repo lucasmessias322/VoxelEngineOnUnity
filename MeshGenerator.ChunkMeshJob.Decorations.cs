@@ -90,7 +90,7 @@ public static partial class MeshGenerator
                         {
                             BlockTextureMapping mapping = blockMappings[(int)blockType];
                             BlockRenderShape effectiveShape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
-                            if (!mapping.isEmpty && effectiveShape != BlockRenderShape.Cube)
+                            if (!mapping.isEmpty && !mapping.renderAsDynamicPrefab && effectiveShape != BlockRenderShape.Cube)
                             {
                                 currentSubchunkSupportsLightingOnlyRebuild = false;
                                 activeSpecialMeshLightChannels = GetSpecialMeshLightChannels01(x, y, z, voxelSizeX, voxelSizeZ, light);
@@ -2981,7 +2981,10 @@ public static partial class MeshGenerator
             Vector2 uv2 = ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin);
             Vector2 uv3 = ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin);
             if (currentShape == BlockRenderShape.MultiCuboid)
+            {
                 NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
+            }
 
             AddAmbientOccludedShapeVertex(p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
             AddAmbientOccludedShapeVertex(p1, uv1, normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
@@ -3262,6 +3265,49 @@ public static partial class MeshGenerator
             uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);
             uv2 = new Vector2((uv2.x - minU) * invSpanU, (uv2.y - minV) * invSpanV);
             uv3 = new Vector2((uv3.x - minU) * invSpanU, (uv3.y - minV) * invSpanV);
+        }
+
+        private static void RotateConveyorProjectedUvForPlacement(
+            BlockTextureMapping mapping,
+            BlockFace sampledFace,
+            BlockPlacementAxis placementAxis,
+            ref Vector2 uv0,
+            ref Vector2 uv1,
+            ref Vector2 uv2,
+            ref Vector2 uv3)
+        {
+            if (mapping.blockType != BlockType.ConveyorBelt ||
+                (sampledFace != BlockFace.Top && sampledFace != BlockFace.Bottom))
+            {
+                return;
+            }
+
+            BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+            if (axis == BlockPlacementAxis.Y)
+                return;
+
+            uv0 = RotateConveyorProjectedUv(uv0, axis);
+            uv1 = RotateConveyorProjectedUv(uv1, axis);
+            uv2 = RotateConveyorProjectedUv(uv2, axis);
+            uv3 = RotateConveyorProjectedUv(uv3, axis);
+        }
+
+        private static Vector2 RotateConveyorProjectedUv(Vector2 uv, BlockPlacementAxis placementAxis)
+        {
+            switch (placementAxis)
+            {
+                case BlockPlacementAxis.X:
+                    return new Vector2(uv.y, 1f - uv.x);
+
+                case BlockPlacementAxis.XNegative:
+                    return new Vector2(1f - uv.y, uv.x);
+
+                case BlockPlacementAxis.ZNegative:
+                    return uv;
+
+                default:
+                    return new Vector2(1f - uv.x, 1f - uv.y);
+            }
         }
 
         private static Vector3 ResolveShapeFaceNormal(BlockFace face)

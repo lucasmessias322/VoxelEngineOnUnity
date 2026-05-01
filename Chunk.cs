@@ -50,6 +50,10 @@ public class Chunk : MonoBehaviour
     [NonSerialized] public ulong lastLightingContextHash;
     [NonSerialized] public bool lightingContextHashValid;
     [NonSerialized] public int visualSubchunksPerRenderer;
+    [NonSerialized] private Transform dynamicBlocksRoot;
+    [NonSerialized] private Dictionary<int, DynamicBlockVisualInstance> dynamicBlockInstances;
+    [NonSerialized] private HashSet<int> dynamicBlockTouchedKeys;
+    [NonSerialized] private List<int> dynamicBlockRemovalKeys;
     public int SubchunkCount => subchunks?.Length ?? 0;
     public bool HasInitializedSubchunks =>
         subchunks != null &&
@@ -63,6 +67,13 @@ public class Chunk : MonoBehaviour
 
     public Unity.Jobs.JobHandle currentJob;
     public bool jobScheduled;
+
+    private struct DynamicBlockVisualInstance
+    {
+        public GameObject gameObject;
+        public BlockType blockType;
+        public GameObject prefab;
+    }
 
     public enum ChunkState
     {
@@ -97,6 +108,7 @@ public class Chunk : MonoBehaviour
             World.Instance.CompletePendingJobsForChunk(this);
 
         CompleteTrackedJob();
+        ClearDynamicBlockVisuals();
 
 
         // Segurança extra para pool
@@ -409,6 +421,7 @@ public class Chunk : MonoBehaviour
     public void ResetChunk()
     {
         CompleteTrackedJob();
+        ClearDynamicBlockVisuals();
 
         pendingRecycle = false;
         jobScheduled = false;
@@ -474,6 +487,293 @@ public class Chunk : MonoBehaviour
     }
     public int generation;
 
+    public void SyncDynamicBlockVisuals(BlockDataSO blockData)
+    {
+        if (blockData == null || !voxelData.IsCreated || !hasVoxelSnapshot)
+        {
+            ClearDynamicBlockVisuals();
+            return;
+        }
+
+        if (blockData.mappings == null || blockData.mappings.Length == 0)
+            blockData.InitializeDictionary();
+
+        EnsureDynamicBlockVisualStorage();
+        dynamicBlockTouchedKeys.Clear();
+
+        int planeSize = SizeX * SizeZ;
+        for (int y = 0; y < SizeY; y++)
+        {
+            int yBase = y * planeSize;
+            for (int z = 0; z < SizeZ; z++)
+            {
+                int zBase = z * SizeX;
+                for (int x = 0; x < SizeX; x++)
+                {
+                    int key = yBase + zBase + x;
+                    BlockType blockType = (BlockType)voxelData[key];
+                    if (!blockData.IsDynamicVisualBlock(blockType) ||
+                        !blockData.TryGetDynamicBlockPrefabDefinition(blockType, out DynamicBlockPrefabDefinition definition))
+                    {
+                        continue;
+                    }
+
+                    dynamicBlockTouchedKeys.Add(key);
+                    Vector3Int localPos = new Vector3Int(x, y, z);
+                    DynamicBlockVisualInstance instance = GetOrCreateDynamicBlockVisual(key, blockType, definition, localPos);
+                    ApplyDynamicBlockTransform(instance.gameObject, blockType, definition, localPos);
+                    dynamicBlockInstances[key] = instance;
+                }
+            }
+        }
+
+        RemoveUntouchedDynamicBlockVisuals();
+    }
+
+    public void SyncDynamicBlockVisualAt(BlockDataSO blockData, Vector3Int worldPos)
+    {
+        if (blockData == null || !voxelData.IsCreated || !hasVoxelSnapshot)
+        {
+            ClearDynamicBlockVisuals();
+            return;
+        }
+
+        int localX = worldPos.x - coord.x * SizeX;
+        int localZ = worldPos.z - coord.y * SizeZ;
+        int localY = worldPos.y;
+        if ((uint)localX >= SizeX || (uint)localZ >= SizeZ || (uint)localY >= SizeY)
+            return;
+
+        if (blockData.mappings == null || blockData.mappings.Length == 0)
+            blockData.InitializeDictionary();
+
+        int key = localX + localZ * SizeX + localY * SizeX * SizeZ;
+        BlockType blockType = (BlockType)voxelData[key];
+        if (!blockData.IsDynamicVisualBlock(blockType) ||
+            !blockData.TryGetDynamicBlockPrefabDefinition(blockType, out DynamicBlockPrefabDefinition definition))
+        {
+            if (dynamicBlockInstances != null &&
+                dynamicBlockInstances.TryGetValue(key, out DynamicBlockVisualInstance existing))
+            {
+                DestroyDynamicBlockVisual(existing);
+                dynamicBlockInstances.Remove(key);
+            }
+
+            return;
+        }
+
+        EnsureDynamicBlockVisualStorage();
+        Vector3Int localPos = new Vector3Int(localX, localY, localZ);
+        DynamicBlockVisualInstance instance = GetOrCreateDynamicBlockVisual(key, blockType, definition, localPos);
+        ApplyDynamicBlockTransform(instance.gameObject, blockType, definition, localPos);
+        dynamicBlockInstances[key] = instance;
+    }
+
+    public void ClearDynamicBlockVisuals()
+    {
+        if (dynamicBlockInstances != null)
+        {
+            foreach (KeyValuePair<int, DynamicBlockVisualInstance> pair in dynamicBlockInstances)
+                DestroyDynamicBlockVisual(pair.Value);
+
+            dynamicBlockInstances.Clear();
+        }
+
+        dynamicBlockTouchedKeys?.Clear();
+        dynamicBlockRemovalKeys?.Clear();
+
+        if (dynamicBlocksRoot != null)
+        {
+            DestroyDynamicGameObject(dynamicBlocksRoot.gameObject);
+            dynamicBlocksRoot = null;
+        }
+    }
+
+    private void EnsureDynamicBlockVisualStorage()
+    {
+        if (dynamicBlockInstances == null)
+            dynamicBlockInstances = new Dictionary<int, DynamicBlockVisualInstance>();
+
+        if (dynamicBlockTouchedKeys == null)
+            dynamicBlockTouchedKeys = new HashSet<int>();
+
+        if (dynamicBlockRemovalKeys == null)
+            dynamicBlockRemovalKeys = new List<int>();
+    }
+
+    private Transform EnsureDynamicBlocksRoot()
+    {
+        if (dynamicBlocksRoot != null)
+            return dynamicBlocksRoot;
+
+        Transform existing = transform.Find("DynamicBlocks");
+        if (existing != null)
+        {
+            dynamicBlocksRoot = existing;
+            return dynamicBlocksRoot;
+        }
+
+        GameObject root = new GameObject("DynamicBlocks");
+        root.transform.SetParent(transform, false);
+        root.transform.localPosition = Vector3.zero;
+        root.transform.localRotation = Quaternion.identity;
+        root.transform.localScale = Vector3.one;
+        root.layer = gameObject.layer;
+        dynamicBlocksRoot = root.transform;
+        return dynamicBlocksRoot;
+    }
+
+    private DynamicBlockVisualInstance GetOrCreateDynamicBlockVisual(
+        int key,
+        BlockType blockType,
+        DynamicBlockPrefabDefinition definition,
+        Vector3Int localPos)
+    {
+        if (dynamicBlockInstances.TryGetValue(key, out DynamicBlockVisualInstance existing) &&
+            existing.gameObject != null &&
+            existing.blockType == blockType &&
+            existing.prefab == definition.prefab)
+        {
+            return existing;
+        }
+
+        if (existing.gameObject != null)
+            DestroyDynamicBlockVisual(existing);
+
+        GameObject created = Instantiate(definition.prefab, EnsureDynamicBlocksRoot());
+        created.name = $"Dynamic_{blockType}_{localPos.x}_{localPos.y}_{localPos.z}";
+
+        if (definition.inheritChunkLayer)
+            SetLayerRecursively(created, gameObject.layer);
+
+        Vector3Int worldPos = GetWorldPositionForLocalBlock(localPos);
+        NotifyDynamicBlockSpawned(created, worldPos, blockType);
+
+        return new DynamicBlockVisualInstance
+        {
+            gameObject = created,
+            blockType = blockType,
+            prefab = definition.prefab
+        };
+    }
+
+    private void ApplyDynamicBlockTransform(
+        GameObject instance,
+        BlockType blockType,
+        DynamicBlockPrefabDefinition definition,
+        Vector3Int localPos)
+    {
+        if (instance == null)
+            return;
+
+        Transform instanceTransform = instance.transform;
+        instanceTransform.SetParent(EnsureDynamicBlocksRoot(), false);
+        instanceTransform.localPosition = (Vector3)localPos + definition.localOffset;
+        instanceTransform.localRotation = ResolveDynamicBlockRotation(blockType, localPos, definition);
+        instanceTransform.localScale = definition.localScale == Vector3.zero ? Vector3.one : definition.localScale;
+    }
+
+    private Quaternion ResolveDynamicBlockRotation(
+        BlockType blockType,
+        Vector3Int localPos,
+        DynamicBlockPrefabDefinition definition)
+    {
+        Quaternion localRotation = Quaternion.Euler(definition.localEulerAngles);
+        if (!definition.rotateWithPlacementAxis || World.Instance == null)
+            return localRotation;
+
+        Vector3Int worldPos = GetWorldPositionForLocalBlock(localPos);
+        BlockPlacementAxis axis = World.Instance.GetPlacementAxisAt(worldPos, blockType);
+        return Quaternion.Euler(0f, GetYawForPlacementAxis(axis), 0f) * localRotation;
+    }
+
+    private static float GetYawForPlacementAxis(BlockPlacementAxis axis)
+    {
+        switch (BlockPlacementRotationUtility.SanitizeStoredAxis(axis))
+        {
+            case BlockPlacementAxis.X:
+                return 90f;
+            case BlockPlacementAxis.ZNegative:
+                return 180f;
+            case BlockPlacementAxis.XNegative:
+                return 270f;
+            default:
+                return 0f;
+        }
+    }
+
+    private Vector3Int GetWorldPositionForLocalBlock(Vector3Int localPos)
+    {
+        return new Vector3Int(
+            coord.x * SizeX + localPos.x,
+            localPos.y,
+            coord.y * SizeZ + localPos.z);
+    }
+
+    private void RemoveUntouchedDynamicBlockVisuals()
+    {
+        dynamicBlockRemovalKeys.Clear();
+        foreach (KeyValuePair<int, DynamicBlockVisualInstance> pair in dynamicBlockInstances)
+        {
+            if (!dynamicBlockTouchedKeys.Contains(pair.Key))
+                dynamicBlockRemovalKeys.Add(pair.Key);
+        }
+
+        for (int i = 0; i < dynamicBlockRemovalKeys.Count; i++)
+        {
+            int key = dynamicBlockRemovalKeys[i];
+            if (dynamicBlockInstances.TryGetValue(key, out DynamicBlockVisualInstance instance))
+                DestroyDynamicBlockVisual(instance);
+
+            dynamicBlockInstances.Remove(key);
+        }
+    }
+
+    private void NotifyDynamicBlockSpawned(GameObject instance, Vector3Int worldPos, BlockType blockType)
+    {
+        DynamicVoxelBlock[] behaviours = instance.GetComponentsInChildren<DynamicVoxelBlock>(true);
+        for (int i = 0; i < behaviours.Length; i++)
+            behaviours[i].Initialize(this, worldPos, blockType);
+    }
+
+    private static void NotifyDynamicBlockDespawned(GameObject instance)
+    {
+        DynamicVoxelBlock[] behaviours = instance.GetComponentsInChildren<DynamicVoxelBlock>(true);
+        for (int i = 0; i < behaviours.Length; i++)
+            behaviours[i].Despawn();
+    }
+
+    private static void DestroyDynamicBlockVisual(DynamicBlockVisualInstance instance)
+    {
+        if (instance.gameObject == null)
+            return;
+
+        NotifyDynamicBlockDespawned(instance.gameObject);
+        DestroyDynamicGameObject(instance.gameObject);
+    }
+
+    private static void DestroyDynamicGameObject(GameObject target)
+    {
+        if (target == null)
+            return;
+
+        if (Application.isPlaying)
+            UnityEngine.Object.Destroy(target);
+        else
+            UnityEngine.Object.DestroyImmediate(target);
+    }
+
+    private static void SetLayerRecursively(GameObject target, int layer)
+    {
+        if (target == null)
+            return;
+
+        target.layer = layer;
+        Transform targetTransform = target.transform;
+        for (int i = 0; i < targetTransform.childCount; i++)
+            SetLayerRecursively(targetTransform.GetChild(i).gameObject, layer);
+    }
+
     public void CompleteTrackedJob()
     {
         if (!jobScheduled)
@@ -535,7 +835,7 @@ public class Chunk : MonoBehaviour
             return;
 
         subchunks[subchunkIndex].hasGeometry = geometryPresent;
-        subchunks[subchunkIndex].canHaveColliders = geometryPresent && solidColliderGeometryPresent;
+        subchunks[subchunkIndex].canHaveColliders = solidColliderGeometryPresent;
 
         if (!subchunks[subchunkIndex].canHaveColliders)
             ClearSubchunkColliderData(subchunkIndex);
@@ -588,7 +888,7 @@ public class Chunk : MonoBehaviour
             return;
 
         bool shouldEnable = enabled &&
-                            subchunks[subchunkIndex].hasGeometry &&
+                            subchunks[subchunkIndex].canHaveColliders &&
                             subchunks[subchunkIndex].hasColliderData;
         colliderBuilder.SetEnabled(shouldEnable);
     }
@@ -634,7 +934,7 @@ public class Chunk : MonoBehaviour
         if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
             return false;
 
-        if (!subchunks[subchunkIndex].hasGeometry || !subchunks[subchunkIndex].canHaveColliders)
+        if (!subchunks[subchunkIndex].canHaveColliders)
             return false;
 
         if (!TryGetSubchunkColliderOccupancyRange(subchunkIndex, out int wordOffset))
@@ -697,7 +997,7 @@ public class Chunk : MonoBehaviour
         if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
             return;
 
-        if (!subchunks[subchunkIndex].hasGeometry || !subchunks[subchunkIndex].canHaveColliders)
+        if (!subchunks[subchunkIndex].canHaveColliders)
         {
             ClearSubchunkColliderData(subchunkIndex);
             return;

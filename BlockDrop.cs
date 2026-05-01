@@ -1,9 +1,114 @@
 using System.Collections.Generic;
 using UnityEngine;
 
+internal static class DropCollisionUtility
+{
+    private const float BoundsInset = 0.001f;
+
+    public static bool IntersectsSolid(
+        World world,
+        Vector3 center,
+        float collisionHalfExtent,
+        BlockType ignoredBlockType = BlockType.Air)
+    {
+        if (world == null)
+            return false;
+
+        float half = Mathf.Max(0.05f, collisionHalfExtent);
+        float testHalf = Mathf.Max(0.001f, half - BoundsInset);
+        Bounds testBounds = new Bounds(center, Vector3.one * (testHalf * 2f));
+
+        int minX = Mathf.FloorToInt(center.x - half + BoundsInset);
+        int maxX = Mathf.FloorToInt(center.x + half - BoundsInset);
+        int minY = Mathf.FloorToInt(center.y - half + BoundsInset);
+        int maxY = Mathf.FloorToInt(center.y + half - BoundsInset);
+        int minZ = Mathf.FloorToInt(center.z - half + BoundsInset);
+        int maxZ = Mathf.FloorToInt(center.z + half - BoundsInset);
+
+        for (int x = minX; x <= maxX; x++)
+        {
+            for (int y = minY; y <= maxY; y++)
+            {
+                for (int z = minZ; z <= maxZ; z++)
+                {
+                    Vector3Int blockPos = new Vector3Int(x, y, z);
+                    if (!world.TryGetLoadedBlockAt(blockPos, out BlockType blockType))
+                        continue;
+
+                    if (blockType == ignoredBlockType)
+                        continue;
+
+                    if (!world.IsSolidBlock(blockType))
+                        continue;
+
+                    if (IntersectsBlockShape(world, blockPos, blockType, testBounds))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IntersectsBlockShape(World world, Vector3Int blockPos, BlockType blockType, Bounds testBounds)
+    {
+        if (world.blockData == null)
+            return UnitBlockBounds(blockPos).Intersects(testBounds);
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return UnitBlockBounds(blockPos).Intersects(testBounds);
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+        if (mapping.renderAsDynamicPrefab || shape == BlockRenderShape.Cube)
+            return UnitBlockBounds(blockPos).Intersects(testBounds);
+
+        BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(blockPos, blockType);
+        if (shape == BlockRenderShape.MultiCuboid)
+            return IntersectsMultiCuboidShape(world, blockPos, blockType, mapping, placementAxis, testBounds);
+
+        Bounds shapeBounds = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mapping, placementAxis);
+        return shapeBounds.Intersects(testBounds);
+    }
+
+    private static bool IntersectsMultiCuboidShape(
+        World world,
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        Bounds testBounds)
+    {
+        BlockModelCuboid[] cuboids = world.blockData != null ? world.blockData.runtimeMultiCuboidBoxes : null;
+        int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, cuboids);
+        if (boxCount <= 0)
+        {
+            Bounds fallbackBounds = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mapping, placementAxis);
+            return fallbackBounds.Intersects(testBounds);
+        }
+
+        for (int i = 0; i < boxCount; i++)
+        {
+            if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, cuboids, i, placementAxis, blockType, out ShapeBox box) &&
+                box.ToWorldBounds(blockPos).Intersects(testBounds))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static Bounds UnitBlockBounds(Vector3Int blockPos)
+    {
+        return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+    }
+}
+
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-public class BlockDrop : MonoBehaviour
+public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
@@ -26,6 +131,9 @@ public class BlockDrop : MonoBehaviour
     [SerializeField, Min(0.1f)] private float pickupRadius = 1.7f;
     [SerializeField, Min(0.02f)] private float pickupCheckInterval = 0.08f;
     [SerializeField, Min(0.25f)] private float mergeGridCellSize = 1.25f;
+    [SerializeField, Min(0f)] private float conveyorSpeed = ConveyorBeltUtility.DefaultSpeed;
+    [SerializeField, Min(0f)] private float conveyorCenteringStrength = ConveyorBeltUtility.DefaultCenteringStrength;
+    [SerializeField, Min(0f)] private float conveyorMaxCenteringSpeed = ConveyorBeltUtility.DefaultMaxCenteringSpeed;
 
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
@@ -47,6 +155,7 @@ public class BlockDrop : MonoBehaviour
     private bool isGrounded;
     private bool isSleeping;
     private bool isRegisteredInMergeGrid;
+    private bool isHeldByRoboticArm;
 
     private struct FaceDef
     {
@@ -138,6 +247,7 @@ public class BlockDrop : MonoBehaviour
         drop.stackAmount = Mathf.Clamp(amount, 1, drop.maxStackAmount);
         drop.isCollected = false;
         drop.isPooled = false;
+        drop.isHeldByRoboticArm = false;
         drop.transform.localScale = Vector3.one * drop.dropScale;
         drop.spawnTime = Time.time;
         drop.nextMergeCheckTime = Time.time + Random.Range(0f, drop.mergeCheckInterval);
@@ -156,6 +266,60 @@ public class BlockDrop : MonoBehaviour
         drop.RegisterInMergeGrid();
         drop.UpdateDropName();
         return true;
+    }
+
+    public Transform DropTransform => transform;
+
+    public bool CanBeGrabbedByRoboticArm =>
+        gameObject.activeSelf &&
+        !isPooled &&
+        !isCollected &&
+        !isHeldByRoboticArm &&
+        blockType != BlockType.Air &&
+        blockType != BlockType.Bedrock;
+
+    public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
+    {
+        if (parent == null || !CanBeGrabbedByRoboticArm)
+            return;
+
+        isHeldByRoboticArm = true;
+        isCollected = false;
+        isPooled = false;
+        velocity = Vector3.zero;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = true;
+        UnregisterFromMergeGrid();
+
+        transform.SetParent(parent, false);
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.localScale = Vector3.one * Mathf.Max(0.01f, localScale);
+    }
+
+    public void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (isPooled)
+            return;
+
+        isHeldByRoboticArm = false;
+        isCollected = false;
+        transform.SetParent(null, true);
+        transform.position = worldPosition;
+        transform.rotation = Quaternion.identity;
+        transform.localScale = Vector3.one * dropScale;
+        spawnTime = Time.time;
+        nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
+        nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
+
+        SetupPhysics(throwDirection);
+        gameObject.SetActive(true);
+        RegisterInMergeGrid();
+        UpdateDropName();
     }
 
     private bool BuildVisual(World world, BlockType blockType)
@@ -1952,6 +2116,9 @@ public class BlockDrop : MonoBehaviour
         pickupRadius = Mathf.Max(0.1f, pickupRadius);
         pickupCheckInterval = Mathf.Max(0.02f, pickupCheckInterval);
         mergeGridCellSize = Mathf.Max(0.25f, mergeGridCellSize);
+        conveyorSpeed = Mathf.Max(0f, conveyorSpeed);
+        conveyorCenteringStrength = Mathf.Max(0f, conveyorCenteringStrength);
+        conveyorMaxCenteringSpeed = Mathf.Max(0f, conveyorMaxCenteringSpeed);
         mergeRadius = Mathf.Max(0.01f, mergeRadius);
         mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
@@ -1962,12 +2129,13 @@ public class BlockDrop : MonoBehaviour
 
     private void Update()
     {
-        if (!gameObject.activeSelf || isPooled || isCollected)
+        if (!gameObject.activeSelf || isPooled || isCollected || isHeldByRoboticArm)
             return;
 
         transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
 
         WakeIfSupportWasRemoved();
+        WakeIfOnConveyor();
 
         if (!isSleeping)
             SimulateMotion(Time.deltaTime);
@@ -2093,12 +2261,13 @@ public class BlockDrop : MonoBehaviour
 
         World world = World.Instance;
         Vector3 nextPosition = transform.position;
+        ApplyConveyorVelocity(world);
 
         float moveX = velocity.x * deltaTime;
         if (Mathf.Abs(moveX) > 0.0001f)
         {
             Vector3 candidateX = nextPosition + new Vector3(moveX, 0f, 0f);
-            if (IntersectsSolid(world, candidateX))
+            if (IntersectsSolidIgnoringConveyors(world, candidateX))
                 velocity.x = 0f;
             else
                 nextPosition = candidateX;
@@ -2108,7 +2277,7 @@ public class BlockDrop : MonoBehaviour
         if (Mathf.Abs(moveZ) > 0.0001f)
         {
             Vector3 candidateZ = nextPosition + new Vector3(0f, 0f, moveZ);
-            if (IntersectsSolid(world, candidateZ))
+            if (IntersectsSolidIgnoringConveyors(world, candidateZ))
                 velocity.z = 0f;
             else
                 nextPosition = candidateZ;
@@ -2154,33 +2323,12 @@ public class BlockDrop : MonoBehaviour
 
     private bool IntersectsSolid(World world, Vector3 center)
     {
-        if (world == null)
-            return false;
+        return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent);
+    }
 
-        float half = Mathf.Max(0.05f, collisionHalfExtent);
-        const float inset = 0.001f;
-
-        int minX = Mathf.FloorToInt(center.x - half + inset);
-        int maxX = Mathf.FloorToInt(center.x + half - inset);
-        int minY = Mathf.FloorToInt(center.y - half + inset);
-        int maxY = Mathf.FloorToInt(center.y + half - inset);
-        int minZ = Mathf.FloorToInt(center.z - half + inset);
-        int maxZ = Mathf.FloorToInt(center.z + half - inset);
-
-        for (int x = minX; x <= maxX; x++)
-        {
-            for (int y = minY; y <= maxY; y++)
-            {
-                for (int z = minZ; z <= maxZ; z++)
-                {
-                    BlockType blockTypeAtCell = world.GetBlockAt(new Vector3Int(x, y, z));
-                    if (world.IsSolidBlock(blockTypeAtCell))
-                        return true;
-                }
-            }
-        }
-
-        return false;
+    private bool IntersectsSolidIgnoringConveyors(World world, Vector3 center)
+    {
+        return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent, BlockType.ConveyorBelt);
     }
 
     private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
@@ -2222,6 +2370,48 @@ public class BlockDrop : MonoBehaviour
         isGrounded = false;
         isSleeping = false;
         simulationAccumulator = 0f;
+    }
+
+    private void WakeIfOnConveyor()
+    {
+        if (!isSleeping)
+            return;
+
+        if (!ConveyorBeltUtility.TryGetConveyorVelocity(
+                World.Instance,
+                transform.position,
+                collisionHalfExtent,
+                conveyorSpeed,
+                conveyorCenteringStrength,
+                conveyorMaxCenteringSpeed,
+                out _))
+        {
+            return;
+        }
+
+        isGrounded = true;
+        isSleeping = false;
+        simulationAccumulator = 0f;
+    }
+
+    private void ApplyConveyorVelocity(World world)
+    {
+        if (!ConveyorBeltUtility.TryGetConveyorVelocity(
+                world,
+                transform.position,
+                collisionHalfExtent,
+                conveyorSpeed,
+                conveyorCenteringStrength,
+                conveyorMaxCenteringSpeed,
+                out Vector3 conveyorVelocity))
+        {
+            return;
+        }
+
+        velocity.x = conveyorVelocity.x;
+        velocity.z = conveyorVelocity.z;
+        isGrounded = true;
+        isSleeping = false;
     }
 
     private void TryMergeNearbyDrops()
@@ -2398,10 +2588,11 @@ public class BlockDrop : MonoBehaviour
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;
+        isHeldByRoboticArm = false;
     }
 }
 
-public class InventoryItemDrop : MonoBehaviour
+public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
@@ -2424,6 +2615,9 @@ public class InventoryItemDrop : MonoBehaviour
     [SerializeField, Min(0.1f)] private float pickupRadius = 1.7f;
     [SerializeField, Min(0.02f)] private float pickupCheckInterval = 0.08f;
     [SerializeField, Min(0.25f)] private float mergeGridCellSize = 1.25f;
+    [SerializeField, Min(0f)] private float conveyorSpeed = ConveyorBeltUtility.DefaultSpeed;
+    [SerializeField, Min(0f)] private float conveyorCenteringStrength = ConveyorBeltUtility.DefaultCenteringStrength;
+    [SerializeField, Min(0f)] private float conveyorMaxCenteringSpeed = ConveyorBeltUtility.DefaultMaxCenteringSpeed;
 
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
@@ -2453,6 +2647,7 @@ public class InventoryItemDrop : MonoBehaviour
     private bool isGrounded;
     private bool isSleeping;
     private bool isRegisteredInMergeGrid;
+    private bool isHeldByRoboticArm;
     private Transform visualRoot;
     private SpriteRenderer spriteRenderer;
 
@@ -2514,6 +2709,9 @@ public class InventoryItemDrop : MonoBehaviour
         pickupRadius = Mathf.Max(0.1f, pickupRadius);
         pickupCheckInterval = Mathf.Max(0.02f, pickupCheckInterval);
         mergeGridCellSize = Mathf.Max(0.25f, mergeGridCellSize);
+        conveyorSpeed = Mathf.Max(0f, conveyorSpeed);
+        conveyorCenteringStrength = Mathf.Max(0f, conveyorCenteringStrength);
+        conveyorMaxCenteringSpeed = Mathf.Max(0f, conveyorMaxCenteringSpeed);
         mergeRadius = Mathf.Max(0.01f, mergeRadius);
         mergeCheckInterval = Mathf.Max(0.02f, mergeCheckInterval);
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
@@ -2531,6 +2729,7 @@ public class InventoryItemDrop : MonoBehaviour
         stackAmount = Mathf.Clamp(amount, 1, maxStackAmount);
         isCollected = false;
         isPooled = false;
+        isHeldByRoboticArm = false;
         visualSpinAngle = Random.Range(0f, 360f);
 
         transform.position = worldPosition;
@@ -2543,6 +2742,60 @@ public class InventoryItemDrop : MonoBehaviour
         isSleeping = false;
 
         UpdateVisual();
+        SetupPhysics(throwDirection);
+        gameObject.SetActive(true);
+        RegisterInMergeGrid();
+        UpdateDropName();
+    }
+
+    public Transform DropTransform => transform;
+
+    public bool CanBeGrabbedByRoboticArm =>
+        gameObject.activeSelf &&
+        !isPooled &&
+        !isCollected &&
+        !isHeldByRoboticArm &&
+        item != null &&
+        stackAmount > 0;
+
+    public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
+    {
+        if (parent == null || !CanBeGrabbedByRoboticArm)
+            return;
+
+        isHeldByRoboticArm = true;
+        isCollected = false;
+        isPooled = false;
+        velocity = Vector3.zero;
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = true;
+        UnregisterFromMergeGrid();
+
+        transform.SetParent(parent, false);
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.localScale = Vector3.one * Mathf.Max(0.01f, localScale);
+    }
+
+    public void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (isPooled)
+            return;
+
+        isHeldByRoboticArm = false;
+        isCollected = false;
+        transform.SetParent(null, true);
+        transform.position = worldPosition;
+        transform.rotation = Quaternion.identity;
+        transform.localScale = Vector3.one * dropScale;
+        spawnTime = Time.time;
+        nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
+        nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
+        simulationAccumulator = 0f;
+        isGrounded = false;
+        isSleeping = false;
+
         SetupPhysics(throwDirection);
         gameObject.SetActive(true);
         RegisterInMergeGrid();
@@ -2605,7 +2858,7 @@ public class InventoryItemDrop : MonoBehaviour
 
     private void Update()
     {
-        if (!gameObject.activeSelf || isPooled || isCollected)
+        if (!gameObject.activeSelf || isPooled || isCollected || isHeldByRoboticArm)
             return;
 
         if (item == null)
@@ -2617,6 +2870,7 @@ public class InventoryItemDrop : MonoBehaviour
         visualSpinAngle = (visualSpinAngle + rotateSpeed * Time.deltaTime) % 360f;
 
         WakeIfSupportWasRemoved();
+        WakeIfOnConveyor();
 
         if (!isSleeping)
             SimulateMotion(Time.deltaTime);
@@ -2733,12 +2987,13 @@ public class InventoryItemDrop : MonoBehaviour
 
         World world = World.Instance;
         Vector3 nextPosition = transform.position;
+        ApplyConveyorVelocity(world);
 
         float moveX = velocity.x * deltaTime;
         if (Mathf.Abs(moveX) > 0.0001f)
         {
             Vector3 candidateX = nextPosition + new Vector3(moveX, 0f, 0f);
-            if (IntersectsSolid(world, candidateX))
+            if (IntersectsSolidIgnoringConveyors(world, candidateX))
                 velocity.x = 0f;
             else
                 nextPosition = candidateX;
@@ -2748,7 +3003,7 @@ public class InventoryItemDrop : MonoBehaviour
         if (Mathf.Abs(moveZ) > 0.0001f)
         {
             Vector3 candidateZ = nextPosition + new Vector3(0f, 0f, moveZ);
-            if (IntersectsSolid(world, candidateZ))
+            if (IntersectsSolidIgnoringConveyors(world, candidateZ))
                 velocity.z = 0f;
             else
                 nextPosition = candidateZ;
@@ -2794,33 +3049,12 @@ public class InventoryItemDrop : MonoBehaviour
 
     private bool IntersectsSolid(World world, Vector3 center)
     {
-        if (world == null)
-            return false;
+        return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent);
+    }
 
-        float half = Mathf.Max(0.05f, collisionHalfExtent);
-        const float inset = 0.001f;
-
-        int minX = Mathf.FloorToInt(center.x - half + inset);
-        int maxX = Mathf.FloorToInt(center.x + half - inset);
-        int minY = Mathf.FloorToInt(center.y - half + inset);
-        int maxY = Mathf.FloorToInt(center.y + half - inset);
-        int minZ = Mathf.FloorToInt(center.z - half + inset);
-        int maxZ = Mathf.FloorToInt(center.z + half - inset);
-
-        for (int x = minX; x <= maxX; x++)
-        {
-            for (int y = minY; y <= maxY; y++)
-            {
-                for (int z = minZ; z <= maxZ; z++)
-                {
-                    BlockType blockTypeAtCell = world.GetBlockAt(new Vector3Int(x, y, z));
-                    if (world.IsSolidBlock(blockTypeAtCell))
-                        return true;
-                }
-            }
-        }
-
-        return false;
+    private bool IntersectsSolidIgnoringConveyors(World world, Vector3 center)
+    {
+        return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent, BlockType.ConveyorBelt);
     }
 
     private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
@@ -2862,6 +3096,48 @@ public class InventoryItemDrop : MonoBehaviour
         isGrounded = false;
         isSleeping = false;
         simulationAccumulator = 0f;
+    }
+
+    private void WakeIfOnConveyor()
+    {
+        if (!isSleeping)
+            return;
+
+        if (!ConveyorBeltUtility.TryGetConveyorVelocity(
+                World.Instance,
+                transform.position,
+                collisionHalfExtent,
+                conveyorSpeed,
+                conveyorCenteringStrength,
+                conveyorMaxCenteringSpeed,
+                out _))
+        {
+            return;
+        }
+
+        isGrounded = true;
+        isSleeping = false;
+        simulationAccumulator = 0f;
+    }
+
+    private void ApplyConveyorVelocity(World world)
+    {
+        if (!ConveyorBeltUtility.TryGetConveyorVelocity(
+                world,
+                transform.position,
+                collisionHalfExtent,
+                conveyorSpeed,
+                conveyorCenteringStrength,
+                conveyorMaxCenteringSpeed,
+                out Vector3 conveyorVelocity))
+        {
+            return;
+        }
+
+        velocity.x = conveyorVelocity.x;
+        velocity.z = conveyorVelocity.z;
+        isGrounded = true;
+        isSleeping = false;
     }
 
     private void TryMergeNearbyDrops()
@@ -3085,6 +3361,7 @@ public class InventoryItemDrop : MonoBehaviour
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;
+        isHeldByRoboticArm = false;
         item = null;
 
         if (spriteRenderer != null)

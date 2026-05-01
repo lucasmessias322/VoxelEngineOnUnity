@@ -63,6 +63,9 @@ public enum BlockType
     Stone_Ramp = 58,
     Stone_VerticalRamp = 59,
     Stone_Leader = 60,
+    RoboticArm = 61,
+    ConveyorBelt = 62,
+     chest = 63,
 }
 
 public static class FluidBlockUtility

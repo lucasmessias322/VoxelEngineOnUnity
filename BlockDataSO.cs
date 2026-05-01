@@ -347,6 +347,31 @@ public sealed class BlockCuboidTextureEntryIdMapping
     public BlockFaceTextureEntryIdSet entryIds = new BlockFaceTextureEntryIdSet();
 }
 
+[System.Serializable]
+public sealed class DynamicBlockPrefabDefinition
+{
+    public BlockType blockType;
+    public GameObject prefab;
+
+    [Tooltip("Offset local aplicado a partir da origem do voxel no chunk.")]
+    public Vector3 localOffset = Vector3.zero;
+
+    [Tooltip("Rotacao local adicional do prefab.")]
+    public Vector3 localEulerAngles = Vector3.zero;
+
+    [Tooltip("Escala local aplicada ao prefab instanciado.")]
+    public Vector3 localScale = Vector3.one;
+
+    [Tooltip("Quando ativo, usa o eixo salvo na colocacao do bloco para girar o prefab no eixo Y.")]
+    public bool rotateWithPlacementAxis = true;
+
+    [Tooltip("Eixos permitidos para salvar a rotacao de colocacao do prefab dinamico.")]
+    public BlockPlacementRotationAxes placementRotationAxes = BlockPlacementRotationAxes.Horizontal;
+
+    [Tooltip("Quando ativo, copia o layer do chunk para todos os filhos do prefab.")]
+    public bool inheritChunkLayer = true;
+}
+
 public static class WirePlacementUtility
 {
     public const byte SideWest = 16;
@@ -553,6 +578,10 @@ public class BlockDataSO : ScriptableObject
     public List<BlockMultiCuboidDefinition> multiCuboidShapes = new List<BlockMultiCuboidDefinition>();
     [SerializeField, HideInInspector] private List<BlockCuboidTextureEntryIdMapping> multiCuboidTextureEntryIds = new List<BlockCuboidTextureEntryIdMapping>();
 
+    [Header("Blocos Dinamicos")]
+    [Tooltip("Blocos que continuam no voxel data, mas sao renderizados por prefabs reais fora da malha estatica do chunk.")]
+    public List<DynamicBlockPrefabDefinition> dynamicBlockPrefabs = new List<DynamicBlockPrefabDefinition>();
+
     [System.NonSerialized]
     public BlockTextureMapping[] mappings;
 
@@ -561,6 +590,12 @@ public class BlockDataSO : ScriptableObject
 
     [System.NonSerialized]
     public Vector3Int runtimeMultiCuboidOverflowSearchRadius = Vector3Int.zero;
+
+    [System.NonSerialized]
+    private Dictionary<BlockType, DynamicBlockPrefabDefinition> dynamicBlockPrefabLookup;
+
+    [System.NonSerialized]
+    private bool[] runtimeDynamicVisualBlockCache = System.Array.Empty<bool>();
 
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
@@ -791,6 +826,7 @@ public class BlockDataSO : ScriptableObject
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
         BuildMultiCuboidRuntimeData();
+        BuildDynamicBlockRuntimeData();
 
     }
 
@@ -953,6 +989,72 @@ public class BlockDataSO : ScriptableObject
             Mathf.Clamp01(value.x),
             Mathf.Clamp01(value.y),
             Mathf.Clamp01(value.z));
+    }
+
+    private void BuildDynamicBlockRuntimeData()
+    {
+        dynamicBlockPrefabLookup = new Dictionary<BlockType, DynamicBlockPrefabDefinition>();
+        int mappingCount = mappings != null ? mappings.Length : 0;
+        runtimeDynamicVisualBlockCache = mappingCount > 0
+            ? new bool[mappingCount]
+            : System.Array.Empty<bool>();
+
+        if (mappings == null || mappings.Length == 0)
+            return;
+
+        if (dynamicBlockPrefabs != null)
+        {
+            for (int i = 0; i < dynamicBlockPrefabs.Count; i++)
+            {
+                DynamicBlockPrefabDefinition definition = dynamicBlockPrefabs[i];
+                if (definition == null || definition.prefab == null)
+                    continue;
+
+                dynamicBlockPrefabLookup[definition.blockType] = definition;
+
+                int mappingIndex = (int)definition.blockType;
+                if (mappingIndex < 0 || mappingIndex >= mappings.Length)
+                    continue;
+
+                BlockTextureMapping mapping = mappings[mappingIndex];
+                mapping.blockType = definition.blockType;
+                mapping.renderAsDynamicPrefab = true;
+                if (definition.rotateWithPlacementAxis)
+                {
+                    mapping.usePlacementAxisRotation = true;
+                    mapping.placementRotationAxes = definition.placementRotationAxes;
+                }
+                mappings[mappingIndex] = mapping;
+            }
+        }
+
+        for (int i = 0; i < mappings.Length; i++)
+            runtimeDynamicVisualBlockCache[i] = mappings[i].renderAsDynamicPrefab;
+    }
+
+    public bool IsDynamicVisualBlock(BlockType blockType)
+    {
+        if (mappings == null || mappings.Length == 0 || runtimeDynamicVisualBlockCache == null)
+            InitializeDictionary();
+
+        int index = (int)blockType;
+        return runtimeDynamicVisualBlockCache != null &&
+               index >= 0 &&
+               index < runtimeDynamicVisualBlockCache.Length &&
+               runtimeDynamicVisualBlockCache[index];
+    }
+
+    public bool TryGetDynamicBlockPrefabDefinition(BlockType blockType, out DynamicBlockPrefabDefinition definition)
+    {
+        definition = null;
+
+        if (mappings == null || mappings.Length == 0 || dynamicBlockPrefabLookup == null)
+            InitializeDictionary();
+
+        return dynamicBlockPrefabLookup != null &&
+               dynamicBlockPrefabLookup.TryGetValue(blockType, out definition) &&
+               definition != null &&
+               definition.prefab != null;
     }
 
     private BlockTextureEntryIdMapping FindBlockTextureEntryIdMapping(BlockType blockType)
@@ -1309,6 +1411,8 @@ public struct BlockTextureMapping
     [Header("Rendering")]
     [Tooltip("Cube = voxel normal, Cross = duas quads cruzadas para plantas, Cuboid = caixa menor dentro do voxel (bom para tochas/postes), Plane = quad dupla face (redstone/quadros/vinhas).")]
     public BlockRenderShape renderShape;
+    [Tooltip("Quando ativo, este bloco fica no voxel data, mas o chunk mesher nao gera geometria estatica para ele. Use a lista Blocos Dinamicos do BlockDataSO para apontar o prefab.")]
+    public bool renderAsDynamicPrefab;
     [Tooltip("Quando ativo, o bloco usa malha plana (quad dupla face), similar a redstone/quadro/vinhas.")]
     public bool isFlat;
     [Tooltip("Canto minimo local do formato dentro do voxel (0..1). Usado em Cross, Cuboid e Plane.")]
@@ -1876,6 +1980,9 @@ public static class BlockShapeUtility
 
     public static bool UsesCustomMesh(BlockTextureMapping mapping)
     {
+        if (mapping.renderAsDynamicPrefab)
+            return false;
+
         return GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube;
     }
 

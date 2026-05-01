@@ -69,6 +69,12 @@ public static partial class MeshGenerator
                                 }
 
                                 BlockTextureMapping currentMapping = blockMappings[(int)current];
+                                if (currentMapping.renderAsDynamicPrefab)
+                                {
+                                    mask[maskIndex] = default;
+                                    continue;
+                                }
+
                                 if (enableUltraLeafBillboards && current == BlockType.Leaves)
                                 {
                                     mask[maskIndex] = default;
@@ -518,7 +524,9 @@ public static partial class MeshGenerator
         {
             // AO deve vir de cubos cheios que realmente fecham a iluminaÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o ambiente.
             // Folhas sÃƒÆ’Ã‚Â£o a exceÃƒÆ’Ã‚Â§ÃƒÆ’Ã‚Â£o: mesmo transparentes, devem sombrear como no Minecraft.
-            if (BlockShapeUtility.GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube ||
+            bool behavesAsFullVoxel = mapping.renderAsDynamicPrefab ||
+                                      BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube;
+            if (!behavesAsFullVoxel ||
                 mapping.isEmpty ||
                 mapping.isLiquid ||
                 mapping.lightOpacity == 0)

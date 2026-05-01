@@ -2521,8 +2521,7 @@ public partial class World : MonoBehaviour
                 continue;
             }
 
-            if (!chunk.HasSubchunkGeometry(request.subchunkIndex) ||
-                !chunk.CanSubchunkHaveColliders(request.subchunkIndex))
+            if (!chunk.CanSubchunkHaveColliders(request.subchunkIndex))
             {
                 chunk.ClearSubchunkColliderData(request.subchunkIndex);
                 continue;
@@ -2622,6 +2621,9 @@ public partial class World : MonoBehaviour
         Vector3 lookForward,
         Vector3 hitPoint)
     {
+        if (blockType == BlockType.ConveyorBelt)
+            return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
+
         if (blockType == BlockType.wire)
             return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
 
@@ -4184,32 +4186,28 @@ public partial class World : MonoBehaviour
                             if (activeChunk.SetSubchunkVisibilityData(subchunkIndex, pm.subchunkVisibilityMasks[subchunkIndex]))
                                 updatedSectionVisibility = true;
 
+                            bool hasStaticGeometry = range.vertexCount > 0;
                             bool hasSolidColliderGeometry = activeChunk.HasSubchunkColliderOccupancy(subchunkIndex);
-                            if (range.vertexCount > 0)
+                            activeChunk.SetSubchunkMeshState(subchunkIndex, hasStaticGeometry, hasSolidColliderGeometry);
+                            if (hasStaticGeometry)
                             {
-                                activeChunk.SetSubchunkMeshState(subchunkIndex, true, hasSolidColliderGeometry);
                                 ApplyCachedSectionVisibility(pm.coord, subchunkIndex, activeChunk);
-
-                                if (pm.buildColliders)
-                                {
-                                    if (hasSolidColliderGeometry && IsChunkInsideColliderDistance(pm.coord))
-                                    {
-                                        if (!activeChunk.TryActivateCachedSubchunkColliders(subchunkIndex))
-                                        {
-                                            activeChunk.MarkSubchunkColliderDataDirty(subchunkIndex);
-                                            EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
-                                        }
-                                        else
-                                            activeChunk.SetSubchunkColliderSystemEnabled(subchunkIndex, true);
-                                    }
-                                    else
-                                        activeChunk.ClearSubchunkColliderData(subchunkIndex);
-                                }
                             }
 
-                            else
+                            if (pm.buildColliders)
                             {
-                                activeChunk.ClearSubchunkMesh(subchunkIndex);
+                                if (hasSolidColliderGeometry && IsChunkInsideColliderDistance(pm.coord))
+                                {
+                                    if (!activeChunk.TryActivateCachedSubchunkColliders(subchunkIndex))
+                                    {
+                                        activeChunk.MarkSubchunkColliderDataDirty(subchunkIndex);
+                                        EnqueueColliderBuild(pm.coord, pm.expectedGen, subchunkIndex);
+                                    }
+                                    else
+                                        activeChunk.SetSubchunkColliderSystemEnabled(subchunkIndex, true);
+                                }
+                                else
+                                    activeChunk.ClearSubchunkColliderData(subchunkIndex);
                             }
                         }
 
@@ -4222,6 +4220,7 @@ public partial class World : MonoBehaviour
                             pm.subchunkRanges,
                             activeChunk);
                         activeChunk.RefreshVisualSliceVisibility(pm.visualSliceIndex);
+                        activeChunk.SyncDynamicBlockVisuals(blockData);
                         meshesAppliedThisFrame++;
 
                         if (updatedSectionVisibility)

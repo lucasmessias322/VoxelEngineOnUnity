@@ -206,8 +206,11 @@ internal sealed class SubchunkColliderBuilder
                     int localIndex = x + localYBase + localZBase;
                     occupancyBuffer[localIndex >> 6] |= 1UL << (localIndex & 63);
 
-                    if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+                    if (mapping.renderAsDynamicPrefab ||
+                        BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
+                    {
                         solids[localIndex] = true;
+                    }
                 }
             }
         }
@@ -514,7 +517,7 @@ internal sealed class SubchunkColliderBuilder
                         continue;
 
                     BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
-                    if (shape == BlockRenderShape.Cube)
+                    if (mapping.renderAsDynamicPrefab || shape == BlockRenderShape.Cube)
                         continue;
 
                     Vector3Int localBlockPos = new Vector3Int(x, worldY, z);
@@ -631,7 +634,8 @@ internal sealed class SubchunkColliderBuilder
         if (!TryGetCollidableMapping((BlockType)blockId, blockMappings, out BlockTextureMapping mapping))
             return false;
 
-        return BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube;
+        return mapping.renderAsDynamicPrefab ||
+               BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube;
     }
 
     private static bool TryGetCollidableMapping(BlockType blockType, BlockTextureMapping[] blockMappings, out BlockTextureMapping mapping)

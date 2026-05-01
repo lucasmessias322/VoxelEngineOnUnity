@@ -663,6 +663,7 @@ public partial class World : MonoBehaviour
         int idx = lx + lz * Chunk.SizeX + ly * Chunk.SizeX * Chunk.SizeZ;
         chunk.voxelData[idx] = (byte)type;
         chunk.hasVoxelSnapshot = true;
+        chunk.SyncDynamicBlockVisualAt(blockData, worldPos);
     }
 
     private void ProcessQueuedLeafDecay()
