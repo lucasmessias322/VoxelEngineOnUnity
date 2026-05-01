@@ -9,6 +9,12 @@ public interface IRoboticArmGrabbable
     void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection);
 }
 
+public interface IRoboticArmItemStack
+{
+    bool TryGetRoboticArmItemStack(out Item item, out int amount);
+    int RemoveFromRoboticArmStack(int amount);
+}
+
 [DisallowMultipleComponent]
 public class RoboticArm : DynamicVoxelBlock
 {
@@ -21,6 +27,12 @@ public class RoboticArm : DynamicVoxelBlock
     [SerializeField, Min(1)] private int dropDistanceBlocks = 1;
     [SerializeField, Min(0f)] private float releasedDropIgnoreSeconds = 0.75f;
     [SerializeField] private bool requireInitialWorldReady = true;
+
+    [Header("Chest Transfer")]
+    [SerializeField] private bool enableChestExtraction = true;
+    [SerializeField] private bool enableChestInsertion = true;
+    [Tooltip("Quantidade maxima de itens/blocos retirada do bau em cada ciclo do braco.")]
+    [SerializeField, Min(1)] private int itemsPerChestGrab = 1;
 
     [Header("Animation Events")]
     [SerializeField, Min(0.01f)] private float scanIntervalSeconds = 0.2f;
@@ -97,6 +109,10 @@ public class RoboticArm : DynamicVoxelBlock
         {
             BeginTransfer(targetDrop);
         }
+        else if (TryFindChestItemInFront(out IRoboticArmGrabbable chestItem))
+        {
+            BeginTransfer(chestItem);
+        }
         else
         {
             nextScanTime = Time.time + scanIntervalSeconds;
@@ -127,6 +143,9 @@ public class RoboticArm : DynamicVoxelBlock
     {
         if (targetDrop == null || !targetDrop.CanBeGrabbedByRoboticArm)
         {
+            if (targetDrop is RoboticArmChestItemTransfer chestTransfer)
+                chestTransfer.DiscardIfUnused();
+
             nextScanTime = Time.time + scanIntervalSeconds;
             return;
         }
@@ -182,6 +201,10 @@ public class RoboticArm : DynamicVoxelBlock
         Vector3 throwDirection = -(Vector3)activeTransferForward * Mathf.Max(0f, releaseThrowStrength);
         IRoboticArmGrabbable releasedDrop = heldDrop;
         heldDrop = null;
+
+        if (TryInsertHeldDropIntoChestBehind(releasedDrop))
+            return;
+
         releasedDrop.ReleaseFromRoboticArm(releasePosition, throwDirection);
         IgnoreRecentlyReleasedDrop(releasedDrop);
     }
@@ -212,6 +235,9 @@ public class RoboticArm : DynamicVoxelBlock
         if (releaseHeldDrop)
             ReleaseHeldDropAtGrip(Vector3.zero);
 
+        if (pendingDrop is RoboticArmChestItemTransfer pendingChestTransfer)
+            pendingChestTransfer.DiscardIfUnused();
+
         pendingDrop = null;
         transferInProgress = false;
         SetGrabDropAnimation(false);
@@ -233,6 +259,38 @@ public class RoboticArm : DynamicVoxelBlock
             TryUseCloserDrop(itemDrops[i], pickupCenter, ref grabbable, ref bestDistanceSqr);
 
         return grabbable != null;
+    }
+
+    private bool TryFindChestItemInFront(out IRoboticArmGrabbable grabbable)
+    {
+        grabbable = null;
+        if (!enableChestExtraction)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        ChestUIController chestUI = ChestUIController.Instance != null
+            ? ChestUIController.Instance
+            : ChestUIController.EnsureInstance();
+        if (chestUI == null)
+            return false;
+
+        Vector3Int chestBlock = ResolvePickupBlockPosition();
+        if (world.GetBlockAt(chestBlock) != BlockType.chest ||
+            !chestUI.HasItemStackInChest(chestBlock))
+        {
+            return false;
+        }
+
+        GameObject transferObject = new GameObject($"RoboticArmChestTransfer_{chestBlock.x}_{chestBlock.y}_{chestBlock.z}");
+        transferObject.transform.position = ResolvePickupCenter();
+
+        RoboticArmChestItemTransfer transfer = transferObject.AddComponent<RoboticArmChestItemTransfer>();
+        transfer.Initialize(chestUI, chestBlock, Mathf.Max(1, itemsPerChestGrab));
+        grabbable = transfer;
+        return true;
     }
 
     private void TryUseCloserDrop(
@@ -270,24 +328,62 @@ public class RoboticArm : DynamicVoxelBlock
 
     private Vector3 ResolvePickupCenter()
     {
-        Vector3Int armBlockPos = ResolveArmBlockPosition();
-        Vector3Int forward = ResolveForwardInt();
-        Vector3Int pickupBlock = armBlockPos + forward * Mathf.Max(1, grabDistanceBlocks);
+        Vector3Int pickupBlock = ResolvePickupBlockPosition();
         return new Vector3(
             pickupBlock.x + 0.5f,
             pickupBlock.y + pickupHeightOffset,
             pickupBlock.z + 0.5f);
     }
 
-    private Vector3 ResolveReleaseCenter()
+    private Vector3Int ResolvePickupBlockPosition()
     {
         Vector3Int armBlockPos = ResolveArmBlockPosition();
-        Vector3Int backward = -(transferInProgress ? activeTransferForward : ResolveForwardInt());
-        Vector3Int releaseBlock = armBlockPos + backward * Mathf.Max(1, dropDistanceBlocks);
+        Vector3Int forward = ResolveForwardInt();
+        return armBlockPos + forward * Mathf.Max(1, grabDistanceBlocks);
+    }
+
+    private Vector3 ResolveReleaseCenter()
+    {
+        Vector3Int releaseBlock = ResolveReleaseBlockPosition();
         return new Vector3(
             releaseBlock.x + 0.5f,
             releaseBlock.y + releaseHeightOffset,
             releaseBlock.z + 0.5f);
+    }
+
+    private Vector3Int ResolveReleaseBlockPosition()
+    {
+        Vector3Int armBlockPos = ResolveArmBlockPosition();
+        Vector3Int backward = -(transferInProgress ? activeTransferForward : ResolveForwardInt());
+        return armBlockPos + backward * Mathf.Max(1, dropDistanceBlocks);
+    }
+
+    private bool TryInsertHeldDropIntoChestBehind(IRoboticArmGrabbable grabbable)
+    {
+        if (!enableChestInsertion || grabbable is not IRoboticArmItemStack itemStack)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int chestBlock = ResolveReleaseBlockPosition();
+        if (world.GetBlockAt(chestBlock) != BlockType.chest)
+            return false;
+
+        ChestUIController chestUI = ChestUIController.Instance != null
+            ? ChestUIController.Instance
+            : ChestUIController.EnsureInstance();
+        if (chestUI == null || !itemStack.TryGetRoboticArmItemStack(out Item item, out int amount))
+            return false;
+
+        int remaining = chestUI.InsertItemStackIntoChest(chestBlock, item, amount);
+        int inserted = amount - remaining;
+        if (inserted <= 0)
+            return false;
+
+        itemStack.RemoveFromRoboticArmStack(inserted);
+        return remaining <= 0;
     }
 
     private Vector3Int ResolveArmBlockPosition()
@@ -439,5 +535,113 @@ public class RoboticArm : DynamicVoxelBlock
             return;
 
         animator.SetBool(grabDropAnimatorId, active);
+    }
+}
+
+internal sealed class RoboticArmChestItemTransfer : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemStack
+{
+    private ChestUIController chestUI;
+    private Vector3Int chestBlock;
+    private int maxAmount;
+    private Item item;
+    private int amount;
+    private bool isAttached;
+    private bool isReleased;
+    private SpriteRenderer spriteRenderer;
+
+    public Transform DropTransform => transform;
+
+    public bool CanBeGrabbedByRoboticArm =>
+        !isAttached &&
+        !isReleased &&
+        chestUI != null &&
+        chestUI.HasItemStackInChest(chestBlock);
+
+    public void Initialize(ChestUIController ownerChestUI, Vector3Int sourceChestBlock, int sourceMaxAmount)
+    {
+        chestUI = ownerChestUI;
+        chestBlock = sourceChestBlock;
+        maxAmount = Mathf.Max(1, sourceMaxAmount);
+    }
+
+    public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
+    {
+        if (parent == null || !CanBeGrabbedByRoboticArm)
+            return;
+
+        if (!chestUI.TryTakeItemStackFromChest(chestBlock, maxAmount, out item, out amount))
+            return;
+
+        isAttached = true;
+        transform.SetParent(parent, false);
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.localScale = Vector3.one * Mathf.Max(0.01f, localScale);
+        EnsureHeldVisual();
+    }
+
+    public void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (isReleased)
+            return;
+
+        isReleased = true;
+        transform.SetParent(null, true);
+
+        if (item != null && amount > 0)
+            ChestUIController.TrySpawnItemStack(item, amount, worldPosition, throwDirection);
+
+        Destroy(gameObject);
+    }
+
+    public bool TryGetRoboticArmItemStack(out Item stackItem, out int stackAmount)
+    {
+        stackItem = item;
+        stackAmount = amount;
+        return !isReleased && stackItem != null && stackAmount > 0;
+    }
+
+    public int RemoveFromRoboticArmStack(int amountToRemove)
+    {
+        if (amountToRemove <= 0 || item == null || amount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, amount);
+        amount -= removed;
+        if (amount <= 0)
+        {
+            isReleased = true;
+            Destroy(gameObject);
+        }
+
+        return removed;
+    }
+
+    public void DiscardIfUnused()
+    {
+        if (isAttached)
+            return;
+
+        isReleased = true;
+        Destroy(gameObject);
+    }
+
+    private void EnsureHeldVisual()
+    {
+        if (item == null)
+            return;
+
+        if (spriteRenderer == null)
+        {
+            GameObject visualObject = new GameObject("HeldChestItemVisual");
+            visualObject.transform.SetParent(transform, false);
+            visualObject.transform.localPosition = Vector3.zero;
+            visualObject.transform.localRotation = Quaternion.identity;
+            visualObject.transform.localScale = Vector3.one;
+            spriteRenderer = visualObject.AddComponent<SpriteRenderer>();
+        }
+
+        spriteRenderer.sprite = ItemIconResolver.ResolveForUI(item);
+        spriteRenderer.enabled = spriteRenderer.sprite != null;
     }
 }

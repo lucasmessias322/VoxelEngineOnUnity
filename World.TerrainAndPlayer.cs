@@ -5,6 +5,8 @@ using UnityEngine;
 
 public partial class World : MonoBehaviour
 {
+    public event System.Action<Vector3Int, BlockType, BlockType> BlockChanged;
+
     [Header("Leaf Decay")]
     [SerializeField] private bool enableLeafDecay = true;
     [SerializeField, Min(1)] private int leafDecaySupportDistance = 4;
@@ -180,6 +182,7 @@ public partial class World : MonoBehaviour
         TryConvertCoveredGrassToDirt(worldPos, type, placedByPlayer);
 
         RequestBlockEditRefresh(worldPos, chunkCoord, current, type);
+        BlockChanged?.Invoke(worldPos, current, type);
     }
 
     private void TryConvertCoveredGrassToDirt(Vector3Int worldPos, BlockType placedType, bool placedByPlayer)

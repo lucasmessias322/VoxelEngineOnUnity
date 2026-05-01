@@ -108,7 +108,7 @@ internal static class DropCollisionUtility
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
-public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable
+public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemStack
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
@@ -277,6 +277,43 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable
         !isHeldByRoboticArm &&
         blockType != BlockType.Air &&
         blockType != BlockType.Bedrock;
+
+    public bool TryGetRoboticArmItemStack(out Item item, out int amount)
+    {
+        amount = 0;
+        if (blockType == BlockType.Air ||
+            blockType == BlockType.Bedrock ||
+            stackAmount <= 0 ||
+            !BlockItemCatalog.TryGetItemForBlock(blockType, out item))
+        {
+            item = null;
+            return false;
+        }
+
+        amount = stackAmount;
+        return item != null;
+    }
+
+    public int RemoveFromRoboticArmStack(int amountToRemove)
+    {
+        if (amountToRemove <= 0 || stackAmount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, stackAmount);
+        stackAmount -= removed;
+
+        if (stackAmount <= 0)
+        {
+            isCollected = true;
+            ReturnToPool();
+        }
+        else
+        {
+            UpdateDropName();
+        }
+
+        return removed;
+    }
 
     public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
     {
@@ -2592,7 +2629,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable
     }
 }
 
-public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable
+public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemStack
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
@@ -2757,6 +2794,34 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable
         !isHeldByRoboticArm &&
         item != null &&
         stackAmount > 0;
+
+    public bool TryGetRoboticArmItemStack(out Item stackItem, out int amount)
+    {
+        stackItem = item;
+        amount = stackAmount;
+        return stackItem != null && amount > 0;
+    }
+
+    public int RemoveFromRoboticArmStack(int amountToRemove)
+    {
+        if (amountToRemove <= 0 || stackAmount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, stackAmount);
+        stackAmount -= removed;
+
+        if (stackAmount <= 0)
+        {
+            isCollected = true;
+            ReturnToPool();
+        }
+        else
+        {
+            UpdateDropName();
+        }
+
+        return removed;
+    }
 
     public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
     {

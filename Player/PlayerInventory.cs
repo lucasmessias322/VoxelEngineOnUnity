@@ -356,6 +356,9 @@ public class PlayerInventory : MonoBehaviour
         if (FurnaceUIController.Instance != null)
             FurnaceUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
 
+        if (ChestUIController.Instance != null)
+            ChestUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
+
         if (!isOpen)
             Slot.OnInventoryClosed(this);
     }

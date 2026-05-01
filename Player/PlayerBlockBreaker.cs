@@ -1785,6 +1785,13 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private bool TryHandleRightClickInteractions()
     {
+        ChestUIController chestUI = ChestUIController.EnsureInstance();
+        if (chestUI != null &&
+            chestUI.TryHandleChestInteraction(selector))
+        {
+            return true;
+        }
+
         FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
             ? FurnaceUIController.Instance
             : FindAnyObjectByType<FurnaceUIController>();
