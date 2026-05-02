@@ -1006,6 +1006,22 @@ public class Chunk : MonoBehaviour
         subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, blockModelCuboids, startY, endY);
     }
 
+    public bool ForceRebuildSubchunkColliders(
+        int subchunkIndex,
+        NativeArray<byte> voxelSource,
+        BlockTextureMapping[] blockMappings,
+        BlockModelCuboid[] blockModelCuboids,
+        int startY,
+        int endY)
+    {
+        if (!TryGetSubchunkColliderBuilder(subchunkIndex, out SubchunkColliderBuilder colliderBuilder))
+            return false;
+
+        subchunks[subchunkIndex].canHaveColliders = true;
+        subchunks[subchunkIndex].hasColliderData = colliderBuilder.TryBuild(gameObject, voxelSource, blockMappings, blockModelCuboids, startY, endY);
+        return subchunks[subchunkIndex].hasColliderData;
+    }
+
     private bool TryGetSubchunkColliderOccupancyRange(int subchunkIndex, out int wordOffset)
     {
         wordOffset = 0;
