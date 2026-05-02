@@ -1175,6 +1175,26 @@ internal static class BlockbenchMultiCuboidImporter
         BlockFace.Back
     };
 
+    private enum BlockbenchRotationAxis
+    {
+        None,
+        X,
+        Y,
+        Z
+    }
+
+    private struct BlockbenchGroupTransform
+    {
+        public Vector3 originModel;
+        public Vector3 eulerRotation;
+        public Quaternion rotation;
+        public Vector3 scale;
+        public bool hasRotation;
+        public bool hasScale;
+
+        public bool HasTransform => hasRotation || hasScale;
+    }
+
     private sealed class ImportedCuboidData
     {
         public BlockModelCuboid cuboid;
@@ -1228,10 +1248,14 @@ internal static class BlockbenchMultiCuboidImporter
         public Scene previousActiveScene;
         public Scene temporaryAtlasScene;
         public bool openedTemporaryAtlasScene;
+        public bool disabledSnapForExactImport;
+        public int appliedRescaleRotationCount;
+        public int appliedGroupTransformCount;
         public List<string> warnings = new List<string>();
         public Dictionary<string, BlockbenchTextureSource> textureSources = new Dictionary<string, BlockbenchTextureSource>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, string> textureAliases = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         public Dictionary<string, FaceTextureRequest> faceTextureRequests = new Dictionary<string, FaceTextureRequest>(StringComparer.Ordinal);
+        public Dictionary<string, List<BlockbenchGroupTransform>> elementGroupTransforms = new Dictionary<string, List<BlockbenchGroupTransform>>(StringComparer.OrdinalIgnoreCase);
 
         private readonly HashSet<string> warningKeys = new HashSet<string>(StringComparer.Ordinal);
 
@@ -1298,7 +1322,14 @@ internal static class BlockbenchMultiCuboidImporter
             Dictionary<BlockFace, Vector4> baseUvRects = BuildBaseUvRects(importedCuboids, baseTiles, baseEntryIds, existingMappingValue);
             List<BlockModelCuboid> cuboids = BuildCuboids(importedCuboids, baseTiles, baseEntryIds);
 
-            workbench.ReplaceCuboids(cuboids);
+            if (workbench.snapToGrid)
+            {
+                Undo.RecordObject(workbench, "Disable Snap For Exact Blockbench Import");
+                workbench.snapToGrid = false;
+                context.disabledSnapForExactImport = true;
+            }
+
+            workbench.ReplaceCuboids(cuboids, 0, false);
 
             bool appliedTextureMapping = ApplyTextureMapping(workbench, baseTiles, baseUvRects, existingMappingValue);
             bool appliedBaseEntryIds = ApplyBaseTextureEntryIds(workbench, baseEntryIds);
@@ -1350,6 +1381,7 @@ internal static class BlockbenchMultiCuboidImporter
         try
         {
             RegisterTextureSources(root, context);
+            RegisterOutlinerTransforms(root, context);
             TryResolveAtlasImportTargets(context);
 
             if (!TryResolveTextureSize(root, out context.textureSize))
@@ -1688,6 +1720,160 @@ internal static class BlockbenchMultiCuboidImporter
         return token != null && token.Type == JTokenType.String
             ? token.Value<string>()?.Trim()
             : null;
+    }
+
+    private static void RegisterOutlinerTransforms(JObject root, ImportContext context)
+    {
+        if (root == null || context == null || !(root["outliner"] is JArray outliner))
+            return;
+
+        Dictionary<string, JObject> groupsByUuid = BuildOutlinerGroupLookup(root["groups"]);
+        List<BlockbenchGroupTransform> activeTransforms = new List<BlockbenchGroupTransform>();
+        for (int i = 0; i < outliner.Count; i++)
+            TraverseOutlinerNode(outliner[i], groupsByUuid, context, activeTransforms);
+    }
+
+    private static Dictionary<string, JObject> BuildOutlinerGroupLookup(JToken groupsToken)
+    {
+        Dictionary<string, JObject> groupsByUuid = new Dictionary<string, JObject>(StringComparer.OrdinalIgnoreCase);
+        if (groupsToken is JArray groupsArray)
+        {
+            for (int i = 0; i < groupsArray.Count; i++)
+            {
+                if (groupsArray[i] is JObject groupObject)
+                    RegisterGroupLookupObject(groupsByUuid, null, groupObject);
+            }
+
+            return groupsByUuid;
+        }
+
+        if (groupsToken is JObject groupsObject)
+        {
+            foreach (JProperty property in groupsObject.Properties())
+            {
+                if (property.Value is JObject groupObject)
+                    RegisterGroupLookupObject(groupsByUuid, property.Name, groupObject);
+            }
+        }
+
+        return groupsByUuid;
+    }
+
+    private static void RegisterGroupLookupObject(Dictionary<string, JObject> groupsByUuid, string fallbackUuid, JObject groupObject)
+    {
+        if (groupsByUuid == null || groupObject == null)
+            return;
+
+        string uuid = ReadTrimmedString(groupObject["uuid"]);
+        if (string.IsNullOrWhiteSpace(uuid))
+            uuid = fallbackUuid;
+
+        if (!string.IsNullOrWhiteSpace(uuid))
+            groupsByUuid[uuid] = groupObject;
+    }
+
+    private static void TraverseOutlinerNode(
+        JToken node,
+        Dictionary<string, JObject> groupsByUuid,
+        ImportContext context,
+        List<BlockbenchGroupTransform> activeTransforms)
+    {
+        if (node == null || context == null)
+            return;
+
+        if (node.Type == JTokenType.String)
+        {
+            RegisterElementGroupTransforms(context, node.Value<string>(), activeTransforms);
+            return;
+        }
+
+        if (!(node is JObject nodeObject))
+            return;
+
+        string uuid = ReadTrimmedString(nodeObject["uuid"]);
+        if (nodeObject["children"] is JArray children)
+        {
+            List<BlockbenchGroupTransform> childTransforms = activeTransforms;
+            JObject groupObject = ResolveOutlinerGroupObject(nodeObject, groupsByUuid, uuid);
+            if (TryReadGroupTransform(groupObject, out BlockbenchGroupTransform groupTransform) && groupTransform.HasTransform)
+            {
+                childTransforms = new List<BlockbenchGroupTransform>(activeTransforms)
+                {
+                    groupTransform
+                };
+            }
+
+            for (int i = 0; i < children.Count; i++)
+                TraverseOutlinerNode(children[i], groupsByUuid, context, childTransforms);
+
+            return;
+        }
+
+        RegisterElementGroupTransforms(context, uuid, activeTransforms);
+    }
+
+    private static JObject ResolveOutlinerGroupObject(JObject nodeObject, Dictionary<string, JObject> groupsByUuid, string uuid)
+    {
+        if (!string.IsNullOrWhiteSpace(uuid) &&
+            groupsByUuid != null &&
+            groupsByUuid.TryGetValue(uuid, out JObject groupObject) &&
+            groupObject != null)
+        {
+            return groupObject;
+        }
+
+        return nodeObject;
+    }
+
+    private static void RegisterElementGroupTransforms(
+        ImportContext context,
+        string uuid,
+        List<BlockbenchGroupTransform> activeTransforms)
+    {
+        if (context == null ||
+            string.IsNullOrWhiteSpace(uuid) ||
+            activeTransforms == null ||
+            activeTransforms.Count == 0)
+        {
+            return;
+        }
+
+        context.elementGroupTransforms[uuid.Trim()] = new List<BlockbenchGroupTransform>(activeTransforms);
+    }
+
+    private static bool TryReadGroupTransform(JObject groupObject, out BlockbenchGroupTransform transform)
+    {
+        transform = new BlockbenchGroupTransform
+        {
+            originModel = Vector3.zero,
+            eulerRotation = Vector3.zero,
+            rotation = Quaternion.identity,
+            scale = Vector3.one,
+            hasRotation = false,
+            hasScale = false
+        };
+
+        if (groupObject == null)
+            return false;
+
+        if (TryReadVector3(groupObject["origin"], out Vector3 originModel))
+            transform.originModel = originModel;
+
+        if (TryReadRotationVector(groupObject["rotation"], out Vector3 eulerRotation))
+        {
+            eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(eulerRotation);
+            transform.eulerRotation = eulerRotation;
+            transform.rotation = Quaternion.Euler(eulerRotation);
+            transform.hasRotation = HasSignificantEulerRotation(eulerRotation);
+        }
+
+        if (TryReadScaleVector(groupObject["scale"], out Vector3 scale))
+        {
+            transform.scale = scale;
+            transform.hasScale = HasSignificantScale(scale);
+        }
+
+        return transform.HasTransform;
     }
 
     private static void TryResolveAtlasImportTargets(ImportContext context)
@@ -2586,6 +2772,7 @@ internal static class BlockbenchMultiCuboidImporter
         }
 
         TryApplyRotation(element, minModel, maxModel, ref cuboid, context);
+        TryApplyOutlinerTransforms(element, ref cuboid, context);
         importedCuboid.cuboid = cuboid;
         return true;
     }
@@ -2597,8 +2784,16 @@ internal static class BlockbenchMultiCuboidImporter
         ref BlockModelCuboid cuboid,
         ImportContext context)
     {
-        if (!TryResolveRotation(element, (minModel + maxModel) * 0.5f, out Vector3 euler, out Vector3 pivotModel, out bool usedCustomPivot, out bool usesRescale))
+        if (!TryResolveRotation(
+                element,
+                (minModel + maxModel) * 0.5f,
+                out Vector3 euler,
+                out Vector3 pivotModel,
+                out bool usesRescale,
+                out BlockbenchRotationAxis rotationAxis))
+        {
             return;
+        }
 
         if (Mathf.Abs(euler.x) <= 0.0001f &&
             Mathf.Abs(euler.y) <= 0.0001f &&
@@ -2608,24 +2803,82 @@ internal static class BlockbenchMultiCuboidImporter
         }
 
         Vector3 centerModel = (minModel + maxModel) * 0.5f;
+        Vector3 sizeModel = maxModel - minModel;
+        Vector3 scale = Vector3.one;
         if (usesRescale)
         {
-            context.AddWarning(
-                "rescale_rotation",
-                "Rotacao com 'rescale' do Blockbench nao tem equivalente direto aqui; a importacao manteve a rotacao, mas sem o ajuste extra de escala.");
+            if (TryResolveRotationRescale(rotationAxis, euler, out scale))
+            {
+                context.appliedRescaleRotationCount++;
+            }
+            else
+            {
+                context.AddWarning(
+                    "rescale_rotation",
+                    "Algumas rotacoes com 'rescale' usam um eixo ambíguo; a escala extra dessas rotacoes precisa de revisao manual.");
+            }
         }
 
         Vector3 normalizedEuler = BlockShapeUtility.NormalizeCuboidEulerRotation(euler);
-        if (usedCustomPivot && (pivotModel - centerModel).sqrMagnitude > PivotEpsilon * PivotEpsilon)
+        Quaternion rotation = Quaternion.Euler(normalizedEuler);
+        Vector3 transformedCenterModel = pivotModel + Vector3.Scale(rotation * (centerModel - pivotModel), scale);
+        Vector3 halfSizeModel = Vector3.Scale(sizeModel, Abs(scale)) * 0.5f;
+        cuboid.min = (transformedCenterModel - halfSizeModel) / ModelUnitsPerVoxel;
+        cuboid.max = (transformedCenterModel + halfSizeModel) / ModelUnitsPerVoxel;
+        cuboid.eulerRotation = normalizedEuler;
+    }
+
+    private static void TryApplyOutlinerTransforms(JObject element, ref BlockModelCuboid cuboid, ImportContext context)
+    {
+        if (element == null || context == null || context.elementGroupTransforms.Count == 0)
+            return;
+
+        string uuid = ReadTrimmedString(element["uuid"]);
+        if (string.IsNullOrWhiteSpace(uuid) ||
+            !context.elementGroupTransforms.TryGetValue(uuid, out List<BlockbenchGroupTransform> transforms) ||
+            transforms == null ||
+            transforms.Count == 0)
         {
-            Quaternion rotation = Quaternion.Euler(normalizedEuler);
-            Vector3 rotatedCenterModel = pivotModel + rotation * (centerModel - pivotModel);
-            Vector3 halfSizeModel = (maxModel - minModel) * 0.5f;
-            cuboid.min = (rotatedCenterModel - halfSizeModel) / ModelUnitsPerVoxel;
-            cuboid.max = (rotatedCenterModel + halfSizeModel) / ModelUnitsPerVoxel;
+            return;
         }
 
-        cuboid.eulerRotation = normalizedEuler;
+        Vector3 centerModel = ((cuboid.min + cuboid.max) * 0.5f) * ModelUnitsPerVoxel;
+        Vector3 sizeModel = (cuboid.max - cuboid.min) * ModelUnitsPerVoxel;
+        Quaternion rotation = Quaternion.Euler(cuboid.eulerRotation);
+
+        for (int i = transforms.Count - 1; i >= 0; i--)
+        {
+            BlockbenchGroupTransform groupTransform = transforms[i];
+            if (groupTransform.hasScale && IsNonUniformScale(groupTransform.scale) && HasSignificantRotation(rotation))
+            {
+                context.AddWarning(
+                    "nested_group_scale",
+                    "Algumas escalas nao uniformes em grupos do Blockbench combinam com rotacao; o MultiCuboid aplica a melhor conversao possivel, mas shear verdadeiro nao existe nesse formato.");
+            }
+
+            Vector3 offset = centerModel - groupTransform.originModel;
+            if (groupTransform.hasScale)
+            {
+                offset = Vector3.Scale(offset, groupTransform.scale);
+                sizeModel = Vector3.Scale(sizeModel, Abs(groupTransform.scale));
+            }
+
+            if (groupTransform.hasRotation)
+            {
+                centerModel = groupTransform.originModel + groupTransform.rotation * offset;
+                rotation = groupTransform.rotation * rotation;
+            }
+            else
+            {
+                centerModel = groupTransform.originModel + offset;
+            }
+        }
+
+        Vector3 halfSizeModel = sizeModel * 0.5f;
+        cuboid.min = (centerModel - halfSizeModel) / ModelUnitsPerVoxel;
+        cuboid.max = (centerModel + halfSizeModel) / ModelUnitsPerVoxel;
+        cuboid.eulerRotation = BlockShapeUtility.NormalizeCuboidEulerRotation(rotation.eulerAngles);
+        context.appliedGroupTransformCount++;
     }
 
     private static bool TryCaptureFaceTextureRequest(
@@ -2821,13 +3074,13 @@ internal static class BlockbenchMultiCuboidImporter
         Vector3 defaultPivotModel,
         out Vector3 euler,
         out Vector3 pivotModel,
-        out bool usedCustomPivot,
-        out bool usesRescale)
+        out bool usesRescale,
+        out BlockbenchRotationAxis rotationAxis)
     {
         euler = Vector3.zero;
         pivotModel = defaultPivotModel;
-        usedCustomPivot = false;
         usesRescale = false;
+        rotationAxis = BlockbenchRotationAxis.None;
 
         JToken rotationToken = element["rotation"];
         if (rotationToken == null)
@@ -2835,47 +3088,178 @@ internal static class BlockbenchMultiCuboidImporter
 
         if (rotationToken is JObject rotationObject)
         {
-            float angle = ReadFloat(rotationObject["angle"]);
-            if (rotationObject.TryGetValue("origin", out JToken originToken) && TryReadVector3(originToken, out Vector3 parsedOrigin))
-            {
-                pivotModel = parsedOrigin;
-                usedCustomPivot = true;
-            }
+            TryReadRotationPivot(element, rotationObject, ref pivotModel);
 
             usesRescale = ReadBool(rotationObject["rescale"], false);
             string axis = rotationObject["axis"] != null ? rotationObject["axis"].ToString() : string.Empty;
-            switch (axis.ToLowerInvariant())
+            if (rotationObject["angle"] != null && TryParseRotationAxis(axis, out rotationAxis))
             {
-                case "x":
-                    euler = new Vector3(angle, 0f, 0f);
-                    return true;
-
-                case "y":
-                    euler = new Vector3(0f, angle, 0f);
-                    return true;
-
-                case "z":
-                    euler = new Vector3(0f, 0f, angle);
-                    return true;
-
-                default:
-                    return false;
+                float angle = ReadFloat(rotationObject["angle"]);
+                euler = EulerFromAxisAngle(rotationAxis, angle);
+                return true;
             }
+
+            if (TryReadRotationVector(rotationObject, out euler))
+            {
+                rotationAxis = ResolveSingleRotationAxis(euler);
+                if (rotationAxis == BlockbenchRotationAxis.None &&
+                    TryParseRotationAxis(ReadTrimmedString(element["rotation_axis"]), out BlockbenchRotationAxis elementAxis))
+                {
+                    rotationAxis = elementAxis;
+                }
+
+                return true;
+            }
+
+            return false;
         }
 
         if (TryReadVector3(rotationToken, out euler))
         {
-            if (element.TryGetValue("origin", out JToken originToken) && TryReadVector3(originToken, out Vector3 parsedOrigin))
+            TryReadRotationPivot(element, null, ref pivotModel);
+            usesRescale = ReadBool(element["rescale"], false);
+            rotationAxis = ResolveSingleRotationAxis(euler);
+            if (rotationAxis == BlockbenchRotationAxis.None &&
+                TryParseRotationAxis(ReadTrimmedString(element["rotation_axis"]), out BlockbenchRotationAxis elementAxis))
             {
-                pivotModel = parsedOrigin;
-                usedCustomPivot = true;
+                rotationAxis = elementAxis;
             }
 
-            usesRescale = ReadBool(element["rescale"], false);
             return true;
         }
 
         return false;
+    }
+
+    private static void TryReadRotationPivot(JObject element, JObject rotationObject, ref Vector3 pivotModel)
+    {
+        if (rotationObject != null &&
+            rotationObject.TryGetValue("origin", out JToken rotationOriginToken) &&
+            TryReadVector3(rotationOriginToken, out Vector3 rotationOrigin))
+        {
+            pivotModel = rotationOrigin;
+            return;
+        }
+
+        if (element != null &&
+            element.TryGetValue("origin", out JToken originToken) &&
+            TryReadVector3(originToken, out Vector3 elementOrigin))
+        {
+            pivotModel = elementOrigin;
+        }
+    }
+
+    private static bool TryParseRotationAxis(string axis, out BlockbenchRotationAxis rotationAxis)
+    {
+        rotationAxis = BlockbenchRotationAxis.None;
+        if (string.IsNullOrWhiteSpace(axis))
+            return false;
+
+        switch (axis.Trim().ToLowerInvariant())
+        {
+            case "x":
+                rotationAxis = BlockbenchRotationAxis.X;
+                return true;
+
+            case "y":
+                rotationAxis = BlockbenchRotationAxis.Y;
+                return true;
+
+            case "z":
+                rotationAxis = BlockbenchRotationAxis.Z;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static Vector3 EulerFromAxisAngle(BlockbenchRotationAxis axis, float angle)
+    {
+        switch (axis)
+        {
+            case BlockbenchRotationAxis.X:
+                return new Vector3(angle, 0f, 0f);
+
+            case BlockbenchRotationAxis.Y:
+                return new Vector3(0f, angle, 0f);
+
+            case BlockbenchRotationAxis.Z:
+                return new Vector3(0f, 0f, angle);
+
+            default:
+                return Vector3.zero;
+        }
+    }
+
+    private static BlockbenchRotationAxis ResolveSingleRotationAxis(Vector3 euler)
+    {
+        bool hasX = Mathf.Abs(Mathf.DeltaAngle(0f, euler.x)) > 0.0001f;
+        bool hasY = Mathf.Abs(Mathf.DeltaAngle(0f, euler.y)) > 0.0001f;
+        bool hasZ = Mathf.Abs(Mathf.DeltaAngle(0f, euler.z)) > 0.0001f;
+        int count = (hasX ? 1 : 0) + (hasY ? 1 : 0) + (hasZ ? 1 : 0);
+        if (count != 1)
+            return BlockbenchRotationAxis.None;
+
+        if (hasX)
+            return BlockbenchRotationAxis.X;
+        if (hasY)
+            return BlockbenchRotationAxis.Y;
+        return BlockbenchRotationAxis.Z;
+    }
+
+    private static bool TryResolveRotationRescale(BlockbenchRotationAxis axis, Vector3 euler, out Vector3 scale)
+    {
+        scale = Vector3.one;
+        if (axis == BlockbenchRotationAxis.None)
+            axis = ResolveSingleRotationAxis(euler);
+        if (axis == BlockbenchRotationAxis.None)
+            return false;
+
+        float angle = Mathf.Abs(Mathf.DeltaAngle(0f, GetAxisAngle(euler, axis)));
+        float cos = Mathf.Abs(Mathf.Cos(angle * Mathf.Deg2Rad));
+        if (cos <= 0.0001f)
+            return false;
+
+        float factor = 1f / cos;
+        switch (axis)
+        {
+            case BlockbenchRotationAxis.X:
+                scale.y = factor;
+                scale.z = factor;
+                return true;
+
+            case BlockbenchRotationAxis.Y:
+                scale.x = factor;
+                scale.z = factor;
+                return true;
+
+            case BlockbenchRotationAxis.Z:
+                scale.x = factor;
+                scale.y = factor;
+                return true;
+
+            default:
+                return false;
+        }
+    }
+
+    private static float GetAxisAngle(Vector3 euler, BlockbenchRotationAxis axis)
+    {
+        switch (axis)
+        {
+            case BlockbenchRotationAxis.X:
+                return euler.x;
+
+            case BlockbenchRotationAxis.Y:
+                return euler.y;
+
+            case BlockbenchRotationAxis.Z:
+                return euler.z;
+
+            default:
+                return 0f;
+        }
     }
 
     private static bool TryResolveFaceTile(JObject faceObject, ImportContext context, Vector2Int faceTextureSize, out Vector2Int tile)
@@ -3407,6 +3791,23 @@ internal static class BlockbenchMultiCuboidImporter
         builder.Append(Path.GetFileName(path));
         builder.AppendLine(" para a bancada.");
 
+        if (context.disabledSnapForExactImport)
+            builder.AppendLine("Snap 1/16 foi desligado na bancada para preservar exatamente posicao e escala importadas.");
+
+        if (context.appliedRescaleRotationCount > 0)
+        {
+            builder.Append("Rescale de rotacao aplicado em ");
+            builder.Append(context.appliedRescaleRotationCount);
+            builder.AppendLine(" cuboide(s).");
+        }
+
+        if (context.appliedGroupTransformCount > 0)
+        {
+            builder.Append("Rotacoes/escala de grupos do outliner aplicadas em ");
+            builder.Append(context.appliedGroupTransformCount);
+            builder.AppendLine(" cuboide(s).");
+        }
+
         if (context.importedTextureCount > 0)
         {
             builder.Append("Texturas do Blockbench viraram ");
@@ -3634,6 +4035,73 @@ internal static class BlockbenchMultiCuboidImporter
             ReadFloat(array[1]),
             ReadFloat(array[2]));
         return true;
+    }
+
+    private static bool TryReadRotationVector(JToken token, out Vector3 value)
+    {
+        if (TryReadVector3(token, out value))
+            return true;
+
+        return TryReadNamedVector3(token, "x", "y", "z", out value);
+    }
+
+    private static bool TryReadScaleVector(JToken token, out Vector3 value)
+    {
+        if (TryReadVector3(token, out value))
+            return true;
+
+        return TryReadNamedVector3(token, "x", "y", "z", out value);
+    }
+
+    private static bool TryReadNamedVector3(JToken token, string xName, string yName, string zName, out Vector3 value)
+    {
+        value = Vector3.zero;
+        if (!(token is JObject obj))
+            return false;
+
+        if (!obj.TryGetValue(xName, out JToken xToken) ||
+            !obj.TryGetValue(yName, out JToken yToken) ||
+            !obj.TryGetValue(zName, out JToken zToken))
+        {
+            return false;
+        }
+
+        value = new Vector3(
+            ReadFloat(xToken),
+            ReadFloat(yToken),
+            ReadFloat(zToken));
+        return true;
+    }
+
+    private static bool HasSignificantEulerRotation(Vector3 euler)
+    {
+        return Mathf.Abs(Mathf.DeltaAngle(0f, euler.x)) > 0.0001f ||
+               Mathf.Abs(Mathf.DeltaAngle(0f, euler.y)) > 0.0001f ||
+               Mathf.Abs(Mathf.DeltaAngle(0f, euler.z)) > 0.0001f;
+    }
+
+    private static bool HasSignificantRotation(Quaternion rotation)
+    {
+        return Quaternion.Angle(Quaternion.identity, rotation) > 0.0001f;
+    }
+
+    private static bool HasSignificantScale(Vector3 scale)
+    {
+        return Mathf.Abs(scale.x - 1f) > 0.0001f ||
+               Mathf.Abs(scale.y - 1f) > 0.0001f ||
+               Mathf.Abs(scale.z - 1f) > 0.0001f;
+    }
+
+    private static bool IsNonUniformScale(Vector3 scale)
+    {
+        return Mathf.Abs(scale.x - scale.y) > 0.0001f ||
+               Mathf.Abs(scale.x - scale.z) > 0.0001f ||
+               Mathf.Abs(scale.y - scale.z) > 0.0001f;
+    }
+
+    private static Vector3 Abs(Vector3 value)
+    {
+        return new Vector3(Mathf.Abs(value.x), Mathf.Abs(value.y), Mathf.Abs(value.z));
     }
 
     private static float ReadFloat(JToken token, float fallback = 0f)

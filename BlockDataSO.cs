@@ -9,7 +9,8 @@ public enum BlockPlacementAxis : byte
     X = 1,
     Z = 2,
     XNegative = 3,
-    ZNegative = 4
+    ZNegative = 4,
+    YNegative = 5
 }
 public enum BlockPlacementRotationAxes : byte { Vertical = 0, Horizontal = 1, Both = 2 }
 
@@ -913,7 +914,10 @@ public class BlockDataSO : ScriptableObject
 
             AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.X, ref radiusX, ref radiusY, ref radiusZ);
             AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.XNegative, ref radiusX, ref radiusY, ref radiusZ);
+            AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.Z, ref radiusX, ref radiusY, ref radiusZ);
             AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.ZNegative, ref radiusX, ref radiusY, ref radiusZ);
+            if (mapping.placementRotationAxes == BlockPlacementRotationAxes.Both)
+                AccumulateMultiCuboidOverflowSearchRadius(mapping, BlockPlacementAxis.YNegative, ref radiusX, ref radiusY, ref radiusZ);
         }
 
         return new Vector3Int(radiusX, radiusY, radiusZ);
@@ -1704,6 +1708,7 @@ public static class BlockPlacementRotationUtility
             BlockPlacementAxis.XNegative => BlockPlacementAxis.X,
             BlockPlacementAxis.Z => BlockPlacementAxis.Z,
             BlockPlacementAxis.ZNegative => BlockPlacementAxis.Z,
+            BlockPlacementAxis.YNegative => BlockPlacementAxis.Y,
             _ => BlockPlacementAxis.Y
         };
     }
@@ -1726,6 +1731,7 @@ public static class BlockPlacementRotationUtility
             BlockPlacementAxis.XNegative => BlockPlacementAxis.XNegative,
             BlockPlacementAxis.Z => BlockPlacementAxis.Z,
             BlockPlacementAxis.ZNegative => BlockPlacementAxis.ZNegative,
+            BlockPlacementAxis.YNegative => BlockPlacementAxis.YNegative,
             _ => BlockPlacementAxis.Y
         };
     }
@@ -1822,32 +1828,64 @@ public static class BlockPlacementRotationUtility
 
     public static BlockFace RemapFace(BlockFace worldFace, BlockPlacementAxis axis)
     {
-        axis = SanitizeAxis(axis);
-        if (axis == BlockPlacementAxis.Y)
-            return worldFace;
-
-        if (axis == BlockPlacementAxis.X)
+        axis = SanitizeStoredAxis(axis);
+        return axis switch
         {
-            return worldFace switch
+            BlockPlacementAxis.YNegative => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Left,
+                BlockFace.Left => BlockFace.Right,
+                BlockFace.Top => BlockFace.Bottom,
+                BlockFace.Bottom => BlockFace.Top,
+                BlockFace.Front => BlockFace.Front,
+                BlockFace.Back => BlockFace.Back,
+                _ => worldFace
+            },
+
+            BlockPlacementAxis.XNegative => worldFace switch
             {
                 BlockFace.Right => BlockFace.Top,
                 BlockFace.Left => BlockFace.Bottom,
+                BlockFace.Top => BlockFace.Left,
+                BlockFace.Bottom => BlockFace.Right,
+                BlockFace.Front => BlockFace.Front,
+                BlockFace.Back => BlockFace.Back,
+                _ => worldFace
+            },
+
+            BlockPlacementAxis.X => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Bottom,
+                BlockFace.Left => BlockFace.Top,
                 BlockFace.Top => BlockFace.Right,
                 BlockFace.Bottom => BlockFace.Left,
                 BlockFace.Front => BlockFace.Front,
                 BlockFace.Back => BlockFace.Back,
                 _ => worldFace
-            };
-        }
+            },
 
-        return worldFace switch
-        {
-            BlockFace.Right => BlockFace.Right,
-            BlockFace.Left => BlockFace.Left,
-            BlockFace.Top => BlockFace.Back,
-            BlockFace.Bottom => BlockFace.Front,
-            BlockFace.Front => BlockFace.Top,
-            BlockFace.Back => BlockFace.Bottom,
+            BlockPlacementAxis.ZNegative => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Right,
+                BlockFace.Left => BlockFace.Left,
+                BlockFace.Top => BlockFace.Back,
+                BlockFace.Bottom => BlockFace.Front,
+                BlockFace.Front => BlockFace.Top,
+                BlockFace.Back => BlockFace.Bottom,
+                _ => worldFace
+            },
+
+            BlockPlacementAxis.Z => worldFace switch
+            {
+                BlockFace.Right => BlockFace.Right,
+                BlockFace.Left => BlockFace.Left,
+                BlockFace.Top => BlockFace.Front,
+                BlockFace.Bottom => BlockFace.Back,
+                BlockFace.Front => BlockFace.Bottom,
+                BlockFace.Back => BlockFace.Top,
+                _ => worldFace
+            },
+
             _ => worldFace
         };
     }
@@ -1902,8 +1940,11 @@ public static class BlockPlacementRotationUtility
         if (hitNormal.z < 0)
             return BlockPlacementAxis.Z;
 
-        if (Mathf.Abs(hitNormal.y) > 0)
+        if (hitNormal.y > 0)
             return BlockPlacementAxis.Y;
+
+        if (hitNormal.y < 0)
+            return BlockPlacementAxis.YNegative;
 
         return ResolveHorizontalAxisFromLookForward(lookForward);
     }
@@ -2376,7 +2417,9 @@ public static class BlockShapeUtility
         if (!ShouldRotateShapeForPlacement(mapping))
             return box;
 
-        return RotateHorizontalShapeBox(box, placementAxis);
+        return UsesFullPlacementAxisRotation(mapping)
+            ? RotateFullPlacementShapeBox(box, placementAxis)
+            : RotateHorizontalShapeBox(box, placementAxis);
     }
 
     public static Vector3 TransformPointForPlacement(
@@ -2387,7 +2430,9 @@ public static class BlockShapeUtility
         if (!ShouldRotateShapeForPlacement(mapping))
             return point;
 
-        return RotateHorizontalPoint(point, placementAxis);
+        return UsesFullPlacementAxisRotation(mapping)
+            ? RotateFullPlacementPoint(point, placementAxis)
+            : RotateHorizontalPoint(point, placementAxis);
     }
 
     public static Vector3 TransformDirectionForPlacement(
@@ -2398,7 +2443,9 @@ public static class BlockShapeUtility
         if (!ShouldRotateShapeForPlacement(mapping))
             return direction;
 
-        return RotateHorizontalDirection(direction, placementAxis);
+        return UsesFullPlacementAxisRotation(mapping)
+            ? RotateFullPlacementDirection(direction, placementAxis)
+            : RotateHorizontalDirection(direction, placementAxis);
     }
 
     public static BlockFace TransformFaceForPlacement(
@@ -2408,6 +2455,9 @@ public static class BlockShapeUtility
     {
         if (!ShouldRotateShapeForPlacement(mapping))
             return face;
+
+        if (UsesFullPlacementAxisRotation(mapping))
+            return ResolveFaceFromDirection(RotateFullPlacementDirection(ResolveFaceNormal(face), placementAxis));
 
         return RotateHorizontalFace(face, placementAxis);
     }
@@ -2419,6 +2469,11 @@ public static class BlockShapeUtility
 
         return mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal ||
                mapping.placementRotationAxes == BlockPlacementRotationAxes.Both;
+    }
+
+    private static bool UsesFullPlacementAxisRotation(BlockTextureMapping mapping)
+    {
+        return mapping.placementRotationAxes == BlockPlacementRotationAxes.Both;
     }
 
     public static bool HasCuboidRotation(BlockModelCuboid cuboid)
@@ -2487,6 +2542,40 @@ public static class BlockShapeUtility
         return new ShapeBox(
             new Vector3(minX, box.min.y, minZ),
             new Vector3(maxX, box.max.y, maxZ));
+    }
+
+    private static ShapeBox RotateFullPlacementShapeBox(ShapeBox box, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        if (axis == BlockPlacementAxis.Y)
+            return box;
+
+        Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+        Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+
+        EncapsulateFullPlacementShapePoint(box.min.x, box.min.y, box.min.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.max.x, box.min.y, box.min.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.min.x, box.max.y, box.min.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.max.x, box.max.y, box.min.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.min.x, box.min.y, box.max.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.max.x, box.min.y, box.max.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.min.x, box.max.y, box.max.z, axis, ref min, ref max);
+        EncapsulateFullPlacementShapePoint(box.max.x, box.max.y, box.max.z, axis, ref min, ref max);
+
+        return new ShapeBox(min, max);
+    }
+
+    private static void EncapsulateFullPlacementShapePoint(
+        float x,
+        float y,
+        float z,
+        BlockPlacementAxis axis,
+        ref Vector3 min,
+        ref Vector3 max)
+    {
+        Vector3 point = RotateFullPlacementPoint(new Vector3(x, y, z), axis);
+        min = Vector3.Min(min, point);
+        max = Vector3.Max(max, point);
     }
 
     private static ShapeBox GetTransformedCuboidBounds(
@@ -2566,6 +2655,85 @@ public static class BlockShapeUtility
             default:
                 return direction;
         }
+    }
+
+    private static Vector3 RotateFullPlacementPoint(Vector3 point, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.YNegative:
+                return new Vector3(1f - point.x, 1f - point.y, point.z);
+
+            case BlockPlacementAxis.XNegative:
+                return new Vector3(point.y, 1f - point.x, point.z);
+
+            case BlockPlacementAxis.X:
+                return new Vector3(1f - point.y, point.x, point.z);
+
+            case BlockPlacementAxis.ZNegative:
+                return new Vector3(point.x, 1f - point.z, point.y);
+
+            case BlockPlacementAxis.Z:
+                return new Vector3(point.x, point.z, 1f - point.y);
+
+            default:
+                return point;
+        }
+    }
+
+    private static Vector3 RotateFullPlacementDirection(Vector3 direction, BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.YNegative:
+                return new Vector3(-direction.x, -direction.y, direction.z);
+
+            case BlockPlacementAxis.XNegative:
+                return new Vector3(direction.y, -direction.x, direction.z);
+
+            case BlockPlacementAxis.X:
+                return new Vector3(-direction.y, direction.x, direction.z);
+
+            case BlockPlacementAxis.ZNegative:
+                return new Vector3(direction.x, -direction.z, direction.y);
+
+            case BlockPlacementAxis.Z:
+                return new Vector3(direction.x, direction.z, -direction.y);
+
+            default:
+                return direction;
+        }
+    }
+
+    private static Vector3 ResolveFaceNormal(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Right: return Vector3.right;
+            case BlockFace.Left: return Vector3.left;
+            case BlockFace.Top: return Vector3.up;
+            case BlockFace.Bottom: return Vector3.down;
+            case BlockFace.Front: return Vector3.forward;
+            case BlockFace.Back: return Vector3.back;
+            default: return Vector3.zero;
+        }
+    }
+
+    private static BlockFace ResolveFaceFromDirection(Vector3 direction)
+    {
+        float absX = Mathf.Abs(direction.x);
+        float absY = Mathf.Abs(direction.y);
+        float absZ = Mathf.Abs(direction.z);
+
+        if (absX >= absY && absX >= absZ)
+            return direction.x >= 0f ? BlockFace.Right : BlockFace.Left;
+
+        if (absY >= absZ)
+            return direction.y >= 0f ? BlockFace.Top : BlockFace.Bottom;
+
+        return direction.z >= 0f ? BlockFace.Front : BlockFace.Back;
     }
 
     private static BlockFace RotateHorizontalFace(BlockFace face, BlockPlacementAxis placementAxis)

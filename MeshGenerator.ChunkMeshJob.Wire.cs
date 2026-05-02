@@ -381,15 +381,20 @@ public static partial class MeshGenerator
                 return WireTopConnectionMode.Flat;
             }
 
+            if (IsWireEndpointBlockAt(nx, voxelY, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return WireTopConnectionMode.Flat;
+
             bool adjacentIsSolid = IsSolidSupportBlock(nx, voxelY, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
             if (adjacentIsSolid &&
-                IsTopSurfaceWireAt(nx, voxelY + 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                (IsTopSurfaceWireAt(nx, voxelY + 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize) ||
+                 IsWireEndpointBlockAt(nx, voxelY + 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize)))
             {
                 return WireTopConnectionMode.Up;
             }
 
             if (!adjacentIsSolid &&
-                IsTopSurfaceWireAt(nx, voxelY - 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                (IsTopSurfaceWireAt(nx, voxelY - 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize) ||
+                 IsWireEndpointBlockAt(nx, voxelY - 1, nz, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize)))
             {
                 return WireTopConnectionMode.Down;
             }
@@ -561,6 +566,48 @@ public static partial class MeshGenerator
 
             BlockTextureMapping supportMapping = blockMappings[mapIndex];
             return supportMapping.isSolid && !supportMapping.isEmpty && !supportMapping.isLiquid;
+        }
+
+        private bool IsWireEndpointBlockAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            return TryGetBlockTypeAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, out BlockType blockType) &&
+                   IsWireEndpointBlock(blockType);
+        }
+
+        private bool TryGetBlockTypeAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out BlockType blockType)
+        {
+            blockType = BlockType.Air;
+
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            if ((uint)idx >= (uint)blockTypes.Length)
+                return false;
+
+            blockType = (BlockType)blockTypes[idx];
+            return true;
+        }
+
+        private static bool IsWireEndpointBlock(BlockType blockType)
+        {
+            return blockType == BlockType.RoboticArm ||
+                   blockType == BlockType.EletricConnector;
         }
 
         private bool HasTopWireConnectionForWall(
@@ -826,6 +873,9 @@ public static partial class MeshGenerator
             int voxelSizeZ,
             int voxelPlaneSize)
         {
+            if (IsWireEndpointBlockAt(neighborX, neighborY, neighborZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return true;
+
             if (!TryGetWireSurfaceAt(
                     neighborX,
                     neighborY,

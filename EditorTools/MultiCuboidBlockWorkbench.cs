@@ -197,7 +197,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         return cuboids.Count - 1;
     }
 
-    public void ReplaceCuboids(IEnumerable<BlockModelCuboid> importedCuboids, int selectedIndex = 0)
+    public void ReplaceCuboids(IEnumerable<BlockModelCuboid> importedCuboids, int selectedIndex = 0, bool snapImportedCuboids = true)
     {
         EnsureCuboidList();
         EnsureCuboidTextureEntryIdList();
@@ -212,7 +212,7 @@ public sealed class MultiCuboidBlockWorkbench : MonoBehaviour
         {
             foreach (BlockModelCuboid cuboid in importedCuboids)
             {
-                cuboids.Add(SanitizeCuboid(cuboid, snapToGrid, snapStep));
+                cuboids.Add(SanitizeCuboid(cuboid, snapImportedCuboids && snapToGrid, snapStep));
                 cuboidTextureEntryIds.Add(new BlockFaceTextureEntryIdSet());
             }
         }

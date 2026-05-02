@@ -118,6 +118,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     private int lastCrackStage = -1;
     private int placeActionVersion;
     private float nextHoldPlaceTime;
+    private bool suppressPlacementUntilRightClickReleased;
     private bool hasHoldPlacementContinuation;
     private PlacementAttempt holdPlacementContinuation;
 
@@ -1731,14 +1732,19 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!placeHeld)
         {
             ResetHoldPlacementContinuation();
+            suppressPlacementUntilRightClickReleased = false;
             return;
         }
+
+        if (suppressPlacementUntilRightClickReleased)
+            return;
 
         if (placePressedThisFrame)
         {
             ResetHoldPlacementContinuation();
             if (TryHandleRightClickInteractions())
             {
+                suppressPlacementUntilRightClickReleased = true;
                 CancelBreak();
                 return;
             }
@@ -1785,6 +1791,9 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private bool TryHandleRightClickInteractions()
     {
+        if (TryHandleEletricConnectorWireInteraction())
+            return true;
+
         ChestUIController chestUI = ChestUIController.EnsureInstance();
         if (chestUI != null &&
             chestUI.TryHandleChestInteraction(selector))
@@ -1804,6 +1813,23 @@ public class PlayerBlockBreaker : MonoBehaviour
         CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
         return craftingStationUI != null &&
                craftingStationUI.TryHandleCrafterInteraction(selector);
+    }
+
+    private bool TryHandleEletricConnectorWireInteraction()
+    {
+        if (!TryGetSelectedPlaceBlockType(out BlockType selectedBlockType) ||
+            selectedBlockType != BlockType.wire)
+        {
+            EletricConnectorWireSystem.CancelPendingSelectionIfAny();
+            return false;
+        }
+
+        EletricConnectorWireSystem wireSystem = EletricConnectorWireSystem.EnsureInstance();
+        return wireSystem != null &&
+               wireSystem.TryHandleConnectorInteraction(
+                   selector,
+                   hotbar,
+                   consumeWireOnConnection: !IsCreativeModeActive());
     }
 
     private bool TryResolvePlacementAttempt(bool preferHoldPlacementContinuation, out PlacementAttempt attempt)
