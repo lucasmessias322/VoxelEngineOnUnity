@@ -607,7 +607,8 @@ public static partial class MeshGenerator
         private static bool IsWireEndpointBlock(BlockType blockType)
         {
             return blockType == BlockType.RoboticArm ||
-                   blockType == BlockType.EletricConnector;
+                   blockType == BlockType.EletricConnector ||
+                   blockType == BlockType.SolarPanel;
         }
 
         private bool HasTopWireConnectionForWall(

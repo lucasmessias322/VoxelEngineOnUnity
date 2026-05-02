@@ -123,6 +123,11 @@ public partial class World : MonoBehaviour
         return false;
     }
 
+    public bool IsWorldColumnLoaded(int worldX, int worldZ)
+    {
+        return IsChunkLoaded(GetChunkCoordFromWorldXZ(worldX, worldZ));
+    }
+
     private BlockType GetProceduralBlockFast(Vector3Int worldPos)
     {
         int worldX = worldPos.x;

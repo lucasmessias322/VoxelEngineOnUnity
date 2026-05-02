@@ -15,6 +15,10 @@ public partial class World : MonoBehaviour
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
 
+    [Header("Support Dependent Blocks")]
+    [SerializeField, Min(1)] private int supportDependentBlockChecksPerFrame = 24;
+    [SerializeField, Min(16)] private int supportDependencySearchLimit = 256;
+
     private readonly Queue<TreeCapitatorBreakCandidate> queuedTreeCapitatorBreaks = new Queue<TreeCapitatorBreakCandidate>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly HashSet<Vector3Int> queuedTreeCapitatorSet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly Queue<Vector3Int> treeCapitatorSearchQueue = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
@@ -28,6 +32,10 @@ public partial class World : MonoBehaviour
     private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>(InitialBlockEditCapacity);
     private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Queue<Vector3Int> queuedSupportDependentBlockChecks = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> queuedSupportDependentBlockCheckSet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Queue<Vector3Int> supportDependencySearchQueue = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> supportDependencyVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
 
     private static readonly Vector3Int[] TreeCapitatorNeighborOffsets = CreateTreeCapitatorNeighborOffsets();
@@ -40,6 +48,16 @@ public partial class World : MonoBehaviour
         Vector3Int.right,
         new Vector3Int(0, 0, 1),
         new Vector3Int(0, 0, -1)
+    };
+
+    private static readonly Vector3Int[] SupportDependencyNeighborOffsets =
+    {
+        Vector3Int.up,
+        Vector3Int.down,
+        Vector3Int.left,
+        Vector3Int.right,
+        Vector3Int.forward,
+        Vector3Int.back
     };
 
     private struct LeafDecayCandidate
@@ -131,6 +149,14 @@ public partial class World : MonoBehaviour
             return;
         }
 
+        if (type != BlockType.Air && DoesBlockBreakWithoutSupport(type) && !CanBlockStayAt(worldPos, type))
+        {
+            if (current != type)
+                return;
+
+            type = BlockType.Air;
+        }
+
         if (type == BlockType.wire && current == BlockType.wire)
         {
             byte existingRawValue = blockPlacementAxes.TryGetValue(worldPos, out BlockPlacementAxis existingAxis)
@@ -176,6 +202,7 @@ public partial class World : MonoBehaviour
         HandlePlayerPlacedLogBlockChange(worldPos, current, type, placedByPlayer);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
+        HandleSupportDependentBlockChange(worldPos, current, type);
         if (waterWillPermanentlyDestroyBillboard)
             PermanentlySuppressGrassBillboardAt(worldPos, requestRebuild: false);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
@@ -667,6 +694,140 @@ public partial class World : MonoBehaviour
         chunk.voxelData[idx] = (byte)type;
         chunk.hasVoxelSnapshot = true;
         chunk.SyncDynamicBlockVisualAt(blockData, worldPos);
+    }
+
+    public bool CanBlockStayAt(Vector3Int worldPos, BlockType blockType)
+    {
+        if (!DoesBlockBreakWithoutSupport(blockType))
+            return true;
+
+        return HasStableSupportForSupportDependentBlock(worldPos, blockType);
+    }
+
+    private void ProcessQueuedSupportDependentBlockChecks()
+    {
+        if (queuedSupportDependentBlockChecks.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, supportDependentBlockChecksPerFrame);
+        int processed = 0;
+        int attempts = queuedSupportDependentBlockChecks.Count;
+
+        while (processed < perFrameLimit && attempts-- > 0)
+        {
+            Vector3Int worldPos = queuedSupportDependentBlockChecks.Dequeue();
+            queuedSupportDependentBlockCheckSet.Remove(worldPos);
+            EvaluateSupportDependentBlock(worldPos);
+            processed++;
+        }
+    }
+
+    private void EvaluateSupportDependentBlock(Vector3Int worldPos)
+    {
+        BlockType blockType = GetBlockAt(worldPos);
+        if (!DoesBlockBreakWithoutSupport(blockType))
+            return;
+
+        if (CanBlockStayAt(worldPos, blockType))
+            return;
+
+        BlockDrop.Spawn(this, worldPos, blockType, Vector3.up);
+        SetBlockAt(worldPos, BlockType.Air);
+    }
+
+    private void HandleSupportDependentBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        if (DoesBlockBreakWithoutSupport(newType))
+            TryQueueSupportDependentBlockCheck(worldPos);
+
+        if (previousType == newType)
+            return;
+
+        QueueAdjacentSupportDependentBlockChecks(worldPos);
+    }
+
+    private void QueueAdjacentSupportDependentBlockChecks(Vector3Int center)
+    {
+        for (int i = 0; i < SupportDependencyNeighborOffsets.Length; i++)
+        {
+            Vector3Int neighborPos = center + SupportDependencyNeighborOffsets[i];
+            if (DoesBlockBreakWithoutSupport(GetBlockAt(neighborPos)))
+                TryQueueSupportDependentBlockCheck(neighborPos);
+        }
+    }
+
+    private void TryQueueSupportDependentBlockCheck(Vector3Int worldPos)
+    {
+        if (worldPos.y <= 2)
+            return;
+
+        if (queuedSupportDependentBlockCheckSet.Add(worldPos))
+            queuedSupportDependentBlockChecks.Enqueue(worldPos);
+    }
+
+    private bool HasStableSupportForSupportDependentBlock(Vector3Int origin, BlockType originType)
+    {
+        int searchLimit = Mathf.Max(16, supportDependencySearchLimit);
+        supportDependencySearchQueue.Clear();
+        supportDependencyVisited.Clear();
+        supportDependencyVisited.Add(origin);
+        supportDependencySearchQueue.Enqueue(origin);
+
+        while (supportDependencySearchQueue.Count > 0)
+        {
+            Vector3Int current = supportDependencySearchQueue.Dequeue();
+            for (int i = 0; i < SupportDependencyNeighborOffsets.Length; i++)
+            {
+                Vector3Int neighborPos = current + SupportDependencyNeighborOffsets[i];
+                if (supportDependencyVisited.Contains(neighborPos))
+                    continue;
+
+                BlockType neighborType = neighborPos == origin ? originType : GetBlockAt(neighborPos);
+                if (IsStableSupportBlock(neighborType))
+                    return true;
+
+                if (!DoesBlockBreakWithoutSupport(neighborType))
+                    continue;
+
+                if (supportDependencyVisited.Count >= searchLimit)
+                    return true;
+
+                supportDependencyVisited.Add(neighborPos);
+                supportDependencySearchQueue.Enqueue(neighborPos);
+            }
+        }
+
+        return false;
+    }
+
+    private bool IsStableSupportBlock(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        if (DoesBlockBreakWithoutSupport(blockType))
+            return false;
+
+        if (blockData != null)
+        {
+            BlockTextureMapping? mapping = blockData.GetMapping(blockType);
+            if (mapping != null)
+            {
+                BlockTextureMapping value = mapping.Value;
+                return value.isSolid && !value.isEmpty && !value.isLiquid;
+            }
+        }
+
+        return IsSolidBlock(blockType) && !IsLiquidBlock(blockType);
+    }
+
+    private bool DoesBlockBreakWithoutSupport(BlockType blockType)
+    {
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType) || blockData == null)
+            return false;
+
+        BlockTextureMapping? mapping = blockData.GetMapping(blockType);
+        return mapping != null && mapping.Value.breaksWithoutSupport;
     }
 
     private void ProcessQueuedLeafDecay()

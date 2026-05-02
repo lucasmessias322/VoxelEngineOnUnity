@@ -112,6 +112,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
+    [SerializeField] private bool preventDespawnOnConveyor = true;
     [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
     [SerializeField] private float launchForce = 2.2f;
@@ -146,6 +147,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     [SerializeField] private BlockType blockType;
 
     private float spawnTime;
+    private float despawnStartTime;
     private float nextMergeCheckTime;
     private float nextPickupCheckTime;
     private float simulationAccumulator;
@@ -250,6 +252,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         drop.isHeldByRoboticArm = false;
         drop.transform.localScale = Vector3.one * drop.dropScale;
         drop.spawnTime = Time.time;
+        drop.despawnStartTime = drop.spawnTime;
         drop.nextMergeCheckTime = Time.time + Random.Range(0f, drop.mergeCheckInterval);
         drop.nextPickupCheckTime = Time.time + Random.Range(0f, drop.pickupCheckInterval);
         drop.simulationAccumulator = 0f;
@@ -347,6 +350,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         transform.rotation = Quaternion.identity;
         transform.localScale = Vector3.one * dropScale;
         spawnTime = Time.time;
+        despawnStartTime = spawnTime;
         nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
         nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
         simulationAccumulator = 0f;
@@ -2191,8 +2195,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
             TryMergeNearbyDrops();
         }
 
-        if (Time.time - spawnTime >= lifeTimeSeconds)
-            ReturnToPool();
+        UpdateDespawnTimer();
     }
 
     private void OnDestroy()
@@ -2409,6 +2412,19 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         simulationAccumulator = 0f;
     }
 
+    private void UpdateDespawnTimer()
+    {
+        if (preventDespawnOnConveyor &&
+            ConveyorBeltUtility.IsSupportedByConveyor(World.Instance, transform.position, collisionHalfExtent))
+        {
+            despawnStartTime = Time.time;
+            return;
+        }
+
+        if (Time.time - despawnStartTime >= lifeTimeSeconds)
+            ReturnToPool();
+    }
+
     private void WakeIfOnConveyor()
     {
         if (!isSleeping)
@@ -2421,7 +2437,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                out _))
+                out Vector3 conveyorVelocity) ||
+            conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
             return;
         }
@@ -2534,6 +2551,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         stackAmount += moved;
         other.stackAmount -= moved;
         spawnTime = Mathf.Max(spawnTime, other.spawnTime);
+        despawnStartTime = Mathf.Max(despawnStartTime, other.despawnStartTime);
 
         UpdateDropName();
 
@@ -2622,6 +2640,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private void ResetRuntimeState()
     {
         velocity = Vector3.zero;
+        despawnStartTime = 0f;
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;
@@ -2633,6 +2652,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 {
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
+    [SerializeField] private bool preventDespawnOnConveyor = true;
     [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
     [SerializeField] private float launchForce = 2.2f;
@@ -2673,6 +2693,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private static Transform poolContainer;
 
     private float spawnTime;
+    private float despawnStartTime;
     private float nextMergeCheckTime;
     private float nextPickupCheckTime;
     private float simulationAccumulator;
@@ -2772,6 +2793,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         transform.position = worldPosition;
         transform.localScale = Vector3.one * dropScale;
         spawnTime = Time.time;
+        despawnStartTime = spawnTime;
         nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
         nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
         simulationAccumulator = 0f;
@@ -2855,6 +2877,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         transform.rotation = Quaternion.identity;
         transform.localScale = Vector3.one * dropScale;
         spawnTime = Time.time;
+        despawnStartTime = spawnTime;
         nextMergeCheckTime = Time.time + Random.Range(0f, mergeCheckInterval);
         nextPickupCheckTime = Time.time + Random.Range(0f, pickupCheckInterval);
         simulationAccumulator = 0f;
@@ -2955,8 +2978,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
             TryMergeNearbyDrops();
         }
 
-        if (Time.time - spawnTime >= lifeTimeSeconds)
-            ReturnToPool();
+        UpdateDespawnTimer();
     }
 
     private void OnDestroy()
@@ -3163,6 +3185,19 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         simulationAccumulator = 0f;
     }
 
+    private void UpdateDespawnTimer()
+    {
+        if (preventDespawnOnConveyor &&
+            ConveyorBeltUtility.IsSupportedByConveyor(World.Instance, transform.position, collisionHalfExtent))
+        {
+            despawnStartTime = Time.time;
+            return;
+        }
+
+        if (Time.time - despawnStartTime >= lifeTimeSeconds)
+            ReturnToPool();
+    }
+
     private void WakeIfOnConveyor()
     {
         if (!isSleeping)
@@ -3175,7 +3210,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                out _))
+                out Vector3 conveyorVelocity) ||
+            conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
             return;
         }
@@ -3291,6 +3327,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         stackAmount += moved;
         other.stackAmount -= moved;
         spawnTime = Mathf.Max(spawnTime, other.spawnTime);
+        despawnStartTime = Mathf.Max(despawnStartTime, other.despawnStartTime);
 
         UpdateDropName();
 
@@ -3423,6 +3460,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private void ResetRuntimeState()
     {
         velocity = Vector3.zero;
+        despawnStartTime = 0f;
         simulationAccumulator = 0f;
         isGrounded = false;
         isSleeping = false;

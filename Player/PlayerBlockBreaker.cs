@@ -2213,6 +2213,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (placedBlockType == BlockType.wire && !CanPlaceWireAt(placePos, hitNormal))
             return false;
 
+        if (!world.CanBlockStayAt(placePos, placedBlockType))
+            return false;
+
         if (preventPlaceInsidePlayer &&
             ShouldPreventPlacementInsidePlayer(placedBlockType) &&
             IsBlockIntersectingPlayer(placePos, placedBlockType, placementAxis))

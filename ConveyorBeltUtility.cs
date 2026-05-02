@@ -58,8 +58,20 @@ public static class ConveyorBeltUtility
         Vector3 forward = GetForwardDirection(placementAxis);
         Vector3 centering = GetLaneCenteringVelocity(itemCenter, beltPos, forward, centeringStrength, maxCenteringSpeed);
 
+        if (IsForwardBlockedByUnloadedChunk(world, beltPos, forward))
+        {
+            conveyorVelocity = centering;
+            return true;
+        }
+
         conveyorVelocity = forward * Mathf.Max(0f, speed) + centering;
         return conveyorVelocity.sqrMagnitude > 0.0001f;
+    }
+
+    public static bool IsSupportedByConveyor(World world, Vector3 itemCenter, float collisionHalfExtent)
+    {
+        return world != null &&
+               TryFindSupportConveyor(world, itemCenter, collisionHalfExtent, out _);
     }
 
     private static bool TryFindSupportConveyor(World world, Vector3 itemCenter, float collisionHalfExtent, out Vector3Int beltPos)
@@ -151,10 +163,34 @@ public static class ConveyorBeltUtility
 
     private static bool IsConveyorAt(World world, Vector3Int blockPos)
     {
-        if (world.TryGetLoadedBlockAt(blockPos, out BlockType loadedBlock))
-            return loadedBlock == BlockType.ConveyorBelt;
+        if (!IsColumnLoaded(world, blockPos))
+            return false;
 
-        return world.GetBlockAt(blockPos) == BlockType.ConveyorBelt;
+        return world.TryGetLoadedBlockAt(blockPos, out BlockType loadedBlock) &&
+               loadedBlock == BlockType.ConveyorBelt;
+    }
+
+    private static bool IsForwardBlockedByUnloadedChunk(World world, Vector3Int beltPos, Vector3 forward)
+    {
+        Vector3Int forwardStep = ResolveHorizontalStep(forward);
+        return forwardStep != Vector3Int.zero &&
+               !IsColumnLoaded(world, beltPos + forwardStep);
+    }
+
+    private static bool IsColumnLoaded(World world, Vector3Int blockPos)
+    {
+        return world != null && world.IsWorldColumnLoaded(blockPos.x, blockPos.z);
+    }
+
+    private static Vector3Int ResolveHorizontalStep(Vector3 direction)
+    {
+        if (direction.sqrMagnitude <= 0.0001f)
+            return Vector3Int.zero;
+
+        if (Mathf.Abs(direction.x) >= Mathf.Abs(direction.z))
+            return direction.x > 0f ? Vector3Int.right : Vector3Int.left;
+
+        return direction.z > 0f ? new Vector3Int(0, 0, 1) : new Vector3Int(0, 0, -1);
     }
 
     private static Vector3 GetLaneCenteringVelocity(

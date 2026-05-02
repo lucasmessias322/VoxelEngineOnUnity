@@ -2624,6 +2624,9 @@ public partial class World : MonoBehaviour
         if (blockType == BlockType.ConveyorBelt)
             return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
 
+        if (blockType == BlockType.SolarPanel)
+            return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
+
         if (blockType == BlockType.wire)
             return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
 
@@ -3559,6 +3562,9 @@ public partial class World : MonoBehaviour
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedWaterUpdates();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedSupportDependentBlockChecks();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedTreeCapitatorBreaks();

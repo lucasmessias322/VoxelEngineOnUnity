@@ -1432,6 +1432,8 @@ public struct BlockTextureMapping
     public bool isTransparent; // ex: true para vidro, folhas
     public bool isLiquid;      // true para agua e outros blocos liquidos
     public bool isLightSource; // ex: blocos que emitem luz, como tochas
+    [Tooltip("Quando ativo, este bloco quebra se ele e o grupo conectado dele nao estiverem encostando em nenhum bloco solido estavel.")]
+    public bool breaksWithoutSupport;
     public int materialIndex;  // default: 0
 
     [Header("Breaking")]

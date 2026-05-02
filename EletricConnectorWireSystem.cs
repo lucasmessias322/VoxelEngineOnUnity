@@ -22,6 +22,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
     [SerializeField, Min(0f)] private float sagPerBlock = 0.055f;
     [SerializeField, Min(0f)] private float maxSag = 1.15f;
     [SerializeField] private Vector3 connectorAnchorOffset = new Vector3(0.5f, 0.53f, 0.5f);
+    [SerializeField] private Vector3 solarPanelAnchorOffset = new Vector3(0.5f, 0.28f, 0.5f);
 
     [Header("Connection Rules")]
     [SerializeField, Min(1f)] private float maxConnectionDistanceBlocks = 16f;
@@ -358,13 +359,23 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private Vector3 GetConnectorAnchorWorldPosition(Vector3Int blockPos)
     {
-        return (Vector3)blockPos + connectorAnchorOffset;
+        World world = World.Instance;
+        BlockType blockType = world != null ? world.GetBlockAt(blockPos) : BlockType.Air;
+        return (Vector3)blockPos + GetAnchorOffset(blockType);
+    }
+
+    private Vector3 GetAnchorOffset(BlockType blockType)
+    {
+        return blockType == BlockType.SolarPanel
+            ? solarPanelAnchorOffset
+            : connectorAnchorOffset;
     }
 
     private static bool IsWireEndpointBlock(BlockType blockType)
     {
         return blockType == BlockType.EletricConnector ||
-               blockType == BlockType.RoboticArm;
+               blockType == BlockType.RoboticArm ||
+               blockType == BlockType.SolarPanel;
     }
 
     private bool HasConnection(Vector3Int start, Vector3Int end)
