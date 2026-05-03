@@ -671,7 +671,6 @@ public partial class World
         if (!IsLedVisualBlock(currentType))
             return;
 
-        NormalizeElectricalLedBlockType(worldPos, currentType);
         SetElectricalLedLitVisualState(worldPos, powered);
     }
 
@@ -728,30 +727,7 @@ public partial class World
 
     private static bool IsLedVisualBlock(BlockType blockType)
     {
-        return blockType == BlockType.ledWhiteBlock ||
-               blockType == BlockType.ledWhiteBlockOn;
-    }
-
-    private static BlockType NormalizeElectricalStatefulBlockType(BlockType blockType)
-    {
-        return blockType == BlockType.ledWhiteBlockOn
-            ? BlockType.ledWhiteBlock
-            : blockType;
-    }
-
-    private void NormalizeElectricalLedBlockType(Vector3Int worldPos, BlockType currentType)
-    {
-        if (currentType != BlockType.ledWhiteBlockOn)
-            return;
-
-        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
-        BlockPlacementAxis placementAxis = GetStoredPlacementAxis(worldPos, currentType);
-        blockOverrides[worldPos] = BlockType.ledWhiteBlock;
-        UpdateStoredPlacementAxis(worldPos, BlockType.ledWhiteBlock, placementAxis);
-
-        EnsureTerrainOverrideIndexBuilt();
-        IndexTerrainOverride(worldPos, chunkCoord);
-        ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, BlockType.ledWhiteBlock);
+        return blockType == BlockType.ledWhiteBlock;
     }
 
     private void SetElectricalLedLitVisualState(Vector3Int worldPos, bool lit)
@@ -838,36 +814,18 @@ public partial class World
             delaySeconds: Mathf.Max(0f, electricalVisualRefreshDelaySeconds));
     }
 
-    private void ApplyElectricalVisualStatesToMeshBlockTypes(Vector2Int chunkCoord, int borderSize, NativeArray<byte> blockTypes)
+    private NativeArray<byte> BuildElectricalLitLedVisualMaskForMesh(Vector2Int chunkCoord, int borderSize, int blockTypeCount)
     {
-        if (!blockTypes.IsCreated)
-            return;
-
-        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
-        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
-        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        byte ledOffId = (byte)BlockType.ledWhiteBlock;
-        byte ledOnId = (byte)BlockType.ledWhiteBlockOn;
-
-        for (int z = borderSize; z < borderSize + Chunk.SizeZ; z++)
-        {
-            for (int y = 0; y < Chunk.SizeY; y++)
-            {
-                int rowBase = y * voxelSizeX + z * voxelPlaneSize;
-                for (int x = borderSize; x < borderSize + Chunk.SizeX; x++)
-                {
-                    int idx = rowBase + x;
-                    if (blockTypes[idx] == ledOnId)
-                        blockTypes[idx] = ledOffId;
-                }
-            }
-        }
-
-        if (!electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> litPositions) ||
+        if (blockTypeCount <= 0 ||
+            !electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> litPositions) ||
             litPositions.Count == 0)
         {
-            return;
+            return new NativeArray<byte>(0, Allocator.Persistent);
         }
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        NativeArray<byte> litMask = new NativeArray<byte>(blockTypeCount, Allocator.Persistent, NativeArrayOptions.ClearMemory);
 
         int chunkMinX = chunkCoord.x * Chunk.SizeX;
         int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
@@ -884,9 +842,11 @@ public partial class World
             }
 
             int idx = (localX + borderSize) + localY * voxelSizeX + (localZ + borderSize) * voxelPlaneSize;
-            if (blockTypes[idx] == ledOffId)
-                blockTypes[idx] = ledOnId;
+            if ((uint)idx < (uint)litMask.Length)
+                litMask[idx] = 1;
         }
+
+        return litMask;
     }
 
     private void ClearPoweredElectricalBlockEffects()
@@ -1219,7 +1179,6 @@ public partial class World
                blockType == BlockType.windmill ||
                BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.ledWhiteBlock ||
-               blockType == BlockType.ledWhiteBlockOn ||
                blockType == BlockType.RoboticArm;
     }
 

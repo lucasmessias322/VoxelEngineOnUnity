@@ -333,6 +333,11 @@ public partial class World
                             RequestNeighborChunkLightingRefresh(pd.coord);
                     }
 
+                    activeChunk.UpdateSubchunkColliderOccupancy(
+                        pd.subchunkColliderOccupancy,
+                        SanitizeDirtySubchunkMask(pd.dirtySubchunkMask));
+                    MeshGenerator.ReturnUlongBuffer(ref pd.subchunkColliderOccupancy);
+
                     pendingMeshBuildRequests.Add(pd);
                     pendingJobPrioritiesDirty = true;
                 }

@@ -27,6 +27,8 @@ public static partial class MeshGenerator
         [ReadOnly] public NativeArray<VegetationBillboardRuleData> vegetationBillboardRules;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
         [ReadOnly] public NativeArray<byte> knownVoxelData;
+        [ReadOnly] public NativeArray<byte> electricalLitLedVisualMask;
+        public Vector4 electricalLitLedUvRectData;
         public bool useKnownVoxelData;
 
         public int border;
@@ -563,6 +565,52 @@ public static partial class MeshGenerator
                    ((ulong)EncodeUvRectComponent(atlasOrigin.y) << 16) |
                    ((ulong)EncodeUvRectComponent(atlasSize.x) << 32) |
                    ((ulong)EncodeUvRectComponent(atlasSize.y) << 48);
+        }
+
+        private static float DecodeUvRectComponent(ulong key, int shift)
+        {
+            return ((key >> shift) & 0xffffUL) / UvRectEncodeScale;
+        }
+
+        private static void DecodeUvRectKey(ulong key, out Vector2 atlasOrigin, out Vector2 atlasSize)
+        {
+            atlasOrigin = new Vector2(
+                DecodeUvRectComponent(key, 0),
+                DecodeUvRectComponent(key, 16));
+            atlasSize = new Vector2(
+                DecodeUvRectComponent(key, 32),
+                DecodeUvRectComponent(key, 48));
+        }
+
+        private BlockTextureMapping GetLogicalBlockMapping(BlockType blockType)
+        {
+            int blockIndex = (int)blockType;
+            if ((uint)blockIndex >= (uint)blockMappings.Length)
+                return default;
+
+            return blockMappings[blockIndex];
+        }
+
+        private bool IsElectricalLitLedVisual(int voxelIndex)
+        {
+            return electricalLitLedVisualMask.IsCreated &&
+                   (uint)voxelIndex < (uint)electricalLitLedVisualMask.Length &&
+                   electricalLitLedVisualMask[voxelIndex] != 0;
+        }
+
+        private bool TryGetElectricalLitLedUvRectData(BlockType blockType, int voxelIndex, out Vector4 uvRectData)
+        {
+            uvRectData = default;
+            if (blockType != BlockType.ledWhiteBlock ||
+                !IsElectricalLitLedVisual(voxelIndex) ||
+                electricalLitLedUvRectData.z <= 0f ||
+                electricalLitLedUvRectData.w <= 0f)
+            {
+                return false;
+            }
+
+            uvRectData = electricalLitLedUvRectData;
+            return true;
         }
 
         private static Vector3 ToCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)

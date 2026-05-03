@@ -637,13 +637,14 @@ public static partial class MeshGenerator
             if (FluidBlockUtility.IsWater(current) && FluidBlockUtility.IsWater(neighbor))
                 return false;
 
-            if (current == neighbor && blockMappings[(int)current].isTransparent)
+            BlockTextureMapping currentMapping = GetLogicalBlockMapping(current);
+            if (current == neighbor && currentMapping.isTransparent)
                 return false;
 
-            if (blockMappings[(int)neighbor].isEmpty)
+            BlockTextureMapping neighborMapping = GetLogicalBlockMapping(neighbor);
+            if (neighborMapping.isEmpty)
                 return true;
 
-            BlockTextureMapping neighborMapping = blockMappings[(int)neighbor];
             bool neighborBehavesAsFullVoxel = neighborMapping.renderAsDynamicPrefab ||
                                               BlockShapeUtility.GetEffectiveRenderShape(neighborMapping) == BlockRenderShape.Cube;
             bool neighborOpaque = neighborBehavesAsFullVoxel &&

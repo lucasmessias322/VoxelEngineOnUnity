@@ -70,7 +70,6 @@ public enum BlockType
     batteryBlock = 65,
     windmill = 66,
     ledWhiteBlock = 67,
-    ledWhiteBlockOn = 68,
     batteryBlock100 = 69,
     batteryBlock75 = 70,
     batteryBlock50 = 71,

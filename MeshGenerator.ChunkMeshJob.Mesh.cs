@@ -68,7 +68,7 @@ public static partial class MeshGenerator
                                     continue;
                                 }
 
-                                BlockTextureMapping currentMapping = blockMappings[(int)current];
+                                BlockTextureMapping currentMapping = GetLogicalBlockMapping(current);
                                 if (currentMapping.renderAsDynamicPrefab)
                                 {
                                     mask[maskIndex] = default;
@@ -187,6 +187,11 @@ public static partial class MeshGenerator
                                     invAtlasTilesY,
                                     out Vector2 atlasUv,
                                     out Vector2 atlasSize);
+                                if (TryGetElectricalLitLedUvRectData(current, idx, out Vector4 litLedUvRectData))
+                                {
+                                    atlasUv = new Vector2(litLedUvRectData.x, litLedUvRectData.y);
+                                    atlasSize = new Vector2(litLedUvRectData.z, litLedUvRectData.w);
+                                }
                                 byte renderBucket = ClassifyFaceRenderBucket(current, currentMapping);
                                 uint mergeKey = BuildFaceMergeKey(current, renderBucket, uvPlacementAxis, uvSamplingFace, tint, useGrassSideOverlay);
                                 ulong uvRectKey = BuildUvRectKey(atlasUv, atlasSize);
@@ -314,7 +319,7 @@ public static partial class MeshGenerator
                                 int baseBlockY = u == 1 ? i : v == 1 ? j : n;
 
                                 int vIndex = GetCurrentSliceVertexIndex();
-                                BlockTextureMapping m = blockMappings[(int)bt];
+                                BlockTextureMapping m = GetLogicalBlockMapping(bt);
                                 BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(bottomLeftFace.placementAxis);
                                 BlockFace sampledFace = BlockPlacementRotationUtility.ResolveFaceForPlacement(m, faceType, placementAxis);
                                 BlockPlacementAxis uvPlacementAxis = ResolveUvPlacementAxis(m, placementAxis);
@@ -327,13 +332,7 @@ public static partial class MeshGenerator
                                 int faceSubchunkIndex = math.clamp(baseBlockY / Chunk.SubchunkHeight, 0, Chunk.SubchunksPerColumn - 1);
                                 float packedSubchunkAndOverlay =
                                     faceSubchunkIndex + (useGrassSideOverlay ? 0.25f : 0f);
-                                ResolveAtlasRect(
-                                    m,
-                                    sampledFace,
-                                    invAtlasTilesX,
-                                    invAtlasTilesY,
-                                    out Vector2 atlasUv,
-                                    out Vector2 atlasSize);
+                                DecodeUvRectKey(bottomLeftFace.uvRectKey, out Vector2 atlasUv, out Vector2 atlasSize);
 
                                 for (int l = 0; l < 4; l++)
                                 {
@@ -380,7 +379,7 @@ public static partial class MeshGenerator
 
                                 NativeList<int> tris = FluidBlockUtility.IsWater(bt)
                                     ? waterTriangles
-                                    : (blockMappings[(int)bt].isTransparent ? transparentTriangles : opaqueTriangles);
+                                    : (m.isTransparent ? transparentTriangles : opaqueTriangles);
 
                                 if (normalSign > 0)
                                 {
@@ -478,7 +477,7 @@ public static partial class MeshGenerator
                 return false;
 
             BlockType blockType = (BlockType)blockTypes[idx];
-            BlockTextureMapping mapping = blockMappings[(int)blockType];
+            BlockTextureMapping mapping = GetLogicalBlockMapping(blockType);
             return CastsAmbientOcclusion(blockType, mapping);
         }
 

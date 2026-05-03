@@ -20,6 +20,8 @@ public static partial class MeshGenerator
         NativeArray<int3> suppressedGrassBillboards,
         NativeArray<bool> subchunkNonEmpty,
         NativeArray<byte> knownVoxelData,
+        NativeArray<byte> electricalLitLedVisualMask,
+        Vector4 electricalLitLedUvRectData,
         bool useKnownVoxelData,
         int atlasTilesX,
         int atlasTilesY,
@@ -94,6 +96,8 @@ public static partial class MeshGenerator
             suppressedGrassBillboards = suppressedGrassBillboards,
             subchunkNonEmpty = subchunkNonEmpty,
             knownVoxelData = knownVoxelData,
+            electricalLitLedVisualMask = electricalLitLedVisualMask,
+            electricalLitLedUvRectData = electricalLitLedUvRectData,
             useKnownVoxelData = useKnownVoxelData,
 
             border = borderSize,

@@ -88,6 +88,7 @@ public partial class World
     private bool vegetationBillboardRulesDirty = true;
     private NativeArray<NoiseLayer> cachedNativeNoiseLayers;
     private NativeArray<BlockTextureMapping> cachedNativeBlockMappings;
+    private Vector4 cachedElectricalLitLedUvRectData;
     private NativeArray<BlockModelCuboid> cachedNativeBlockModelCuboids;
     private NativeArray<byte> cachedNativeEffectiveLightOpacityByBlock;
     private NativeArray<ushort> cachedNativeLightEmissionByBlock;

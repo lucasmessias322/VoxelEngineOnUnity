@@ -65,6 +65,7 @@ public partial class World
         VegetationBillboardRuleData[] runtimeVegetationBillboardRules = GetActiveVegetationBillboardRules();
 
         cachedNativeNoiseLayers = new NativeArray<NoiseLayer>(runtimeNoiseLayers, Allocator.Persistent);
+        cachedElectricalLitLedUvRectData = BuildElectricalLitLedUvRectData();
         cachedNativeBlockMappings = new NativeArray<BlockTextureMapping>(runtimeBlockMappings, Allocator.Persistent);
         cachedNativeBlockModelCuboids = new NativeArray<BlockModelCuboid>(runtimeBlockModelCuboids, Allocator.Persistent);
         cachedNativeEffectiveLightOpacityByBlock = new NativeArray<byte>(runtimeBlockMappings.Length, Allocator.Persistent);
@@ -78,6 +79,34 @@ public partial class World
         cachedNativeTreeSpawnRules = new NativeArray<TreeSpawnRuleData>(runtimeTreeSpawnRules, Allocator.Persistent);
         cachedNativeVegetationBillboardRules = new NativeArray<VegetationBillboardRuleData>(runtimeVegetationBillboardRules, Allocator.Persistent);
         nativeGenerationConfigDirty = false;
+    }
+
+    private Vector4 BuildElectricalLitLedUvRectData()
+    {
+        if (TryResolveAtlasUvRectData("block/lampon", out Vector4 lampOnUvRectData))
+            return lampOnUvRectData;
+
+        return default;
+    }
+
+    private bool TryResolveAtlasUvRectData(string entryId, out Vector4 uvRectData)
+    {
+        uvRectData = default;
+        TextureAtlasGenerator generator = ResolveBlockAtlasGenerator();
+        if (generator == null)
+            return false;
+
+        if ((generator.GeneratedAtlas == null || generator.UvMap.Count == 0) &&
+            !generator.TryApplyPersistedAtlasWithoutRebuild())
+        {
+            generator.GenerateAtlas();
+        }
+
+        if (!generator.TryGetUv(entryId, out Rect uvRect))
+            return false;
+
+        uvRectData = BlockAtlasUvUtility.RectToUvRectData(uvRect);
+        return BlockAtlasUvUtility.IsValidUvRectData(uvRectData);
     }
 
     #endregion

@@ -897,35 +897,48 @@ public class Chunk : MonoBehaviour
     {
         EnsureSubchunkStorage();
 
-        if (!occupancyBits.IsCreated || occupancyBits.Length < SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk)
+        try
         {
+            if (!occupancyBits.IsCreated || occupancyBits.Length < SubchunksPerColumn * ColliderOccupancyWordsPerSubchunk)
+            {
+                ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+                return;
+            }
+
             for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
             {
                 if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
                     continue;
 
-                ClearSubchunkColliderOccupancy(subchunkIndex);
+                int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
+                bool hasSolids = false;
+                for (int wordIndex = 0; wordIndex < ColliderOccupancyWordsPerSubchunk; wordIndex++)
+                {
+                    ulong word = occupancyBits[wordOffset + wordIndex];
+                    subchunkColliderOccupancyBits[wordOffset + wordIndex] = word;
+                    hasSolids |= word != 0UL;
+                }
+
+                subchunkColliderOccupancyValid[subchunkIndex] = true;
+                subchunkColliderOccupancyHasSolids[subchunkIndex] = hasSolids;
             }
-
-            return;
         }
+        catch (ObjectDisposedException)
+        {
+            ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+        }
+        catch (InvalidOperationException)
+        {
+            ClearDirtySubchunkColliderOccupancy(dirtySubchunkMask);
+        }
+    }
 
+    private void ClearDirtySubchunkColliderOccupancy(int dirtySubchunkMask)
+    {
         for (int subchunkIndex = 0; subchunkIndex < SubchunksPerColumn; subchunkIndex++)
         {
-            if ((dirtySubchunkMask & (1 << subchunkIndex)) == 0)
-                continue;
-
-            int wordOffset = subchunkIndex * ColliderOccupancyWordsPerSubchunk;
-            bool hasSolids = false;
-            for (int wordIndex = 0; wordIndex < ColliderOccupancyWordsPerSubchunk; wordIndex++)
-            {
-                ulong word = occupancyBits[wordOffset + wordIndex];
-                subchunkColliderOccupancyBits[wordOffset + wordIndex] = word;
-                hasSolids |= word != 0UL;
-            }
-
-            subchunkColliderOccupancyValid[subchunkIndex] = true;
-            subchunkColliderOccupancyHasSolids[subchunkIndex] = hasSolids;
+            if ((dirtySubchunkMask & (1 << subchunkIndex)) != 0)
+                ClearSubchunkColliderOccupancy(subchunkIndex);
         }
     }
 

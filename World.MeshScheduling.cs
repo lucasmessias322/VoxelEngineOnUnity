@@ -14,9 +14,6 @@ public partial class World
     {
         int borderSize = Mathf.Max(1, pd.borderSize);
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
-        activeChunk.UpdateSubchunkColliderOccupancy(pd.subchunkColliderOccupancy, dirtySubchunkMask);
-        MeshGenerator.ReturnUlongBuffer(ref pd.subchunkColliderOccupancy);
-        ApplyElectricalVisualStatesToMeshBlockTypes(pd.coord, borderSize, pd.blockTypes);
         suppressedGrassBillboardInt3Buffer.Clear();
         CollectSuppressedGrassBillboardsForChunk(pd.coord, suppressedGrassBillboardInt3Buffer);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedGrassBillboardInt3Buffer.Count, Allocator.Persistent);
@@ -50,6 +47,9 @@ public partial class World
 
         JobHandle combinedMeshHandle = default;
         bool hasScheduledMeshJobs = false;
+        NativeArray<byte> nativeElectricalLitLedVisualMask = affectedVisualSliceMask != 0
+            ? BuildElectricalLitLedVisualMaskForMesh(pd.coord, borderSize, pd.blockTypes.IsCreated ? pd.blockTypes.Length : 0)
+            : default;
         if (affectedVisualSliceMask != 0)
         {
             bool useDetailedGeneration = pd.targetDetailedGeneration;
@@ -93,7 +93,7 @@ public partial class World
 
                 MeshGenerator.ScheduleMeshJob(
                     pd.heightCache, pd.blockTypes, pd.blockPlacementAxes, pd.solids, pd.light, cachedNativeBlockMappings, cachedNativeBlockModelCuboids, nativeSuppressedBillboards,
-                    pd.subchunkNonEmpty, pd.knownVoxelData, pd.useKnownVoxelData,
+                    pd.subchunkNonEmpty, pd.knownVoxelData, nativeElectricalLitLedVisualMask, cachedElectricalLitLedUvRectData, pd.useKnownVoxelData,
                     atlasTilesX, atlasTilesY, true, borderSize,
                     pd.coord.x, pd.coord.y,
                     scheduledSubchunkMask,
@@ -156,9 +156,12 @@ public partial class World
             suppressedGrassBillboards = nativeSuppressedBillboards
         };
         JobHandle suppressedDisposeHandle = disposeSuppressedBillboardsJob.Schedule(combinedMeshHandle);
+        JobHandle electricalLitLedMaskDisposeHandle = nativeElectricalLitLedVisualMask.IsCreated
+            ? nativeElectricalLitLedVisualMask.Dispose(combinedMeshHandle)
+            : default;
 
         QueueChunkDataBufferReturn(combinedMeshHandle, ref pd);
-        activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, suppressedDisposeHandle);
+        activeChunk.currentJob = JobHandle.CombineDependencies(combinedMeshHandle, suppressedDisposeHandle, electricalLitLedMaskDisposeHandle);
     }
 
     private void CollectSuppressedGrassBillboardsForChunk(Vector2Int chunkCoord, List<int3> output)

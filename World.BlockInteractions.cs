@@ -45,7 +45,6 @@ public partial class World
     {
         if (!enableWater && FluidBlockUtility.IsWater(type))
             type = BlockType.Air;
-        type = NormalizeElectricalStatefulBlockType(type);
 
         if (worldPos.y <= 2)
         {
