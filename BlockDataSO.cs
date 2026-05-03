@@ -1454,6 +1454,16 @@ public struct BlockTextureMapping
     [Tooltip("Cor RGB da luz emitida. Preto mantem compatibilidade e emite branco quando Light Emission > 0.")]
     public Color lightColor;
 
+    [Header("Electricity")]
+    [Tooltip("Quando ativo, o bloco pode participar da rede eletrica como endpoint conectavel.")]
+    public bool isElectricalEndpoint;
+    [Tooltip("Consumo continuo por segundo enquanto o bloco permanecer energizado. 0 = nao consome energia continuamente.")]
+    [Min(0f)] public float poweredElectricalEnergyPerSecond;
+    [Tooltip("Luz emitida enquanto o bloco estiver energizado pela rede eletrica.")]
+    [Range(0, 15)] public byte poweredLightEmission;
+    [Tooltip("Cor da luz emitida enquanto o bloco estiver energizado. Preto mantem compatibilidade e emite branco quando Powered Light Emission > 0.")]
+    public Color poweredLightColor;
+
     [Header("Biome Tinting")]
     [Tooltip("Aplica cor do bioma nesta face?")]
     public bool tintTop;

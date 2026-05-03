@@ -69,6 +69,7 @@ public enum BlockType
     EletricConnector = 64,
     batteryBlock = 65,
     windmill = 66,
+    ledWhiteBlock = 67
 }
 
 public static class FluidBlockUtility

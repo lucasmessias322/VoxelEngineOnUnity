@@ -605,13 +605,23 @@ public static partial class MeshGenerator
             return true;
         }
 
-        private static bool IsWireEndpointBlock(BlockType blockType)
+        private bool IsWireEndpointBlock(BlockType blockType)
         {
-            return blockType == BlockType.RoboticArm ||
+            return IsConfiguredElectricalEndpoint(blockType) ||
+                   blockType == BlockType.RoboticArm ||
                    blockType == BlockType.EletricConnector ||
                    blockType == BlockType.SolarPanel ||
                    blockType == BlockType.batteryBlock ||
-                   blockType == BlockType.windmill;
+                   blockType == BlockType.windmill ||
+                   blockType == BlockType.ledWhiteBlock;
+        }
+
+        private bool IsConfiguredElectricalEndpoint(BlockType blockType)
+        {
+            int mappingIndex = (int)blockType;
+            return mappingIndex >= 0 &&
+                   mappingIndex < blockMappings.Length &&
+                   blockMappings[mappingIndex].isElectricalEndpoint;
         }
 
         private bool HasTopWireConnectionForWall(

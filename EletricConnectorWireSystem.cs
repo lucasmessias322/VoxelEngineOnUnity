@@ -399,11 +399,21 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private static bool IsWireEndpointBlock(BlockType blockType)
     {
+        World world = World.Instance;
+        if (world != null)
+            return world.IsElectricalWireEndpointBlockType(blockType);
+
+        return IsLegacyWireEndpointBlock(blockType);
+    }
+
+    private static bool IsLegacyWireEndpointBlock(BlockType blockType)
+    {
         return blockType == BlockType.EletricConnector ||
                blockType == BlockType.RoboticArm ||
                blockType == BlockType.SolarPanel ||
                blockType == BlockType.batteryBlock ||
-               blockType == BlockType.windmill;
+               blockType == BlockType.windmill ||
+               blockType == BlockType.ledWhiteBlock;
     }
 
     private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
