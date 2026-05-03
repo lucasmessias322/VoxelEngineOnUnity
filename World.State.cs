@@ -165,6 +165,15 @@ public partial class World
         public bool preferredView;
         public ChunkDetailPromotionCandidateState state;
     }
+
+    private struct PendingInteractiveBlockLightRefresh
+    {
+        public Vector3Int position;
+        public BlockType previousType;
+        public BlockType newType;
+        public float earliestRefreshTime;
+    }
+
     private readonly Dictionary<Vector2Int, int> removeLightDirtyChunksBuffer = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
     private readonly Queue<Vector3Int> refillLightQueueBuffer = new Queue<Vector3Int>(InitialLightWorkCollectionCapacity);
     private readonly HashSet<Vector3Int> refillLightEnqueuedBuffer = new HashSet<Vector3Int>(InitialLightWorkCollectionCapacity);

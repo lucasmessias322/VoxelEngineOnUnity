@@ -413,7 +413,8 @@ public class EletricConnectorWireSystem : MonoBehaviour
                blockType == BlockType.SolarPanel ||
                blockType == BlockType.batteryBlock ||
                blockType == BlockType.windmill ||
-               blockType == BlockType.ledWhiteBlock;
+               blockType == BlockType.ledWhiteBlock ||
+               blockType == BlockType.ledWhiteBlockOn;
     }
 
     private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
