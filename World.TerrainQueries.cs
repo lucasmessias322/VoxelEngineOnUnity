@@ -212,6 +212,11 @@ public partial class World : MonoBehaviour
             GetTerrainDensitySettings());
     }
 
+    public int GetTerrainSurfaceHeightAt(int worldX, int worldZ)
+    {
+        return GetSurfaceHeight(worldX, worldZ);
+    }
+
     private static int FloorDiv(int a, int b)
     {
         int q = a / b;

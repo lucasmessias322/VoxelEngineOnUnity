@@ -196,6 +196,7 @@ public static partial class MeshGenerator
         {
             const float armHalfWidth = 0.12f;
             const float centerHalfSize = 0.18f;
+            const float layerStep = 0.0006f;
 
             ResolveWireConnectionOffsets(
                 wireSurfaceAxis,
@@ -330,16 +331,16 @@ public static partial class MeshGenerator
             }
 
             if (connectPosS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0, layerStep);
 
             if (connectNegS)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, 0.5f - armHalfWidth, 0.5f + armHalfWidth, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 0, layerStep * 2f);
 
             if (connectPosT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, 0.5f - WireConnectionOverlap, 1f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, layerStep * 3f);
 
             if (connectNegT)
-                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1);
+                AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, layerStep * 4f);
         }
 
         private enum WireTopConnectionMode : byte
@@ -608,7 +609,9 @@ public static partial class MeshGenerator
         {
             return blockType == BlockType.RoboticArm ||
                    blockType == BlockType.EletricConnector ||
-                   blockType == BlockType.SolarPanel;
+                   blockType == BlockType.SolarPanel ||
+                   blockType == BlockType.batteryBlock ||
+                   blockType == BlockType.windmill;
         }
 
         private bool HasTopWireConnectionForWall(
@@ -632,6 +635,14 @@ public static partial class MeshGenerator
                     blockTypes,
                     voxelSizeX,
                     voxelSizeZ,
+                    voxelPlaneSize) ||
+                IsWireEndpointBlockAt(
+                    voxelX,
+                    voxelY + 1,
+                    voxelZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
                     voxelPlaneSize))
             {
                 return true;
@@ -645,13 +656,21 @@ public static partial class MeshGenerator
                 supportTopZ += attachmentSide;
 
             return IsTopSurfaceWireAt(
-                supportTopX,
-                voxelY + 1,
-                supportTopZ,
-                blockTypes,
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize);
+                       supportTopX,
+                       voxelY + 1,
+                       supportTopZ,
+                       blockTypes,
+                       voxelSizeX,
+                       voxelSizeZ,
+                       voxelPlaneSize)
+                   || IsWireEndpointBlockAt(
+                       supportTopX,
+                       voxelY + 1,
+                       supportTopZ,
+                       blockTypes,
+                       voxelSizeX,
+                       voxelSizeZ,
+                       voxelPlaneSize);
         }
 
         private bool HasGroundWireConnectionForWall(

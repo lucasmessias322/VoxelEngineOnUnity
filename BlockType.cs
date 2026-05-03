@@ -67,6 +67,8 @@ public enum BlockType
     ConveyorBelt = 62,
     chest = 63,
     EletricConnector = 64,
+    batteryBlock = 65,
+    windmill = 66,
 }
 
 public static class FluidBlockUtility

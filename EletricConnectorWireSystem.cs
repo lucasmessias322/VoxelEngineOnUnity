@@ -2,6 +2,18 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.Rendering;
 
+public readonly struct EletricWireConnectionSnapshot
+{
+    public readonly Vector3Int Start;
+    public readonly Vector3Int End;
+
+    public EletricWireConnectionSnapshot(Vector3Int start, Vector3Int end)
+    {
+        Start = start;
+        End = end;
+    }
+}
+
 public class EletricConnectorWireSystem : MonoBehaviour
 {
     private sealed class WireConnection
@@ -23,6 +35,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
     [SerializeField, Min(0f)] private float maxSag = 1.15f;
     [SerializeField] private Vector3 connectorAnchorOffset = new Vector3(0.5f, 0.53f, 0.5f);
     [SerializeField] private Vector3 solarPanelAnchorOffset = new Vector3(0.5f, 0.28f, 0.5f);
+    [SerializeField] private Vector3 windMillAnchorOffset = new Vector3(0.5f, 0.65f, 0.5f);
 
     [Header("Connection Rules")]
     [SerializeField, Min(1f)] private float maxConnectionDistanceBlocks = 16f;
@@ -69,6 +82,14 @@ public class EletricConnectorWireSystem : MonoBehaviour
     {
         if (instance != null)
             instance.ClearPendingConnector();
+    }
+
+    public static void CopyActiveConnections(List<EletricWireConnectionSnapshot> output)
+    {
+        if (output == null || instance == null)
+            return;
+
+        instance.CopyConnections(output);
     }
 
     private void Awake()
@@ -155,7 +176,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         Vector3Int end = connectorPos;
         ClearPendingConnector();
 
-        if (HasConnection(start, end))
+        if (TryRemoveConnection(start, end))
             return true;
 
         if (consumeWireOnConnection && hotbar != null && !hotbar.TryConsumeSelected(1))
@@ -213,6 +234,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
         connections.Add(connection);
         UpdateConnectionLine(connection);
+        NotifyWorldElectricConnectionsChanged();
     }
 
     private Transform EnsureConnectionsRoot()
@@ -366,27 +388,36 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private Vector3 GetAnchorOffset(BlockType blockType)
     {
-        return blockType == BlockType.SolarPanel
-            ? solarPanelAnchorOffset
-            : connectorAnchorOffset;
+        if (blockType == BlockType.SolarPanel)
+            return solarPanelAnchorOffset;
+
+        if (blockType == BlockType.windmill)
+            return windMillAnchorOffset;
+
+        return connectorAnchorOffset;
     }
 
     private static bool IsWireEndpointBlock(BlockType blockType)
     {
         return blockType == BlockType.EletricConnector ||
                blockType == BlockType.RoboticArm ||
-               blockType == BlockType.SolarPanel;
+               blockType == BlockType.SolarPanel ||
+               blockType == BlockType.batteryBlock ||
+               blockType == BlockType.windmill;
     }
 
-    private bool HasConnection(Vector3Int start, Vector3Int end)
+    private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
     {
         SortEndpoints(ref start, ref end);
 
         for (int i = 0; i < connections.Count; i++)
         {
             WireConnection connection = connections[i];
-            if (connection != null && connection.start == start && connection.end == end)
-                return true;
+            if (connection == null || connection.start != start || connection.end != end)
+                continue;
+
+            RemoveConnectionAt(i);
+            return true;
         }
 
         return false;
@@ -428,6 +459,8 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
         if (connection != null && connection.root != null)
             DestroyRuntimeObject(connection.root);
+
+        NotifyWorldElectricConnectionsChanged();
     }
 
     private void ClearConnections()
@@ -476,6 +509,26 @@ public class EletricConnectorWireSystem : MonoBehaviour
             ClearPendingConnector();
 
         PruneInvalidConnections();
+    }
+
+    private void CopyConnections(List<EletricWireConnectionSnapshot> output)
+    {
+        PruneInvalidConnections();
+
+        for (int i = 0; i < connections.Count; i++)
+        {
+            WireConnection connection = connections[i];
+            if (connection == null)
+                continue;
+
+            output.Add(new EletricWireConnectionSnapshot(connection.start, connection.end));
+        }
+    }
+
+    private static void NotifyWorldElectricConnectionsChanged()
+    {
+        if (World.Instance != null)
+            World.Instance.NotifyElectricConnectorConnectionsChanged();
     }
 
     private static void SortEndpoints(ref Vector3Int start, ref Vector3Int end)

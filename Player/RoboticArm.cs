@@ -40,6 +40,10 @@ public class RoboticArm : DynamicVoxelBlock
     [SerializeField, Min(0.01f)] private float cycleCooldownSeconds = 0.35f;
     [SerializeField] private string grabDropAnimatorBool = "GrabDrop";
 
+    [Header("Electricity")]
+    [SerializeField] private bool requireElectricity = true;
+    [SerializeField, Min(0f)] private float energyPerTransferCycle = 8f;
+
     [Header("Held Drop")]
     [SerializeField] private Transform gripAnchor;
     [SerializeField] private Vector3 heldLocalPosition = Vector3.zero;
@@ -146,6 +150,12 @@ public class RoboticArm : DynamicVoxelBlock
             if (targetDrop is RoboticArmChestItemTransfer chestTransfer)
                 chestTransfer.DiscardIfUnused();
 
+            nextScanTime = Time.time + scanIntervalSeconds;
+            return;
+        }
+
+        if (!TryConsumeTransferEnergy())
+        {
             nextScanTime = Time.time + scanIntervalSeconds;
             return;
         }
@@ -323,7 +333,27 @@ public class RoboticArm : DynamicVoxelBlock
         if (world == null)
             return false;
 
-        return !requireInitialWorldReady || world.IsInitialWorldReady;
+        if (requireInitialWorldReady && !world.IsInitialWorldReady)
+            return false;
+
+        if (!requireElectricity)
+            return true;
+
+        return world.HasElectricalEnergy(ResolveArmBlockPosition(), Mathf.Max(0f, energyPerTransferCycle));
+    }
+
+    private bool TryConsumeTransferEnergy()
+    {
+        if (!requireElectricity)
+            return true;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        return world.TryConsumeElectricalEnergy(
+            ResolveArmBlockPosition(),
+            Mathf.Max(0f, energyPerTransferCycle));
     }
 
     private Vector3 ResolvePickupCenter()
