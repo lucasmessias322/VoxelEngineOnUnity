@@ -28,6 +28,8 @@ public partial class World
     [SerializeField, Min(0.05f)] private float electricityTickInterval = 0.25f;
     [SerializeField, Min(0f)] private float solarPanelEnergyPerSecond = 24f;
     [SerializeField, Min(0f)] private float windMillEnergyPerSecond = 18f;
+    [SerializeField, Min(0f)] private float defaultPoweredLightEnergyPerSecond = 0.5f;
+    [SerializeField, Min(0f)] private float roboticArmIdleEnergyPerSecond = 1.5f;
     [SerializeField, Min(0)] private int windMillMinimumGroundClearanceBlocks = 7;
     [SerializeField, Min(1f)] private float batteryCapacity = 240f;
     [SerializeField, Min(0f)] private float directSolarBufferSeconds = 1f;

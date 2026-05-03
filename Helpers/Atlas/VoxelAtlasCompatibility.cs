@@ -29,6 +29,8 @@ public static class VoxelAtlasCompatibility
             generator.GenerateAtlas();
         }
 
+        EnsureAtlasContainsRequiredEntries(generator, blockData);
+
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
 
@@ -60,6 +62,8 @@ public static class VoxelAtlasCompatibility
             generator.GenerateAtlas();
         }
 
+        EnsureAtlasContainsRequiredEntries(generator, blockData);
+
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
 
@@ -88,6 +92,66 @@ public static class VoxelAtlasCompatibility
         }
 
         return updated;
+    }
+
+    private static void EnsureAtlasContainsRequiredEntries(
+        TextureAtlasGenerator generator,
+        BlockDataSO blockData)
+    {
+        if (generator == null ||
+            blockData == null ||
+            generator.GeneratedAtlas == null ||
+            generator.UvMap.Count == 0)
+        {
+            return;
+        }
+
+        if (HasAllRequiredBlockEntries(generator, blockData))
+            return;
+
+        generator.GenerateAtlas();
+    }
+
+    private static bool HasAllRequiredBlockEntries(
+        TextureAtlasGenerator generator,
+        BlockDataSO blockData)
+    {
+        if (blockData.blockTextures == null || blockData.blockTextures.Count == 0)
+            return true;
+
+        for (int i = 0; i < blockData.blockTextures.Count; i++)
+        {
+            BlockTextureMapping mapping = blockData.blockTextures[i];
+            for (int faceIndex = 0; faceIndex < SupportedFaces.Length; faceIndex++)
+            {
+                if (!TryGetRequiredEntryId(blockData, mapping.blockType, SupportedFaces[faceIndex], out string entryId))
+                    continue;
+
+                if (!generator.TryGetUv(entryId, out _))
+                    return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool TryGetRequiredEntryId(
+        BlockDataSO blockData,
+        BlockType blockType,
+        BlockFace face,
+        out string entryId)
+    {
+        entryId = string.Empty;
+        if (blockData != null &&
+            blockData.TryGetTextureEntryId(blockType, face, out string explicitEntryId) &&
+            !string.IsNullOrWhiteSpace(explicitEntryId))
+        {
+            entryId = explicitEntryId;
+            return true;
+        }
+
+        return BlockTextureEntryIdResolver.TryGetCanonicalEntryId(blockType, face, out entryId) &&
+               !string.IsNullOrWhiteSpace(entryId);
     }
 
     private static bool ApplyMultiCuboidMappings(

@@ -611,7 +611,7 @@ public static partial class MeshGenerator
                    blockType == BlockType.RoboticArm ||
                    blockType == BlockType.EletricConnector ||
                    blockType == BlockType.SolarPanel ||
-                   blockType == BlockType.batteryBlock ||
+                   BatteryBlockUtility.IsBatteryBlock(blockType) ||
                    blockType == BlockType.windmill ||
                    blockType == BlockType.ledWhiteBlock ||
                    blockType == BlockType.ledWhiteBlockOn;

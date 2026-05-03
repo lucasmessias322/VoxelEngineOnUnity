@@ -18,6 +18,7 @@ public partial class World
     private readonly HashSet<Vector3Int> electricalPoweredThisTick = new HashSet<Vector3Int>(InitialBlockEditCapacity);
     private readonly List<Vector3Int> poweredElectricalRemovalBuffer = new List<Vector3Int>(128);
     private readonly List<Vector3Int> poweredElectricalApplyBuffer = new List<Vector3Int>(128);
+    private readonly List<ElectricalConsumerDemand> electricalConsumerDemandBuffer = new List<ElectricalConsumerDemand>(128);
 
     private bool electricalNetworksDirty = true;
     private float lastElectricityTickTime;
@@ -30,6 +31,12 @@ public partial class World
         public ushort poweredEmission;
     }
 
+    private struct ElectricalConsumerDemand
+    {
+        public Vector3Int position;
+        public float energyRequired;
+    }
+
     private sealed class ElectricalNetworkRuntime
     {
         public int blockCount;
@@ -40,6 +47,7 @@ public partial class World
         public readonly List<Vector3Int> batteryPositions = new List<Vector3Int>(8);
         public readonly List<Vector3Int> windMillPositions = new List<Vector3Int>(8);
         public readonly List<Vector3Int> poweredBlockPositions = new List<Vector3Int>(8);
+        public int consumerCursor;
     }
 
     #region Electricity
@@ -79,12 +87,14 @@ public partial class World
             return false;
 
         ConsumeElectricalEnergy(network, amount);
+        BalanceElectricalBatteries(network);
+        SyncElectricalBatteryVisualStates(network);
         return true;
     }
 
     public float GetBatteryElectricalEnergy(Vector3Int batteryPos)
     {
-        if (GetBlockAt(batteryPos) != BlockType.batteryBlock)
+        if (!BatteryBlockUtility.IsBatteryBlock(GetBlockAt(batteryPos)))
             return 0f;
 
         return batteryEnergyByPosition.TryGetValue(batteryPos, out float energy)
@@ -231,7 +241,7 @@ public partial class World
                 network.solarPanelCount++;
             else if (blockType == BlockType.windmill)
                 network.windMillPositions.Add(position);
-            else if (blockType == BlockType.batteryBlock)
+            else if (BatteryBlockUtility.IsBatteryBlock(blockType))
                 network.batteryPositions.Add(position);
 
             if (TryGetElectricalPoweredBlockConfig(blockType, out _))
@@ -467,9 +477,11 @@ public partial class World
             }
 
             UpdatePoweredBlocksForNetwork(network, deltaTime);
+            BalanceElectricalBatteries(network);
         }
 
         ApplyPoweredElectricalBlockChanges();
+        SyncElectricalBatteryVisualStates();
         RefreshElectricalNetworkBufferLookup();
     }
 
@@ -478,6 +490,11 @@ public partial class World
         if (network == null || network.poweredBlockPositions.Count == 0)
             return;
 
+        electricalConsumerDemandBuffer.Clear();
+        float tickDuration = Mathf.Max(0f, deltaTime);
+        float availableEnergy = GetAvailableElectricalEnergy(network);
+        float totalEnergyRequired = 0f;
+
         for (int i = 0; i < network.poweredBlockPositions.Count; i++)
         {
             Vector3Int blockPos = network.poweredBlockPositions[i];
@@ -485,22 +502,53 @@ public partial class World
             if (!TryGetElectricalPoweredBlockConfig(blockType, out ElectricalPoweredBlockConfig config))
                 continue;
 
-            float energyRequired = Mathf.Max(0f, config.energyPerSecond) * Mathf.Max(0f, deltaTime);
-            bool hasEnergy;
-            if (energyRequired <= 0f)
+            float energyRequired = Mathf.Max(0f, config.energyPerSecond) * tickDuration;
+            if (energyRequired <= 0.0001f)
             {
-                hasEnergy = GetAvailableElectricalEnergy(network) > 0.0001f;
-            }
-            else
-            {
-                hasEnergy = GetAvailableElectricalEnergy(network) + 0.0001f >= energyRequired;
-                if (hasEnergy)
-                    ConsumeElectricalEnergy(network, energyRequired);
+                if (availableEnergy > 0.0001f)
+                    electricalPoweredThisTick.Add(blockPos);
+                continue;
             }
 
-            if (hasEnergy)
-                electricalPoweredThisTick.Add(blockPos);
+            totalEnergyRequired += energyRequired;
+            electricalConsumerDemandBuffer.Add(new ElectricalConsumerDemand
+            {
+                position = blockPos,
+                energyRequired = energyRequired
+            });
         }
+
+        if (totalEnergyRequired <= 0.0001f || electricalConsumerDemandBuffer.Count == 0)
+            return;
+
+        if (availableEnergy + 0.0001f >= totalEnergyRequired)
+        {
+            ConsumeElectricalEnergy(network, totalEnergyRequired);
+            for (int i = 0; i < electricalConsumerDemandBuffer.Count; i++)
+                electricalPoweredThisTick.Add(electricalConsumerDemandBuffer[i].position);
+            return;
+        }
+
+        float spentEnergy = 0f;
+        int demandCount = electricalConsumerDemandBuffer.Count;
+        int startIndex = demandCount > 0 ? network.consumerCursor % demandCount : 0;
+        if (startIndex < 0)
+            startIndex += demandCount;
+
+        for (int step = 0; step < demandCount; step++)
+        {
+            int index = (startIndex + step) % demandCount;
+            ElectricalConsumerDemand demand = electricalConsumerDemandBuffer[index];
+            if (spentEnergy + demand.energyRequired > availableEnergy + 0.0001f)
+                continue;
+
+            spentEnergy += demand.energyRequired;
+            electricalPoweredThisTick.Add(demand.position);
+        }
+
+        network.consumerCursor = demandCount > 0 ? (startIndex + 1) % demandCount : 0;
+        if (spentEnergy > 0.0001f)
+            ConsumeElectricalEnergy(network, spentEnergy);
     }
 
     private void ApplyPoweredElectricalBlockChanges()
@@ -580,6 +628,37 @@ public partial class World
                 SyncElectricalPoweredBlockVisualState(blockPos, electricalPoweredThisTick.Contains(blockPos));
             }
         }
+    }
+
+    private void SyncElectricalBatteryVisualStates()
+    {
+        for (int i = 0; i < electricalNetworks.Count; i++)
+        {
+            ElectricalNetworkRuntime network = electricalNetworks[i];
+            SyncElectricalBatteryVisualStates(network);
+        }
+    }
+
+    private void SyncElectricalBatteryVisualStates(ElectricalNetworkRuntime network)
+    {
+        if (network == null)
+            return;
+
+        for (int i = 0; i < network.batteryPositions.Count; i++)
+            SyncElectricalBatteryVisualState(network.batteryPositions[i]);
+    }
+
+    private void SyncElectricalBatteryVisualState(Vector3Int batteryPos)
+    {
+        BlockType currentType = GetBlockAt(batteryPos);
+        if (!BatteryBlockUtility.IsBatteryBlock(currentType))
+            return;
+
+        BlockType targetType = BatteryBlockUtility.GetChargeVisualBlockType(GetBatteryElectricalCharge01(batteryPos));
+        if (targetType == currentType)
+            return;
+
+        SetElectricalVisualBlockType(batteryPos, currentType, targetType);
     }
 
     private void SyncElectricalPoweredBlockVisualState(Vector3Int worldPos, bool powered)
@@ -746,6 +825,39 @@ public partial class World
         return remaining;
     }
 
+    private void BalanceElectricalBatteries(ElectricalNetworkRuntime network)
+    {
+        if (network == null || network.batteryPositions.Count <= 1)
+            return;
+
+        float capacity = GetBatteryCapacity();
+        if (capacity <= 0f)
+            return;
+
+        float totalStored = 0f;
+        for (int i = 0; i < network.batteryPositions.Count; i++)
+        {
+            Vector3Int batteryPos = network.batteryPositions[i];
+            if (!batteryEnergyByPosition.TryGetValue(batteryPos, out float stored))
+                continue;
+
+            totalStored += Mathf.Clamp(stored, 0f, capacity);
+        }
+
+        float targetStored = Mathf.Clamp(totalStored / network.batteryPositions.Count, 0f, capacity);
+        for (int i = 0; i < network.batteryPositions.Count; i++)
+        {
+            Vector3Int batteryPos = network.batteryPositions[i];
+            if (targetStored <= 0.0001f)
+            {
+                batteryEnergyByPosition.Remove(batteryPos);
+                continue;
+            }
+
+            batteryEnergyByPosition[batteryPos] = targetStored;
+        }
+    }
+
     private float GetAvailableElectricalEnergy(ElectricalNetworkRuntime network)
     {
         if (network == null)
@@ -799,7 +911,7 @@ public partial class World
         electricityCleanupBuffer.Clear();
         foreach (KeyValuePair<Vector3Int, float> pair in batteryEnergyByPosition)
         {
-            if (GetBlockAt(pair.Key) != BlockType.batteryBlock)
+            if (!BatteryBlockUtility.IsBatteryBlock(GetBlockAt(pair.Key)))
                 electricityCleanupBuffer.Add(pair.Key);
         }
 
@@ -813,8 +925,12 @@ public partial class World
             return;
 
         electricalNetworksDirty = true;
-        if (previousType == BlockType.batteryBlock && newType != BlockType.batteryBlock)
+        if (BatteryBlockUtility.IsBatteryBlock(previousType) &&
+            !BatteryBlockUtility.IsBatteryBlock(newType))
+        {
             batteryEnergyByPosition.Remove(worldPos);
+        }
+
         if (previousType != newType)
             RemovePoweredElectricalBlockPosition(worldPos);
     }
@@ -851,11 +967,20 @@ public partial class World
     private bool TryGetElectricalPoweredBlockConfig(BlockType blockType, out ElectricalPoweredBlockConfig config)
     {
         config = default;
+        if (blockType == BlockType.RoboticArm)
+        {
+            config.energyPerSecond = Mathf.Max(0f, roboticArmIdleEnergyPerSecond);
+            return config.energyPerSecond > 0f;
+        }
+
         if (!TryGetBlockMapping(blockType, out BlockTextureMapping mapping) || !mapping.isElectricalEndpoint)
             return false;
 
         config.energyPerSecond = Mathf.Max(0f, mapping.poweredElectricalEnergyPerSecond);
         config.poweredEmission = LightUtils.PackEmission(mapping.poweredLightEmission, mapping.poweredLightColor);
+        if (config.energyPerSecond <= 0f && LightUtils.HasBlockLight(config.poweredEmission))
+            config.energyPerSecond = Mathf.Max(0f, defaultPoweredLightEnergyPerSecond);
+
         return config.energyPerSecond > 0f || LightUtils.HasBlockLight(config.poweredEmission);
     }
 
@@ -894,14 +1019,16 @@ public partial class World
 
     private bool AreAdjacentElectricalBlocksConnected(BlockType left, BlockType right)
     {
-        return IsElectricalTransportBlock(left) || IsElectricalTransportBlock(right);
+        return IsElectricalTransportBlock(left) ||
+               IsElectricalTransportBlock(right) ||
+               (BatteryBlockUtility.IsBatteryBlock(left) && BatteryBlockUtility.IsBatteryBlock(right));
     }
 
     private static bool IsLegacyElectricalEndpointBlock(BlockType blockType)
     {
         return blockType == BlockType.SolarPanel ||
                blockType == BlockType.windmill ||
-               blockType == BlockType.batteryBlock ||
+               BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.ledWhiteBlock ||
                blockType == BlockType.ledWhiteBlockOn ||
                blockType == BlockType.RoboticArm;

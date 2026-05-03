@@ -276,7 +276,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         line.numCapVertices = 6;
         line.numCornerVertices = 6;
         line.textureMode = LineTextureMode.Stretch;
-        line.alignment = loop ? LineAlignment.View : LineAlignment.TransformZ;
+        line.alignment = LineAlignment.View;
         line.shadowCastingMode = ShadowCastingMode.Off;
         line.receiveShadows = false;
     }
@@ -324,8 +324,6 @@ public class EletricConnectorWireSystem : MonoBehaviour
         Vector3 end = GetConnectorAnchorWorldPosition(connection.end);
         float distance = Vector3.Distance(start, end);
         float sag = Mathf.Min(maxSag, distance * sagPerBlock);
-        AlignConnectionRibbon(connection.root != null ? connection.root.transform : null, start, end);
-
         for (int i = 0; i < segmentCount; i++)
         {
             float t = segmentCount <= 1 ? 0f : i / (float)(segmentCount - 1);
@@ -333,29 +331,6 @@ public class EletricConnectorWireSystem : MonoBehaviour
             point.y -= Mathf.Sin(t * Mathf.PI) * sag;
             connection.line.SetPosition(i, point);
         }
-    }
-
-    private static void AlignConnectionRibbon(Transform root, Vector3 start, Vector3 end)
-    {
-        if (root == null)
-            return;
-
-        Vector3 direction = end - start;
-        if (direction.sqrMagnitude <= 0.000001f)
-            return;
-
-        Vector3 horizontalDirection = new Vector3(direction.x, 0f, direction.z);
-
-        // Keep the ribbon in the vertical plane of the cable so it does not collapse
-        // when the camera looks along the same world axis as the connection.
-        Vector3 ribbonForward = horizontalDirection.sqrMagnitude > 0.000001f
-            ? Vector3.Cross(horizontalDirection.normalized, Vector3.up)
-            : Vector3.Cross(direction.normalized, Vector3.right);
-
-        if (ribbonForward.sqrMagnitude <= 0.000001f)
-            ribbonForward = Vector3.forward;
-
-        root.rotation = Quaternion.LookRotation(ribbonForward.normalized, Vector3.up);
     }
 
     private void EnsurePendingMarker()
@@ -435,7 +410,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         return blockType == BlockType.EletricConnector ||
                blockType == BlockType.RoboticArm ||
                blockType == BlockType.SolarPanel ||
-               blockType == BlockType.batteryBlock ||
+               BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.windmill ||
                blockType == BlockType.ledWhiteBlock ||
                blockType == BlockType.ledWhiteBlockOn;

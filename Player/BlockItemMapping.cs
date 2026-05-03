@@ -120,6 +120,10 @@ public static class BlockItemCatalog
 
     private static bool TryGetFallbackInventoryBlockType(BlockType blockType, out BlockType fallbackBlockType)
     {
+        fallbackBlockType = BatteryBlockUtility.GetInventoryDropBlockType(blockType);
+        if (fallbackBlockType != blockType)
+            return true;
+
         fallbackBlockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
         return fallbackBlockType != blockType;
     }
