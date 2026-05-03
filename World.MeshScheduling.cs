@@ -16,6 +16,7 @@ public partial class World
         int dirtySubchunkMask = SanitizeDirtySubchunkMask(pd.dirtySubchunkMask);
         activeChunk.UpdateSubchunkColliderOccupancy(pd.subchunkColliderOccupancy, dirtySubchunkMask);
         MeshGenerator.ReturnUlongBuffer(ref pd.subchunkColliderOccupancy);
+        ApplyElectricalVisualStatesToMeshBlockTypes(pd.coord, borderSize, pd.blockTypes);
         suppressedGrassBillboardInt3Buffer.Clear();
         CollectSuppressedGrassBillboardsForChunk(pd.coord, suppressedGrassBillboardInt3Buffer);
         NativeArray<int3> nativeSuppressedBillboards = new NativeArray<int3>(suppressedGrassBillboardInt3Buffer.Count, Allocator.Persistent);

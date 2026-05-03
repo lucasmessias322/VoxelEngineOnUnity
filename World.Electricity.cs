@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using Unity.Collections;
 using UnityEngine;
 
 public partial class World
@@ -19,6 +20,9 @@ public partial class World
     private readonly List<Vector3Int> poweredElectricalRemovalBuffer = new List<Vector3Int>(128);
     private readonly List<Vector3Int> poweredElectricalApplyBuffer = new List<Vector3Int>(128);
     private readonly List<ElectricalConsumerDemand> electricalConsumerDemandBuffer = new List<ElectricalConsumerDemand>(128);
+    private readonly HashSet<Vector3Int> electricalLitLedVisualPositions = new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> electricalLitLedVisualPositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(64);
+    private readonly List<Vector3Int> electricalLedVisualCleanupBuffer = new List<Vector3Int>(128);
 
     private bool electricalNetworksDirty = true;
     private float lastElectricityTickTime;
@@ -664,28 +668,11 @@ public partial class World
     private void SyncElectricalPoweredBlockVisualState(Vector3Int worldPos, bool powered)
     {
         BlockType currentType = GetBlockAt(worldPos);
-        if (!TryResolveElectricalPoweredVisualType(currentType, powered, out BlockType targetType) ||
-            targetType == currentType)
-        {
+        if (!IsLedVisualBlock(currentType))
             return;
-        }
 
-        SetElectricalVisualBlockType(worldPos, currentType, targetType);
-    }
-
-    private static bool TryResolveElectricalPoweredVisualType(BlockType blockType, bool powered, out BlockType resolvedType)
-    {
-        switch (blockType)
-        {
-            case BlockType.ledWhiteBlock:
-            case BlockType.ledWhiteBlockOn:
-                resolvedType = powered ? BlockType.ledWhiteBlockOn : BlockType.ledWhiteBlock;
-                return true;
-
-            default:
-                resolvedType = blockType;
-                return false;
-        }
+        NormalizeElectricalLedBlockType(worldPos, currentType);
+        SetElectricalLedLitVisualState(worldPos, powered);
     }
 
     private void SetElectricalVisualBlockType(Vector3Int worldPos, BlockType previousType, BlockType newType)
@@ -703,8 +690,203 @@ public partial class World
         EnsureTerrainOverrideIndexBuilt();
         IndexTerrainOverride(worldPos, chunkCoord);
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, newType);
+        if (IsElectricalTextureOnlyVisualTransition(previousType, newType))
+        {
+            RequestElectricalTextureOnlyVisualRefresh(worldPos, chunkCoord, newType);
+            return;
+        }
+
         RequestBlockEditRefresh(worldPos, chunkCoord, previousType, newType);
         BlockChanged?.Invoke(worldPos, previousType, newType);
+    }
+
+    private void RequestElectricalTextureOnlyVisualRefresh(Vector3Int worldPos, Vector2Int chunkCoord, BlockType visualType)
+    {
+        if (worldPos.y >= Chunk.SizeY)
+        {
+            IndexHighOverride(worldPos, chunkCoord, visualType);
+            RequestHighBuildMeshRebuild(chunkCoord);
+            return;
+        }
+
+        int dirtySubchunkMask = GetDirtySubchunkMaskForWorldY(worldPos.y);
+        RequestChunkRebuildDelayed(
+            chunkCoord,
+            dirtySubchunkMask,
+            rebuildColliders: false,
+            delaySeconds: Mathf.Max(0f, electricalVisualRefreshDelaySeconds));
+    }
+
+    private static bool IsElectricalTextureOnlyVisualTransition(BlockType previousType, BlockType newType)
+    {
+        if (previousType == newType)
+            return false;
+
+        return BatteryBlockUtility.IsBatteryBlock(previousType) &&
+               BatteryBlockUtility.IsBatteryBlock(newType);
+    }
+
+    private static bool IsLedVisualBlock(BlockType blockType)
+    {
+        return blockType == BlockType.ledWhiteBlock ||
+               blockType == BlockType.ledWhiteBlockOn;
+    }
+
+    private static BlockType NormalizeElectricalStatefulBlockType(BlockType blockType)
+    {
+        return blockType == BlockType.ledWhiteBlockOn
+            ? BlockType.ledWhiteBlock
+            : blockType;
+    }
+
+    private void NormalizeElectricalLedBlockType(Vector3Int worldPos, BlockType currentType)
+    {
+        if (currentType != BlockType.ledWhiteBlockOn)
+            return;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        BlockPlacementAxis placementAxis = GetStoredPlacementAxis(worldPos, currentType);
+        blockOverrides[worldPos] = BlockType.ledWhiteBlock;
+        UpdateStoredPlacementAxis(worldPos, BlockType.ledWhiteBlock, placementAxis);
+
+        EnsureTerrainOverrideIndexBuilt();
+        IndexTerrainOverride(worldPos, chunkCoord);
+        ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, BlockType.ledWhiteBlock);
+    }
+
+    private void SetElectricalLedLitVisualState(Vector3Int worldPos, bool lit)
+    {
+        bool changed = lit
+            ? electricalLitLedVisualPositions.Add(worldPos)
+            : electricalLitLedVisualPositions.Remove(worldPos);
+
+        if (!changed)
+            return;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (lit)
+        {
+            if (!electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
+            {
+                chunkPositions = new HashSet<Vector3Int>();
+                electricalLitLedVisualPositionsByChunk[chunkCoord] = chunkPositions;
+            }
+
+            chunkPositions.Add(worldPos);
+        }
+        else if (electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
+        {
+            chunkPositions.Remove(worldPos);
+            if (chunkPositions.Count == 0)
+                electricalLitLedVisualPositionsByChunk.Remove(chunkCoord);
+        }
+
+        RequestElectricalLedVisualRefresh(worldPos, chunkCoord);
+    }
+
+    private void RemoveElectricalLedLitVisualState(Vector3Int worldPos, bool requestRefresh)
+    {
+        if (!electricalLitLedVisualPositions.Remove(worldPos))
+            return;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
+        {
+            chunkPositions.Remove(worldPos);
+            if (chunkPositions.Count == 0)
+                electricalLitLedVisualPositionsByChunk.Remove(chunkCoord);
+        }
+
+        if (requestRefresh)
+            RequestElectricalLedVisualRefresh(worldPos, chunkCoord);
+    }
+
+    private void ClearElectricalLedLitVisualStates()
+    {
+        if (electricalLitLedVisualPositions.Count == 0)
+            return;
+
+        electricalLedVisualCleanupBuffer.Clear();
+        foreach (Vector3Int litPos in electricalLitLedVisualPositions)
+            electricalLedVisualCleanupBuffer.Add(litPos);
+
+        electricalLitLedVisualPositions.Clear();
+        electricalLitLedVisualPositionsByChunk.Clear();
+
+        for (int i = 0; i < electricalLedVisualCleanupBuffer.Count; i++)
+        {
+            Vector3Int litPos = electricalLedVisualCleanupBuffer[i];
+            if (IsLedVisualBlock(GetBlockAt(litPos)))
+                RequestElectricalLedVisualRefresh(litPos, GetChunkCoordFromWorldXZ(litPos.x, litPos.z));
+        }
+
+        electricalLedVisualCleanupBuffer.Clear();
+    }
+
+    private void RequestElectricalLedVisualRefresh(Vector3Int worldPos, Vector2Int chunkCoord)
+    {
+        if (worldPos.y >= Chunk.SizeY)
+        {
+            RequestHighBuildMeshRebuild(chunkCoord);
+            return;
+        }
+
+        RequestChunkRebuildDelayed(
+            chunkCoord,
+            GetDirtySubchunkMaskForWorldY(worldPos.y),
+            rebuildColliders: false,
+            delaySeconds: Mathf.Max(0f, electricalVisualRefreshDelaySeconds));
+    }
+
+    private void ApplyElectricalVisualStatesToMeshBlockTypes(Vector2Int chunkCoord, int borderSize, NativeArray<byte> blockTypes)
+    {
+        if (!blockTypes.IsCreated)
+            return;
+
+        int voxelSizeX = Chunk.SizeX + 2 * borderSize;
+        int voxelSizeZ = Chunk.SizeZ + 2 * borderSize;
+        int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
+        byte ledOffId = (byte)BlockType.ledWhiteBlock;
+        byte ledOnId = (byte)BlockType.ledWhiteBlockOn;
+
+        for (int z = borderSize; z < borderSize + Chunk.SizeZ; z++)
+        {
+            for (int y = 0; y < Chunk.SizeY; y++)
+            {
+                int rowBase = y * voxelSizeX + z * voxelPlaneSize;
+                for (int x = borderSize; x < borderSize + Chunk.SizeX; x++)
+                {
+                    int idx = rowBase + x;
+                    if (blockTypes[idx] == ledOnId)
+                        blockTypes[idx] = ledOffId;
+                }
+            }
+        }
+
+        if (!electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> litPositions) ||
+            litPositions.Count == 0)
+        {
+            return;
+        }
+
+        int chunkMinX = chunkCoord.x * Chunk.SizeX;
+        int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
+        foreach (Vector3Int litPos in litPositions)
+        {
+            int localX = litPos.x - chunkMinX;
+            int localZ = litPos.z - chunkMinZ;
+            int localY = litPos.y;
+            if (localX < 0 || localX >= Chunk.SizeX ||
+                localY < 0 || localY >= Chunk.SizeY ||
+                localZ < 0 || localZ >= Chunk.SizeZ)
+            {
+                continue;
+            }
+
+            int idx = (localX + borderSize) + localY * voxelSizeX + (localZ + borderSize) * voxelPlaneSize;
+            if (blockTypes[idx] == ledOffId)
+                blockTypes[idx] = ledOnId;
+        }
     }
 
     private void ClearPoweredElectricalBlockEffects()
@@ -712,6 +894,7 @@ public partial class World
         if (poweredElectricalBlockPositions.Count == 0)
         {
             electricalPoweredThisTick.Clear();
+            ClearElectricalLedLitVisualStates();
             return;
         }
 
@@ -723,6 +906,7 @@ public partial class World
             RemovePoweredElectricalBlockPosition(poweredElectricalRemovalBuffer[i]);
 
         electricalPoweredThisTick.Clear();
+        ClearElectricalLedLitVisualStates();
     }
 
     private void RemovePoweredElectricalBlockPosition(Vector3Int blockPos)
@@ -730,6 +914,8 @@ public partial class World
         electricalPoweredThisTick.Remove(blockPos);
         if (!poweredElectricalBlockPositions.Remove(blockPos))
             return;
+
+        RemoveElectricalLedLitVisualState(blockPos, requestRefresh: IsLedVisualBlock(GetBlockAt(blockPos)));
 
         if (poweredElectricalEmissionByPosition.TryGetValue(blockPos, out ushort poweredEmission))
         {
@@ -925,6 +1111,9 @@ public partial class World
             return;
 
         electricalNetworksDirty = true;
+        if (IsLedVisualBlock(previousType) || IsLedVisualBlock(newType))
+            RemoveElectricalLedLitVisualState(worldPos, requestRefresh: false);
+
         if (BatteryBlockUtility.IsBatteryBlock(previousType) &&
             !BatteryBlockUtility.IsBatteryBlock(newType))
         {
