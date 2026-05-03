@@ -27,8 +27,8 @@ public static partial class MeshGenerator
         [ReadOnly] public NativeArray<VegetationBillboardRuleData> vegetationBillboardRules;
         [ReadOnly] public NativeArray<bool> subchunkNonEmpty;
         [ReadOnly] public NativeArray<byte> knownVoxelData;
-        [ReadOnly] public NativeArray<byte> electricalLitLedVisualMask;
-        public Vector4 electricalLitLedUvRectData;
+        [ReadOnly] public NativeArray<byte> blockVisualStateMask;
+        [ReadOnly] public NativeArray<BlockVisualStateTextureMapping> blockVisualStateTextures;
         public bool useKnownVoxelData;
 
         public int border;
@@ -591,26 +591,29 @@ public static partial class MeshGenerator
             return blockMappings[blockIndex];
         }
 
-        private bool IsElectricalLitLedVisual(int voxelIndex)
+        private byte GetBlockVisualState(int voxelIndex)
         {
-            return electricalLitLedVisualMask.IsCreated &&
-                   (uint)voxelIndex < (uint)electricalLitLedVisualMask.Length &&
-                   electricalLitLedVisualMask[voxelIndex] != 0;
+            if (!blockVisualStateMask.IsCreated ||
+                (uint)voxelIndex >= (uint)blockVisualStateMask.Length)
+            {
+                return 0;
+            }
+
+            return blockVisualStateMask[voxelIndex];
         }
 
-        private bool TryGetElectricalLitLedUvRectData(BlockType blockType, int voxelIndex, out Vector4 uvRectData)
+        private bool TryGetBlockVisualStateUvRectData(BlockType blockType, int voxelIndex, BlockFace face, out Vector4 uvRectData)
         {
             uvRectData = default;
-            if (blockType != BlockType.ledWhiteBlock ||
-                !IsElectricalLitLedVisual(voxelIndex) ||
-                electricalLitLedUvRectData.z <= 0f ||
-                electricalLitLedUvRectData.w <= 0f)
+            byte visualState = GetBlockVisualState(voxelIndex);
+            int stateTextureIndex = BlockVisualStateUtility.GetTextureMappingIndex((int)blockType, visualState, blockMappings.Length);
+            if (!blockVisualStateTextures.IsCreated ||
+                (uint)stateTextureIndex >= (uint)blockVisualStateTextures.Length)
             {
                 return false;
             }
 
-            uvRectData = electricalLitLedUvRectData;
-            return true;
+            return blockVisualStateTextures[stateTextureIndex].TryGetUvRectData(face, out uvRectData);
         }
 
         private static Vector3 ToCanonicalCoords(Vector3 worldCoords, BlockPlacementAxis placementAxis)

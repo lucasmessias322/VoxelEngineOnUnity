@@ -187,10 +187,10 @@ public static partial class MeshGenerator
                                     invAtlasTilesY,
                                     out Vector2 atlasUv,
                                     out Vector2 atlasSize);
-                                if (TryGetElectricalLitLedUvRectData(current, idx, out Vector4 litLedUvRectData))
+                                if (TryGetBlockVisualStateUvRectData(current, idx, sampledFace, out Vector4 stateUvRectData))
                                 {
-                                    atlasUv = new Vector2(litLedUvRectData.x, litLedUvRectData.y);
-                                    atlasSize = new Vector2(litLedUvRectData.z, litLedUvRectData.w);
+                                    atlasUv = new Vector2(stateUvRectData.x, stateUvRectData.y);
+                                    atlasSize = new Vector2(stateUvRectData.z, stateUvRectData.w);
                                 }
                                 byte renderBucket = ClassifyFaceRenderBucket(current, currentMapping);
                                 uint mergeKey = BuildFaceMergeKey(current, renderBucket, uvPlacementAxis, uvSamplingFace, tint, useGrassSideOverlay);

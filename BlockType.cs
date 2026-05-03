@@ -74,6 +74,7 @@ public enum BlockType
     batteryBlock75 = 70,
     batteryBlock50 = 71,
     batteryBlock25 = 72,
+    ledRedBlock = 73,
 
     
 
@@ -272,6 +273,11 @@ public static class BatteryBlockUtility
             return BlockType.batteryBlock75;
 
         return BlockType.batteryBlock100;
+    }
+
+    public static BlockVisualStateCondition GetChargeVisualState(float charge01)
+    {
+        return BlockVisualStateUtility.GetBatteryChargeState(charge01);
     }
 }
 

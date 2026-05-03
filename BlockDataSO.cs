@@ -348,6 +348,167 @@ public sealed class BlockCuboidTextureEntryIdMapping
     public BlockFaceTextureEntryIdSet entryIds = new BlockFaceTextureEntryIdSet();
 }
 
+public enum BlockVisualStateCondition : byte
+{
+    None = 0,
+    ElectricalPowered = 1,
+    BatteryCharge25 = 2,
+    BatteryCharge50 = 3,
+    BatteryCharge75 = 4,
+    BatteryCharge100 = 5
+}
+
+[System.Serializable]
+public sealed class BlockStateTextureDefinition
+{
+    public BlockType blockType;
+    public BlockVisualStateCondition condition = BlockVisualStateCondition.ElectricalPowered;
+
+    [Tooltip("Opcional: aplica este entryId em todas as faces deste estado visual. Faces preenchidas abaixo sobrescrevem este valor.")]
+    public string allFacesEntryId;
+
+    public BlockFaceTextureEntryIdSet entryIds = new BlockFaceTextureEntryIdSet();
+}
+
+public struct BlockVisualStateTextureMapping
+{
+    private byte faceMask;
+    private Vector4 topUvRect;
+    private Vector4 bottomUvRect;
+    private Vector4 rightUvRect;
+    private Vector4 leftUvRect;
+    private Vector4 frontUvRect;
+    private Vector4 backUvRect;
+
+    public bool HasAnyFace
+    {
+        get { return faceMask != 0; }
+    }
+
+    public void SetUvRectData(BlockFace face, Vector4 uvRectData)
+    {
+        if (!BlockAtlasUvUtility.IsValidUvRectData(uvRectData))
+            return;
+
+        faceMask |= GetMaskForFace(face);
+        switch (face)
+        {
+            case BlockFace.Top:
+                topUvRect = uvRectData;
+                break;
+            case BlockFace.Bottom:
+                bottomUvRect = uvRectData;
+                break;
+            case BlockFace.Right:
+                rightUvRect = uvRectData;
+                break;
+            case BlockFace.Left:
+                leftUvRect = uvRectData;
+                break;
+            case BlockFace.Front:
+                frontUvRect = uvRectData;
+                break;
+            case BlockFace.Back:
+                backUvRect = uvRectData;
+                break;
+        }
+    }
+
+    public bool TryGetUvRectData(BlockFace face, out Vector4 uvRectData)
+    {
+        uvRectData = default;
+        if ((faceMask & GetMaskForFace(face)) == 0)
+            return false;
+
+        switch (face)
+        {
+            case BlockFace.Top:
+                uvRectData = topUvRect;
+                break;
+            case BlockFace.Bottom:
+                uvRectData = bottomUvRect;
+                break;
+            case BlockFace.Right:
+                uvRectData = rightUvRect;
+                break;
+            case BlockFace.Left:
+                uvRectData = leftUvRect;
+                break;
+            case BlockFace.Front:
+                uvRectData = frontUvRect;
+                break;
+            case BlockFace.Back:
+                uvRectData = backUvRect;
+                break;
+            default:
+                return false;
+        }
+
+        return BlockAtlasUvUtility.IsValidUvRectData(uvRectData);
+    }
+
+    private static byte GetMaskForFace(BlockFace face)
+    {
+        switch (face)
+        {
+            case BlockFace.Top: return 1 << 0;
+            case BlockFace.Bottom: return 1 << 1;
+            case BlockFace.Right: return 1 << 2;
+            case BlockFace.Left: return 1 << 3;
+            case BlockFace.Front: return 1 << 4;
+            case BlockFace.Back: return 1 << 5;
+            default: return 0;
+        }
+    }
+}
+
+public static class BlockVisualStateUtility
+{
+    public const int StateCount = (int)BlockVisualStateCondition.BatteryCharge100 + 1;
+
+    public static bool IsValidState(BlockVisualStateCondition state)
+    {
+        return state > BlockVisualStateCondition.None &&
+               (int)state < StateCount;
+    }
+
+    public static int GetTextureMappingIndex(BlockType blockType, BlockVisualStateCondition state, int blockTypeCount)
+    {
+        return GetTextureMappingIndex((int)blockType, (byte)state, blockTypeCount);
+    }
+
+    public static int GetTextureMappingIndex(int blockTypeIndex, byte state, int blockTypeCount)
+    {
+        if (blockTypeIndex < 0 ||
+            blockTypeIndex >= blockTypeCount ||
+            state == 0 ||
+            state >= StateCount)
+        {
+            return -1;
+        }
+
+        return blockTypeIndex * StateCount + state;
+    }
+
+    public static BlockVisualStateCondition GetBatteryChargeState(float charge01)
+    {
+        float charge = Mathf.Clamp01(charge01);
+        if (charge <= 0.01f)
+            return BlockVisualStateCondition.None;
+
+        if (charge <= 0.25f)
+            return BlockVisualStateCondition.BatteryCharge25;
+
+        if (charge <= 0.5f)
+            return BlockVisualStateCondition.BatteryCharge50;
+
+        if (charge <= 0.75f)
+            return BlockVisualStateCondition.BatteryCharge75;
+
+        return BlockVisualStateCondition.BatteryCharge100;
+    }
+}
+
 [System.Serializable]
 public sealed class DynamicBlockPrefabDefinition
 {
@@ -573,6 +734,10 @@ public class BlockDataSO : ScriptableObject
     public bool atlasCoordinatesStartTopLeft = true;
     public List<BlockTextureMapping> blockTextures = new List<BlockTextureMapping>();
     [SerializeField, HideInInspector] private List<BlockTextureEntryIdMapping> blockTextureEntryIds = new List<BlockTextureEntryIdMapping>();
+
+    [Header("Texturas por Estado")]
+    [Tooltip("Overrides visuais por estado sem trocar o BlockType real. Use ElectricalPowered para blocos que mudam textura ao receber energia.")]
+    public List<BlockStateTextureDefinition> stateTextureOverrides = new List<BlockStateTextureDefinition>();
 
     [Header("Multi Cubos")]
     [Tooltip("Modelos por blocos compostos por varios cuboides no espaco local do bloco. Coordenadas podem sair de 0..1 para suportar blocos maiores.")]

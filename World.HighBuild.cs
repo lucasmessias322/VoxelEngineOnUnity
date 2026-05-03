@@ -248,6 +248,8 @@ public partial class World
                     BlockFaceUtility.FromCubeFaceIndex(f),
                     legacyAtlasTiles,
                     blockData.atlasCoordinatesStartTopLeft);
+                if (TryGetElectricalVisualStateUvRectData(pos, blockType, BlockFaceUtility.FromCubeFaceIndex(f), out Vector4 stateUvRectData))
+                    uvRectData = stateUvRectData;
                 Vector2 atlasUv = new Vector2(uvRectData.x, uvRectData.y);
                 Vector2 atlasSize = new Vector2(uvRectData.z, uvRectData.w);
 

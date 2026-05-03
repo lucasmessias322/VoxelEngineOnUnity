@@ -20,9 +20,9 @@ public partial class World
     private readonly List<Vector3Int> poweredElectricalRemovalBuffer = new List<Vector3Int>(128);
     private readonly List<Vector3Int> poweredElectricalApplyBuffer = new List<Vector3Int>(128);
     private readonly List<ElectricalConsumerDemand> electricalConsumerDemandBuffer = new List<ElectricalConsumerDemand>(128);
-    private readonly HashSet<Vector3Int> electricalLitLedVisualPositions = new HashSet<Vector3Int>(InitialBlockEditCapacity);
-    private readonly Dictionary<Vector2Int, HashSet<Vector3Int>> electricalLitLedVisualPositionsByChunk = new Dictionary<Vector2Int, HashSet<Vector3Int>>(64);
-    private readonly List<Vector3Int> electricalLedVisualCleanupBuffer = new List<Vector3Int>(128);
+    private readonly Dictionary<Vector3Int, byte> electricalTextureVisualStateByPosition = new Dictionary<Vector3Int, byte>(InitialBlockEditCapacity);
+    private readonly Dictionary<Vector2Int, Dictionary<Vector3Int, byte>> electricalTextureVisualStateByChunk = new Dictionary<Vector2Int, Dictionary<Vector3Int, byte>>(64);
+    private readonly List<Vector3Int> electricalTextureVisualCleanupBuffer = new List<Vector3Int>(128);
 
     private bool electricalNetworksDirty = true;
     private float lastElectricityTickTime;
@@ -658,20 +658,24 @@ public partial class World
         if (!BatteryBlockUtility.IsBatteryBlock(currentType))
             return;
 
-        BlockType targetType = BatteryBlockUtility.GetChargeVisualBlockType(GetBatteryElectricalCharge01(batteryPos));
-        if (targetType == currentType)
-            return;
+        if (currentType != BlockType.batteryBlock)
+        {
+            SetElectricalVisualBlockType(batteryPos, currentType, BlockType.batteryBlock);
+            currentType = BlockType.batteryBlock;
+        }
 
-        SetElectricalVisualBlockType(batteryPos, currentType, targetType);
+        SetElectricalTextureVisualState(
+            batteryPos,
+            BatteryBlockUtility.GetChargeVisualState(GetBatteryElectricalCharge01(batteryPos)));
     }
 
     private void SyncElectricalPoweredBlockVisualState(Vector3Int worldPos, bool powered)
     {
         BlockType currentType = GetBlockAt(worldPos);
-        if (!IsLedVisualBlock(currentType))
-            return;
-
-        SetElectricalLedLitVisualState(worldPos, powered);
+        BlockVisualStateCondition state = powered && HasBlockVisualStateTexture(currentType, BlockVisualStateCondition.ElectricalPowered)
+            ? BlockVisualStateCondition.ElectricalPowered
+            : BlockVisualStateCondition.None;
+        SetElectricalTextureVisualState(worldPos, state);
     }
 
     private void SetElectricalVisualBlockType(Vector3Int worldPos, BlockType previousType, BlockType newType)
@@ -725,81 +729,73 @@ public partial class World
                BatteryBlockUtility.IsBatteryBlock(newType);
     }
 
-    private static bool IsLedVisualBlock(BlockType blockType)
+    private void SetElectricalTextureVisualState(Vector3Int worldPos, BlockVisualStateCondition state)
     {
-        return blockType == BlockType.ledWhiteBlock;
+        if (!BlockVisualStateUtility.IsValidState(state))
+        {
+            RemoveElectricalTextureVisualState(worldPos, requestRefresh: true);
+            return;
+        }
+
+        byte stateValue = (byte)state;
+        if (electricalTextureVisualStateByPosition.TryGetValue(worldPos, out byte currentState) &&
+            currentState == stateValue)
+        {
+            return;
+        }
+
+        electricalTextureVisualStateByPosition[worldPos] = stateValue;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        if (!electricalTextureVisualStateByChunk.TryGetValue(chunkCoord, out Dictionary<Vector3Int, byte> chunkStates))
+        {
+            chunkStates = new Dictionary<Vector3Int, byte>();
+            electricalTextureVisualStateByChunk[chunkCoord] = chunkStates;
+        }
+
+        chunkStates[worldPos] = stateValue;
+        RequestElectricalTextureVisualRefresh(worldPos, chunkCoord);
     }
 
-    private void SetElectricalLedLitVisualState(Vector3Int worldPos, bool lit)
+    private void RemoveElectricalTextureVisualState(Vector3Int worldPos, bool requestRefresh)
     {
-        bool changed = lit
-            ? electricalLitLedVisualPositions.Add(worldPos)
-            : electricalLitLedVisualPositions.Remove(worldPos);
-
-        if (!changed)
+        if (!electricalTextureVisualStateByPosition.Remove(worldPos))
             return;
 
         Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
-        if (lit)
+        if (electricalTextureVisualStateByChunk.TryGetValue(chunkCoord, out Dictionary<Vector3Int, byte> chunkStates))
         {
-            if (!electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
-            {
-                chunkPositions = new HashSet<Vector3Int>();
-                electricalLitLedVisualPositionsByChunk[chunkCoord] = chunkPositions;
-            }
-
-            chunkPositions.Add(worldPos);
-        }
-        else if (electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
-        {
-            chunkPositions.Remove(worldPos);
-            if (chunkPositions.Count == 0)
-                electricalLitLedVisualPositionsByChunk.Remove(chunkCoord);
-        }
-
-        RequestElectricalLedVisualRefresh(worldPos, chunkCoord);
-    }
-
-    private void RemoveElectricalLedLitVisualState(Vector3Int worldPos, bool requestRefresh)
-    {
-        if (!electricalLitLedVisualPositions.Remove(worldPos))
-            return;
-
-        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
-        if (electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> chunkPositions))
-        {
-            chunkPositions.Remove(worldPos);
-            if (chunkPositions.Count == 0)
-                electricalLitLedVisualPositionsByChunk.Remove(chunkCoord);
+            chunkStates.Remove(worldPos);
+            if (chunkStates.Count == 0)
+                electricalTextureVisualStateByChunk.Remove(chunkCoord);
         }
 
         if (requestRefresh)
-            RequestElectricalLedVisualRefresh(worldPos, chunkCoord);
+            RequestElectricalTextureVisualRefresh(worldPos, chunkCoord);
     }
 
-    private void ClearElectricalLedLitVisualStates()
+    private void ClearElectricalTextureVisualStates()
     {
-        if (electricalLitLedVisualPositions.Count == 0)
+        if (electricalTextureVisualStateByPosition.Count == 0)
             return;
 
-        electricalLedVisualCleanupBuffer.Clear();
-        foreach (Vector3Int litPos in electricalLitLedVisualPositions)
-            electricalLedVisualCleanupBuffer.Add(litPos);
+        electricalTextureVisualCleanupBuffer.Clear();
+        foreach (KeyValuePair<Vector3Int, byte> pair in electricalTextureVisualStateByPosition)
+            electricalTextureVisualCleanupBuffer.Add(pair.Key);
 
-        electricalLitLedVisualPositions.Clear();
-        electricalLitLedVisualPositionsByChunk.Clear();
+        electricalTextureVisualStateByPosition.Clear();
+        electricalTextureVisualStateByChunk.Clear();
 
-        for (int i = 0; i < electricalLedVisualCleanupBuffer.Count; i++)
+        for (int i = 0; i < electricalTextureVisualCleanupBuffer.Count; i++)
         {
-            Vector3Int litPos = electricalLedVisualCleanupBuffer[i];
-            if (IsLedVisualBlock(GetBlockAt(litPos)))
-                RequestElectricalLedVisualRefresh(litPos, GetChunkCoordFromWorldXZ(litPos.x, litPos.z));
+            Vector3Int visualPos = electricalTextureVisualCleanupBuffer[i];
+            RequestElectricalTextureVisualRefresh(visualPos, GetChunkCoordFromWorldXZ(visualPos.x, visualPos.z));
         }
 
-        electricalLedVisualCleanupBuffer.Clear();
+        electricalTextureVisualCleanupBuffer.Clear();
     }
 
-    private void RequestElectricalLedVisualRefresh(Vector3Int worldPos, Vector2Int chunkCoord)
+    private void RequestElectricalTextureVisualRefresh(Vector3Int worldPos, Vector2Int chunkCoord)
     {
         if (worldPos.y >= Chunk.SizeY)
         {
@@ -814,26 +810,62 @@ public partial class World
             delaySeconds: Mathf.Max(0f, electricalVisualRefreshDelaySeconds));
     }
 
-    private NativeArray<byte> BuildElectricalLitLedVisualMaskForMesh(Vector2Int chunkCoord, int borderSize, int blockTypeCount)
+    private bool HasBlockVisualStateTexture(BlockType blockType, BlockVisualStateCondition state)
     {
-        if (blockTypeCount <= 0 ||
-            !electricalLitLedVisualPositionsByChunk.TryGetValue(chunkCoord, out HashSet<Vector3Int> litPositions) ||
-            litPositions.Count == 0)
+        if (!BlockVisualStateUtility.IsValidState(state))
+            return false;
+
+        EnsureNativeGenerationCaches();
+        int blockTypeCount = cachedNativeBlockMappings.IsCreated ? cachedNativeBlockMappings.Length : 0;
+        int index = BlockVisualStateUtility.GetTextureMappingIndex(blockType, state, blockTypeCount);
+        return cachedNativeBlockVisualStateTextures.IsCreated &&
+               (uint)index < (uint)cachedNativeBlockVisualStateTextures.Length &&
+               cachedNativeBlockVisualStateTextures[index].HasAnyFace;
+    }
+
+    private bool TryGetElectricalVisualStateUvRectData(
+        Vector3Int worldPos,
+        BlockType blockType,
+        BlockFace face,
+        out Vector4 uvRectData)
+    {
+        uvRectData = default;
+        if (!electricalTextureVisualStateByPosition.TryGetValue(worldPos, out byte visualState))
+            return false;
+
+        EnsureNativeGenerationCaches();
+        int blockTypeCount = cachedNativeBlockMappings.IsCreated ? cachedNativeBlockMappings.Length : 0;
+        int index = BlockVisualStateUtility.GetTextureMappingIndex((int)blockType, visualState, blockTypeCount);
+        if (!cachedNativeBlockVisualStateTextures.IsCreated ||
+            (uint)index >= (uint)cachedNativeBlockVisualStateTextures.Length)
+        {
+            return false;
+        }
+
+        return cachedNativeBlockVisualStateTextures[index].TryGetUvRectData(face, out uvRectData);
+    }
+
+    private NativeArray<byte> BuildElectricalVisualStateMaskForMesh(Vector2Int chunkCoord, int borderSize, int voxelDataLength)
+    {
+        if (voxelDataLength <= 0 ||
+            !electricalTextureVisualStateByChunk.TryGetValue(chunkCoord, out Dictionary<Vector3Int, byte> visualStates) ||
+            visualStates.Count == 0)
         {
             return new NativeArray<byte>(0, Allocator.Persistent);
         }
 
         int voxelSizeX = Chunk.SizeX + 2 * borderSize;
         int voxelPlaneSize = voxelSizeX * Chunk.SizeY;
-        NativeArray<byte> litMask = new NativeArray<byte>(blockTypeCount, Allocator.Persistent, NativeArrayOptions.ClearMemory);
+        NativeArray<byte> stateMask = new NativeArray<byte>(voxelDataLength, Allocator.Persistent, NativeArrayOptions.ClearMemory);
 
         int chunkMinX = chunkCoord.x * Chunk.SizeX;
         int chunkMinZ = chunkCoord.y * Chunk.SizeZ;
-        foreach (Vector3Int litPos in litPositions)
+        foreach (KeyValuePair<Vector3Int, byte> pair in visualStates)
         {
-            int localX = litPos.x - chunkMinX;
-            int localZ = litPos.z - chunkMinZ;
-            int localY = litPos.y;
+            Vector3Int visualPos = pair.Key;
+            int localX = visualPos.x - chunkMinX;
+            int localZ = visualPos.z - chunkMinZ;
+            int localY = visualPos.y;
             if (localX < 0 || localX >= Chunk.SizeX ||
                 localY < 0 || localY >= Chunk.SizeY ||
                 localZ < 0 || localZ >= Chunk.SizeZ)
@@ -842,11 +874,11 @@ public partial class World
             }
 
             int idx = (localX + borderSize) + localY * voxelSizeX + (localZ + borderSize) * voxelPlaneSize;
-            if ((uint)idx < (uint)litMask.Length)
-                litMask[idx] = 1;
+            if ((uint)idx < (uint)stateMask.Length)
+                stateMask[idx] = pair.Value;
         }
 
-        return litMask;
+        return stateMask;
     }
 
     private void ClearPoweredElectricalBlockEffects()
@@ -854,7 +886,7 @@ public partial class World
         if (poweredElectricalBlockPositions.Count == 0)
         {
             electricalPoweredThisTick.Clear();
-            ClearElectricalLedLitVisualStates();
+            ClearElectricalTextureVisualStates();
             return;
         }
 
@@ -866,7 +898,7 @@ public partial class World
             RemovePoweredElectricalBlockPosition(poweredElectricalRemovalBuffer[i]);
 
         electricalPoweredThisTick.Clear();
-        ClearElectricalLedLitVisualStates();
+        ClearElectricalTextureVisualStates();
     }
 
     private void RemovePoweredElectricalBlockPosition(Vector3Int blockPos)
@@ -875,7 +907,11 @@ public partial class World
         if (!poweredElectricalBlockPositions.Remove(blockPos))
             return;
 
-        RemoveElectricalLedLitVisualState(blockPos, requestRefresh: IsLedVisualBlock(GetBlockAt(blockPos)));
+        if (electricalTextureVisualStateByPosition.TryGetValue(blockPos, out byte visualState) &&
+            visualState == (byte)BlockVisualStateCondition.ElectricalPowered)
+        {
+            RemoveElectricalTextureVisualState(blockPos, requestRefresh: true);
+        }
 
         if (poweredElectricalEmissionByPosition.TryGetValue(blockPos, out ushort poweredEmission))
         {
@@ -1071,8 +1107,7 @@ public partial class World
             return;
 
         electricalNetworksDirty = true;
-        if (IsLedVisualBlock(previousType) || IsLedVisualBlock(newType))
-            RemoveElectricalLedLitVisualState(worldPos, requestRefresh: false);
+        RemoveElectricalTextureVisualState(worldPos, requestRefresh: false);
 
         if (BatteryBlockUtility.IsBatteryBlock(previousType) &&
             !BatteryBlockUtility.IsBatteryBlock(newType))
@@ -1125,12 +1160,15 @@ public partial class World
         if (!TryGetBlockMapping(blockType, out BlockTextureMapping mapping) || !mapping.isElectricalEndpoint)
             return false;
 
+        bool hasPoweredVisualState = HasBlockVisualStateTexture(blockType, BlockVisualStateCondition.ElectricalPowered);
         config.energyPerSecond = Mathf.Max(0f, mapping.poweredElectricalEnergyPerSecond);
         config.poweredEmission = LightUtils.PackEmission(mapping.poweredLightEmission, mapping.poweredLightColor);
         if (config.energyPerSecond <= 0f && LightUtils.HasBlockLight(config.poweredEmission))
             config.energyPerSecond = Mathf.Max(0f, defaultPoweredLightEnergyPerSecond);
 
-        return config.energyPerSecond > 0f || LightUtils.HasBlockLight(config.poweredEmission);
+        return config.energyPerSecond > 0f ||
+               LightUtils.HasBlockLight(config.poweredEmission) ||
+               hasPoweredVisualState;
     }
 
     private bool TryGetBlockMapping(BlockType blockType, out BlockTextureMapping mapping)
