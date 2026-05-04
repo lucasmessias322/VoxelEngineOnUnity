@@ -70,10 +70,6 @@ public enum BlockType
     batteryBlock = 65,
     windmill = 66,
     ledWhiteBlock = 67,
-    batteryBlock100 = 69,
-    batteryBlock75 = 70,
-    batteryBlock50 = 71,
-    batteryBlock25 = 72,
     ledRedBlock = 73,
 
     
@@ -234,45 +230,14 @@ public static class FluidBlockUtility
 
 public static class BatteryBlockUtility
 {
-    private const float EmptyChargeThreshold = 0.01f;
-
     public static bool IsBatteryBlock(BlockType type)
     {
-        switch (type)
-        {
-            case BlockType.batteryBlock:
-            case BlockType.batteryBlock100:
-            case BlockType.batteryBlock75:
-            case BlockType.batteryBlock50:
-            case BlockType.batteryBlock25:
-                return true;
-
-            default:
-                return false;
-        }
+        return type == BlockType.batteryBlock;
     }
 
     public static BlockType GetInventoryDropBlockType(BlockType type)
     {
         return IsBatteryBlock(type) ? BlockType.batteryBlock : type;
-    }
-
-    public static BlockType GetChargeVisualBlockType(float charge01)
-    {
-        float charge = Mathf.Clamp01(charge01);
-        if (charge <= EmptyChargeThreshold)
-            return BlockType.batteryBlock;
-
-        if (charge <= 0.25f)
-            return BlockType.batteryBlock25;
-
-        if (charge <= 0.5f)
-            return BlockType.batteryBlock50;
-
-        if (charge <= 0.75f)
-            return BlockType.batteryBlock75;
-
-        return BlockType.batteryBlock100;
     }
 
     public static BlockVisualStateCondition GetChargeVisualState(float charge01)

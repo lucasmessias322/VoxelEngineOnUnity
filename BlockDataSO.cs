@@ -976,7 +976,6 @@ public class BlockDataSO : ScriptableObject
     public void InitializeDictionary()
     {
         SyncDirectionalSideMappings();
-        EnsureBatteryVariantMappings();
 
         int maxBlockTypeValue = GetMaxBlockTypeValue();
         int mappingCount = maxBlockTypeValue + 1;
@@ -1430,48 +1429,6 @@ public class BlockDataSO : ScriptableObject
             return true;
 
         return TryGetExplicitMapping(BlockType.glowstone, out template);
-    }
-
-    private void EnsureBatteryVariantMappings()
-    {
-        if (blockTextures == null || blockTextures.Count == 0)
-            return;
-
-        if (!TryGetSerializedMapping(BlockType.batteryBlock, out BlockTextureMapping template))
-            return;
-
-        EnsureSerializedFallbackMapping(BlockType.batteryBlock100, template);
-        EnsureSerializedFallbackMapping(BlockType.batteryBlock75, template);
-        EnsureSerializedFallbackMapping(BlockType.batteryBlock50, template);
-        EnsureSerializedFallbackMapping(BlockType.batteryBlock25, template);
-    }
-
-    private bool TryGetSerializedMapping(BlockType type, out BlockTextureMapping mapping)
-    {
-        mapping = default;
-        if (blockTextures == null)
-            return false;
-
-        for (int i = 0; i < blockTextures.Count; i++)
-        {
-            BlockTextureMapping candidate = blockTextures[i];
-            if (candidate.blockType != type)
-                continue;
-
-            mapping = candidate;
-            return true;
-        }
-
-        return false;
-    }
-
-    private void EnsureSerializedFallbackMapping(BlockType type, BlockTextureMapping template)
-    {
-        if (TryGetSerializedMapping(type, out _))
-            return;
-
-        template.blockType = type;
-        blockTextures.Add(template);
     }
 
     private bool TryGetExplicitMapping(BlockType type, out BlockTextureMapping mapping)

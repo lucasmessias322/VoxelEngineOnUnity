@@ -131,24 +131,23 @@ public partial class World
             BlockVisualStateCondition.ElectricalPowered,
             "block/lampon");
 
-        ApplyBatteryBuiltInVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge25, "block/battery25");
-        ApplyBatteryBuiltInVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge50, "block/battery50");
-        ApplyBatteryBuiltInVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge75, "block/battery75");
-        ApplyBatteryBuiltInVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge100, "block/battery100");
+        ApplyBatteryFrontVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge25, "block/battery25");
+        ApplyBatteryFrontVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge50, "block/battery50");
+        ApplyBatteryFrontVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge75, "block/battery75");
+        ApplyBatteryFrontVisualStateTexture(generator, stateMappings, blockTypeCount, BlockVisualStateCondition.BatteryCharge100, "block/battery100");
     }
 
-    private void ApplyBatteryBuiltInVisualStateTexture(
+    private void ApplyBatteryFrontVisualStateTexture(
         TextureAtlasGenerator generator,
         BlockVisualStateTextureMapping[] stateMappings,
         int blockTypeCount,
         BlockVisualStateCondition state,
         string entryId)
     {
-        ApplySideFacesBlockVisualStateTexture(generator, stateMappings, blockTypeCount, BlockType.batteryBlock, state, entryId);
-        ApplySideFacesBlockVisualStateTexture(generator, stateMappings, blockTypeCount, BlockType.batteryBlock25, state, entryId);
-        ApplySideFacesBlockVisualStateTexture(generator, stateMappings, blockTypeCount, BlockType.batteryBlock50, state, entryId);
-        ApplySideFacesBlockVisualStateTexture(generator, stateMappings, blockTypeCount, BlockType.batteryBlock75, state, entryId);
-        ApplySideFacesBlockVisualStateTexture(generator, stateMappings, blockTypeCount, BlockType.batteryBlock100, state, entryId);
+        if (!TryResolveAtlasUvRectData(generator, entryId, out Vector4 uvRectData))
+            return;
+
+        ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, BlockType.batteryBlock, state, BlockFace.Front, uvRectData);
     }
 
     private void ApplyConfiguredBlockVisualStateTextures(
@@ -199,23 +198,6 @@ public partial class World
 
         ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Top, uvRectData);
         ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Bottom, uvRectData);
-        ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Right, uvRectData);
-        ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Left, uvRectData);
-        ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Front, uvRectData);
-        ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Back, uvRectData);
-    }
-
-    private void ApplySideFacesBlockVisualStateTexture(
-        TextureAtlasGenerator generator,
-        BlockVisualStateTextureMapping[] stateMappings,
-        int blockTypeCount,
-        BlockType blockType,
-        BlockVisualStateCondition state,
-        string entryId)
-    {
-        if (!TryResolveAtlasUvRectData(generator, entryId, out Vector4 uvRectData))
-            return;
-
         ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Right, uvRectData);
         ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Left, uvRectData);
         ApplyResolvedBlockVisualStateTexture(stateMappings, blockTypeCount, blockType, state, BlockFace.Front, uvRectData);

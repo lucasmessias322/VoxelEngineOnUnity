@@ -198,11 +198,7 @@ public static class BlockTextureEntryIdResolver
                 return true;
 
             case BlockType.batteryBlock:
-            case BlockType.batteryBlock100:
-            case BlockType.batteryBlock75:
-            case BlockType.batteryBlock50:
-            case BlockType.batteryBlock25:
-                entryId = ResolveBatteryEntryId(blockType, face);
+                entryId = ResolveBatteryEntryId(face);
                 return !string.IsNullOrEmpty(entryId);
 
             case BlockType.oak_planks:
@@ -281,30 +277,11 @@ public static class BlockTextureEntryIdResolver
         return face == BlockFace.Top || face == BlockFace.Bottom;
     }
 
-    private static string ResolveBatteryEntryId(BlockType blockType, BlockFace face)
+    private static string ResolveBatteryEntryId(BlockFace face)
     {
         if (IsTopOrBottom(face))
             return "block/batterytop";
 
-        switch (blockType)
-        {
-            case BlockType.batteryBlock100:
-                return "block/battery100";
-
-            case BlockType.batteryBlock75:
-                return "block/battery75";
-
-            case BlockType.batteryBlock50:
-                return "block/battery50";
-
-            case BlockType.batteryBlock25:
-                return "block/battery25";
-
-            case BlockType.batteryBlock:
-                return "block/batteryside";
-
-            default:
-                return string.Empty;
-        }
+        return "block/batteryside";
     }
 }
