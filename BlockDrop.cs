@@ -2655,6 +2655,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     [SerializeField] private bool preventDespawnOnConveyor = true;
     [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
+    [SerializeField, Min(0.05f)] private float itemVisualWorldHeight = 0.42f;
+    [SerializeField, Min(0.05f)] private float itemVisualMaxWorldWidth = 0.7f;
     [SerializeField] private float launchForce = 2.2f;
     [SerializeField] private float pickupDelaySeconds = 0.25f;
     [SerializeField] private string playerTag = "Player";
@@ -3357,14 +3359,34 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 
         if (icon != null)
         {
-            float height = Mathf.Max(1f, icon.rect.height);
-            float aspect = icon.rect.width / height;
-            visualRoot.localScale = new Vector3(0.45f * aspect, 0.45f, 0.45f);
+            visualRoot.localScale = ResolveItemVisualLocalScale(icon);
         }
         else
         {
-            visualRoot.localScale = Vector3.one * 0.45f;
+            visualRoot.localScale = Vector3.one * ResolveVisualLocalScale(itemVisualWorldHeight, 1f);
         }
+    }
+
+    private Vector3 ResolveItemVisualLocalScale(Sprite icon)
+    {
+        if (icon == null)
+            return Vector3.one * ResolveVisualLocalScale(itemVisualWorldHeight, 1f);
+
+        Vector2 spriteSize = icon.bounds.size;
+        float spriteHeight = Mathf.Max(0.0001f, spriteSize.y);
+        float spriteWidth = Mathf.Max(0.0001f, spriteSize.x);
+        float scaleByHeight = ResolveVisualLocalScale(itemVisualWorldHeight, spriteHeight);
+        float scaleByWidth = ResolveVisualLocalScale(itemVisualMaxWorldWidth, spriteWidth);
+        float uniformScale = Mathf.Min(scaleByHeight, scaleByWidth);
+        return Vector3.one * Mathf.Max(0.0001f, uniformScale);
+    }
+
+    private float ResolveVisualLocalScale(float targetWorldSize, float spriteLocalSize)
+    {
+        float parentScale = Mathf.Max(0.0001f, Mathf.Max(
+            Mathf.Abs(transform.lossyScale.x),
+            Mathf.Abs(transform.lossyScale.y)));
+        return Mathf.Max(0.0001f, targetWorldSize) / (parentScale * Mathf.Max(0.0001f, spriteLocalSize));
     }
 
     private void UpdateVisualTransform()

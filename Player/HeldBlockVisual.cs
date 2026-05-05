@@ -90,6 +90,7 @@ public class HeldBlockVisual : MonoBehaviour
     private readonly Dictionary<BlockType, int> blockMaterialIndexCache = new Dictionary<BlockType, int>();
     private readonly Dictionary<Item, Mesh> atlasFlatItemMeshCache = new Dictionary<Item, Mesh>();
     private readonly Dictionary<Item, Mesh> spriteFlatItemMeshCache = new Dictionary<Item, Mesh>();
+    private readonly Dictionary<Material, Material> flatItemMaterialCloneCache = new Dictionary<Material, Material>();
 
     private GameObject followRoot;
     private GameObject visualRoot;
@@ -162,6 +163,7 @@ public class HeldBlockVisual : MonoBehaviour
         UpdateFollowRootTransform();
         ApplyRendererSettings();
         UpdateArmMeshVisibility(isVisible);
+        InvalidateFlatItemMeshCaches();
         RefreshHeldBlock(forceRefresh: true);
         ApplyMiningMotion();
     }
@@ -174,6 +176,7 @@ public class HeldBlockVisual : MonoBehaviour
         blockMaterialIndexCache.Clear();
         DestroyCachedMeshes(atlasFlatItemMeshCache);
         DestroyCachedMeshes(spriteFlatItemMeshCache);
+        DestroyRuntimeMaterials(flatItemMaterialCloneCache);
 
         if (runtimeFlatItemMaterial != null)
             Destroy(runtimeFlatItemMaterial);
@@ -646,10 +649,13 @@ public class HeldBlockVisual : MonoBehaviour
         if (selectedItem.heldPrefab != null)
             return HeldVisualKind.Prefab;
 
+        if (HasDirectFlatItemSprite(selectedItem))
+            return HeldVisualKind.FlatItem;
+
         if (hasBlockSelection)
             return HeldVisualKind.Block;
 
-        if (HasFlatItemVisual(selectedItem))
+        if (HasAtlasFlatItem(selectedItem))
             return HeldVisualKind.FlatItem;
 
         return HeldVisualKind.None;
@@ -668,12 +674,6 @@ public class HeldBlockVisual : MonoBehaviour
         return inventory != null &&
                inventory.TryGetBlockForItem(selectedItem, out blockType) &&
                blockType != BlockType.Air;
-    }
-
-    private bool HasFlatItemVisual(Item selectedItem)
-    {
-        return selectedItem != null &&
-               (HasDirectFlatItemSprite(selectedItem) || HasAtlasFlatItem(selectedItem));
     }
 
     private bool ShowBlock(BlockType blockType)
@@ -920,14 +920,14 @@ public class HeldBlockVisual : MonoBehaviour
     private Material ResolveFlatItemMaterial(Item item)
     {
         if (flatItemMaterial != null)
-            return flatItemMaterial;
+            return GetOrCreateFlatItemMaterialClone(flatItemMaterial);
 
         if (item != null &&
             TryGetActiveItemAtlasData(out ItemAtlasDataSO atlasData) &&
             atlasData.TryGetMaterial(out Material atlasMaterial) &&
             atlasMaterial != null)
         {
-            return atlasMaterial;
+            return GetOrCreateFlatItemMaterialClone(atlasMaterial);
         }
 
         return GetOrCreateRuntimeFlatItemMaterial();
@@ -963,11 +963,11 @@ public class HeldBlockVisual : MonoBehaviour
 
         Rect pixelRect = sprite.textureRect;
         float aspect = Mathf.Max(0.01f, pixelRect.width / Mathf.Max(1f, pixelRect.height));
-        Mesh mesh = BuildPreferredFlatItemMesh(sprite.texture, pixelRect, uvRect, aspect);
+        Mesh mesh = BuildFlatItemMesh(aspect, uvRect);
         if (mesh == null)
             return null;
 
-        mesh.name = $"HeldFlatItemSprite_{item.name}";
+        mesh.name = $"HeldFlatItemSprite2D_{item.name}";
         spriteFlatItemMeshCache[item] = mesh;
         return mesh;
     }
@@ -1057,12 +1057,11 @@ public class HeldBlockVisual : MonoBehaviour
         float pixelUvWidth = uvRect.width / pixelWidth;
         float pixelUvHeight = uvRect.height / pixelHeight;
 
-        List<Vector3> vertices = new List<Vector3>(4096);
-        List<Vector3> normals = new List<Vector3>(4096);
-        List<Vector2> uvs = new List<Vector2>(4096);
-        List<int> triangles = new List<int>(6144);
-
-        AddFrontBackItemFaces(vertices, normals, uvs, triangles, halfWidth, halfHeight, halfThickness, uvRect);
+        int estimatedFaceCount = Mathf.Min(MaxGeneratedItemPixels, pixelWidth * pixelHeight) * 4;
+        List<Vector3> vertices = new List<Vector3>(estimatedFaceCount);
+        List<Vector3> normals = new List<Vector3>(estimatedFaceCount);
+        List<Vector2> uvs = new List<Vector2>(estimatedFaceCount);
+        List<int> triangles = new List<int>(estimatedFaceCount * 2);
 
         for (int y = 0; y < pixelHeight; y++)
         {
@@ -1081,6 +1080,8 @@ public class HeldBlockVisual : MonoBehaviour
                     uvRect.yMin + y * pixelUvHeight,
                     pixelUvWidth,
                     pixelUvHeight);
+
+                AddFrontBackItemFaces(vertices, normals, uvs, triangles, x0, x1, y0, y1, halfThickness, pixelUv);
 
                 if (!IsMaskOpaque(opaqueMask, pixelWidth, pixelHeight, x - 1, y))
                 {
@@ -1178,27 +1179,29 @@ public class HeldBlockVisual : MonoBehaviour
         List<Vector3> normals,
         List<Vector2> uvs,
         List<int> triangles,
-        float halfWidth,
-        float halfHeight,
+        float x0,
+        float x1,
+        float y0,
+        float y1,
         float halfThickness,
         Rect uvRect)
     {
         AddQuad(
             vertices, normals, uvs, triangles,
-            new Vector3(-halfWidth, -halfHeight, halfThickness),
-            new Vector3(-halfWidth, halfHeight, halfThickness),
-            new Vector3(halfWidth, halfHeight, halfThickness),
-            new Vector3(halfWidth, -halfHeight, halfThickness),
+            new Vector3(x0, y0, halfThickness),
+            new Vector3(x0, y1, halfThickness),
+            new Vector3(x1, y1, halfThickness),
+            new Vector3(x1, y0, halfThickness),
             Vector3.forward,
             uvRect,
             flipWinding: false);
 
         AddQuad(
             vertices, normals, uvs, triangles,
-            new Vector3(halfWidth, -halfHeight, -halfThickness),
-            new Vector3(halfWidth, halfHeight, -halfThickness),
-            new Vector3(-halfWidth, halfHeight, -halfThickness),
-            new Vector3(-halfWidth, -halfHeight, -halfThickness),
+            new Vector3(x1, y0, -halfThickness),
+            new Vector3(x1, y1, -halfThickness),
+            new Vector3(x0, y1, -halfThickness),
+            new Vector3(x0, y0, -halfThickness),
             Vector3.back,
             uvRect,
             flipWinding: false);
@@ -1257,11 +1260,11 @@ public class HeldBlockVisual : MonoBehaviour
         if (runtimeFlatItemMaterial != null)
             return runtimeFlatItemMaterial;
 
-        Shader shader = Shader.Find("Sprites/Default");
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
+        if (shader == null)
+            shader = Shader.Find("Sprites/Default");
         if (shader == null)
             shader = Shader.Find("Unlit/Transparent");
-        if (shader == null)
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
         if (shader == null)
             return null;
 
@@ -1269,14 +1272,10 @@ public class HeldBlockVisual : MonoBehaviour
         {
             name = "HeldFlatItemRuntimeMaterial",
             hideFlags = HideFlags.HideAndDontSave,
-            renderQueue = (int)RenderQueue.Transparent
+            renderQueue = (int)RenderQueue.AlphaTest
         };
 
-        if (runtimeFlatItemMaterial.HasProperty("_Surface"))
-            runtimeFlatItemMaterial.SetFloat("_Surface", 1f);
-
-        if (runtimeFlatItemMaterial.HasProperty("_Cull"))
-            runtimeFlatItemMaterial.SetFloat("_Cull", (float)CullMode.Off);
+        ConfigureHeldFlatItemMaterial(runtimeFlatItemMaterial);
 
         return runtimeFlatItemMaterial;
     }
@@ -1352,6 +1351,65 @@ public class HeldBlockVisual : MonoBehaviour
         }
 
         cache.Clear();
+    }
+
+    private void InvalidateFlatItemMeshCaches()
+    {
+        DestroyCachedMeshes(atlasFlatItemMeshCache);
+        DestroyCachedMeshes(spriteFlatItemMeshCache);
+    }
+
+    private Material GetOrCreateFlatItemMaterialClone(Material source)
+    {
+        if (source == null)
+            return null;
+
+        if (flatItemMaterialCloneCache.TryGetValue(source, out Material cachedMaterial) && cachedMaterial != null)
+            return cachedMaterial;
+
+        Material clone = new Material(source)
+        {
+            name = source.name + "_HeldRuntime",
+            hideFlags = HideFlags.HideAndDontSave
+        };
+        ConfigureHeldFlatItemMaterial(clone);
+        flatItemMaterialCloneCache[source] = clone;
+        return clone;
+    }
+
+    private void DestroyRuntimeMaterials(Dictionary<Material, Material> cache)
+    {
+        foreach (KeyValuePair<Material, Material> pair in cache)
+        {
+            if (pair.Value != null)
+                Destroy(pair.Value);
+        }
+
+        cache.Clear();
+    }
+
+    private void ConfigureHeldFlatItemMaterial(Material material)
+    {
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_Cull"))
+            material.SetFloat("_Cull", (float)CullMode.Off);
+
+        if (material.HasProperty("_AlphaClip"))
+            material.SetFloat("_AlphaClip", 1f);
+
+        if (material.HasProperty("_Cutoff"))
+            material.SetFloat("_Cutoff", Mathf.Clamp01(generatedItemAlphaThreshold));
+
+        if (material.HasProperty("_Surface"))
+            material.SetFloat("_Surface", 0f);
+
+        if (material.HasProperty("_ZWrite"))
+            material.SetFloat("_ZWrite", 1f);
+
+        material.renderQueue = (int)RenderQueue.AlphaTest;
+        material.SetOverrideTag("RenderType", "TransparentCutout");
     }
 
     private void SetVisible(bool visible)
