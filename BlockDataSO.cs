@@ -532,6 +532,35 @@ public sealed class DynamicBlockPrefabDefinition
 
     [Tooltip("Quando ativo, copia o layer do chunk para todos os filhos do prefab.")]
     public bool inheritChunkLayer = true;
+
+    [Header("Comportamento Voxel")]
+    [Tooltip("Define se o bloco dinamico cria collider e conta como suporte solido. Nao oculta faces vizinhas; blocos dinamicos sao sempre transparentes para renderizacao.")]
+    public bool isSolid = true;
+
+    [Tooltip("Define se o bloco dinamico se comporta como liquido.")]
+    public bool isLiquid;
+
+    [Tooltip("Marca o bloco dinamico como fonte de luz.")]
+    public bool isLightSource;
+
+    [Tooltip("Quando ativo, o bloco dinamico quebra se nao estiver ligado a um suporte solido estavel.")]
+    public bool breaksWithoutSupport;
+
+    [Tooltip("0 = nao reduz luz, 15 = bloqueia luz.")]
+    [Range(0, 15)] public byte lightOpacity = 15;
+
+    [Tooltip("Intensidade da luz emitida pelo bloco dinamico, de 0 a 15.")]
+    [Range(0, 15)] public byte lightEmission;
+
+    [Tooltip("Cor RGB da luz emitida. Preto mantem compatibilidade e emite branco quando Light Emission > 0.")]
+    public Color lightColor = Color.white;
+
+    [Header("Ocupacao Voxel")]
+    [Tooltip("Quantidade de blocos ocupados no plano horizontal X/Z a partir do voxel de origem.")]
+    [Min(1)] public int occupiedHorizontalBlocks = 1;
+
+    [Tooltip("Quantidade de blocos ocupados para cima a partir do voxel de origem.")]
+    [Min(1)] public int occupiedVerticalBlocks = 1;
 }
 
 public static class WirePlacementUtility
@@ -762,6 +791,9 @@ public class BlockDataSO : ScriptableObject
 
     [System.NonSerialized]
     private bool[] runtimeDynamicVisualBlockCache = System.Array.Empty<bool>();
+
+    [System.NonSerialized]
+    public Vector3Int runtimeDynamicBlockOverflowSearchRadius = Vector3Int.zero;
 
     public static bool[] IsSolidCache;
     public static bool[] IsEmptyCache;
@@ -1167,6 +1199,7 @@ public class BlockDataSO : ScriptableObject
         runtimeDynamicVisualBlockCache = mappingCount > 0
             ? new bool[mappingCount]
             : System.Array.Empty<bool>();
+        runtimeDynamicBlockOverflowSearchRadius = Vector3Int.zero;
 
         if (mappings == null || mappings.Length == 0)
             return;
@@ -1188,11 +1221,29 @@ public class BlockDataSO : ScriptableObject
                 BlockTextureMapping mapping = mappings[mappingIndex];
                 mapping.blockType = definition.blockType;
                 mapping.renderAsDynamicPrefab = true;
+                mapping.dynamicOccupiedHorizontalBlocks = Mathf.Max(1, definition.occupiedHorizontalBlocks);
+                mapping.dynamicOccupiedVerticalBlocks = Mathf.Max(1, definition.occupiedVerticalBlocks);
                 if (definition.rotateWithPlacementAxis)
                 {
                     mapping.usePlacementAxisRotation = true;
                     mapping.placementRotationAxes = definition.placementRotationAxes;
                 }
+
+                mapping.isSolid = definition.isSolid;
+                // Blocos dinamicos usam prefab visual; solidez aqui e fisica/suporte, nao culling de faces vizinhas.
+                mapping.isTransparent = true;
+                mapping.isLiquid = definition.isLiquid;
+                mapping.isLightSource = definition.isLightSource || definition.lightEmission > 0;
+                mapping.breaksWithoutSupport = definition.breaksWithoutSupport;
+                mapping.lightOpacity = definition.lightOpacity;
+                mapping.lightEmission = definition.lightEmission;
+                mapping.lightColor = definition.lightColor;
+
+                runtimeDynamicBlockOverflowSearchRadius = new Vector3Int(
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.x, mapping.dynamicOccupiedHorizontalBlocks - 1),
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.y, mapping.dynamicOccupiedVerticalBlocks - 1),
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.z, mapping.dynamicOccupiedHorizontalBlocks - 1));
+
                 mappings[mappingIndex] = mapping;
             }
         }
@@ -1224,6 +1275,19 @@ public class BlockDataSO : ScriptableObject
                dynamicBlockPrefabLookup.TryGetValue(blockType, out definition) &&
                definition != null &&
                definition.prefab != null;
+    }
+
+    public bool TryGetDynamicBlockOccupancy(BlockType blockType, out int horizontalBlocks, out int verticalBlocks)
+    {
+        horizontalBlocks = 1;
+        verticalBlocks = 1;
+
+        if (!TryGetDynamicBlockPrefabDefinition(blockType, out DynamicBlockPrefabDefinition definition))
+            return false;
+
+        horizontalBlocks = Mathf.Max(1, definition.occupiedHorizontalBlocks);
+        verticalBlocks = Mathf.Max(1, definition.occupiedVerticalBlocks);
+        return true;
     }
 
     private BlockTextureEntryIdMapping FindBlockTextureEntryIdMapping(BlockType blockType)
@@ -1628,6 +1692,9 @@ public struct BlockTextureMapping
     [Range(0, 15)] public byte poweredLightEmission;
     [Tooltip("Cor da luz emitida enquanto o bloco estiver energizado. Preto mantem compatibilidade e emite branco quando Powered Light Emission > 0.")]
     public Color poweredLightColor;
+
+    [HideInInspector] public int dynamicOccupiedHorizontalBlocks;
+    [HideInInspector] public int dynamicOccupiedVerticalBlocks;
 
     [Header("Biome Tinting")]
     [Tooltip("Aplica cor do bioma nesta face?")]
@@ -2204,6 +2271,35 @@ public static class BlockShapeUtility
         return GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube;
     }
 
+    public static int GetDynamicOccupiedHorizontalBlocks(BlockTextureMapping mapping)
+    {
+        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedHorizontalBlocks) : 1;
+    }
+
+    public static int GetDynamicOccupiedVerticalBlocks(BlockTextureMapping mapping)
+    {
+        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedVerticalBlocks) : 1;
+    }
+
+    public static bool HasExpandedDynamicOccupancy(BlockTextureMapping mapping)
+    {
+        return mapping.renderAsDynamicPrefab &&
+               (GetDynamicOccupiedHorizontalBlocks(mapping) > 1 ||
+                GetDynamicOccupiedVerticalBlocks(mapping) > 1);
+    }
+
+    public static ShapeBox GetDynamicOccupancyBox(BlockTextureMapping mapping)
+    {
+        int horizontalBlocks = GetDynamicOccupiedHorizontalBlocks(mapping);
+        int verticalBlocks = GetDynamicOccupiedVerticalBlocks(mapping);
+        return new ShapeBox(Vector3.zero, new Vector3(horizontalBlocks, verticalBlocks, horizontalBlocks));
+    }
+
+    public static Bounds GetDynamicOccupancyBounds(Vector3Int blockPos, BlockTextureMapping mapping)
+    {
+        return GetDynamicOccupancyBox(mapping).ToWorldBounds(blockPos);
+    }
+
     public static byte GetEffectiveLightOpacity(BlockTextureMapping mapping)
     {
         if (GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube && !mapping.isSolid && !mapping.isLiquid)
@@ -2280,6 +2376,9 @@ public static class BlockShapeUtility
         bool hasNegativeSupport,
         bool hasPositiveSupport)
     {
+        if (mapping.renderAsDynamicPrefab)
+            return GetDynamicOccupancyBounds(blockPos, mapping);
+
         if (TorchPlacementUtility.IsWallTorch(blockType))
             return TorchPlacementUtility.GetWorldBounds(blockPos, blockType, mapping);
 

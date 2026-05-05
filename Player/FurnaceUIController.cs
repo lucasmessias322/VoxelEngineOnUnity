@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -44,6 +45,7 @@ public class FurnaceUIController : MonoBehaviour
     private bool lastKnownPanelOpen;
     private Vector3Int activeFurnaceBlock = InvalidBlock;
     private PlayerInventory subscribedInventory;
+    private readonly Dictionary<Vector3Int, FurnaceInventoryData> furnaceStorage = new Dictionary<Vector3Int, FurnaceInventoryData>();
 
     public bool IsFurnaceOpen => furnacePanel != null && furnacePanel.activeSelf;
     public bool IsWorldFurnaceOpen => activeFurnaceBlock != InvalidBlock;
@@ -110,7 +112,26 @@ public class FurnaceUIController : MonoBehaviour
         if (IsFurnaceOpen && ShouldCloseFurnace())
             CloseFurnacePanel();
 
-        ProcessActiveRecipe(Time.deltaTime);
+        if (IsWorldFurnaceOpen)
+            SaveActiveFurnaceFromSlots();
+
+        ProcessStoredFurnaces(Time.deltaTime);
+
+        if (IsWorldFurnaceOpen)
+        {
+            FurnaceInventoryData activeData = GetOrCreateFurnaceData(activeFurnaceBlock);
+            LoadFurnaceIntoSlots(activeData);
+            SyncActiveStateFromData(activeData);
+        }
+        else if (IsFurnaceOpen)
+        {
+            ProcessActiveRecipe(Time.deltaTime);
+        }
+        else
+        {
+            SyncActiveStateFromData(null);
+        }
+
         RefreshFuelUi();
         RefreshCookProgressUi();
     }
@@ -201,13 +222,23 @@ public class FurnaceUIController : MonoBehaviour
         if (!TryGetTargetFurnace(activeSelector != null ? activeSelector : selector, out Vector3Int furnaceBlock))
             return false;
 
+        if (IsWorldFurnaceOpen)
+            SaveActiveFurnaceFromSlots();
+
         activeFurnaceBlock = furnaceBlock;
+        FurnaceInventoryData data = GetOrCreateFurnaceData(furnaceBlock);
+        RefreshFurnaceRecipeState(data);
+        LoadFurnaceIntoSlots(data);
+        SyncActiveStateFromData(data);
         OpenFurnacePanel();
         return true;
     }
 
     public void CloseFurnacePanel()
     {
+        if (IsWorldFurnaceOpen)
+            SaveActiveFurnaceFromSlots();
+
         if (furnacePanel != null)
             furnacePanel.SetActive(false);
 
@@ -230,6 +261,139 @@ public class FurnaceUIController : MonoBehaviour
     {
         if (!inventoryOpen && closeWhenInventoryCloses && IsFurnaceOpen)
             CloseFurnacePanel();
+    }
+
+    public bool CanCookItem(Item item)
+    {
+        return FindRecipeForInput(item) != null;
+    }
+
+    public bool CanUseItemAsFuel(Item item)
+    {
+        return IsFuelItem(item);
+    }
+
+    public bool HasOutputStackInFurnace(Vector3Int furnaceBlock)
+    {
+        if (!IsFurnaceBlockInWorld(furnaceBlock))
+            return false;
+
+        if (IsWorldFurnaceOpen && activeFurnaceBlock == furnaceBlock)
+            SaveActiveFurnaceFromSlots();
+
+        if (!furnaceStorage.TryGetValue(furnaceBlock, out FurnaceInventoryData data) || data == null)
+            return false;
+
+        return data.OutputItem != null && data.OutputAmount > 0;
+    }
+
+    public bool TryTakeOutputStackFromFurnace(Vector3Int furnaceBlock, int maxAmount, out Item item, out int amount)
+    {
+        item = null;
+        amount = 0;
+
+        if (maxAmount <= 0 || !IsFurnaceBlockInWorld(furnaceBlock))
+            return false;
+
+        if (IsWorldFurnaceOpen && activeFurnaceBlock == furnaceBlock)
+            SaveActiveFurnaceFromSlots();
+
+        if (!furnaceStorage.TryGetValue(furnaceBlock, out FurnaceInventoryData data) || data == null)
+            return false;
+
+        if (data.OutputItem == null || data.OutputAmount <= 0)
+            return false;
+
+        item = data.OutputItem;
+        amount = Mathf.Min(maxAmount, data.OutputAmount);
+        RemoveFromFurnaceDataSlot(ref data.OutputItem, ref data.OutputAmount, amount);
+        RefreshActiveFurnaceSlotsIfNeeded(furnaceBlock, data);
+        return true;
+    }
+
+    public bool TryPeekOutputStackFromFurnace(Vector3Int furnaceBlock, int maxAmount, out Item item, out int amount)
+    {
+        item = null;
+        amount = 0;
+
+        if (maxAmount <= 0 || !IsFurnaceBlockInWorld(furnaceBlock))
+            return false;
+
+        if (IsWorldFurnaceOpen && activeFurnaceBlock == furnaceBlock)
+            SaveActiveFurnaceFromSlots();
+
+        if (!furnaceStorage.TryGetValue(furnaceBlock, out FurnaceInventoryData data) || data == null)
+            return false;
+
+        if (data.OutputItem == null || data.OutputAmount <= 0)
+            return false;
+
+        item = data.OutputItem;
+        amount = Mathf.Min(maxAmount, data.OutputAmount);
+        return true;
+    }
+
+    public int InsertItemStackIntoFurnace(Vector3Int furnaceBlock, Item item, int amount)
+    {
+        return InsertItemStackIntoFurnace(furnaceBlock, item, amount, int.MaxValue, int.MaxValue);
+    }
+
+    public int InsertItemStackIntoFurnace(
+        Vector3Int furnaceBlock,
+        Item item,
+        int amount,
+        int maxInputAmount,
+        int maxFuelAmount)
+    {
+        if (item == null || amount <= 0 || !IsFurnaceBlockInWorld(furnaceBlock))
+            return amount;
+
+        if (IsWorldFurnaceOpen && activeFurnaceBlock == furnaceBlock)
+            SaveActiveFurnaceFromSlots();
+
+        FurnaceInventoryData data = GetOrCreateFurnaceData(furnaceBlock);
+        int remaining = amount;
+        bool isCookable = CanCookItem(item);
+
+        if (isCookable)
+            remaining = InsertIntoFurnaceDataSlot(ref data.InputItem, ref data.InputAmount, item, remaining, maxInputAmount);
+
+        if ((!isCookable || remaining == amount) && CanUseItemAsFuel(item))
+            remaining = InsertIntoFurnaceDataSlot(ref data.FuelItem, ref data.FuelAmount, item, remaining, maxFuelAmount);
+
+        if (remaining != amount)
+        {
+            RefreshFurnaceRecipeState(data);
+            RefreshActiveFurnaceSlotsIfNeeded(furnaceBlock, data);
+        }
+
+        return remaining;
+    }
+
+    public int GetInsertableItemCountForFurnace(
+        Vector3Int furnaceBlock,
+        Item item,
+        int amount,
+        int maxInputAmount,
+        int maxFuelAmount)
+    {
+        if (item == null || amount <= 0 || !IsFurnaceBlockInWorld(furnaceBlock))
+            return 0;
+
+        if (IsWorldFurnaceOpen && activeFurnaceBlock == furnaceBlock)
+            SaveActiveFurnaceFromSlots();
+
+        FurnaceInventoryData data = GetOrCreateFurnaceData(furnaceBlock);
+        int remaining = amount;
+        bool isCookable = CanCookItem(item);
+
+        if (isCookable)
+            remaining = CountRemainingAfterFurnaceDataSlotInsert(data.InputItem, data.InputAmount, item, remaining, maxInputAmount);
+
+        if ((!isCookable || remaining == amount) && CanUseItemAsFuel(item))
+            remaining = CountRemainingAfterFurnaceDataSlotInsert(data.FuelItem, data.FuelAmount, item, remaining, maxFuelAmount);
+
+        return amount - remaining;
     }
 
     private void ResolveReferences()
@@ -369,7 +533,11 @@ public class FurnaceUIController : MonoBehaviour
         if (suppressSlotCallbacks)
             return;
 
-        RefreshRecipeState();
+        if (IsWorldFurnaceOpen)
+            RefreshActiveFurnaceStateAfterSlotMutation();
+        else
+            RefreshRecipeState();
+
         RefreshSlotVisuals();
     }
 
@@ -445,6 +613,11 @@ public class FurnaceUIController : MonoBehaviour
                IsFurnaceBlock(World.Instance.GetBlockAt(furnaceBlock));
     }
 
+    private static bool IsFurnaceBlockInWorld(Vector3Int furnaceBlock)
+    {
+        return World.Instance != null && IsFurnaceBlock(World.Instance.GetBlockAt(furnaceBlock));
+    }
+
     private bool ShouldCloseFurnace()
     {
         if (!IsWorldFurnaceOpen)
@@ -480,6 +653,24 @@ public class FurnaceUIController : MonoBehaviour
         RefreshCookProgressUi();
     }
 
+    private void RefreshFurnaceRecipeState(FurnaceInventoryData data, bool forceResetProgress = false)
+    {
+        if (data == null)
+            return;
+
+        FurnaceRecipeSO previousRecipe = data.ActiveRecipe;
+        data.ActiveRecipe = FindMatchingRecipe(data);
+
+        if (data.ActiveRecipe == null)
+        {
+            data.CookTimer = 0f;
+            return;
+        }
+
+        if (forceResetProgress || data.ActiveRecipe != previousRecipe)
+            data.CookTimer = 0f;
+    }
+
     private FurnaceRecipeSO FindMatchingRecipe()
     {
         if (inputSlot == null || inputSlot.IsEmpty || recipes == null || recipes.Length == 0)
@@ -495,6 +686,26 @@ public class FurnaceUIController : MonoBehaviour
                 continue;
 
             if (recipe.InputItem != inputItem || inputAmount < recipe.InputAmount)
+                continue;
+
+            return recipe;
+        }
+
+        return null;
+    }
+
+    private FurnaceRecipeSO FindMatchingRecipe(FurnaceInventoryData data)
+    {
+        if (data == null || data.InputItem == null || data.InputAmount <= 0 || recipes == null || recipes.Length == 0)
+            return null;
+
+        for (int i = 0; i < recipes.Length; i++)
+        {
+            FurnaceRecipeSO recipe = recipes[i];
+            if (recipe == null || !recipe.IsValid)
+                continue;
+
+            if (recipe.InputItem != data.InputItem || data.InputAmount < recipe.InputAmount)
                 continue;
 
             return recipe;
@@ -544,6 +755,46 @@ public class FurnaceUIController : MonoBehaviour
         }
     }
 
+    private void ProcessStoredFurnaces(float deltaTime)
+    {
+        if (furnaceStorage.Count == 0)
+            return;
+
+        foreach (KeyValuePair<Vector3Int, FurnaceInventoryData> pair in furnaceStorage)
+        {
+            if (!IsFurnaceBlockInWorld(pair.Key))
+                continue;
+
+            ProcessFurnaceData(pair.Value, deltaTime);
+        }
+    }
+
+    private void ProcessFurnaceData(FurnaceInventoryData data, float deltaTime)
+    {
+        if (data == null)
+            return;
+
+        RefreshFurnaceRecipeState(data);
+        float remainingDelta = Mathf.Max(0f, deltaTime);
+
+        if (data.BurnTimer > 0f)
+            remainingDelta = ConsumeBurnTime(data, remainingDelta);
+
+        RefreshFurnaceRecipeState(data);
+
+        while (remainingDelta > 0f)
+        {
+            if (data.ActiveRecipe == null || !CanOutputAccept(data, data.ActiveRecipe))
+                break;
+
+            if (data.BurnTimer <= 0f && !TryStartFuelBurn(data))
+                break;
+
+            remainingDelta = ConsumeBurnTime(data, remainingDelta);
+            RefreshFurnaceRecipeState(data);
+        }
+    }
+
     private bool TryCompleteRecipe(FurnaceRecipeSO recipe)
     {
         if (!CanConsumeInput(recipe) || !CanOutputAccept(recipe))
@@ -574,6 +825,28 @@ public class FurnaceUIController : MonoBehaviour
         }
     }
 
+    private bool TryCompleteRecipe(FurnaceInventoryData data, FurnaceRecipeSO recipe)
+    {
+        if (!CanConsumeInput(data, recipe) || !CanOutputAccept(data, recipe))
+            return false;
+
+        int removed = RemoveFromFurnaceDataSlot(ref data.InputItem, ref data.InputAmount, recipe.InputAmount);
+        if (removed != recipe.InputAmount)
+            return false;
+
+        int remaining = InsertIntoFurnaceDataSlot(ref data.OutputItem, ref data.OutputAmount, recipe.OutputItem, recipe.OutputAmount);
+        if (remaining <= 0)
+            return true;
+
+        int inserted = recipe.OutputAmount - remaining;
+        if (inserted > 0)
+            RemoveFromFurnaceDataSlot(ref data.OutputItem, ref data.OutputAmount, inserted);
+
+        InsertIntoFurnaceDataSlot(ref data.InputItem, ref data.InputAmount, recipe.InputItem, removed);
+        Log($"Falha ao finalizar receita da fornalha para {recipe.OutputItem.name}.");
+        return false;
+    }
+
     private bool TryMoveInventorySlotToFurnace(Slot sourceSlot)
     {
         if (sourceSlot == null || sourceSlot.IsEmpty)
@@ -600,6 +873,14 @@ public class FurnaceUIController : MonoBehaviour
                inputSlot.amount >= recipe.InputAmount;
     }
 
+    private bool CanConsumeInput(FurnaceInventoryData data, FurnaceRecipeSO recipe)
+    {
+        return data != null &&
+               recipe != null &&
+               data.InputItem == recipe.InputItem &&
+               data.InputAmount >= recipe.InputAmount;
+    }
+
     private bool CanOutputAccept(FurnaceRecipeSO recipe)
     {
         if (recipe == null || recipe.OutputItem == null || outputSlot == null)
@@ -613,6 +894,21 @@ public class FurnaceUIController : MonoBehaviour
             return false;
 
         return outputSlot.amount + recipe.OutputAmount <= stackLimit;
+    }
+
+    private bool CanOutputAccept(FurnaceInventoryData data, FurnaceRecipeSO recipe)
+    {
+        if (data == null || recipe == null || recipe.OutputItem == null)
+            return false;
+
+        int stackLimit = Mathf.Max(1, recipe.OutputItem.maxStack);
+        if (data.OutputItem == null || data.OutputAmount <= 0)
+            return recipe.OutputAmount <= stackLimit;
+
+        if (data.OutputItem != recipe.OutputItem)
+            return false;
+
+        return data.OutputAmount + recipe.OutputAmount <= stackLimit;
     }
 
     private static bool IsFurnaceBlock(BlockType blockType)
@@ -699,6 +995,53 @@ public class FurnaceUIController : MonoBehaviour
         }
     }
 
+    private float ConsumeBurnTime(FurnaceInventoryData data, float deltaTime)
+    {
+        if (data == null || data.BurnTimer <= 0f || deltaTime <= 0f)
+            return 0f;
+
+        float burnNow = Mathf.Min(data.BurnTimer, deltaTime);
+        data.BurnTimer -= burnNow;
+
+        if (data.ActiveRecipe != null && CanOutputAccept(data, data.ActiveRecipe))
+            AdvanceCooking(data, burnNow);
+
+        return deltaTime - burnNow;
+    }
+
+    private void AdvanceCooking(FurnaceInventoryData data, float deltaTime)
+    {
+        if (data == null || deltaTime <= 0f || data.ActiveRecipe == null || !CanOutputAccept(data, data.ActiveRecipe))
+            return;
+
+        data.CookTimer += deltaTime;
+
+        while (data.ActiveRecipe != null && data.CookTimer >= data.ActiveRecipe.CookDuration)
+        {
+            FurnaceRecipeSO recipeToComplete = data.ActiveRecipe;
+            if (!TryCompleteRecipe(data, recipeToComplete))
+                return;
+
+            data.CookTimer -= recipeToComplete.CookDuration;
+            RefreshFurnaceRecipeState(data);
+
+            if (data.ActiveRecipe == null)
+            {
+                data.CookTimer = 0f;
+                return;
+            }
+
+            if (data.ActiveRecipe != recipeToComplete)
+            {
+                data.CookTimer = 0f;
+                return;
+            }
+
+            if (!CanOutputAccept(data, data.ActiveRecipe))
+                return;
+        }
+    }
+
     private bool TryStartFuelBurn()
     {
         if (fuelSlot == null || fuelSlot.IsEmpty)
@@ -713,6 +1056,23 @@ public class FurnaceUIController : MonoBehaviour
 
         currentFuelDuration = fuelDuration;
         burnTimer = fuelDuration;
+        return true;
+    }
+
+    private bool TryStartFuelBurn(FurnaceInventoryData data)
+    {
+        if (data == null || data.FuelItem == null || data.FuelAmount <= 0)
+            return false;
+
+        if (!TryGetFuelDuration(data.FuelItem, out float fuelDuration))
+            return false;
+
+        int removed = RemoveFromFurnaceDataSlot(ref data.FuelItem, ref data.FuelAmount, 1);
+        if (removed <= 0)
+            return false;
+
+        data.CurrentFuelDuration = fuelDuration;
+        data.BurnTimer = fuelDuration;
         return true;
     }
 
@@ -777,9 +1137,185 @@ public class FurnaceUIController : MonoBehaviour
         else
             sourceSlot.SetContents(sourceItem, remaining);
 
-        RefreshRecipeState(forceResetProgress: false);
+        if (IsWorldFurnaceOpen)
+            RefreshActiveFurnaceStateAfterSlotMutation();
+        else
+            RefreshRecipeState(forceResetProgress: false);
+
         RefreshSlotVisuals();
         return true;
+    }
+
+    private FurnaceInventoryData GetOrCreateFurnaceData(Vector3Int furnaceBlock)
+    {
+        if (!furnaceStorage.TryGetValue(furnaceBlock, out FurnaceInventoryData data) || data == null)
+        {
+            data = new FurnaceInventoryData();
+            furnaceStorage[furnaceBlock] = data;
+        }
+
+        return data;
+    }
+
+    private void SaveActiveFurnaceFromSlots()
+    {
+        if (!IsWorldFurnaceOpen)
+            return;
+
+        FurnaceInventoryData data = GetOrCreateFurnaceData(activeFurnaceBlock);
+        CopySlotToData(inputSlot, out data.InputItem, out data.InputAmount);
+        CopySlotToData(fuelSlot, out data.FuelItem, out data.FuelAmount);
+        CopySlotToData(outputSlot, out data.OutputItem, out data.OutputAmount);
+        data.CookTimer = cookTimer;
+        data.BurnTimer = burnTimer;
+        data.CurrentFuelDuration = currentFuelDuration;
+        data.ActiveRecipe = activeRecipe;
+    }
+
+    private void LoadFurnaceIntoSlots(FurnaceInventoryData data)
+    {
+        if (data == null)
+            return;
+
+        suppressSlotCallbacks = true;
+        try
+        {
+            SetSlotContents(inputSlot, data.InputItem, data.InputAmount);
+            SetSlotContents(fuelSlot, data.FuelItem, data.FuelAmount);
+            SetSlotContents(outputSlot, data.OutputItem, data.OutputAmount);
+        }
+        finally
+        {
+            suppressSlotCallbacks = false;
+        }
+    }
+
+    private void RefreshActiveFurnaceSlotsIfNeeded(Vector3Int furnaceBlock, FurnaceInventoryData data)
+    {
+        if (!IsWorldFurnaceOpen || activeFurnaceBlock != furnaceBlock)
+            return;
+
+        LoadFurnaceIntoSlots(data);
+        SyncActiveStateFromData(data);
+        RefreshSlotVisuals();
+    }
+
+    private void RefreshActiveFurnaceStateAfterSlotMutation()
+    {
+        if (!IsWorldFurnaceOpen)
+            return;
+
+        SaveActiveFurnaceFromSlots();
+        FurnaceInventoryData data = GetOrCreateFurnaceData(activeFurnaceBlock);
+        RefreshFurnaceRecipeState(data);
+        SyncActiveStateFromData(data);
+    }
+
+    private void SyncActiveStateFromData(FurnaceInventoryData data)
+    {
+        activeRecipe = data != null ? data.ActiveRecipe : null;
+        cookTimer = data != null ? data.CookTimer : 0f;
+        burnTimer = data != null ? data.BurnTimer : 0f;
+        currentFuelDuration = data != null ? data.CurrentFuelDuration : 0f;
+    }
+
+    private static void CopySlotToData(Slot slot, out Item item, out int amount)
+    {
+        if (slot == null || slot.IsEmpty)
+        {
+            item = null;
+            amount = 0;
+            return;
+        }
+
+        item = slot.item;
+        amount = Mathf.Max(0, slot.amount);
+    }
+
+    private static void SetSlotContents(Slot slot, Item item, int amount)
+    {
+        if (slot == null)
+            return;
+
+        if (item != null && amount > 0)
+            slot.SetContents(item, amount);
+        else
+            slot.Clear();
+    }
+
+    private static int InsertIntoFurnaceDataSlot(
+        ref Item slotItem,
+        ref int slotAmount,
+        Item item,
+        int amount,
+        int maxSlotAmount = int.MaxValue)
+    {
+        if (item == null || amount <= 0)
+            return amount;
+
+        int stackLimit = ResolveFurnaceSlotLimit(item, maxSlotAmount);
+        if (slotItem == null || slotAmount <= 0)
+        {
+            int moved = Mathf.Min(stackLimit, amount);
+            slotItem = item;
+            slotAmount = moved;
+            return amount - moved;
+        }
+
+        if (slotItem != item)
+            return amount;
+
+        int freeSpace = Mathf.Max(0, stackLimit - slotAmount);
+        int addNow = Mathf.Min(freeSpace, amount);
+        if (addNow <= 0)
+            return amount;
+
+        slotAmount += addNow;
+        return amount - addNow;
+    }
+
+    private static int CountRemainingAfterFurnaceDataSlotInsert(
+        Item slotItem,
+        int slotAmount,
+        Item item,
+        int amount,
+        int maxSlotAmount)
+    {
+        if (item == null || amount <= 0)
+            return amount;
+
+        int stackLimit = ResolveFurnaceSlotLimit(item, maxSlotAmount);
+        if (slotItem == null || slotAmount <= 0)
+            return amount - Mathf.Min(stackLimit, amount);
+
+        if (slotItem != item)
+            return amount;
+
+        int freeSpace = Mathf.Max(0, stackLimit - slotAmount);
+        return amount - Mathf.Min(freeSpace, amount);
+    }
+
+    private static int ResolveFurnaceSlotLimit(Item item, int maxSlotAmount)
+    {
+        int itemStackLimit = item != null ? Mathf.Max(1, item.maxStack) : 1;
+        int configuredLimit = maxSlotAmount > 0 ? maxSlotAmount : itemStackLimit;
+        return Mathf.Max(1, Mathf.Min(itemStackLimit, configuredLimit));
+    }
+
+    private static int RemoveFromFurnaceDataSlot(ref Item slotItem, ref int slotAmount, int amountToRemove)
+    {
+        if (amountToRemove <= 0 || slotItem == null || slotAmount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, slotAmount);
+        slotAmount -= removed;
+        if (slotAmount <= 0)
+        {
+            slotItem = null;
+            slotAmount = 0;
+        }
+
+        return removed;
     }
 
     private static bool IsWoodFuelBlock(BlockType blockType)
@@ -815,5 +1351,19 @@ public class FurnaceUIController : MonoBehaviour
     {
         if (debugLogs)
             Debug.Log($"[FurnaceUIController] {message}");
+    }
+
+    private sealed class FurnaceInventoryData
+    {
+        public Item InputItem;
+        public int InputAmount;
+        public Item FuelItem;
+        public int FuelAmount;
+        public Item OutputItem;
+        public int OutputAmount;
+        public FurnaceRecipeSO ActiveRecipe;
+        public float CookTimer;
+        public float BurnTimer;
+        public float CurrentFuelDuration;
     }
 }

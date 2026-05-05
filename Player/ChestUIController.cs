@@ -205,6 +205,11 @@ public class ChestUIController : MonoBehaviour
 
     public bool TryTakeItemStackFromChest(Vector3Int chestBlock, int maxAmount, out Item item, out int amount)
     {
+        return TryTakeItemStackFromChest(chestBlock, maxAmount, null, out item, out amount);
+    }
+
+    public bool TryTakeItemStackFromChest(Vector3Int chestBlock, int maxAmount, Item preferredItem, out Item item, out int amount)
+    {
         item = null;
         amount = 0;
 
@@ -225,6 +230,9 @@ public class ChestUIController : MonoBehaviour
             if (slotItem == null || slotAmount <= 0)
                 continue;
 
+            if (preferredItem != null && slotItem != preferredItem)
+                continue;
+
             amount = Mathf.Min(maxAmount, slotAmount);
             item = slotItem;
             data.Amounts[i] = slotAmount - amount;
@@ -235,6 +243,49 @@ public class ChestUIController : MonoBehaviour
             }
 
             RefreshActiveChestSlotsIfNeeded(chestBlock, data);
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool TryPeekItemStackFromChest(Vector3Int chestBlock, int maxAmount, out Item item, out int amount)
+    {
+        return TryPeekItemStackFromChest(chestBlock, maxAmount, null, out item, out amount);
+    }
+
+    public bool TryPeekItemStackFromChest(
+        Vector3Int chestBlock,
+        int maxAmount,
+        System.Predicate<Item> itemFilter,
+        out Item item,
+        out int amount)
+    {
+        item = null;
+        amount = 0;
+
+        if (maxAmount <= 0 || !IsChestBlockInWorld(chestBlock))
+            return false;
+
+        if (IsChestOpen && activeChestBlock == chestBlock)
+            SaveActiveChestFromSlots();
+
+        if (!chestStorage.TryGetValue(chestBlock, out ChestInventoryData data) || data == null)
+            return false;
+
+        data.EnsureSize(ChestSlotCount);
+        for (int i = 0; i < data.Items.Length; i++)
+        {
+            Item slotItem = data.Items[i];
+            int slotAmount = data.Amounts[i];
+            if (slotItem == null || slotAmount <= 0)
+                continue;
+
+            if (itemFilter != null && !itemFilter(slotItem))
+                continue;
+
+            item = slotItem;
+            amount = Mathf.Min(maxAmount, slotAmount);
             return true;
         }
 

@@ -147,6 +147,13 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         BlockTextureMapping value = mapping.Value;
+        if (value.renderAsDynamicPrefab)
+        {
+            BlockPlacementAxis dynamicPlacementAxis = world.GetPlacementAxisAt(pos, blockType);
+            bounds = BlockShapeUtility.GetWorldBounds(pos, blockType, value, dynamicPlacementAxis);
+            return true;
+        }
+
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return false;
 
@@ -411,6 +418,26 @@ public class BlockSelector : MonoBehaviour
                 return true;
             }
 
+            if (TryHitOverflowingNeighborDynamicBlock(
+                    ray,
+                    maxDistance,
+                    voxel,
+                    lastNormal,
+                    ignoreNonSolidBlocksForPlacement,
+                    out Vector3Int dynamicBlock,
+                    out BlockType dynamicType,
+                    out Vector3Int dynamicNormal,
+                    out Vector3 dynamicPoint))
+            {
+                hitBlock = dynamicBlock;
+                hitType = dynamicType;
+                hitNormal = dynamicNormal;
+                hitPoint = dynamicPoint;
+                isBillboardHit = false;
+                billboardGroundPos = new Vector3Int(int.MinValue, 0, 0);
+                return true;
+            }
+
             if (!ignoreNonSolidBlocksForPlacement &&
                 hasLoadedBlock &&
                 TryHitGrassBillboardInVoxel(
@@ -470,7 +497,8 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
-        return mapping != null && BlockShapeUtility.UsesCustomMesh(mapping.Value);
+        return mapping != null &&
+               (mapping.Value.renderAsDynamicPrefab || BlockShapeUtility.UsesCustomMesh(mapping.Value));
     }
 
     private bool TryHitCustomBlock(
@@ -490,11 +518,20 @@ public class BlockSelector : MonoBehaviour
             return false;
 
         BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
-        if (mapping == null || !BlockShapeUtility.UsesCustomMesh(mapping.Value))
+        if (mapping == null ||
+            (!mapping.Value.renderAsDynamicPrefab && !BlockShapeUtility.UsesCustomMesh(mapping.Value)))
+        {
             return false;
+        }
 
         BlockTextureMapping value = mapping.Value;
         BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(voxel, blockType);
+        if (value.renderAsDynamicPrefab)
+        {
+            Bounds bounds = BlockShapeUtility.GetWorldBounds(voxel, blockType, value, placementAxis);
+            return TryHitShapeBox(ray, maxDistance, bounds, lastNormal, out _, out hitNormal, out hitPoint);
+        }
+
         switch (BlockShapeUtility.GetEffectiveRenderShape(value))
         {
             case BlockRenderShape.Cuboid:
@@ -709,6 +746,99 @@ public class BlockSelector : MonoBehaviour
                             out Vector3Int candidateNormal,
                             out Vector3 candidatePoint,
                             out float candidateDistance) ||
+                        candidateDistance >= bestDistance)
+                    {
+                        continue;
+                    }
+
+                    bestDistance = candidateDistance;
+                    hitBlock = candidatePos;
+                    hitType = candidateType;
+                    hitNormal = candidateNormal;
+                    hitPoint = candidatePoint;
+                    foundHit = true;
+                }
+            }
+        }
+
+        return foundHit;
+    }
+
+    private bool TryHitOverflowingNeighborDynamicBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        Vector3Int lastNormal,
+        bool ignoreNonSolidBlocksForPlacement,
+        out Vector3Int hitBlock,
+        out BlockType hitType,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        hitBlock = default;
+        hitType = BlockType.Air;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        Vector3Int searchRadius = world.blockData.runtimeDynamicBlockOverflowSearchRadius;
+        if (searchRadius == Vector3Int.zero)
+            return false;
+
+        Bounds voxelBounds = new Bounds(voxel + Vector3.one * 0.5f, Vector3.one);
+        float bestDistance = float.PositiveInfinity;
+        bool foundHit = false;
+
+        for (int y = -searchRadius.y; y <= searchRadius.y; y++)
+        {
+            for (int z = -searchRadius.z; z <= searchRadius.z; z++)
+            {
+                for (int x = -searchRadius.x; x <= searchRadius.x; x++)
+                {
+                    Vector3Int candidatePos = voxel + new Vector3Int(x, y, z);
+                    if (candidatePos == voxel)
+                        continue;
+
+                    if (!world.TryGetLoadedBlockAt(candidatePos, out BlockType candidateType) ||
+                        candidateType == BlockType.Air ||
+                        world.IsLiquidBlock(candidateType))
+                    {
+                        continue;
+                    }
+
+                    if (ignoreNonSolidBlocksForPlacement &&
+                        ShouldIgnoreNonSolidPlacementHit(world, candidateType))
+                    {
+                        continue;
+                    }
+
+                    BlockTextureMapping? mappingResult = world.blockData.GetMapping(candidateType);
+                    if (mappingResult == null)
+                        continue;
+
+                    BlockTextureMapping mapping = mappingResult.Value;
+                    if (!mapping.renderAsDynamicPrefab ||
+                        !BlockShapeUtility.HasExpandedDynamicOccupancy(mapping))
+                    {
+                        continue;
+                    }
+
+                    BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(candidatePos, candidateType);
+                    Bounds candidateBounds = BlockShapeUtility.GetWorldBounds(candidatePos, candidateType, mapping, placementAxis);
+                    if (!candidateBounds.Intersects(voxelBounds))
+                        continue;
+
+                    if (!TryHitShapeBox(
+                            ray,
+                            maxDistance,
+                            candidateBounds,
+                            lastNormal,
+                            out float candidateDistance,
+                            out Vector3Int candidateNormal,
+                            out Vector3 candidatePoint) ||
                         candidateDistance >= bestDistance)
                     {
                         continue;

@@ -35,6 +35,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     private const float MinecraftNetheriteToolSpeed = 9f;
     private const float MinecraftGoldenToolSpeed = 12f;
     private const float BreakVisualDefaultAOCurveExponent = 1.12f;
+    private const float DynamicOccupancyOverlapEpsilon = 0.001f;
     private static readonly Vector3Int[] BreakVisualHorizontalLightDirections =
     {
         Vector3Int.right,
@@ -2216,6 +2217,12 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!world.CanBlockStayAt(placePos, placedBlockType))
             return false;
 
+        if (!CanPlaceDynamicBlockFootprintAt(placePos, placedBlockType))
+            return false;
+
+        if (DoesPlacementOverlapExistingDynamicBlock(placePos, placedBlockType, placementAxis))
+            return false;
+
         if (preventPlaceInsidePlayer &&
             ShouldPreventPlacementInsidePlayer(placedBlockType) &&
             IsBlockIntersectingPlayer(placePos, placedBlockType, placementAxis))
@@ -2508,6 +2515,104 @@ public class PlayerBlockBreaker : MonoBehaviour
         return value.isSolid && !value.isEmpty && !value.isLiquid;
     }
 
+    private bool CanPlaceDynamicBlockFootprintAt(Vector3Int origin, BlockType blockType)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return true;
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return true;
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        if (!mapping.renderAsDynamicPrefab)
+            return true;
+
+        int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
+        int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
+        for (int y = 0; y < verticalBlocks; y++)
+        {
+            for (int z = 0; z < horizontalBlocks; z++)
+            {
+                for (int x = 0; x < horizontalBlocks; x++)
+                {
+                    Vector3Int pos = origin + new Vector3Int(x, y, z);
+                    if (pos == origin)
+                        continue;
+
+                    if (world.GetBlockAt(pos) != BlockType.Air)
+                        return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private bool DoesPlacementOverlapExistingDynamicBlock(
+        Vector3Int placePos,
+        BlockType blockType,
+        BlockPlacementAxis placementAxis)
+    {
+        World world = World.Instance;
+        if (world == null || world.blockData == null)
+            return false;
+
+        Vector3Int dynamicSearchRadius = world.blockData.runtimeDynamicBlockOverflowSearchRadius;
+        if (dynamicSearchRadius == Vector3Int.zero)
+            return false;
+
+        Bounds placementBounds = ResolveBlockBounds(placePos, blockType, placementAxis);
+        Vector3Int min = Vector3Int.FloorToInt(placementBounds.min) - dynamicSearchRadius;
+        Vector3Int max = Vector3Int.CeilToInt(placementBounds.max) + dynamicSearchRadius;
+
+        for (int y = min.y; y <= max.y; y++)
+        {
+            for (int z = min.z; z <= max.z; z++)
+            {
+                for (int x = min.x; x <= max.x; x++)
+                {
+                    Vector3Int candidatePos = new Vector3Int(x, y, z);
+                    if (!world.TryGetLoadedBlockAt(candidatePos, out BlockType candidateType) ||
+                        candidateType == BlockType.Air ||
+                        world.IsLiquidBlock(candidateType))
+                    {
+                        continue;
+                    }
+
+                    BlockTextureMapping? mappingResult = world.blockData.GetMapping(candidateType);
+                    if (mappingResult == null)
+                        continue;
+
+                    BlockTextureMapping mapping = mappingResult.Value;
+                    if (!mapping.renderAsDynamicPrefab ||
+                        !BlockShapeUtility.HasExpandedDynamicOccupancy(mapping))
+                    {
+                        continue;
+                    }
+
+                    BlockPlacementAxis candidateAxis = world.GetPlacementAxisAt(candidatePos, candidateType);
+                    Bounds candidateBounds = BlockShapeUtility.GetWorldBounds(candidatePos, candidateType, mapping, candidateAxis);
+                    if (BoundsOverlapWithVolume(placementBounds, candidateBounds))
+                        return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static bool BoundsOverlapWithVolume(Bounds a, Bounds b)
+    {
+        return a.min.x < b.max.x - DynamicOccupancyOverlapEpsilon &&
+               a.max.x > b.min.x + DynamicOccupancyOverlapEpsilon &&
+               a.min.y < b.max.y - DynamicOccupancyOverlapEpsilon &&
+               a.max.y > b.min.y + DynamicOccupancyOverlapEpsilon &&
+               a.min.z < b.max.z - DynamicOccupancyOverlapEpsilon &&
+               a.max.z > b.min.z + DynamicOccupancyOverlapEpsilon;
+    }
+
     private bool IsBlockIntersectingPlayer(Vector3Int placePos, BlockType blockType, BlockPlacementAxis placementAxis)
     {
         CharacterController characterController = GetComponent<CharacterController>();
@@ -2647,6 +2752,9 @@ public class PlayerBlockBreaker : MonoBehaviour
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
 
         BlockTextureMapping value = mapping.Value;
+        if (value.renderAsDynamicPrefab)
+            return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value, placementAxis);
+
         if (!BlockShapeUtility.UsesCustomMesh(value))
             return new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
 

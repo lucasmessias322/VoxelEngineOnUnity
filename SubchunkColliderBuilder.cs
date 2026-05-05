@@ -206,7 +206,7 @@ internal sealed class SubchunkColliderBuilder
                     int localIndex = x + localYBase + localZBase;
                     occupancyBuffer[localIndex >> 6] |= 1UL << (localIndex & 63);
 
-                    if (mapping.renderAsDynamicPrefab ||
+                    if (!mapping.renderAsDynamicPrefab &&
                         BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Cube)
                     {
                         solids[localIndex] = true;
@@ -516,11 +516,21 @@ internal sealed class SubchunkColliderBuilder
                     if (!TryGetCollidableMapping(blockType, blockMappings, out BlockTextureMapping mapping))
                         continue;
 
+                    Vector3Int localBlockPos = new Vector3Int(x, worldY, z);
                     BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
-                    if (mapping.renderAsDynamicPrefab || shape == BlockRenderShape.Cube)
+                    if (mapping.renderAsDynamicPrefab)
+                    {
+                        colliderCount = AddShapeColliderBox(
+                            owner,
+                            colliderCount,
+                            localBlockPos,
+                            BlockShapeUtility.GetDynamicOccupancyBox(mapping));
+                        continue;
+                    }
+
+                    if (shape == BlockRenderShape.Cube)
                         continue;
 
-                    Vector3Int localBlockPos = new Vector3Int(x, worldY, z);
                     Vector3Int worldPos = new Vector3Int(
                         chunkCoord.x * Chunk.SizeX + x,
                         worldY,

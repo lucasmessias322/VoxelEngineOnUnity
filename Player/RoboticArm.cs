@@ -28,13 +28,36 @@ public class RoboticArm : DynamicVoxelBlock
     [SerializeField, Min(0f)] private float releasedDropIgnoreSeconds = 0.75f;
     [SerializeField] private bool requireInitialWorldReady = true;
 
+    [Header("Factorio Style Transfer")]
+    [Tooltip("Quantidade maxima que o braco pega e carrega por ciclo. Use 1 para o comportamento padrao do braco do Factorio.")]
+    [SerializeField, Min(1)] private int itemsPerGrab = 1;
+    [Tooltip("Impede o braco de passar do limite configurado no slot de input da fornalha.")]
+    [SerializeField] private bool limitFurnaceInputFill = true;
+    [Tooltip("Quantidade maxima que o braco deixa no slot de input da fornalha.")]
+    [SerializeField, Min(1)] private int maxFurnaceInputItems = 5;
+    [Tooltip("Impede o braco de passar do limite configurado no slot de combustivel da fornalha.")]
+    [SerializeField] private bool limitFurnaceFuelFill = true;
+    [Tooltip("Quantidade maxima que o braco deixa no slot de combustivel da fornalha.")]
+    [SerializeField, Min(1)] private int maxFurnaceFuelItems = 5;
+
     [Header("Chest Transfer")]
     [SerializeField] private bool enableChestExtraction = true;
     [SerializeField] private bool enableChestInsertion = true;
-    [Tooltip("Quantidade maxima de itens/blocos retirada do bau em cada ciclo do braco.")]
-    [SerializeField, Min(1)] private int itemsPerChestGrab = 1;
+
+    [Header("Furnace Transfer")]
+    [SerializeField] private bool enableFurnaceExtraction = true;
+    [SerializeField] private bool enableFurnaceInsertion = true;
 
     [Header("Animation Events")]
+    [SerializeField] private bool playTransferAnimation = true;
+    [Tooltip("Quando ligado, o proprio braco chama Grab/Drop pelos tempos abaixo. Os eventos da animacao ainda podem chamar as mesmas funcoes, sem duplicar a acao.")]
+    [SerializeField] private bool useTimedTransferEvents = true;
+    [Tooltip("Tempo em segundos desde o inicio do ciclo para pegar o item.")]
+    [SerializeField, Min(0f)] private float grabEventTimeSeconds = 0.17f;
+    [Tooltip("Tempo em segundos desde o inicio do ciclo para soltar/inserir o item.")]
+    [SerializeField, Min(0f)] private float releaseEventTimeSeconds = 0.67f;
+    [Tooltip("Tempo total do ciclo antes do braco voltar a procurar outro item e desligar o bool da animacao.")]
+    [SerializeField, Min(0.01f)] private float transferCycleDurationSeconds = 1f;
     [SerializeField, Min(0.01f)] private float scanIntervalSeconds = 0.2f;
     [SerializeField, Min(0f)] private float initialDelaySeconds = 0.25f;
     [SerializeField, Min(0.01f)] private float cycleCooldownSeconds = 0.35f;
@@ -60,6 +83,9 @@ public class RoboticArm : DynamicVoxelBlock
     private IRoboticArmGrabbable recentlyReleasedDrop;
     private Vector3Int activeTransferForward = Vector3Int.forward;
     private bool transferInProgress;
+    private bool grabEventProcessed;
+    private bool releaseEventProcessed;
+    private float transferStartTime;
     private float nextScanTime;
     private float recentlyReleasedDropIgnoreUntil;
 
@@ -98,7 +124,10 @@ public class RoboticArm : DynamicVoxelBlock
     private void Update()
     {
         if (transferInProgress)
+        {
+            UpdateTransferTimeline();
             return;
+        }
 
         if (Time.time < nextScanTime)
             return;
@@ -109,7 +138,11 @@ public class RoboticArm : DynamicVoxelBlock
             return;
         }
 
-        if (TryFindDropInFront(out IRoboticArmGrabbable targetDrop))
+        if (TryFindFurnaceOutputInFront(out IRoboticArmGrabbable furnaceItem))
+        {
+            BeginTransfer(furnaceItem);
+        }
+        else if (TryFindDropInFront(out IRoboticArmGrabbable targetDrop))
         {
             BeginTransfer(targetDrop);
         }
@@ -125,22 +158,12 @@ public class RoboticArm : DynamicVoxelBlock
 
     public void GrabDropFromAnimation()
     {
-        if (!transferInProgress)
-            return;
-
-        if (!TryAttachPendingDrop())
-            CancelTransfer(releaseHeldDrop: false);
+        TriggerGrabEvent();
     }
 
     public void ReleaseDropFromAnimation()
     {
-        if (!transferInProgress)
-            return;
-
-        if (heldDrop != null)
-            ReleaseHeldDropBehind();
-
-        FinishTransfer();
+        TriggerReleaseEvent();
     }
 
     private void BeginTransfer(IRoboticArmGrabbable targetDrop)
@@ -149,6 +172,10 @@ public class RoboticArm : DynamicVoxelBlock
         {
             if (targetDrop is RoboticArmChestItemTransfer chestTransfer)
                 chestTransfer.DiscardIfUnused();
+            else if (targetDrop is RoboticArmFurnaceOutputTransfer furnaceTransfer)
+                furnaceTransfer.DiscardIfUnused();
+            else if (targetDrop is RoboticArmLimitedStackPickup limitedStackTransfer)
+                limitedStackTransfer.DiscardIfUnused();
 
             nextScanTime = Time.time + scanIntervalSeconds;
             return;
@@ -164,7 +191,74 @@ public class RoboticArm : DynamicVoxelBlock
         heldDrop = null;
         activeTransferForward = ResolveForwardInt();
         transferInProgress = true;
+        grabEventProcessed = false;
+        releaseEventProcessed = false;
+        transferStartTime = Time.time;
         SetGrabDropAnimation(true);
+    }
+
+    private void UpdateTransferTimeline()
+    {
+        if (!transferInProgress)
+            return;
+
+        float elapsed = Time.time - transferStartTime;
+        if (useTimedTransferEvents)
+        {
+            if (!grabEventProcessed && elapsed >= Mathf.Max(0f, grabEventTimeSeconds))
+                TriggerGrabEvent();
+
+            if (transferInProgress &&
+                grabEventProcessed &&
+                !releaseEventProcessed &&
+                elapsed >= ResolveReleaseEventTime())
+            {
+                TriggerReleaseEvent();
+            }
+        }
+
+        if (transferInProgress &&
+            releaseEventProcessed &&
+            elapsed >= ResolveTransferCycleDuration())
+        {
+            FinishTransfer();
+        }
+    }
+
+    private float ResolveReleaseEventTime()
+    {
+        return Mathf.Max(Mathf.Max(0f, grabEventTimeSeconds), Mathf.Max(0f, releaseEventTimeSeconds));
+    }
+
+    private float ResolveTransferCycleDuration()
+    {
+        return Mathf.Max(ResolveReleaseEventTime(), Mathf.Max(0.01f, transferCycleDurationSeconds));
+    }
+
+    private void TriggerGrabEvent()
+    {
+        if (!transferInProgress || grabEventProcessed)
+            return;
+
+        grabEventProcessed = true;
+        if (!TryAttachPendingDrop())
+            CancelTransfer(releaseHeldDrop: false);
+    }
+
+    private void TriggerReleaseEvent()
+    {
+        if (!transferInProgress || releaseEventProcessed)
+            return;
+
+        if (!grabEventProcessed)
+            TriggerGrabEvent();
+
+        if (!transferInProgress)
+            return;
+
+        releaseEventProcessed = true;
+        if (heldDrop != null)
+            ReleaseHeldDropBehind();
     }
 
     private bool TryAttachPendingDrop()
@@ -212,6 +306,9 @@ public class RoboticArm : DynamicVoxelBlock
         IRoboticArmGrabbable releasedDrop = heldDrop;
         heldDrop = null;
 
+        if (TryInsertHeldDropIntoFurnaceBehind(releasedDrop))
+            return;
+
         if (TryInsertHeldDropIntoChestBehind(releasedDrop))
             return;
 
@@ -236,6 +333,9 @@ public class RoboticArm : DynamicVoxelBlock
     {
         pendingDrop = null;
         transferInProgress = false;
+        grabEventProcessed = false;
+        releaseEventProcessed = false;
+        transferStartTime = 0f;
         SetGrabDropAnimation(false);
         nextScanTime = Time.time + Mathf.Max(0.01f, cycleCooldownSeconds);
     }
@@ -247,9 +347,16 @@ public class RoboticArm : DynamicVoxelBlock
 
         if (pendingDrop is RoboticArmChestItemTransfer pendingChestTransfer)
             pendingChestTransfer.DiscardIfUnused();
+        else if (pendingDrop is RoboticArmFurnaceOutputTransfer pendingFurnaceTransfer)
+            pendingFurnaceTransfer.DiscardIfUnused();
+        else if (pendingDrop is RoboticArmLimitedStackPickup pendingLimitedStackTransfer)
+            pendingLimitedStackTransfer.DiscardIfUnused();
 
         pendingDrop = null;
         transferInProgress = false;
+        grabEventProcessed = false;
+        releaseEventProcessed = false;
+        transferStartTime = 0f;
         SetGrabDropAnimation(false);
         nextScanTime = Time.time + Mathf.Max(0.01f, scanIntervalSeconds);
     }
@@ -268,7 +375,10 @@ public class RoboticArm : DynamicVoxelBlock
         for (int i = 0; i < itemDrops.Length; i++)
             TryUseCloserDrop(itemDrops[i], pickupCenter, ref grabbable, ref bestDistanceSqr);
 
-        return grabbable != null;
+        if (grabbable == null)
+            return false;
+
+        return TryPrepareDropPickup(grabbable, out grabbable);
     }
 
     private bool TryFindChestItemInFront(out IRoboticArmGrabbable grabbable)
@@ -288,18 +398,121 @@ public class RoboticArm : DynamicVoxelBlock
             return false;
 
         Vector3Int chestBlock = ResolvePickupBlockPosition();
+        int grabAmount = ResolveItemsPerGrab();
         if (world.GetBlockAt(chestBlock) != BlockType.chest ||
             !chestUI.HasItemStackInChest(chestBlock))
         {
             return false;
         }
 
+        Item preferredChestItem = null;
+        if (TryResolveFurnaceBehind(out FurnaceUIController furnaceBehindUI, out Vector3Int furnaceBehindBlock))
+        {
+            if (!chestUI.TryPeekItemStackFromChest(
+                    chestBlock,
+                    grabAmount,
+                    item => furnaceBehindUI.GetInsertableItemCountForFurnace(
+                        furnaceBehindBlock,
+                        item,
+                        grabAmount,
+                        ResolveFurnaceInputInsertionLimit(),
+                        ResolveFurnaceFuelInsertionLimit()) > 0,
+                    out Item peekItem,
+                    out int peekAmount))
+            {
+                return false;
+            }
+
+            int acceptedAmount = furnaceBehindUI.GetInsertableItemCountForFurnace(
+                furnaceBehindBlock,
+                peekItem,
+                Mathf.Min(grabAmount, peekAmount),
+                ResolveFurnaceInputInsertionLimit(),
+                ResolveFurnaceFuelInsertionLimit());
+            if (acceptedAmount <= 0)
+                return false;
+
+            preferredChestItem = peekItem;
+            grabAmount = Mathf.Min(grabAmount, acceptedAmount);
+        }
+
         GameObject transferObject = new GameObject($"RoboticArmChestTransfer_{chestBlock.x}_{chestBlock.y}_{chestBlock.z}");
         transferObject.transform.position = ResolvePickupCenter();
 
         RoboticArmChestItemTransfer transfer = transferObject.AddComponent<RoboticArmChestItemTransfer>();
-        transfer.Initialize(chestUI, chestBlock, Mathf.Max(1, itemsPerChestGrab));
+        transfer.Initialize(chestUI, chestBlock, grabAmount, preferredChestItem);
         grabbable = transfer;
+        return true;
+    }
+
+    private bool TryFindFurnaceOutputInFront(out IRoboticArmGrabbable grabbable)
+    {
+        grabbable = null;
+        if (!enableFurnaceExtraction)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
+            ? FurnaceUIController.Instance
+            : FindAnyObjectByType<FurnaceUIController>();
+        if (furnaceUI == null)
+            return false;
+
+        Vector3Int furnaceBlock = ResolvePickupBlockPosition();
+        int grabAmount = ResolveItemsPerGrab();
+        if (world.GetBlockAt(furnaceBlock) != BlockType.StoneFurnance ||
+            !furnaceUI.HasOutputStackInFurnace(furnaceBlock))
+        {
+            return false;
+        }
+
+        if (TryResolveFurnaceBehind(out FurnaceUIController furnaceBehindUI, out Vector3Int furnaceBehindBlock) &&
+            furnaceUI.TryPeekOutputStackFromFurnace(furnaceBlock, grabAmount, out Item peekItem, out int peekAmount))
+        {
+            int acceptedAmount = furnaceBehindUI.GetInsertableItemCountForFurnace(
+                furnaceBehindBlock,
+                peekItem,
+                Mathf.Min(grabAmount, peekAmount),
+                ResolveFurnaceInputInsertionLimit(),
+                ResolveFurnaceFuelInsertionLimit());
+            if (acceptedAmount <= 0)
+                return false;
+
+            grabAmount = Mathf.Min(grabAmount, acceptedAmount);
+        }
+
+        GameObject transferObject = new GameObject($"RoboticArmFurnaceOutputTransfer_{furnaceBlock.x}_{furnaceBlock.y}_{furnaceBlock.z}");
+        transferObject.transform.position = ResolvePickupCenter();
+
+        RoboticArmFurnaceOutputTransfer transfer = transferObject.AddComponent<RoboticArmFurnaceOutputTransfer>();
+        transfer.Initialize(furnaceUI, furnaceBlock, grabAmount);
+        grabbable = transfer;
+        return true;
+    }
+
+    private bool TryPrepareDropPickup(IRoboticArmGrabbable source, out IRoboticArmGrabbable prepared)
+    {
+        prepared = source;
+        if (source == null || source is not IRoboticArmItemStack sourceStack)
+            return source != null;
+
+        if (!sourceStack.TryGetRoboticArmItemStack(out Item item, out int amount))
+            return false;
+
+        int grabAmount = ResolveMaxGrabAmountForItem(item, amount);
+        if (grabAmount <= 0)
+            return false;
+
+        Transform sourceTransform = source.DropTransform;
+        GameObject transferObject = new GameObject($"RoboticArmLimitedPickup_{(item != null ? item.name : "Item")}");
+        transferObject.transform.position = sourceTransform != null ? sourceTransform.position : ResolvePickupCenter();
+
+        RoboticArmLimitedStackPickup transfer = transferObject.AddComponent<RoboticArmLimitedStackPickup>();
+        transfer.Initialize(source, sourceStack, grabAmount);
+        prepared = transfer;
         return true;
     }
 
@@ -315,6 +528,9 @@ public class RoboticArm : DynamicVoxelBlock
         if (ShouldIgnoreRecentlyReleasedDrop(candidate))
             return;
 
+        if (!CanUseDropForCurrentTarget(candidate))
+            return;
+
         Vector3 delta = candidate.DropTransform.position - pickupCenter;
         if (Mathf.Abs(delta.y) > pickupVerticalTolerance)
             return;
@@ -325,6 +541,17 @@ public class RoboticArm : DynamicVoxelBlock
 
         bestDistanceSqr = horizontalDistanceSqr;
         bestDrop = candidate;
+    }
+
+    private bool CanUseDropForCurrentTarget(IRoboticArmGrabbable candidate)
+    {
+        if (candidate is not IRoboticArmItemStack itemStack)
+            return true;
+
+        if (!itemStack.TryGetRoboticArmItemStack(out Item item, out int amount))
+            return false;
+
+        return ResolveMaxGrabAmountForItem(item, amount) > 0;
     }
 
     private bool CanOperate()
@@ -414,6 +641,91 @@ public class RoboticArm : DynamicVoxelBlock
 
         itemStack.RemoveFromRoboticArmStack(inserted);
         return remaining <= 0;
+    }
+
+    private bool TryInsertHeldDropIntoFurnaceBehind(IRoboticArmGrabbable grabbable)
+    {
+        if (!enableFurnaceInsertion || grabbable is not IRoboticArmItemStack itemStack)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int furnaceBlock = ResolveReleaseBlockPosition();
+        if (world.GetBlockAt(furnaceBlock) != BlockType.StoneFurnance)
+            return false;
+
+        FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
+            ? FurnaceUIController.Instance
+            : FindAnyObjectByType<FurnaceUIController>();
+        if (furnaceUI == null || !itemStack.TryGetRoboticArmItemStack(out Item item, out int amount))
+            return false;
+
+        int insertAmount = Mathf.Min(amount, ResolveItemsPerGrab());
+        int remaining = furnaceUI.InsertItemStackIntoFurnace(
+            furnaceBlock,
+            item,
+            insertAmount,
+            ResolveFurnaceInputInsertionLimit(),
+            ResolveFurnaceFuelInsertionLimit());
+        int inserted = insertAmount - remaining;
+        if (inserted <= 0)
+            return false;
+
+        itemStack.RemoveFromRoboticArmStack(inserted);
+        return remaining <= 0;
+    }
+
+    private int ResolveItemsPerGrab()
+    {
+        return Mathf.Max(1, itemsPerGrab);
+    }
+
+    private int ResolveFurnaceInputInsertionLimit()
+    {
+        return limitFurnaceInputFill ? Mathf.Max(1, maxFurnaceInputItems) : int.MaxValue;
+    }
+
+    private int ResolveFurnaceFuelInsertionLimit()
+    {
+        return limitFurnaceFuelFill ? Mathf.Max(1, maxFurnaceFuelItems) : int.MaxValue;
+    }
+
+    private int ResolveMaxGrabAmountForItem(Item item, int availableAmount)
+    {
+        if (item == null || availableAmount <= 0)
+            return 0;
+
+        int grabAmount = Mathf.Min(ResolveItemsPerGrab(), availableAmount);
+        if (grabAmount <= 0)
+            return 0;
+
+        if (!TryResolveFurnaceBehind(out FurnaceUIController furnaceUI, out Vector3Int furnaceBlock))
+            return grabAmount;
+
+        int acceptedAmount = furnaceUI.GetInsertableItemCountForFurnace(
+            furnaceBlock,
+            item,
+            grabAmount,
+            ResolveFurnaceInputInsertionLimit(),
+            ResolveFurnaceFuelInsertionLimit());
+        return Mathf.Min(grabAmount, acceptedAmount);
+    }
+
+    private bool TryResolveFurnaceBehind(out FurnaceUIController furnaceUI, out Vector3Int furnaceBlock)
+    {
+        furnaceUI = null;
+        furnaceBlock = ResolveReleaseBlockPosition();
+
+        World world = World.Instance;
+        if (world == null || world.GetBlockAt(furnaceBlock) != BlockType.StoneFurnance)
+            return false;
+
+        furnaceUI = FurnaceUIController.Instance != null
+            ? FurnaceUIController.Instance
+            : FindAnyObjectByType<FurnaceUIController>();
+        return furnaceUI != null;
     }
 
     private Vector3Int ResolveArmBlockPosition()
@@ -561,10 +873,211 @@ public class RoboticArm : DynamicVoxelBlock
 
     private void SetGrabDropAnimation(bool active)
     {
+        if (!playTransferAnimation)
+            active = false;
+
         if (!hasGrabDropAnimatorBool || animator == null)
             return;
 
         animator.SetBool(grabDropAnimatorId, active);
+    }
+}
+
+internal static class RoboticArmHeldItemVisual
+{
+    private static Material fallbackMaterial;
+
+    public static void Ensure(Transform root, Item item, string visualName)
+    {
+        if (root == null || item == null)
+            return;
+
+        if (TryCreateBlockVisual(root, item, visualName))
+            return;
+
+        CreateSpriteVisual(root, item, visualName);
+    }
+
+    private static bool TryCreateBlockVisual(Transform root, Item item, string visualName)
+    {
+        if (!BlockItemCatalog.TryGetBlockForItem(item, out BlockType blockType))
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Mesh mesh = BlockDrop.BuildBlockMesh(world, blockType, out int materialIndex);
+        if (mesh == null)
+            return false;
+
+        GameObject visualObject = CreateVisualObject(root, visualName);
+        MeshFilter meshFilter = visualObject.AddComponent<MeshFilter>();
+        meshFilter.sharedMesh = mesh;
+
+        MeshRenderer meshRenderer = visualObject.AddComponent<MeshRenderer>();
+        meshRenderer.sharedMaterial = ResolveMaterial(world, materialIndex);
+        meshRenderer.shadowCastingMode = UnityEngine.Rendering.ShadowCastingMode.On;
+        meshRenderer.receiveShadows = true;
+        return meshRenderer.sharedMaterial != null;
+    }
+
+    private static void CreateSpriteVisual(Transform root, Item item, string visualName)
+    {
+        GameObject visualObject = CreateVisualObject(root, visualName);
+        SpriteRenderer spriteRenderer = visualObject.AddComponent<SpriteRenderer>();
+        spriteRenderer.sprite = ItemIconResolver.ResolveForUI(item);
+        spriteRenderer.enabled = spriteRenderer.sprite != null;
+    }
+
+    private static GameObject CreateVisualObject(Transform root, string visualName)
+    {
+        GameObject visualObject = new GameObject(string.IsNullOrWhiteSpace(visualName) ? "HeldItemVisual" : visualName);
+        visualObject.transform.SetParent(root, false);
+        visualObject.transform.localPosition = Vector3.zero;
+        visualObject.transform.localRotation = Quaternion.identity;
+        visualObject.transform.localScale = Vector3.one;
+        return visualObject;
+    }
+
+    private static Material ResolveMaterial(World world, int preferredMaterialIndex)
+    {
+        if (world != null && world.Material != null && world.Material.Length > 0)
+        {
+            int clamped = Mathf.Clamp(preferredMaterialIndex, 0, world.Material.Length - 1);
+            if (world.Material[clamped] != null)
+                return world.Material[clamped];
+
+            for (int i = 0; i < world.Material.Length; i++)
+            {
+                if (world.Material[i] != null)
+                    return world.Material[i];
+            }
+        }
+
+        return GetFallbackMaterial();
+    }
+
+    private static Material GetFallbackMaterial()
+    {
+        if (fallbackMaterial != null)
+            return fallbackMaterial;
+
+        Shader shader = Shader.Find("Universal Render Pipeline/Lit");
+        if (shader == null)
+            shader = Shader.Find("Standard");
+        if (shader == null)
+            return null;
+
+        fallbackMaterial = new Material(shader)
+        {
+            name = "RoboticArmHeldItem_FallbackMaterial"
+        };
+        return fallbackMaterial;
+    }
+}
+
+internal sealed class RoboticArmLimitedStackPickup : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemStack
+{
+    private IRoboticArmGrabbable sourceGrabbable;
+    private IRoboticArmItemStack sourceStack;
+    private int maxAmount;
+    private Item item;
+    private int amount;
+    private bool isAttached;
+    private bool isReleased;
+
+    public Transform DropTransform => transform;
+
+    public bool CanBeGrabbedByRoboticArm =>
+        !isAttached &&
+        !isReleased &&
+        sourceGrabbable != null &&
+        sourceStack != null &&
+        sourceGrabbable.CanBeGrabbedByRoboticArm &&
+        sourceStack.TryGetRoboticArmItemStack(out Item sourceItem, out int sourceAmount) &&
+        sourceItem != null &&
+        sourceAmount > 0;
+
+    public void Initialize(IRoboticArmGrabbable source, IRoboticArmItemStack stack, int sourceMaxAmount)
+    {
+        sourceGrabbable = source;
+        sourceStack = stack;
+        maxAmount = Mathf.Max(1, sourceMaxAmount);
+    }
+
+    public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
+    {
+        if (parent == null || !CanBeGrabbedByRoboticArm)
+            return;
+
+        if (!sourceStack.TryGetRoboticArmItemStack(out Item sourceItem, out int sourceAmount))
+            return;
+
+        int amountToTake = Mathf.Min(maxAmount, sourceAmount);
+        int removed = sourceStack.RemoveFromRoboticArmStack(amountToTake);
+        if (removed <= 0)
+            return;
+
+        item = sourceItem;
+        amount = removed;
+        isAttached = true;
+        transform.SetParent(parent, false);
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.localScale = Vector3.one * Mathf.Max(0.01f, localScale);
+        EnsureHeldVisual();
+    }
+
+    public void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (isReleased)
+            return;
+
+        isReleased = true;
+        transform.SetParent(null, true);
+
+        if (item != null && amount > 0)
+            ChestUIController.TrySpawnItemStack(item, amount, worldPosition, throwDirection);
+
+        Destroy(gameObject);
+    }
+
+    public bool TryGetRoboticArmItemStack(out Item stackItem, out int stackAmount)
+    {
+        stackItem = item;
+        stackAmount = amount;
+        return !isReleased && stackItem != null && stackAmount > 0;
+    }
+
+    public int RemoveFromRoboticArmStack(int amountToRemove)
+    {
+        if (amountToRemove <= 0 || item == null || amount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, amount);
+        amount -= removed;
+        if (amount <= 0)
+        {
+            isReleased = true;
+            Destroy(gameObject);
+        }
+
+        return removed;
+    }
+
+    public void DiscardIfUnused()
+    {
+        if (isAttached)
+            return;
+
+        isReleased = true;
+        Destroy(gameObject);
+    }
+
+    private void EnsureHeldVisual()
+    {
+        RoboticArmHeldItemVisual.Ensure(transform, item, "HeldLimitedStackVisual");
     }
 }
 
@@ -573,11 +1086,11 @@ internal sealed class RoboticArmChestItemTransfer : MonoBehaviour, IRoboticArmGr
     private ChestUIController chestUI;
     private Vector3Int chestBlock;
     private int maxAmount;
+    private Item preferredItem;
     private Item item;
     private int amount;
     private bool isAttached;
     private bool isReleased;
-    private SpriteRenderer spriteRenderer;
 
     public Transform DropTransform => transform;
 
@@ -587,11 +1100,12 @@ internal sealed class RoboticArmChestItemTransfer : MonoBehaviour, IRoboticArmGr
         chestUI != null &&
         chestUI.HasItemStackInChest(chestBlock);
 
-    public void Initialize(ChestUIController ownerChestUI, Vector3Int sourceChestBlock, int sourceMaxAmount)
+    public void Initialize(ChestUIController ownerChestUI, Vector3Int sourceChestBlock, int sourceMaxAmount, Item sourcePreferredItem = null)
     {
         chestUI = ownerChestUI;
         chestBlock = sourceChestBlock;
         maxAmount = Mathf.Max(1, sourceMaxAmount);
+        preferredItem = sourcePreferredItem;
     }
 
     public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
@@ -599,7 +1113,7 @@ internal sealed class RoboticArmChestItemTransfer : MonoBehaviour, IRoboticArmGr
         if (parent == null || !CanBeGrabbedByRoboticArm)
             return;
 
-        if (!chestUI.TryTakeItemStackFromChest(chestBlock, maxAmount, out item, out amount))
+        if (!chestUI.TryTakeItemStackFromChest(chestBlock, maxAmount, preferredItem, out item, out amount))
             return;
 
         isAttached = true;
@@ -658,20 +1172,99 @@ internal sealed class RoboticArmChestItemTransfer : MonoBehaviour, IRoboticArmGr
 
     private void EnsureHeldVisual()
     {
-        if (item == null)
+        RoboticArmHeldItemVisual.Ensure(transform, item, "HeldChestItemVisual");
+    }
+}
+
+internal sealed class RoboticArmFurnaceOutputTransfer : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemStack
+{
+    private FurnaceUIController furnaceUI;
+    private Vector3Int furnaceBlock;
+    private int maxAmount;
+    private Item item;
+    private int amount;
+    private bool isAttached;
+    private bool isReleased;
+
+    public Transform DropTransform => transform;
+
+    public bool CanBeGrabbedByRoboticArm =>
+        !isAttached &&
+        !isReleased &&
+        furnaceUI != null &&
+        furnaceUI.HasOutputStackInFurnace(furnaceBlock);
+
+    public void Initialize(FurnaceUIController ownerFurnaceUI, Vector3Int sourceFurnaceBlock, int sourceMaxAmount)
+    {
+        furnaceUI = ownerFurnaceUI;
+        furnaceBlock = sourceFurnaceBlock;
+        maxAmount = Mathf.Max(1, sourceMaxAmount);
+    }
+
+    public void AttachToRoboticArm(Transform parent, Vector3 localPosition, Quaternion localRotation, float localScale)
+    {
+        if (parent == null || !CanBeGrabbedByRoboticArm)
             return;
 
-        if (spriteRenderer == null)
+        if (!furnaceUI.TryTakeOutputStackFromFurnace(furnaceBlock, maxAmount, out item, out amount))
+            return;
+
+        isAttached = true;
+        transform.SetParent(parent, false);
+        transform.localPosition = localPosition;
+        transform.localRotation = localRotation;
+        transform.localScale = Vector3.one * Mathf.Max(0.01f, localScale);
+        EnsureHeldVisual();
+    }
+
+    public void ReleaseFromRoboticArm(Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (isReleased)
+            return;
+
+        isReleased = true;
+        transform.SetParent(null, true);
+
+        if (item != null && amount > 0)
+            ChestUIController.TrySpawnItemStack(item, amount, worldPosition, throwDirection);
+
+        Destroy(gameObject);
+    }
+
+    public bool TryGetRoboticArmItemStack(out Item stackItem, out int stackAmount)
+    {
+        stackItem = item;
+        stackAmount = amount;
+        return !isReleased && stackItem != null && stackAmount > 0;
+    }
+
+    public int RemoveFromRoboticArmStack(int amountToRemove)
+    {
+        if (amountToRemove <= 0 || item == null || amount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amountToRemove, amount);
+        amount -= removed;
+        if (amount <= 0)
         {
-            GameObject visualObject = new GameObject("HeldChestItemVisual");
-            visualObject.transform.SetParent(transform, false);
-            visualObject.transform.localPosition = Vector3.zero;
-            visualObject.transform.localRotation = Quaternion.identity;
-            visualObject.transform.localScale = Vector3.one;
-            spriteRenderer = visualObject.AddComponent<SpriteRenderer>();
+            isReleased = true;
+            Destroy(gameObject);
         }
 
-        spriteRenderer.sprite = ItemIconResolver.ResolveForUI(item);
-        spriteRenderer.enabled = spriteRenderer.sprite != null;
+        return removed;
+    }
+
+    public void DiscardIfUnused()
+    {
+        if (isAttached)
+            return;
+
+        isReleased = true;
+        Destroy(gameObject);
+    }
+
+    private void EnsureHeldVisual()
+    {
+        RoboticArmHeldItemVisual.Ensure(transform, item, "HeldFurnaceItemVisual");
     }
 }
