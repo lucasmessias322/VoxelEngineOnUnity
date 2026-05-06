@@ -14,11 +14,16 @@ public static partial class MeshGenerator
         private struct ShapeFaceRect
         {
             public BlockFace face;
+            public BlockFace uvFace;
             public float plane;
             public float minA;
             public float maxA;
             public float minB;
             public float maxB;
+            public float sourceMinU;
+            public float sourceMaxU;
+            public float sourceMinV;
+            public float sourceMaxV;
             public int tileX;
             public int tileY;
             public bool tint;
@@ -1710,6 +1715,11 @@ public static partial class MeshGenerator
                 return;
 
             ResolveCuboidFace(box, localFace, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out Vector3 normal);
+            Vector2 uv0 = ResolveShapeProjectedUv(localFace, p0);
+            Vector2 uv1 = ResolveShapeProjectedUv(localFace, p1);
+            Vector2 uv2 = ResolveShapeProjectedUv(localFace, p2);
+            Vector2 uv3 = ResolveShapeProjectedUv(localFace, p3);
+            NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
 
             p0 = RotateCuboidPoint(p0, center, rotation);
             p1 = RotateCuboidPoint(p1, center, rotation);
@@ -1732,10 +1742,10 @@ public static partial class MeshGenerator
                 p1,
                 p2,
                 p3,
-                ResolveShapeProjectedUv(worldFace, p0),
-                ResolveShapeProjectedUv(worldFace, p1),
-                ResolveShapeProjectedUv(worldFace, p2),
-                ResolveShapeProjectedUv(worldFace, p3),
+                uv0,
+                uv1,
+                uv2,
+                uv3,
                 normal,
                 normal,
                 (p1 - p0).normalized,
@@ -2033,7 +2043,7 @@ public static partial class MeshGenerator
             if (cuboid.TryGetUvRectData(localFace, mapping, out Vector4 cuboidUvRectData))
                 explicitUvRectData = cuboidUvRectData;
 
-            AppendShapeFaceRect(ref faceRects, box, worldFace, tile, tint, true, explicitUvRectData);
+            AppendShapeFaceRect(ref faceRects, box, worldFace, tile, tint, true, explicitUvRectData, localFace);
         }
 
         private static void AppendShapeFaceRect(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
@@ -2048,14 +2058,20 @@ public static partial class MeshGenerator
             Vector2Int tile,
             bool tint,
             bool usesExplicitAppearance,
-            Vector4 explicitUvRectData)
+            Vector4 explicitUvRectData,
+            BlockFace uvFace = BlockFace.Side)
         {
+            if (uvFace == BlockFace.Side)
+                uvFace = face;
+
             switch (face)
             {
                 case BlockFace.Right:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Right,
+                        uvFace = uvFace,
                         plane = box.max.x,
                         minA = box.min.y,
                         maxA = box.max.y,
@@ -2066,13 +2082,17 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
 
                 case BlockFace.Left:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Left,
+                        uvFace = uvFace,
                         plane = box.min.x,
                         minA = box.min.y,
                         maxA = box.max.y,
@@ -2083,13 +2103,17 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
 
                 case BlockFace.Top:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Top,
+                        uvFace = uvFace,
                         plane = box.max.y,
                         minA = box.min.x,
                         maxA = box.max.x,
@@ -2100,13 +2124,17 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
 
                 case BlockFace.Bottom:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Bottom,
+                        uvFace = uvFace,
                         plane = box.min.y,
                         minA = box.min.x,
                         maxA = box.max.x,
@@ -2117,13 +2145,17 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
 
                 case BlockFace.Front:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Front,
+                        uvFace = uvFace,
                         plane = box.max.z,
                         minA = box.min.x,
                         maxA = box.max.x,
@@ -2134,13 +2166,17 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
 
                 case BlockFace.Back:
-                    faceRects.Add(new ShapeFaceRect
+                {
+                    ShapeFaceRect rect = new ShapeFaceRect
                     {
                         face = BlockFace.Back,
+                        uvFace = uvFace,
                         plane = box.min.z,
                         minA = box.min.x,
                         maxA = box.max.x,
@@ -2151,9 +2187,81 @@ public static partial class MeshGenerator
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
-                    });
+                    };
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
                     return;
+                }
             }
+        }
+
+        private static void AddShapeFaceRectWithSourceUv(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            ShapeFaceRect rect)
+        {
+            ResolveShapeFaceRectProjectedUvBounds(rect, out rect.sourceMinU, out rect.sourceMaxU, out rect.sourceMinV, out rect.sourceMaxV);
+            faceRects.Add(rect);
+        }
+
+        private static void ResolveShapeFaceRectProjectedUvBounds(
+            ShapeFaceRect rect,
+            out float minU,
+            out float maxU,
+            out float minV,
+            out float maxV)
+        {
+            Vector2 uv0;
+            Vector2 uv1;
+            Vector2 uv2;
+            Vector2 uv3;
+            switch (rect.face)
+            {
+                case BlockFace.Right:
+                    uv0 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.minA, rect.minB));
+                    uv1 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.maxA, rect.minB));
+                    uv2 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.maxA, rect.maxB));
+                    uv3 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.minA, rect.maxB));
+                    break;
+
+                case BlockFace.Left:
+                    uv0 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.minA, rect.maxB));
+                    uv1 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.maxA, rect.maxB));
+                    uv2 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.maxA, rect.minB));
+                    uv3 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.plane, rect.minA, rect.minB));
+                    break;
+
+                case BlockFace.Top:
+                    uv0 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.plane, rect.maxB));
+                    uv1 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.plane, rect.maxB));
+                    uv2 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.plane, rect.minB));
+                    uv3 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.plane, rect.minB));
+                    break;
+
+                case BlockFace.Bottom:
+                    uv0 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.plane, rect.minB));
+                    uv1 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.plane, rect.minB));
+                    uv2 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.plane, rect.maxB));
+                    uv3 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.plane, rect.maxB));
+                    break;
+
+                case BlockFace.Front:
+                    uv0 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.minB, rect.plane));
+                    uv1 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.maxA, rect.maxB, rect.plane));
+                    uv2 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.maxB, rect.plane));
+                    uv3 = ResolveShapeProjectedUv(rect.face, new Vector3(rect.minA, rect.minB, rect.plane));
+                    break;
+
+                default:
+                    uv0 = ResolveShapeProjectedUv(BlockFace.Back, new Vector3(rect.minA, rect.minB, rect.plane));
+                    uv1 = ResolveShapeProjectedUv(BlockFace.Back, new Vector3(rect.minA, rect.maxB, rect.plane));
+                    uv2 = ResolveShapeProjectedUv(BlockFace.Back, new Vector3(rect.maxA, rect.maxB, rect.plane));
+                    uv3 = ResolveShapeProjectedUv(BlockFace.Back, new Vector3(rect.maxA, rect.minB, rect.plane));
+                    break;
+            }
+
+            minU = math.min(math.min(uv0.x, uv1.x), math.min(uv2.x, uv3.x));
+            maxU = math.max(math.max(uv0.x, uv1.x), math.max(uv2.x, uv3.x));
+            minV = math.min(math.min(uv0.y, uv1.y), math.min(uv2.y, uv3.y));
+            maxV = math.max(math.max(uv0.y, uv1.y), math.max(uv2.y, uv3.y));
         }
 
         private static void MergeShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects)
@@ -2186,7 +2294,8 @@ public static partial class MeshGenerator
 
             if (a.face != b.face ||
                 math.abs(a.plane - b.plane) > epsilon ||
-                !HasSameAppearance(a, b))
+                !HasSameAppearance(a, b) ||
+                !HasSameSourceUvBounds(a, b))
                 return false;
 
             bool sameA = math.abs(a.minA - b.minA) <= epsilon && math.abs(a.maxA - b.maxA) <= epsilon;
@@ -2216,7 +2325,19 @@ public static partial class MeshGenerator
             return a.usesExplicitAppearance == b.usesExplicitAppearance &&
                    (!a.usesExplicitAppearance ||
                     (a.tint == b.tint &&
+                     a.uvFace == b.uvFace &&
+                     a.tileX == b.tileX &&
+                     a.tileY == b.tileY &&
                      math.lengthsq(a.explicitUvRectData - b.explicitUvRectData) <= 1e-10f));
+        }
+
+        private static bool HasSameSourceUvBounds(ShapeFaceRect a, ShapeFaceRect b)
+        {
+            const float epsilon = 0.0001f;
+            return math.abs(a.sourceMinU - b.sourceMinU) <= epsilon &&
+                   math.abs(a.sourceMaxU - b.sourceMaxU) <= epsilon &&
+                   math.abs(a.sourceMinV - b.sourceMinV) <= epsilon &&
+                   math.abs(a.sourceMaxV - b.sourceMaxV) <= epsilon;
         }
 
         private static void CullHiddenShapeFaceRects(
@@ -2435,11 +2556,16 @@ public static partial class MeshGenerator
             faceRects.Add(new ShapeFaceRect
             {
                 face = source.face,
+                uvFace = source.uvFace,
                 plane = source.plane,
                 minA = minA,
                 maxA = maxA,
                 minB = minB,
                 maxB = maxB,
+                sourceMinU = source.sourceMinU,
+                sourceMaxU = source.sourceMaxU,
+                sourceMinV = source.sourceMinV,
+                sourceMaxV = source.sourceMaxV,
                 tileX = source.tileX,
                 tileY = source.tileY,
                 tint = source.tint,
@@ -2466,6 +2592,7 @@ public static partial class MeshGenerator
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
             out BlockFace textureFace,
+            out BlockFace uvFace,
             out Vector2Int tile,
             out bool tint,
             out Vector4 explicitUvRectData)
@@ -2473,6 +2600,7 @@ public static partial class MeshGenerator
             if (rect.usesExplicitAppearance)
             {
                 textureFace = rect.face;
+                uvFace = rect.uvFace;
                 tile = new Vector2Int(rect.tileX, rect.tileY);
                 tint = rect.tint;
                 explicitUvRectData = rect.explicitUvRectData;
@@ -2480,6 +2608,7 @@ public static partial class MeshGenerator
             }
 
             textureFace = ResolveShapeTextureFace(mapping, rect.face, currentShape, currentPlacementAxis);
+            uvFace = rect.face;
             tile = mapping.GetTileCoord(textureFace);
             tint = mapping.GetTint(textureFace);
             explicitUvRectData = default;
@@ -2511,6 +2640,7 @@ public static partial class MeshGenerator
                 currentShape,
                 currentPlacementAxis,
                 out BlockFace textureFace,
+                out BlockFace uvFace,
                 out Vector2Int tile,
                 out bool tint,
                 out Vector4 explicitUvRectData);
@@ -2531,6 +2661,9 @@ public static partial class MeshGenerator
                         Vector3Int.forward,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2566,6 +2699,9 @@ public static partial class MeshGenerator
                         Vector3Int.back,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2601,6 +2737,9 @@ public static partial class MeshGenerator
                         Vector3Int.back,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2636,6 +2775,9 @@ public static partial class MeshGenerator
                         Vector3Int.forward,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2671,6 +2813,9 @@ public static partial class MeshGenerator
                         Vector3Int.left,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2706,6 +2851,9 @@ public static partial class MeshGenerator
                         Vector3Int.right,
                         mapping,
                         textureFace,
+                        uvFace,
+                        new Vector4(rect.sourceMinU, rect.sourceMaxU, rect.sourceMinV, rect.sourceMaxV),
+                        rect.usesExplicitAppearance,
                         tile,
                         explicitUvRectData,
                         tint,
@@ -2943,6 +3091,9 @@ public static partial class MeshGenerator
             Vector3 aoStepV,
             BlockTextureMapping mapping,
             BlockFace textureFace,
+            BlockFace uvFace,
+            Vector4 sourceProjectedUvBounds,
+            bool usesExplicitAppearance,
             Vector2Int tile,
             Vector4 explicitUvRectData,
             bool tint,
@@ -2972,19 +3123,37 @@ public static partial class MeshGenerator
             }
             else
             {
-                ResolveAtlasRect(mapping, textureFace, invAtlasTilesX, invAtlasTilesY, out atlasUv, out atlasSize);
+                if (usesExplicitAppearance)
+                {
+                    atlasUv = new Vector2(tile.x * invAtlasTilesX, tile.y * invAtlasTilesY);
+                    atlasSize = new Vector2(invAtlasTilesX, invAtlasTilesY);
+                }
+                else
+                {
+                    ResolveAtlasRect(mapping, textureFace, invAtlasTilesX, invAtlasTilesY, out atlasUv, out atlasSize);
+                }
             }
             Vector3 blockOrigin = new Vector3(voxelX - border, voxelY, voxelZ - border);
 
-            Vector2 uv0 = ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin);
-            Vector2 uv1 = ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin);
-            Vector2 uv2 = ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin);
-            Vector2 uv3 = ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin);
-            if (currentShape == BlockRenderShape.MultiCuboid)
+            Vector2 uv0;
+            Vector2 uv1;
+            Vector2 uv2;
+            Vector2 uv3;
+            if (currentShape == BlockRenderShape.MultiCuboid && uvFace != sampledFace)
             {
-                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
-                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
+                ResolveCanonicalModelFaceQuadUv(uvFace, out uv0, out uv1, out uv2, out uv3);
             }
+            else
+            {
+                uv0 = ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin);
+                uv1 = ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin);
+                uv2 = ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin);
+                uv3 = ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin);
+                if (currentShape == BlockRenderShape.MultiCuboid)
+                    NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3, sourceProjectedUvBounds);
+            }
+            if (currentShape == BlockRenderShape.MultiCuboid)
+                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
 
             AddAmbientOccludedShapeVertex(p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
             AddAmbientOccludedShapeVertex(p1, uv1, normal, aoNormal, aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
@@ -3241,14 +3410,54 @@ public static partial class MeshGenerator
         {
             return sampledFace switch
             {
-                BlockFace.Top => new Vector2(localPos.x, localPos.z),
+                BlockFace.Top => new Vector2(localPos.x, -localPos.z),
                 BlockFace.Bottom => new Vector2(localPos.x, localPos.z),
-                BlockFace.Right => new Vector2(localPos.z, localPos.y),
+                BlockFace.Right => new Vector2(-localPos.z, localPos.y),
                 BlockFace.Left => new Vector2(localPos.z, localPos.y),
                 BlockFace.Front => new Vector2(localPos.x, localPos.y),
-                BlockFace.Back => new Vector2(localPos.x, localPos.y),
+                BlockFace.Back => new Vector2(-localPos.x, localPos.y),
                 _ => new Vector2(localPos.x, localPos.y)
             };
+        }
+
+        private static void ResolveCanonicalModelFaceQuadUv(
+            BlockFace localFace,
+            out Vector2 uv0,
+            out Vector2 uv1,
+            out Vector2 uv2,
+            out Vector2 uv3)
+        {
+            switch (localFace)
+            {
+                case BlockFace.Top:
+                    uv0 = new Vector2(0f, 0f);
+                    uv1 = new Vector2(1f, 0f);
+                    uv2 = new Vector2(1f, 1f);
+                    uv3 = new Vector2(0f, 1f);
+                    return;
+
+                case BlockFace.Bottom:
+                    uv0 = new Vector2(0f, 0f);
+                    uv1 = new Vector2(1f, 0f);
+                    uv2 = new Vector2(1f, 1f);
+                    uv3 = new Vector2(0f, 1f);
+                    return;
+
+                case BlockFace.Right:
+                case BlockFace.Left:
+                case BlockFace.Front:
+                case BlockFace.Back:
+                    uv0 = new Vector2(1f, 0f);
+                    uv1 = new Vector2(1f, 1f);
+                    uv2 = new Vector2(0f, 1f);
+                    uv3 = new Vector2(0f, 0f);
+                    return;
+            }
+
+            uv0 = new Vector2(0f, 0f);
+            uv1 = new Vector2(0f, 1f);
+            uv2 = new Vector2(1f, 1f);
+            uv3 = new Vector2(1f, 0f);
         }
 
         private static void NormalizeProjectedQuadUv(ref Vector2 uv0, ref Vector2 uv1, ref Vector2 uv2, ref Vector2 uv3)
@@ -3260,6 +3469,33 @@ public static partial class MeshGenerator
 
             float invSpanU = 1f / math.max(maxU - minU, 1e-6f);
             float invSpanV = 1f / math.max(maxV - minV, 1e-6f);
+
+            uv0 = new Vector2((uv0.x - minU) * invSpanU, (uv0.y - minV) * invSpanV);
+            uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);
+            uv2 = new Vector2((uv2.x - minU) * invSpanU, (uv2.y - minV) * invSpanV);
+            uv3 = new Vector2((uv3.x - minU) * invSpanU, (uv3.y - minV) * invSpanV);
+        }
+
+        private static void NormalizeProjectedQuadUv(
+            ref Vector2 uv0,
+            ref Vector2 uv1,
+            ref Vector2 uv2,
+            ref Vector2 uv3,
+            Vector4 sourceProjectedUvBounds)
+        {
+            float minU = sourceProjectedUvBounds.x;
+            float maxU = sourceProjectedUvBounds.y;
+            float minV = sourceProjectedUvBounds.z;
+            float maxV = sourceProjectedUvBounds.w;
+
+            if (math.abs(maxU - minU) <= 1e-6f || math.abs(maxV - minV) <= 1e-6f)
+            {
+                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+                return;
+            }
+
+            float invSpanU = 1f / (maxU - minU);
+            float invSpanV = 1f / (maxV - minV);
 
             uv0 = new Vector2((uv0.x - minU) * invSpanU, (uv0.y - minV) * invSpanV);
             uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);

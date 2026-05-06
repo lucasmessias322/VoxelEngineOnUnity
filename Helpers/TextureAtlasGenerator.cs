@@ -761,7 +761,8 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
             useSourceRect = source.useSourceRect,
             sourceRect = source.sourceRect,
             useUvSampling = source.useUvSampling,
-            sampledUvRect = source.sampledUvRect
+            sampledUvRect = source.sampledUvRect,
+            sampledUvRotation = source.sampledUvRotation
         };
     }
 
@@ -779,7 +780,8 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
                 useSourceRect = source.useSourceRect,
                 sourceRect = source.sourceRect,
                 useUvSampling = source.useUvSampling,
-                sampledUvRect = source.sampledUvRect
+                sampledUvRect = source.sampledUvRect,
+                sampledUvRotation = source.sampledUvRotation
             };
         }
 
@@ -821,8 +823,18 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
     {
         if (source != null && source.useUvSampling)
         {
-            width = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.z - source.sampledUvRect.x)));
-            height = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.w - source.sampledUvRect.y)));
+            int sampledWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.z - source.sampledUvRect.x)));
+            int sampledHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(source.sampledUvRect.w - source.sampledUvRect.y)));
+            if (IsOddQuarterTurn(source.sampledUvRotation))
+            {
+                width = sampledHeight;
+                height = sampledWidth;
+            }
+            else
+            {
+                width = sampledWidth;
+                height = sampledHeight;
+            }
             return;
         }
 
@@ -835,6 +847,12 @@ public class TextureAtlasGenerator : MonoBehaviour, ISerializationCallbackReceiv
 
         width = source != null && source.texture != null ? Mathf.Max(1, source.texture.width) : 1;
         height = source != null && source.texture != null ? Mathf.Max(1, source.texture.height) : 1;
+    }
+
+    private static bool IsOddQuarterTurn(int degrees)
+    {
+        int normalized = ((degrees % 360) + 360) % 360;
+        return normalized == 90 || normalized == 270;
     }
 
     private static void DestroyImmediateSafe(UnityEngine.Object target)

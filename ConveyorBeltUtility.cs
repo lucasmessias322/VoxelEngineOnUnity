@@ -31,10 +31,10 @@ public static class ConveyorBeltUtility
                 return Vector3.left;
 
             case BlockPlacementAxis.ZNegative:
-                return Vector3.back;
+                return Vector3.forward;
 
             default:
-                return Vector3.forward;
+                return Vector3.back;
         }
     }
 

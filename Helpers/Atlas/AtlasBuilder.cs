@@ -101,6 +101,7 @@ public sealed class AtlasBuilder
                         readableTexture.width,
                         readableTexture.height,
                         sourceEntry.sampledUvRect,
+                        sourceEntry.sampledUvRotation,
                         out entryWidth,
                         out entryHeight);
                 }
@@ -194,11 +195,16 @@ public sealed class AtlasBuilder
         int sourceWidth,
         int sourceHeight,
         Vector4 sampledUvRect,
+        int sampledUvRotation,
         out int outputWidth,
         out int outputHeight)
     {
-        outputWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.z - sampledUvRect.x)));
-        outputHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.w - sampledUvRect.y)));
+        int sampledWidth = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.z - sampledUvRect.x)));
+        int sampledHeight = Mathf.Max(1, Mathf.RoundToInt(Mathf.Abs(sampledUvRect.w - sampledUvRect.y)));
+        int rotation = NormalizeUvRotation(sampledUvRotation);
+        bool swapsAxes = rotation == 90 || rotation == 270;
+        outputWidth = swapsAxes ? sampledHeight : sampledWidth;
+        outputHeight = swapsAxes ? sampledWidth : sampledHeight;
 
         Color32[] targetPixels = new Color32[outputWidth * outputHeight];
         for (int y = 0; y < outputHeight; y++)
@@ -209,8 +215,9 @@ public sealed class AtlasBuilder
             for (int x = 0; x < outputWidth; x++)
             {
                 float localU = (x + 0.5f) / outputWidth;
-                float sampleU = Mathf.Lerp(sampledUvRect.x, sampledUvRect.z, localU);
-                float sampleVFromTop = Mathf.Lerp(sampledUvRect.y, sampledUvRect.w, localVTop);
+                ResolveRotatedUvSampleCoordinates(rotation, localU, localVTop, out float sampleLocalU, out float sampleLocalVTop);
+                float sampleU = Mathf.Lerp(sampledUvRect.x, sampledUvRect.z, sampleLocalU);
+                float sampleVFromTop = Mathf.Lerp(sampledUvRect.y, sampledUvRect.w, sampleLocalVTop);
 
                 int pixelX = Mathf.Clamp(Mathf.FloorToInt(sampleU), 0, sourceWidth - 1);
                 int pixelYFromTop = Mathf.Clamp(Mathf.FloorToInt(sampleVFromTop), 0, sourceHeight - 1);
@@ -220,6 +227,49 @@ public sealed class AtlasBuilder
         }
 
         return targetPixels;
+    }
+
+    private static int NormalizeUvRotation(int degrees)
+    {
+        int normalized = ((degrees % 360) + 360) % 360;
+        if (normalized < 45 || normalized >= 315)
+            return 0;
+        if (normalized < 135)
+            return 90;
+        if (normalized < 225)
+            return 180;
+        return 270;
+    }
+
+    private static void ResolveRotatedUvSampleCoordinates(
+        int clockwiseRotation,
+        float localU,
+        float localVTop,
+        out float sampleLocalU,
+        out float sampleLocalVTop)
+    {
+        switch (clockwiseRotation)
+        {
+            case 90:
+                sampleLocalU = localVTop;
+                sampleLocalVTop = 1f - localU;
+                return;
+
+            case 180:
+                sampleLocalU = 1f - localU;
+                sampleLocalVTop = 1f - localVTop;
+                return;
+
+            case 270:
+                sampleLocalU = 1f - localVTop;
+                sampleLocalVTop = localU;
+                return;
+
+            default:
+                sampleLocalU = localU;
+                sampleLocalVTop = localVTop;
+                return;
+        }
     }
 
     private static Texture2D EnsureReadable(Texture2D source, out bool ownsCopy)

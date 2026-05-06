@@ -13,6 +13,7 @@ public sealed class AtlasTextureEntry
     public RectInt sourceRect;
     public bool useUvSampling;
     public Vector4 sampledUvRect;
+    public int sampledUvRotation;
 }
 
 [Serializable]
