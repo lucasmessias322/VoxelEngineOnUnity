@@ -17,7 +17,7 @@ public static class ConveyorBeltUtility
 
         return Mathf.Abs(horizontal.x) >= Mathf.Abs(horizontal.z)
             ? (horizontal.x >= 0f ? BlockPlacementAxis.XNegative : BlockPlacementAxis.X)
-            : (horizontal.z >= 0f ? BlockPlacementAxis.ZNegative : BlockPlacementAxis.Z);
+            : (horizontal.z >= 0f ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative);
     }
 
     public static Vector3 GetForwardDirection(BlockPlacementAxis placementAxis)
