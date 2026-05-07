@@ -1,4 +1,5 @@
 using TMPro;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.EventSystems;
 using UnityEngine.UI;
@@ -46,6 +47,8 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
     private static Slot hoveredSlot;
     private static Slot pendingDropTarget;
     private static bool pendingDropResolution;
+    private static readonly List<RaycastResult> PointerRaycastResults = new List<RaycastResult>(16);
+    private static int lastOutsideDropFrame = -1;
 
     private bool draggingFromThisSlot;
 
@@ -89,6 +92,7 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         if (inventory != null && !inventory.IsInventoryOpen && HasCarriedStack)
             OnInventoryClosed(inventory);
 
+        TryDropCarriedStackFromOutsideClick(inventory);
         TryResolvePendingDragDrop();
     }
 
@@ -313,9 +317,18 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
 
         draggingFromThisSlot = false;
         UpdateDragVisualPosition(eventData.position);
-        pendingDropTarget = ResolveSlotFromGameObject(eventData.pointerEnter);
+        pendingDropTarget = ResolveSlotUnderPointer(eventData);
+
         if (pendingDropTarget == null)
-            pendingDropTarget = hoveredSlot;
+        {
+            PlayerInventory inventory = PlayerInventory.Instance;
+            if (inventory != null && inventory.IsInventoryOpen && TryDropCarriedStack(inventory, dropFullStack: true))
+            {
+                pendingDropResolution = false;
+                pendingDropTarget = null;
+                return;
+            }
+        }
 
         pendingDropResolution = HasCarriedStack;
     }
@@ -688,6 +701,24 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
         target.PlaceCarriedStackWithLeftClick();
     }
 
+    private static void TryDropCarriedStackFromOutsideClick(PlayerInventory inventory)
+    {
+        if (inventory == null || !inventory.IsInventoryOpen || !HasCarriedStack)
+            return;
+
+        if (!Input.GetMouseButtonDown(0))
+            return;
+
+        if (lastOutsideDropFrame == Time.frameCount)
+            return;
+
+        if (ResolveSlotAtScreenPosition(Input.mousePosition) != null)
+            return;
+
+        lastOutsideDropFrame = Time.frameCount;
+        TryDropCarriedStack(inventory, dropFullStack: true);
+    }
+
     private static void UpdateDragVisualPosition(Vector2 screenPosition)
     {
         if (dragVisualRoot == null || dragVisualCanvas == null)
@@ -718,6 +749,41 @@ public class Slot : MonoBehaviour, IPointerClickHandler, IBeginDragHandler, IDra
             return null;
 
         return currentObject.GetComponentInParent<Slot>();
+    }
+
+    private static Slot ResolveSlotUnderPointer(PointerEventData eventData)
+    {
+        if (eventData == null || EventSystem.current == null)
+            return null;
+
+        return ResolveSlotAtScreenPosition(eventData.position);
+    }
+
+    private static Slot ResolveSlotAtScreenPosition(Vector2 screenPosition)
+    {
+        if (EventSystem.current == null)
+            return null;
+
+        PointerEventData pointerData = new PointerEventData(EventSystem.current)
+        {
+            position = screenPosition
+        };
+
+        PointerRaycastResults.Clear();
+        EventSystem.current.RaycastAll(pointerData, PointerRaycastResults);
+
+        for (int i = 0; i < PointerRaycastResults.Count; i++)
+        {
+            Slot slot = ResolveSlotFromGameObject(PointerRaycastResults[i].gameObject);
+            if (slot != null)
+            {
+                PointerRaycastResults.Clear();
+                return slot;
+            }
+        }
+
+        PointerRaycastResults.Clear();
+        return null;
     }
 
     private void TryAutoBindIconImage()

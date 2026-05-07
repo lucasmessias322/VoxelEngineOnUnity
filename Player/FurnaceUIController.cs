@@ -23,8 +23,7 @@ public class FurnaceUIController : MonoBehaviour
     [SerializeField] private FurnaceRecipeSO[] recipes;
 
     [Header("Fuel")]
-    [Min(0.1f)] [SerializeField] private float woodFuelDuration = 7.5f;
-    [Min(0.1f)] [SerializeField] private float coalFuelDuration = 40f;
+    [SerializeField] private FurnaceFuelEntry[] fuelItems;
 
     [Header("Behavior")]
     [SerializeField] private bool autoOpenInventoryWithFurnace = true;
@@ -1084,34 +1083,16 @@ public class FurnaceUIController : MonoBehaviour
     private bool TryGetFuelDuration(Item item, out float fuelDuration)
     {
         fuelDuration = 0f;
-        if (item == null)
+        if (item == null || fuelItems == null || fuelItems.Length == 0)
             return false;
 
-        if (inventory != null && inventory.TryGetBlockForItem(item, out BlockType blockType))
+        for (int i = 0; i < fuelItems.Length; i++)
         {
-            if (IsCoalFuelBlock(blockType))
-            {
-                fuelDuration = coalFuelDuration;
-                return true;
-            }
+            FurnaceFuelEntry fuelEntry = fuelItems[i];
+            if (fuelEntry == null || fuelEntry.Item != item)
+                continue;
 
-            if (IsWoodFuelBlock(blockType))
-            {
-                fuelDuration = woodFuelDuration;
-                return true;
-            }
-        }
-
-        string itemName = string.IsNullOrWhiteSpace(item.itemName) ? item.name : item.itemName;
-        if (MatchesFuelKeyword(itemName, "coal", "charcoal", "carvao", "carvão"))
-        {
-            fuelDuration = coalFuelDuration;
-            return true;
-        }
-
-        if (MatchesFuelKeyword(itemName, "log", "wood", "plank", "madeira", "tronco"))
-        {
-            fuelDuration = woodFuelDuration;
+            fuelDuration = Mathf.Max(0.1f, fuelEntry.BurnDuration);
             return true;
         }
 
@@ -1318,39 +1299,20 @@ public class FurnaceUIController : MonoBehaviour
         return removed;
     }
 
-    private static bool IsWoodFuelBlock(BlockType blockType)
-    {
-        return blockType == BlockType.Log ||
-               blockType == BlockType.birch_log ||
-               blockType == BlockType.acacia_log ||
-               blockType == BlockType.oak_planks;
-    }
-
-    private static bool IsCoalFuelBlock(BlockType blockType)
-    {
-        return blockType == BlockType.CoalOre;
-    }
-
-    private static bool MatchesFuelKeyword(string value, params string[] keywords)
-    {
-        if (string.IsNullOrWhiteSpace(value) || keywords == null)
-            return false;
-
-        string lowerValue = value.ToLowerInvariant();
-        for (int i = 0; i < keywords.Length; i++)
-        {
-            if (!string.IsNullOrWhiteSpace(keywords[i]) &&
-                lowerValue.Contains(keywords[i].ToLowerInvariant()))
-                return true;
-        }
-
-        return false;
-    }
-
     private void Log(string message)
     {
         if (debugLogs)
             Debug.Log($"[FurnaceUIController] {message}");
+    }
+
+    [System.Serializable]
+    private sealed class FurnaceFuelEntry
+    {
+        [SerializeField] private Item item;
+        [Min(0.1f)] [SerializeField] private float burnDuration = 7.5f;
+
+        public Item Item => item;
+        public float BurnDuration => burnDuration;
     }
 
     private sealed class FurnaceInventoryData
