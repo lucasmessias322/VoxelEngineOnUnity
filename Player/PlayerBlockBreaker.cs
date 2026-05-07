@@ -251,13 +251,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         bool treeCapitatorTriggered = world.TryQueueTreeCapitatorBreak(sel, current, shouldDrop, throwDir);
         if (!treeCapitatorTriggered)
         {
-            bool spawnedDrop = shouldDrop && BlockDrop.Spawn(world, sel, current, throwDir);
+            bool spawnedDrop = shouldDrop && BlockBreakDropResolver.TrySpawnDrop(world, sel, current, throwDir);
             world.SetBlockAt(sel, BlockType.Air);
 
             if (shouldDrop && !spawnedDrop)
             {
                 bool addedToInventory = PlayerInventory.Instance != null &&
-                                        PlayerInventory.Instance.TryAddBlockDrop(current, 1);
+                                        BlockBreakDropResolver.TryAddDropToInventory(PlayerInventory.Instance, world, current);
                 if (!addedToInventory)
                 {
                     Debug.LogWarning($"[PlayerBlockBreaker] Falha ao gerar drop de {current} em {sel}.");

@@ -71,7 +71,7 @@ public enum BlockType
     windmill = 66,
     ledWhiteBlock = 67,
     ledRedBlock = 73,
-
+    oakPlanks_fence = 68,
     
 
 }

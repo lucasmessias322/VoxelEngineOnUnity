@@ -17,6 +17,7 @@ public class FurnaceUIController : MonoBehaviour
     [SerializeField] private Slot fuelSlot;
     [SerializeField] private Slot outputSlot;
     [SerializeField] private Slider fuelLevelSlider;
+    [SerializeField] private Image fuelFillImage;
     [SerializeField] private Image cookProgressFillImage;
 
     [Header("Recipes")]
@@ -161,7 +162,8 @@ public class FurnaceUIController : MonoBehaviour
         Slot outputSlotReference,
         GameObject panelReference = null,
         FurnaceRecipeSO[] availableRecipes = null,
-        Slider fuelSliderReference = null)
+        Slider fuelSliderReference = null,
+        Image fuelFillImageReference = null)
     {
         UnsubscribeSlots();
 
@@ -169,6 +171,7 @@ public class FurnaceUIController : MonoBehaviour
         fuelSlot = fuelSlotReference;
         outputSlot = outputSlotReference;
         fuelLevelSlider = fuelSliderReference != null ? fuelSliderReference : fuelLevelSlider;
+        fuelFillImage = fuelFillImageReference != null ? fuelFillImageReference : fuelFillImage;
 
         if (panelReference != null)
             furnacePanel = panelReference;
@@ -188,6 +191,12 @@ public class FurnaceUIController : MonoBehaviour
     public void SetFuelSlider(Slider slider)
     {
         fuelLevelSlider = slider;
+        RefreshFuelUi();
+    }
+
+    public void SetFuelFillImage(Image image)
+    {
+        fuelFillImage = image;
         RefreshFuelUi();
     }
 
@@ -929,13 +938,18 @@ public class FurnaceUIController : MonoBehaviour
 
     private void RefreshFuelUi()
     {
+        float fuelLevel = CurrentFuel01;
+
+        if (fuelFillImage != null)
+            fuelFillImage.fillAmount = fuelLevel;
+
         if (fuelLevelSlider == null)
             return;
 
         fuelLevelSlider.minValue = 0f;
         fuelLevelSlider.maxValue = 1f;
         fuelLevelSlider.wholeNumbers = false;
-        fuelLevelSlider.value = CurrentFuel01;
+        fuelLevelSlider.value = fuelLevel;
     }
 
     private void RefreshCookProgressUi()

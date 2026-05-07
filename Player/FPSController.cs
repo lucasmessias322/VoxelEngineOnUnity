@@ -198,6 +198,21 @@ public class FPSController : MonoBehaviour
             return;
         }
 
+        if (PauseMenuManager.Instance != null && PauseMenuManager.Instance.IsPaused)
+        {
+            velocity = Vector3.zero;
+            currentFlyHorizontal = Vector3.zero;
+            flySmoothVelocity = Vector3.zero;
+            currentSwimHorizontal = Vector3.zero;
+            swimSmoothVelocity = Vector3.zero;
+            sprintToggled = false;
+
+            if (animator != null)
+                animator.SetBool("isWalking", false);
+
+            return;
+        }
+
         HandleViewModeInput();
         HandleRotation();
         //  HandleCrouchInput();

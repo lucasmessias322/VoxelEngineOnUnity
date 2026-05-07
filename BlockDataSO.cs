@@ -563,6 +563,16 @@ public sealed class DynamicBlockPrefabDefinition
     [Min(1)] public int occupiedVerticalBlocks = 1;
 }
 
+[System.Serializable]
+public sealed class BlockDropDefinition
+{
+    public BlockType blockType;
+    [Tooltip("Item que substitui o drop padrao do bloco. Deixe vazio para o bloco dropar ele mesmo.")]
+    public Item dropItem;
+    [Tooltip("Quantidade dropada. 0 em assets antigos e tratado como 1 em runtime.")]
+    [Min(1)] public int amount = 1;
+}
+
 public static class WirePlacementUtility
 {
     public const byte SideWest = 16;
@@ -777,6 +787,10 @@ public class BlockDataSO : ScriptableObject
     [Tooltip("Blocos que continuam no voxel data, mas sao renderizados por prefabs reais fora da malha estatica do chunk.")]
     public List<DynamicBlockPrefabDefinition> dynamicBlockPrefabs = new List<DynamicBlockPrefabDefinition>();
 
+    [Header("Drops")]
+    [Tooltip("Overrides de drop por bloco. Sem entrada aqui, o bloco dropa o item-bloco dele normalmente.")]
+    public List<BlockDropDefinition> blockDrops = new List<BlockDropDefinition>();
+
     [System.NonSerialized]
     public BlockTextureMapping[] mappings;
 
@@ -788,6 +802,9 @@ public class BlockDataSO : ScriptableObject
 
     [System.NonSerialized]
     private Dictionary<BlockType, DynamicBlockPrefabDefinition> dynamicBlockPrefabLookup;
+
+    [System.NonSerialized]
+    private Dictionary<BlockType, BlockDropDefinition> blockDropLookup;
 
     [System.NonSerialized]
     private bool[] runtimeDynamicVisualBlockCache = System.Array.Empty<bool>();
@@ -810,11 +827,58 @@ public class BlockDataSO : ScriptableObject
     private void OnEnable()
     {
         SyncDirectionalSideMappings();
+        BuildBlockDropLookup();
     }
 
     private void OnValidate()
     {
         SyncDirectionalSideMappings();
+        BuildBlockDropLookup();
+    }
+
+    public bool TryGetCustomDrop(BlockType blockType, out Item dropItem, out int amount)
+    {
+        dropItem = null;
+        amount = 1;
+
+        if (blockDropLookup == null)
+            BuildBlockDropLookup();
+
+        if (blockDropLookup == null ||
+            !blockDropLookup.TryGetValue(blockType, out BlockDropDefinition definition) ||
+            definition == null ||
+            definition.dropItem == null)
+        {
+            return false;
+        }
+
+        dropItem = definition.dropItem;
+        amount = Mathf.Max(1, definition.amount);
+        return true;
+    }
+
+    private void BuildBlockDropLookup()
+    {
+        if (blockDropLookup == null)
+            blockDropLookup = new Dictionary<BlockType, BlockDropDefinition>();
+        else
+            blockDropLookup.Clear();
+
+        if (blockDrops == null)
+            return;
+
+        for (int i = 0; i < blockDrops.Count; i++)
+        {
+            BlockDropDefinition definition = blockDrops[i];
+            if (definition == null ||
+                definition.blockType == BlockType.Air ||
+                definition.dropItem == null)
+            {
+                continue;
+            }
+
+            blockDropLookup[definition.blockType] = definition;
+        }
     }
 
     public bool TryGetTextureEntryId(BlockType blockType, BlockFace face, out string entryId)

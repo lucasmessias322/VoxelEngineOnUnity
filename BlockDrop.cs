@@ -3496,3 +3496,86 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         }
     }
 }
+
+public static class BlockBreakDropResolver
+{
+    public static bool TrySpawnDrop(World world, Vector3Int blockPos, BlockType brokenBlockType, Vector3 throwDirection)
+    {
+        Vector3 spawnPosition = blockPos + Vector3.one * 0.5f + Vector3.up * 0.08f;
+        return TrySpawnDrop(world, spawnPosition, brokenBlockType, throwDirection);
+    }
+
+    public static bool TrySpawnDrop(World world, Vector3 worldPosition, BlockType brokenBlockType, Vector3 throwDirection)
+    {
+        if (!TryResolveDrop(world, brokenBlockType, out Item dropItem, out BlockType dropBlockType, out int amount))
+            return false;
+
+        if (dropItem != null)
+            return TrySpawnItemDrop(world, dropItem, amount, worldPosition, throwDirection);
+
+        return BlockDrop.Spawn(world, worldPosition, dropBlockType, amount, throwDirection);
+    }
+
+    public static bool TryAddDropToInventory(PlayerInventory inventory, World world, BlockType brokenBlockType)
+    {
+        if (inventory == null)
+            return false;
+
+        if (!TryResolveDrop(world, brokenBlockType, out Item dropItem, out BlockType dropBlockType, out int amount))
+            return false;
+
+        if (dropItem != null)
+            return inventory.InsertItem(dropItem, amount) == 0;
+
+        return inventory.TryAddBlockDrop(dropBlockType, amount);
+    }
+
+    public static bool TryResolveDrop(
+        World world,
+        BlockType brokenBlockType,
+        out Item dropItem,
+        out BlockType dropBlockType,
+        out int amount)
+    {
+        dropItem = null;
+        dropBlockType = BlockType.Air;
+        amount = 1;
+
+        if (brokenBlockType == BlockType.Air || brokenBlockType == BlockType.Bedrock)
+            return false;
+
+        if (world != null &&
+            world.blockData != null &&
+            world.blockData.TryGetCustomDrop(brokenBlockType, out dropItem, out amount))
+        {
+            amount = Mathf.Max(1, amount);
+            return dropItem != null;
+        }
+
+        dropBlockType = ResolveDefaultDropBlockType(brokenBlockType);
+        return dropBlockType != BlockType.Air && dropBlockType != BlockType.Bedrock;
+    }
+
+    private static bool TrySpawnItemDrop(
+        World world,
+        Item dropItem,
+        int amount,
+        Vector3 worldPosition,
+        Vector3 throwDirection)
+    {
+        if (dropItem == null)
+            return false;
+
+        amount = Mathf.Max(1, amount);
+        if (dropItem.TryGetBlockType(out BlockType itemBlockType))
+            return BlockDrop.Spawn(world, worldPosition, itemBlockType, amount, throwDirection);
+
+        return InventoryItemDrop.Spawn(dropItem, amount, worldPosition, throwDirection);
+    }
+
+    private static BlockType ResolveDefaultDropBlockType(BlockType blockType)
+    {
+        BlockType dropBlockType = BatteryBlockUtility.GetInventoryDropBlockType(blockType);
+        return TorchPlacementUtility.GetInventoryDropBlockType(dropBlockType);
+    }
+}

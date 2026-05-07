@@ -45,9 +45,11 @@ public class CraftingSystem : MonoBehaviour
     [SerializeField] private bool enableCreativeModeHotkey = true;
     [SerializeField] private KeyCode toggleCreativeModeKey = KeyCode.F3;
     [SerializeField] private bool includeCraftRecipesInCreativePanel = true;
+    [SerializeField] private bool includeItemAtlasItemsInCreativePanel = true;
     [SerializeField] private bool includeMappedBlocksInCreativePanel = true;
     [SerializeField] private bool includeBlockItemsFromResources = true;
     [SerializeField] private string blockItemsResourcePath = "Itens/Blocks";
+    [SerializeField] private string itemAtlasDataResourcePath = "ItemAtlasDataSO";
 
     private readonly List<Recipe> creativeRecipesCache = new List<Recipe>(64);
     private bool creativeRecipesDirty = true;
@@ -309,6 +311,9 @@ public class CraftingSystem : MonoBehaviour
         }
 
         List<Item> creativeBlockItems = new List<Item>(64);
+        if (includeItemAtlasItemsInCreativePanel)
+            AppendItemAtlasCreativeItems(creativeBlockItems);
+
         if (includeMappedBlocksInCreativePanel)
             AppendCatalogCreativeBlockItems(creativeBlockItems);
 
@@ -333,6 +338,32 @@ public class CraftingSystem : MonoBehaviour
             return;
 
         BlockItemCatalog.AppendBlockItems(output);
+    }
+
+    private void AppendItemAtlasCreativeItems(List<Item> output)
+    {
+        if (output == null)
+            return;
+
+        ItemAtlasDataSO atlasData = null;
+        if (TryResolveInventory(out PlayerInventory inventory) && inventory.TryGetItemAtlasData(out ItemAtlasDataSO inventoryAtlasData))
+            atlasData = inventoryAtlasData;
+
+        if (atlasData == null && !string.IsNullOrWhiteSpace(itemAtlasDataResourcePath))
+            atlasData = Resources.Load<ItemAtlasDataSO>(itemAtlasDataResourcePath);
+
+        if (atlasData == null || atlasData.itemMappings == null || atlasData.itemMappings.Count == 0)
+            return;
+
+        HashSet<Item> seen = new HashSet<Item>(output);
+        for (int i = 0; i < atlasData.itemMappings.Count; i++)
+        {
+            Item item = atlasData.itemMappings[i].item;
+            if (item == null || !seen.Add(item))
+                continue;
+
+            output.Add(item);
+        }
     }
 
     private void AppendResourceCreativeBlockItems(List<Item> output)

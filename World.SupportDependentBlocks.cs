@@ -55,7 +55,7 @@ public partial class World
         if (CanBlockStayAt(worldPos, blockType))
             return;
 
-        BlockDrop.Spawn(this, worldPos, blockType, Vector3.up);
+        BlockBreakDropResolver.TrySpawnDrop(this, worldPos, blockType, Vector3.up);
         SetBlockAt(worldPos, BlockType.Air);
     }
 

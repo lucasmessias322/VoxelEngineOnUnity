@@ -161,14 +161,14 @@ public partial class World
                 continue;
 
             bool spawnedDrop = candidate.shouldDrop &&
-                               BlockDrop.Spawn(this, candidate.position, currentType, candidate.throwDirection);
+                               BlockBreakDropResolver.TrySpawnDrop(this, candidate.position, currentType, candidate.throwDirection);
             SetBlockAt(candidate.position, BlockType.Air);
             InvalidateLoadedSubchunkCollidersAt(candidate.position);
 
             if (candidate.shouldDrop && !spawnedDrop)
             {
                 bool addedToInventory = PlayerInventory.Instance != null &&
-                                        PlayerInventory.Instance.TryAddBlockDrop(currentType, 1);
+                                        BlockBreakDropResolver.TryAddDropToInventory(PlayerInventory.Instance, this, currentType);
                 if (!addedToInventory)
                     Debug.LogWarning($"[World] Falha ao gerar drop de {currentType} em {candidate.position}.");
             }
