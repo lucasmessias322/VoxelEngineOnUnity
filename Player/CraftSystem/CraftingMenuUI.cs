@@ -2,6 +2,7 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Text;
 using UnityEngine;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 
 public class CraftingMenuUI : MonoBehaviour
@@ -11,11 +12,13 @@ public class CraftingMenuUI : MonoBehaviour
     private sealed class RecipeButtonView : MonoBehaviour
     {
         private Button cachedButton;
+        private CanvasGroup canvasGroup;
         private Image iconImage;
         private CraftingMenuUI owner;
         private Recipe boundRecipe;
 
         public Button Button => cachedButton;
+        public Recipe BoundRecipe => boundRecipe;
 
         public void Initialize(CraftingMenuUI ownerMenu)
         {
@@ -23,6 +26,13 @@ public class CraftingMenuUI : MonoBehaviour
 
             if (cachedButton == null)
                 cachedButton = GetComponent<Button>();
+
+            if (canvasGroup == null)
+            {
+                canvasGroup = GetComponent<CanvasGroup>();
+                if (canvasGroup == null)
+                    canvasGroup = gameObject.AddComponent<CanvasGroup>();
+            }
 
             if (iconImage == null)
                 iconImage = transform.Find("ItemIcon")?.GetComponent<Image>();
@@ -41,11 +51,26 @@ public class CraftingMenuUI : MonoBehaviour
                 iconImage.sprite = ResolveItemIcon(recipe != null ? recipe.resultItem : null);
         }
 
+        public void SetCraftable(bool craftable)
+        {
+            if (cachedButton != null)
+                cachedButton.interactable = craftable;
+
+            if (canvasGroup != null)
+            {
+                canvasGroup.alpha = craftable ? 1f : UncraftableRecipeButtonAlpha;
+                canvasGroup.interactable = craftable;
+                canvasGroup.blocksRaycasts = craftable;
+            }
+        }
+
         public void Unbind()
         {
             boundRecipe = null;
             if (iconImage != null)
                 iconImage.sprite = null;
+
+            SetCraftable(false);
         }
 
         private void HandleClick()
@@ -62,6 +87,7 @@ public class CraftingMenuUI : MonoBehaviour
     }
 
     private const int MaxRecipeButtonPoolSize = 128;
+    private const float UncraftableRecipeButtonAlpha = 0.35f;
 
     public static CraftingMenuUI Instance { get; private set; }
 
@@ -73,6 +99,16 @@ public class CraftingMenuUI : MonoBehaviour
     public Text ItemName;
     public Text recipeDetailsText;
     public Button craftButton;
+    [SerializeField] private GameObject characterPanel;
+
+    [Header("Panel Button States")]
+    [SerializeField] private Button openCraftPanelButton;
+    [SerializeField] private Sprite PanelButtonActiveSprite;
+    [SerializeField] private Sprite PanelButtonInactiveSprite;
+    [SerializeField] private Button openCreativePanelButton;
+
+    [SerializeField] private Button openCharacterPanelButton;
+
 
     [Header("Creative Mode UI")]
     [SerializeField] private bool useSeparateCreativePanel = true;
@@ -155,6 +191,39 @@ public class CraftingMenuUI : MonoBehaviour
         SyncPanelWithInventory();
     }
 
+
+    public void ToggleExclusivePanel(GameObject panelToOpen)
+    {
+        if (panelToOpen == null)
+            return;
+
+        if (craftingPanel != null && craftingPanel != panelToOpen)
+            craftingPanel.SetActive(false);
+
+        if (creativeCraftingPanel != null && creativeCraftingPanel != panelToOpen)
+            creativeCraftingPanel.SetActive(false);
+
+        if (characterPanel != null && characterPanel != panelToOpen)
+            characterPanel.SetActive(false);
+
+        panelToOpen.SetActive(true);
+
+        craftingPanelIsOpen = (craftingPanel != null && craftingPanel.activeSelf) ||
+                              (creativeCraftingPanel != null && creativeCraftingPanel.activeSelf);
+        UpdatePanelButtonStates();
+    }
+
+    public void OpenCraftPanel()
+    {
+        EnsureCreativePanelIfNeeded();
+        ToggleExclusivePanel(GetActiveCraftingPanel());
+    }
+
+    public void OpenCharacterPanel()
+    {
+        ToggleExclusivePanel(characterPanel);
+    }
+
     private void OnDisable()
     {
         UnsubscribeFromInventory();
@@ -190,7 +259,10 @@ public class CraftingMenuUI : MonoBehaviour
         ReleaseAllRecipeButtons();
 
         if (visibleRecipes == null || visibleRecipes.Count == 0)
+        {
+            RefreshActiveRecipeScrollView(resetPosition: true);
             return;
+        }
 
         for (int i = 0; i < visibleRecipes.Count; i++)
         {
@@ -204,8 +276,12 @@ public class CraftingMenuUI : MonoBehaviour
 
             buttonView.gameObject.name = $"Recipe_{GetRecipeDisplayName(recipe)}";
             buttonView.Bind(recipe);
+            AttachRecipeScrollForwarder(buttonView.gameObject, activeRecipeListParent);
             activeRecipeButtons.Add(buttonView);
         }
+
+        RefreshRecipeButtonStates();
+        RefreshActiveRecipeScrollView(resetPosition: true);
     }
 
     private void PrimeRecipeButtonPoolFromExistingChildren()
@@ -251,6 +327,7 @@ public class CraftingMenuUI : MonoBehaviour
             pooledView.transform.SetParent(activeRecipeListParent, false);
             pooledView.gameObject.SetActive(true);
             pooledView.Initialize(this);
+            AttachRecipeScrollForwarder(pooledView.gameObject, activeRecipeListParent);
             return pooledView;
         }
 
@@ -259,6 +336,7 @@ public class CraftingMenuUI : MonoBehaviour
         if (view == null)
             view = buttonObject.AddComponent<RecipeButtonView>();
         view.Initialize(this);
+        AttachRecipeScrollForwarder(buttonObject, activeRecipeListParent);
         return view;
     }
 
@@ -317,7 +395,7 @@ public class CraftingMenuUI : MonoBehaviour
     {
         if (!IsCreativeModeActive())
         {
-            OnRecipeSelected(recipe);
+            CraftRecipeFromList(recipe);
             return;
         }
 
@@ -419,24 +497,215 @@ public class CraftingMenuUI : MonoBehaviour
             SetCraftButtonOpacity(activeCraftButton, canCraftNow ? 1f : 0.5f);
             UpdateCraftButtonLabel(activeCraftButton, creativeMode);
         }
+
+        RefreshRecipeButtonStates();
+    }
+
+    private void RefreshRecipeButtonStates()
+    {
+        CraftingSystem craftingSystem = CraftingSystem.Instance;
+        bool creativeMode = IsCreativeModeActive();
+
+        for (int i = 0; i < activeRecipeButtons.Count; i++)
+        {
+            RecipeButtonView view = activeRecipeButtons[i];
+            if (view == null)
+                continue;
+
+            bool canUseButton = creativeMode ||
+                                (craftingSystem != null && craftingSystem.CanCraft(view.BoundRecipe));
+            view.SetCraftable(canUseButton);
+        }
+    }
+
+    private void RefreshActiveRecipeScrollView(bool resetPosition)
+    {
+        Transform activeRecipeListParent = GetActiveRecipeListParent();
+        if (activeRecipeListParent == null)
+            return;
+
+        RectTransform contentRect = activeRecipeListParent as RectTransform;
+        if (contentRect == null)
+            return;
+
+        ScrollRect scrollRect = ResolveRecipeScrollRect(activeRecipeListParent);
+        if (scrollRect != null)
+        {
+            scrollRect.content = contentRect;
+            scrollRect.vertical = true;
+            scrollRect.horizontal = false;
+            scrollRect.enabled = true;
+
+            if (scrollRect.viewport == null)
+            {
+                Mask viewportMask = activeRecipeListParent.GetComponentInParent<Mask>();
+                if (viewportMask != null)
+                    scrollRect.viewport = viewportMask.transform as RectTransform;
+            }
+        }
+
+        Canvas.ForceUpdateCanvases();
+        ResizeRecipeContentForScroll(
+            contentRect,
+            scrollRect,
+            activeRecipeButtons.Count,
+            activeRecipeListParent == creativeRecipeListParent);
+        LayoutRebuilder.ForceRebuildLayoutImmediate(contentRect);
+
+        if (scrollRect != null)
+        {
+            scrollRect.Rebuild(CanvasUpdate.PostLayout);
+            if (resetPosition)
+                scrollRect.verticalNormalizedPosition = 1f;
+        }
+    }
+
+    private static ScrollRect ResolveRecipeScrollRect(Transform recipeListParent)
+    {
+        if (recipeListParent == null)
+            return null;
+
+        ScrollRect scrollRect = recipeListParent.GetComponentInParent<ScrollRect>();
+        if (scrollRect != null)
+            return scrollRect;
+
+        Mask viewportMask = recipeListParent.GetComponentInParent<Mask>();
+        return viewportMask != null ? viewportMask.GetComponentInParent<ScrollRect>() : null;
+    }
+
+    private static void ResizeRecipeContentForScroll(
+        RectTransform contentRect,
+        ScrollRect scrollRect,
+        int itemCount,
+        bool allowStretchContentResize)
+    {
+        if (contentRect == null || scrollRect == null)
+            return;
+
+        bool stretchVertically = !Mathf.Approximately(contentRect.anchorMin.y, contentRect.anchorMax.y);
+        if (stretchVertically && !allowStretchContentResize)
+            return;
+
+        GridLayoutGroup grid = contentRect.GetComponent<GridLayoutGroup>();
+        if (grid == null)
+            return;
+
+        int rows = CalculateRecipeGridRows(contentRect, scrollRect, grid, itemCount);
+        float contentHeight = grid.padding.top + grid.padding.bottom;
+        if (rows > 0)
+            contentHeight += rows * grid.cellSize.y + Mathf.Max(0, rows - 1) * grid.spacing.y;
+
+        float viewportHeight = 0f;
+        RectTransform viewportRect = scrollRect != null ? scrollRect.viewport : null;
+        if (viewportRect != null)
+            viewportHeight = viewportRect.rect.height;
+
+        if (stretchVertically)
+            AnchorRecipeContentToTop(contentRect);
+
+        contentRect.SetSizeWithCurrentAnchors(
+            RectTransform.Axis.Vertical,
+            Mathf.Max(contentHeight, viewportHeight));
+    }
+
+    private static void AnchorRecipeContentToTop(RectTransform contentRect)
+    {
+        if (contentRect == null)
+            return;
+
+        Vector2 anchorMin = contentRect.anchorMin;
+        Vector2 anchorMax = contentRect.anchorMax;
+        Vector2 pivot = contentRect.pivot;
+        Vector2 anchoredPosition = contentRect.anchoredPosition;
+
+        anchorMin.y = 1f;
+        anchorMax.y = 1f;
+        pivot.y = 1f;
+        anchoredPosition.y = 0f;
+
+        contentRect.anchorMin = anchorMin;
+        contentRect.anchorMax = anchorMax;
+        contentRect.pivot = pivot;
+        contentRect.anchoredPosition = anchoredPosition;
+    }
+
+    private static int CalculateRecipeGridRows(RectTransform contentRect, ScrollRect scrollRect, GridLayoutGroup grid, int itemCount)
+    {
+        if (grid == null || itemCount <= 0)
+            return 0;
+
+        if (grid.constraint == GridLayoutGroup.Constraint.FixedRowCount)
+            return Mathf.Max(1, grid.constraintCount);
+
+        int columns = ResolveRecipeGridColumns(contentRect, scrollRect, grid, itemCount);
+        return Mathf.CeilToInt(itemCount / (float)Mathf.Max(1, columns));
+    }
+
+    private static int ResolveRecipeGridColumns(RectTransform contentRect, ScrollRect scrollRect, GridLayoutGroup grid, int itemCount)
+    {
+        if (grid.constraint == GridLayoutGroup.Constraint.FixedColumnCount)
+            return Mathf.Max(1, grid.constraintCount);
+
+        RectTransform viewportRect = scrollRect != null ? scrollRect.viewport : null;
+        float availableWidth = viewportRect != null ? viewportRect.rect.width : 0f;
+        if (availableWidth <= 0f)
+            availableWidth = contentRect.rect.width;
+
+        if (availableWidth <= 0f)
+            availableWidth = contentRect.sizeDelta.x;
+
+        availableWidth -= grid.padding.left + grid.padding.right;
+        float stride = Mathf.Max(1f, grid.cellSize.x + grid.spacing.x);
+        if (availableWidth < grid.cellSize.x)
+        {
+            if (grid.constraintCount > 0)
+                return Mathf.Clamp(grid.constraintCount, 1, Mathf.Max(1, itemCount));
+
+            return Mathf.Clamp(Mathf.CeilToInt(Mathf.Sqrt(itemCount)), 1, Mathf.Max(1, itemCount));
+        }
+
+        return Mathf.Clamp(Mathf.FloorToInt((availableWidth + grid.spacing.x) / stride), 1, Mathf.Max(1, itemCount));
+    }
+
+    private static void AttachRecipeScrollForwarder(GameObject buttonObject, Transform recipeListParent)
+    {
+        if (buttonObject == null)
+            return;
+
+        ScrollRect scrollRect = ResolveRecipeScrollRect(recipeListParent);
+        if (scrollRect == null)
+            return;
+
+        RecipeScrollForwarder forwarder = buttonObject.GetComponent<RecipeScrollForwarder>();
+        if (forwarder == null)
+            forwarder = buttonObject.AddComponent<RecipeScrollForwarder>();
+
+        forwarder.Initialize(scrollRect);
     }
 
     public void OnCraftButtonClicked()
     {
+        CraftRecipeFromList(selectedRecipe);
+    }
+
+    private void CraftRecipeFromList(Recipe recipe)
+    {
         CraftingSystem craftingSystem = CraftingSystem.Instance;
-        if (selectedRecipe == null || craftingSystem == null)
+        if (recipe == null || craftingSystem == null || craftingSystem.isCrafting)
             return;
 
-        if (craftingSystem.isCrafting)
+        selectedRecipe = recipe;
+        if (!craftingSystem.CanCraft(recipe))
+        {
+            UpdateRecipeDetails();
             return;
-
-        if (!craftingSystem.CanCraft(selectedRecipe))
-            return;
+        }
 
         bool craftAll = Input.GetKey(KeyCode.LeftShift) || Input.GetKey(KeyCode.RightShift);
-        int craftCount = craftAll ? craftingSystem.GetMaxCraftAmount(selectedRecipe) : 1;
-        craftingSystem.TryCraft(selectedRecipe, craftCount);
+        int craftCount = craftAll ? craftingSystem.GetMaxCraftAmount(recipe) : 1;
+        craftingSystem.TryCraft(recipe, craftCount);
         UpdateRecipeDetails();
+        RefreshRecipeButtonStates();
 
         if (craftingSystem.isCrafting)
             StartCoroutine(DisableUntilCraftReady());
@@ -454,6 +723,7 @@ public class CraftingMenuUI : MonoBehaviour
         if (!craftingSystem.CanCraft(recipe))
         {
             UpdateRecipeDetails();
+            RefreshRecipeButtonStates();
             return;
         }
 
@@ -461,6 +731,7 @@ public class CraftingMenuUI : MonoBehaviour
         int craftCount = takeAll ? craftingSystem.GetMaxCraftAmount(recipe) : 1;
         craftingSystem.TryCraft(recipe, craftCount);
         UpdateRecipeDetails();
+        RefreshRecipeButtonStates();
     }
 
     private IEnumerator DisableUntilCraftReady()
@@ -474,6 +745,7 @@ public class CraftingMenuUI : MonoBehaviour
 
         yield return new WaitUntil(() => CraftingSystem.Instance == null || !CraftingSystem.Instance.isCrafting);
         UpdateRecipeDetails();
+        RefreshRecipeButtonStates();
     }
 
     private void SetCraftButtonOpacity(Button button, float alpha)
@@ -674,6 +946,11 @@ public class CraftingMenuUI : MonoBehaviour
 
         if (inactivePanel != null && inactivePanel != activePanel)
             inactivePanel.SetActive(false);
+
+        if (state)
+            RefreshActiveRecipeScrollView(resetPosition: false);
+
+        UpdatePanelButtonStates();
     }
 
     public void CloseCraftingPanel()
@@ -727,6 +1004,7 @@ public class CraftingMenuUI : MonoBehaviour
     private void HandleInventoryContentsChanged()
     {
         UpdateRecipeDetails();
+        RefreshRecipeButtonStates();
     }
 
     private void SyncPanelWithInventory(bool force = false)
@@ -737,6 +1015,45 @@ public class CraftingMenuUI : MonoBehaviour
 
         lastKnownInventoryOpen = inventoryOpen;
         SetCraftingPanelState(inventoryOpen && !externalPanelBlocked);
+    }
+
+    private void UpdatePanelButtonStates()
+    {
+        bool craftPanelActive = craftingPanel != null && craftingPanel.activeSelf;
+        bool creativePanelActive = creativeCraftingPanel != null && creativeCraftingPanel.activeSelf;
+        bool characterPanelActive = characterPanel != null && characterPanel.activeSelf;
+
+        SetPanelButtonSprite(
+            openCraftPanelButton,
+            craftPanelActive || creativePanelActive,
+            PanelButtonActiveSprite,
+            PanelButtonInactiveSprite);
+
+        SetPanelButtonSprite(
+            openCreativePanelButton,
+            creativePanelActive,
+            PanelButtonActiveSprite,
+            PanelButtonInactiveSprite);
+
+        SetPanelButtonSprite(
+            openCharacterPanelButton,
+            characterPanelActive,
+            PanelButtonActiveSprite,
+            PanelButtonInactiveSprite);
+    }
+
+    private static void SetPanelButtonSprite(Button button, bool active, Sprite activeSprite, Sprite inactiveSprite)
+    {
+        if (button == null)
+            return;
+
+        Image buttonImage = button.GetComponent<Image>();
+        if (buttonImage == null)
+            return;
+
+        Sprite sprite = active ? activeSprite : inactiveSprite;
+        if (sprite != null)
+            buttonImage.sprite = sprite;
     }
 
     private static string GetRecipeDisplayName(Recipe recipe)
@@ -781,5 +1098,24 @@ public class CraftingMenuUI : MonoBehaviour
             return EmptyRecipeList;
 
         return craftingSystem.GetRecipesForCurrentContext();
+    }
+}
+
+internal sealed class RecipeScrollForwarder : MonoBehaviour, IScrollHandler
+{
+    private ScrollRect targetScrollRect;
+
+    public void Initialize(ScrollRect scrollRect)
+    {
+        targetScrollRect = scrollRect;
+    }
+
+    public void OnScroll(PointerEventData eventData)
+    {
+        if (targetScrollRect == null)
+            targetScrollRect = GetComponentInParent<ScrollRect>();
+
+        if (targetScrollRect != null && targetScrollRect.isActiveAndEnabled)
+            targetScrollRect.OnScroll(eventData);
     }
 }
