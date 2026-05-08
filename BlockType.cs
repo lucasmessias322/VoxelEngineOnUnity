@@ -72,7 +72,9 @@ public enum BlockType
     ledWhiteBlock = 67,
     ledRedBlock = 73,
     oakPlanks_fence = 68,
-    
+    oakPlanks_fence2 = 69,
+    oakPlanks_slab = 70,
+    conveyorBelt_splitter = 71,
 
 }
 
@@ -420,16 +422,20 @@ public static class TorchPlacementUtility
 
     public static Vector3 GetFireAnchorWorldPosition(Vector3Int blockPos, BlockType type)
     {
-        return blockPos + TransformVoxelPoint(type, new Vector3(0.5f, FireAnchorHeight, 0.5f));
+        return blockPos +
+               TransformVoxelPoint(type, new Vector3(0.5f, FireAnchorHeight, 0.5f)) +
+               BlockSupportSurfaceUtility.GetTorchVisualWorldOffset(World.Instance, blockPos, type);
     }
 
     public static Bounds GetWorldBounds(Vector3Int blockPos, BlockType type, BlockTextureMapping mapping)
     {
         BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+        Vector3 visualOffset = BlockSupportSurfaceUtility.GetTorchVisualWorldOffset(World.Instance, blockPos, type);
+
         if (!IsWallTorch(type))
         {
-            Vector3 worldMin = blockPos + min;
-            Vector3 worldMax = blockPos + max;
+            Vector3 worldMin = blockPos + min + visualOffset;
+            Vector3 worldMax = blockPos + max + visualOffset;
             Vector3 size = worldMax - worldMin;
             return new Bounds(worldMin + size * 0.5f, size);
         }
@@ -454,7 +460,7 @@ public static class TorchPlacementUtility
 
         for (int i = 0; i < corners.Length; i++)
         {
-            Vector3 worldPoint = blockPos + TransformModelPoint(type, corners[i]);
+            Vector3 worldPoint = blockPos + TransformModelPoint(type, corners[i]) + visualOffset;
             boundsMin = Vector3.Min(boundsMin, worldPoint);
             boundsMax = Vector3.Max(boundsMax, worldPoint);
         }

@@ -2,7 +2,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
-public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7, MultiCuboid = 8 }
+public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7, MultiCuboid = 8, Fence2 = 9, Slab = 10 }
 public enum BlockPlacementAxis : byte
 {
     Y = 0,
@@ -2072,6 +2072,9 @@ public static class BlockPlacementRotationUtility
         if (shape == BlockRenderShape.Stairs)
             return StairPlacementUtility.ResolvePlacementCode(hitNormal, lookForward, hitPoint);
 
+        if (shape == BlockRenderShape.Slab)
+            return SlabShapeUtility.ResolvePlacementCode(hitNormal, hitPoint);
+
         if (shape == BlockRenderShape.Ramp)
         {
             if (mapping.usePlacementAxisRotation &&
@@ -2313,6 +2316,8 @@ public static class BlockShapeUtility
     private static readonly Vector3 DefaultCuboidMax = new Vector3(0.625f, 0.75f, 0.625f);
     private static readonly Vector3 DefaultPlaneMin = new Vector3(0f, 0f, 0f);
     private static readonly Vector3 DefaultPlaneMax = new Vector3(1f, 0.0625f, 1f);
+    private static readonly Vector3 DefaultSlabMin = new Vector3(0f, 0f, 0f);
+    private static readonly Vector3 DefaultSlabMax = new Vector3(1f, 0.5f, 1f);
     private const float PlaneBoundsHalfThickness = 0.01f;
     private const float PlaneAttachmentInset01 = 0.001f;
     private const float BoundsEpsilon = 0.0001f;
@@ -2406,6 +2411,11 @@ public static class BlockShapeUtility
                 max = DefaultPlaneMax;
                 return;
 
+            case BlockRenderShape.Slab:
+                min = DefaultSlabMin;
+                max = DefaultSlabMax;
+                return;
+
             default:
                 min = Vector3.zero;
                 max = Vector3.one;
@@ -2491,7 +2501,19 @@ public static class BlockShapeUtility
             return new Bounds(planeWorldMin + planeSize * 0.5f, planeSize);
         }
 
+        BlockRenderShape shape = GetEffectiveRenderShape(mapping);
         ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+        if (shape == BlockRenderShape.Cuboid || shape == BlockRenderShape.MultiCuboid)
+        {
+            Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(
+                World.Instance,
+                blockPos,
+                blockType,
+                mapping,
+                placementAxis);
+            min += supportOffset;
+            max += supportOffset;
+        }
 
         Vector3 boundsMin = blockPos + min;
         Vector3 boundsMax = blockPos + max;
@@ -2689,12 +2711,21 @@ public static class BlockShapeUtility
             return false;
 
         bool hasBounds = false;
+        Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(
+            World.Instance,
+            blockPos,
+            blockType,
+            mapping,
+            placementAxis);
+
         for (int i = 0; i < count; i++)
         {
             if (!TryGetMultiCuboidBox(mapping, cuboids, i, placementAxis, blockType, out ShapeBox box))
                 continue;
 
             Bounds boxBounds = box.ToWorldBounds(blockPos);
+            boxBounds.center += supportOffset;
+
             if (!hasBounds)
             {
                 bounds = boxBounds;

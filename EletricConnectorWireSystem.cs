@@ -139,6 +139,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         {
             nextValidationTime = Time.time + Mathf.Max(0.1f, validationIntervalSeconds);
             PruneInvalidConnections();
+            RefreshConnectionLines();
         }
     }
 
@@ -382,7 +383,25 @@ public class EletricConnectorWireSystem : MonoBehaviour
     {
         World world = World.Instance;
         BlockType blockType = world != null ? world.GetBlockAt(blockPos) : BlockType.Air;
-        return (Vector3)blockPos + GetAnchorOffset(blockType);
+        return (Vector3)blockPos + GetAnchorOffset(blockType) + GetSurfaceAlignedAnchorOffset(world, blockPos, blockType);
+    }
+
+    private static Vector3 GetSurfaceAlignedAnchorOffset(World world, Vector3Int blockPos, BlockType blockType)
+    {
+        if (world == null || world.blockData == null)
+            return Vector3.zero;
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return Vector3.zero;
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
+        if (shape != BlockRenderShape.Cuboid && shape != BlockRenderShape.MultiCuboid)
+            return Vector3.zero;
+
+        BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(blockPos, blockType);
+        return BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, blockPos, blockType, placementAxis);
     }
 
     private Vector3 GetAnchorOffset(BlockType blockType)
@@ -456,6 +475,12 @@ public class EletricConnectorWireSystem : MonoBehaviour
                 RemoveConnectionAt(i);
             }
         }
+    }
+
+    private void RefreshConnectionLines()
+    {
+        for (int i = 0; i < connections.Count; i++)
+            UpdateConnectionLine(connections[i]);
     }
 
     private void RemoveConnectionAt(int index)

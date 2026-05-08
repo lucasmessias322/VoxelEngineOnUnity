@@ -132,6 +132,11 @@ public partial class World
             return (byte)axis;
         }
 
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Slab)
+        {
+            return (byte)(SlabShapeUtility.IsTopHalf(axis) ? BlockPlacementAxis.YNegative : BlockPlacementAxis.Y);
+        }
+
         return BlockPlacementRotationUtility.SanitizeStoredAxisByte((byte)axis);
     }
 
@@ -156,6 +161,11 @@ public partial class World
             RampShapeUtility.IsEncodedState((byte)axis))
         {
             return axis;
+        }
+
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Slab)
+        {
+            return SlabShapeUtility.IsTopHalf(axis) ? BlockPlacementAxis.YNegative : BlockPlacementAxis.Y;
         }
 
         BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
@@ -200,6 +210,16 @@ public partial class World
             }
         }
 
+        if (BlockShapeUtility.GetEffectiveRenderShape(mapping) == BlockRenderShape.Slab)
+        {
+            if (SlabShapeUtility.IsTopHalf(axis))
+                blockPlacementAxes[worldPos] = BlockPlacementAxis.YNegative;
+            else
+                blockPlacementAxes.Remove(worldPos);
+
+            return;
+        }
+
         BlockPlacementAxis sanitized = BlockPlacementRotationUtility.SanitizeStoredAxis(axis);
         if (sanitized == BlockPlacementAxis.Y)
         {
@@ -225,7 +245,8 @@ public partial class World
         return mapping.usePlacementAxisRotation ||
                shape == BlockRenderShape.Stairs ||
                shape == BlockRenderShape.Ramp ||
-               shape == BlockRenderShape.VerticalRamp;
+               shape == BlockRenderShape.VerticalRamp ||
+               shape == BlockRenderShape.Slab;
     }
 
     private static BlockPlacementAxis ResolveWirePlacementAxis(Vector3 lookForward)

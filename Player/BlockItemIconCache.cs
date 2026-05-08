@@ -549,6 +549,15 @@ public static class BlockItemIconCache
                 AppendFenceFaces(faces);
                 break;
 
+            case BlockRenderShape.Fence2:
+                AppendFence2Faces(faces);
+                break;
+
+            case BlockRenderShape.Slab:
+                ShapeBox slab = SlabShapeUtility.GetVisualBox(BlockPlacementAxis.Y);
+                AddVisibleBoxFaces(faces, slab.min, slab.max);
+                break;
+
             default:
                 AddVisibleBoxFaces(faces, Vector3.zero, Vector3.one);
                 break;
@@ -852,6 +861,21 @@ public static class BlockItemIconCache
         ShapeBox upperRail = FenceShapeUtility.GetRailVisualBox(directionFlag, true);
         AddVisibleBoxFaces(faces, lowerRail.min, lowerRail.max);
         AddVisibleBoxFaces(faces, upperRail.min, upperRail.max);
+    }
+
+    private static void AppendFence2Faces(List<IconFace3D> faces)
+    {
+        ShapeBox centerPost = FenceShapeUtility.GetCenterPostVisualBox();
+        AddVisibleBoxFaces(faces, centerPost.min, centerPost.max);
+
+        AppendFence2RailFaces(faces, FenceShapeUtility.ConnectWest);
+        AppendFence2RailFaces(faces, FenceShapeUtility.ConnectEast);
+    }
+
+    private static void AppendFence2RailFaces(List<IconFace3D> faces, byte directionFlag)
+    {
+        ShapeBox rail = FenceShapeUtility.GetSingleRailVisualBox(directionFlag);
+        AddVisibleBoxFaces(faces, rail.min, rail.max);
     }
 
     private static void AddVisibleBoxFaces(List<IconFace3D> faces, Vector3 min, Vector3 max)

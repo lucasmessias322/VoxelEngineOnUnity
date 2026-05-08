@@ -1295,6 +1295,17 @@ public static class FenceShapeUtility
         };
     }
 
+    public static ShapeBox GetSingleRailVisualBox(byte directionFlag)
+    {
+        return directionFlag switch
+        {
+            ConnectWest => new ShapeBox(new Vector3(0f, 0f, 0.375f), new Vector3(0.625f, 1f, 0.625f)),
+            ConnectEast => new ShapeBox(new Vector3(0.375f, 0f, 0.375f), new Vector3(1f, 1f, 0.625f)),
+            ConnectSouth => new ShapeBox(new Vector3(0.375f, 0f, 0f), new Vector3(0.625f, 1f, 0.625f)),
+            _ => new ShapeBox(new Vector3(0.375f, 0f, 0.375f), new Vector3(0.625f, 1f, 1f))
+        };
+    }
+
     public static ShapeBox GetCenterPostColliderBox()
     {
         return new ShapeBox(new Vector3(0.375f, 0f, 0.375f), new Vector3(0.625f, 1.5f, 0.625f));
@@ -1355,12 +1366,319 @@ public static class FenceShapeUtility
     private static bool CanConnect(BlockType neighborType, BlockTextureMapping mapping)
     {
         BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
-        if (shape == BlockRenderShape.Fence)
+        if (shape == BlockRenderShape.Fence || shape == BlockRenderShape.Fence2)
             return true;
 
         return shape == BlockRenderShape.Cube &&
                mapping.isSolid &&
                !mapping.isEmpty &&
                !mapping.isLiquid;
+    }
+}
+
+public static class SlabShapeUtility
+{
+    public static BlockPlacementAxis ResolvePlacementCode(Vector3Int hitNormal, Vector3 hitPoint)
+    {
+        if (hitNormal.y < 0)
+            return BlockPlacementAxis.YNegative;
+
+        if (hitNormal.y > 0)
+            return BlockPlacementAxis.Y;
+
+        float localY = hitPoint.y - Mathf.Floor(hitPoint.y);
+        return localY > 0.5f ? BlockPlacementAxis.YNegative : BlockPlacementAxis.Y;
+    }
+
+    public static bool IsTopHalf(BlockPlacementAxis placementAxis)
+    {
+        return (byte)placementAxis == (byte)BlockPlacementAxis.YNegative;
+    }
+
+    public static ShapeBox GetVisualBox(BlockPlacementAxis placementAxis)
+    {
+        return IsTopHalf(placementAxis)
+            ? new ShapeBox(new Vector3(0f, 0.5f, 0f), Vector3.one)
+            : new ShapeBox(Vector3.zero, new Vector3(1f, 0.5f, 1f));
+    }
+
+    public static bool TryGetDoubleSlabBlockType(BlockType slabType, out BlockType fullBlockType)
+    {
+        switch (slabType)
+        {
+            case BlockType.oakPlanks_slab:
+                fullBlockType = BlockType.oak_planks;
+                return true;
+
+            default:
+                fullBlockType = BlockType.Air;
+                return false;
+        }
+    }
+}
+
+public static class BlockSupportSurfaceUtility
+{
+    public static Vector3 GetSurfaceAlignedWorldOffset(
+        World world,
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockPlacementAxis placementAxis)
+    {
+        if (world == null || blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return Vector3.zero;
+
+        if (TorchPlacementUtility.IsWallTorch(blockType))
+            return GetWallTorchSurfaceOffset(world, blockPos, blockType);
+
+        BlockPlacementAxis supportAxis = placementAxis;
+        if (world.blockData != null)
+        {
+            BlockTextureMapping? mapping = world.blockData.GetMapping(blockType);
+            if (mapping != null)
+                supportAxis = ResolveSurfaceSupportAxis(blockType, mapping.Value, placementAxis);
+            else
+                supportAxis = ResolveSurfaceSupportAxis(blockType, placementAxis);
+        }
+        else
+        {
+            supportAxis = ResolveSurfaceSupportAxis(blockType, placementAxis);
+        }
+
+        return GetSurfaceAlignedWorldOffset(world, blockPos, supportAxis);
+    }
+
+    public static Vector3 GetSurfaceAlignedWorldOffset(
+        World world,
+        Vector3Int blockPos,
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (world == null || blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return Vector3.zero;
+
+        if (TorchPlacementUtility.IsWallTorch(blockType))
+            return GetWallTorchSurfaceOffset(world, blockPos, blockType);
+
+        return GetSurfaceAlignedWorldOffset(world, blockPos, ResolveSurfaceSupportAxis(blockType, mapping, placementAxis));
+    }
+
+    public static BlockPlacementAxis ResolveSurfaceSupportAxis(BlockType blockType, BlockPlacementAxis placementAxis)
+    {
+        switch (blockType)
+        {
+            case BlockType.ConveyorBelt:
+            case BlockType.conveyorBelt_splitter:
+            case BlockType.SolarPanel:
+                return BlockPlacementAxis.Y;
+
+            default:
+                return placementAxis;
+        }
+    }
+
+    public static BlockPlacementAxis ResolveSurfaceSupportAxis(
+        BlockType blockType,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        switch (blockType)
+        {
+            case BlockType.ConveyorBelt:
+            case BlockType.conveyorBelt_splitter:
+            case BlockType.SolarPanel:
+                return BlockPlacementAxis.Y;
+        }
+
+        if (mapping.usePlacementAxisRotation &&
+            mapping.placementRotationAxes == BlockPlacementRotationAxes.Horizontal)
+        {
+            return BlockPlacementAxis.Y;
+        }
+
+        return ResolveSurfaceSupportAxis(blockType, placementAxis);
+    }
+
+    public static Vector3 GetSurfaceAlignedWorldOffset(
+        World world,
+        Vector3Int blockPos,
+        BlockPlacementAxis placementAxis)
+    {
+        if (world == null)
+            return Vector3.zero;
+
+        Vector3Int supportPos = GetSupportPosition(blockPos, placementAxis);
+        if (!TryGetVisualBounds(world, supportPos, out Bounds supportBounds))
+            return Vector3.zero;
+
+        Vector3 offset = Vector3.zero;
+        switch (placementAxis)
+        {
+            case BlockPlacementAxis.YNegative:
+                offset.y = supportBounds.min.y - (blockPos.y + 1f);
+                break;
+
+            case BlockPlacementAxis.XNegative:
+                offset.x = supportBounds.max.x - blockPos.x;
+                offset.y = supportBounds.center.y - (blockPos.y + 0.5f);
+                break;
+
+            case BlockPlacementAxis.X:
+                offset.x = supportBounds.min.x - (blockPos.x + 1f);
+                offset.y = supportBounds.center.y - (blockPos.y + 0.5f);
+                break;
+
+            case BlockPlacementAxis.ZNegative:
+                offset.z = supportBounds.max.z - blockPos.z;
+                offset.y = supportBounds.center.y - (blockPos.y + 0.5f);
+                break;
+
+            case BlockPlacementAxis.Z:
+                offset.z = supportBounds.min.z - (blockPos.z + 1f);
+                offset.y = supportBounds.center.y - (blockPos.y + 0.5f);
+                break;
+
+            default:
+                offset.y = Mathf.Min(0f, supportBounds.max.y - blockPos.y);
+                break;
+        }
+
+        return offset;
+    }
+
+    public static Vector3 GetTorchVisualWorldOffset(World world, Vector3Int blockPos, BlockType torchType)
+    {
+        if (torchType == BlockType.torch)
+            return GetSurfaceAlignedWorldOffset(world, blockPos, BlockPlacementAxis.Y);
+
+        if (TorchPlacementUtility.IsWallTorch(torchType))
+            return GetWallTorchSurfaceOffset(world, blockPos, torchType);
+
+        return Vector3.zero;
+    }
+
+    private static Vector3Int GetSupportPosition(Vector3Int blockPos, BlockPlacementAxis placementAxis)
+    {
+        return placementAxis switch
+        {
+            BlockPlacementAxis.YNegative => blockPos + Vector3Int.up,
+            BlockPlacementAxis.XNegative => blockPos + Vector3Int.left,
+            BlockPlacementAxis.X => blockPos + Vector3Int.right,
+            BlockPlacementAxis.ZNegative => blockPos + Vector3Int.back,
+            BlockPlacementAxis.Z => blockPos + Vector3Int.forward,
+            _ => blockPos + Vector3Int.down
+        };
+    }
+
+    private static Vector3 GetWallTorchSurfaceOffset(World world, Vector3Int blockPos, BlockType torchType)
+    {
+        if (world == null)
+            return Vector3.zero;
+
+        Vector3Int wallNormal = TorchPlacementUtility.GetWallNormal(torchType);
+        if (wallNormal == Vector3Int.zero)
+            return Vector3.zero;
+
+        Vector3Int supportPos = blockPos - wallNormal;
+        if (!TryGetVisualBounds(world, supportPos, out Bounds supportBounds))
+            return Vector3.zero;
+
+        Vector3 offset = Vector3.zero;
+        if (wallNormal.x > 0)
+            offset.x = supportBounds.max.x - blockPos.x;
+        else if (wallNormal.x < 0)
+            offset.x = supportBounds.min.x - (blockPos.x + 1f);
+        else if (wallNormal.z > 0)
+            offset.z = supportBounds.max.z - blockPos.z;
+        else if (wallNormal.z < 0)
+            offset.z = supportBounds.min.z - (blockPos.z + 1f);
+
+        offset.y = supportBounds.center.y - (blockPos.y + 0.5f);
+        return offset;
+    }
+
+    private static bool TryGetVisualBounds(World world, Vector3Int blockPos, out Bounds bounds)
+    {
+        bounds = default;
+        if (world == null || world.blockData == null)
+            return false;
+
+        BlockType blockType = world.GetBlockAt(blockPos);
+        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            return false;
+
+        BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return false;
+
+        BlockTextureMapping mapping = mappingResult.Value;
+        switch (BlockShapeUtility.GetEffectiveRenderShape(mapping))
+        {
+            case BlockRenderShape.Slab:
+                bounds = SlabShapeUtility.GetVisualBox(world.GetPlacementAxisAt(blockPos, blockType)).ToWorldBounds(blockPos);
+                return true;
+
+            case BlockRenderShape.Fence:
+                bounds = ResolveFenceVisualBounds(world, blockPos, false);
+                return true;
+
+            case BlockRenderShape.Fence2:
+                bounds = ResolveFenceVisualBounds(world, blockPos, true);
+                return true;
+
+            case BlockRenderShape.Cuboid:
+                bounds = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mapping, world.GetPlacementAxisAt(blockPos, blockType));
+                return true;
+
+            case BlockRenderShape.MultiCuboid:
+                if (BlockShapeUtility.TryGetMultiCuboidBounds(
+                    blockPos,
+                    mapping,
+                    world.blockData.runtimeMultiCuboidBoxes,
+                    world.GetPlacementAxisAt(blockPos, blockType),
+                    blockType,
+                    out bounds))
+                {
+                    return true;
+                }
+
+                bounds = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mapping, world.GetPlacementAxisAt(blockPos, blockType));
+                return true;
+
+            case BlockRenderShape.Cube:
+                bounds = new Bounds(blockPos + Vector3.one * 0.5f, Vector3.one);
+                return true;
+
+            default:
+                bounds = BlockShapeUtility.GetWorldBounds(blockPos, blockType, mapping, world.GetPlacementAxisAt(blockPos, blockType));
+                return true;
+        }
+    }
+
+    private static Bounds ResolveFenceVisualBounds(World world, Vector3Int blockPos, bool singleRail)
+    {
+        byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
+        Bounds bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(blockPos);
+        EncapsulateFenceRail(ref bounds, blockPos, connectionMask, FenceShapeUtility.ConnectWest, singleRail);
+        EncapsulateFenceRail(ref bounds, blockPos, connectionMask, FenceShapeUtility.ConnectEast, singleRail);
+        EncapsulateFenceRail(ref bounds, blockPos, connectionMask, FenceShapeUtility.ConnectSouth, singleRail);
+        EncapsulateFenceRail(ref bounds, blockPos, connectionMask, FenceShapeUtility.ConnectNorth, singleRail);
+        return bounds;
+    }
+
+    private static void EncapsulateFenceRail(ref Bounds bounds, Vector3Int blockPos, byte connectionMask, byte directionFlag, bool singleRail)
+    {
+        if (!FenceShapeUtility.IsFenceConnectionActive(connectionMask, directionFlag))
+            return;
+
+        if (singleRail)
+        {
+            bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(directionFlag).ToWorldBounds(blockPos));
+            return;
+        }
+
+        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(directionFlag, false).ToWorldBounds(blockPos));
+        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(directionFlag, true).ToWorldBounds(blockPos));
     }
 }

@@ -195,6 +195,25 @@ public class BlockSelector : MonoBehaviour
                 return true;
             }
 
+            case BlockRenderShape.Fence2:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
+                bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectWest).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectEast).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(pos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(pos));
+                return true;
+            }
+
+            case BlockRenderShape.Slab:
+                bounds = SlabShapeUtility.GetVisualBox(placementAxis).ToWorldBounds(pos);
+                return true;
+
             case BlockRenderShape.MultiCuboid:
                 if (BlockShapeUtility.TryGetMultiCuboidBounds(
                     pos,
@@ -558,6 +577,12 @@ public class BlockSelector : MonoBehaviour
             case BlockRenderShape.Fence:
                 return TryHitFenceBlock(ray, maxDistance, voxel, lastNormal, out hitNormal, out hitPoint);
 
+            case BlockRenderShape.Fence2:
+                return TryHitFence2Block(ray, maxDistance, voxel, lastNormal, out hitNormal, out hitPoint);
+
+            case BlockRenderShape.Slab:
+                return TryHitShapeBox(ray, maxDistance, SlabShapeUtility.GetVisualBox(placementAxis).ToWorldBounds(voxel), lastNormal, out _, out hitNormal, out hitPoint);
+
             default:
                 return false;
         }
@@ -636,6 +661,12 @@ public class BlockSelector : MonoBehaviour
             return TryHitShapeBox(ray, maxDistance, fallbackBounds, lastNormal, out hitDistance, out hitNormal, out hitPoint);
         }
 
+        Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(
+            world,
+            voxel,
+            mapping.blockType,
+            placementAxis);
+
         float bestDistance = float.PositiveInfinity;
         bool hit = false;
         for (int i = 0; i < boxCount; i++)
@@ -643,7 +674,7 @@ public class BlockSelector : MonoBehaviour
             if (!BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, mapping.blockType, out ShapeBox box))
                 continue;
 
-            if (!TryHitShapeBox(ray, maxDistance, box.ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point))
+            if (!TryHitShapeBox(ray, maxDistance, OffsetShapeBox(box, supportOffset).ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point))
                 continue;
 
             if (distance >= bestDistance)
@@ -657,6 +688,14 @@ public class BlockSelector : MonoBehaviour
 
         hitDistance = bestDistance;
         return hit;
+    }
+
+    private static ShapeBox OffsetShapeBox(ShapeBox box, Vector3 offset)
+    {
+        if (offset == Vector3.zero)
+            return box;
+
+        return new ShapeBox(box.min + offset, box.max + offset);
     }
 
     private bool TryHitOverflowingNeighborMultiCuboid(
@@ -1151,6 +1190,61 @@ public class BlockSelector : MonoBehaviour
         }
 
         return hit;
+    }
+
+    private bool TryHitFence2Block(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        byte connectionMask = FenceShapeUtility.ResolveConnectionMask(World.Instance, voxel);
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+
+        if (TryHitShapeBox(ray, maxDistance, FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(voxel), lastNormal, out float centerDistance, out Vector3Int centerNormal, out Vector3 centerPoint))
+        {
+            bestDistance = centerDistance;
+            hitNormal = centerNormal;
+            hitPoint = centerPoint;
+            hit = true;
+        }
+
+        hit = TryHitFence2Rail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectWest, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFence2Rail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectEast, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFence2Rail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectSouth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        hit = TryHitFence2Rail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectNorth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        return hit;
+    }
+
+    private bool TryHitFence2Rail(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        byte connectionMask,
+        byte directionFlag,
+        Vector3Int lastNormal,
+        ref float bestDistance,
+        ref Vector3Int bestNormal,
+        ref Vector3 bestPoint)
+    {
+        if (!FenceShapeUtility.IsFenceConnectionActive(connectionMask, directionFlag))
+            return false;
+
+        if (!TryHitShapeBox(ray, maxDistance, FenceShapeUtility.GetSingleRailVisualBox(directionFlag).ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point) ||
+            (!float.IsPositiveInfinity(bestDistance) && distance >= bestDistance))
+        {
+            return false;
+        }
+
+        bestDistance = distance;
+        bestNormal = normal;
+        bestPoint = point;
+        return true;
     }
 
     private bool TryUpdateCustomHit(

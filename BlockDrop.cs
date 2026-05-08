@@ -525,6 +525,14 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 AppendFenceMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
 
+            case BlockRenderShape.Fence2:
+                AppendFence2Mesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
+                break;
+
+            case BlockRenderShape.Slab:
+                AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, SlabShapeUtility.GetVisualBox(BlockPlacementAxis.Y), invAtlasTilesX, invAtlasTilesY);
+                break;
+
             case BlockRenderShape.Ramp:
                 AppendRampMesh(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, invAtlasTilesX, invAtlasTilesY);
                 break;
@@ -997,6 +1005,24 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true), invAtlasTilesX, invAtlasTilesY);
         AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false), invAtlasTilesX, invAtlasTilesY);
         AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true), invAtlasTilesX, invAtlasTilesY);
+    }
+
+    private static void AppendFence2Mesh(
+        List<Vector3> vertices,
+        List<Vector3> normals,
+        List<Vector2> uv0,
+        List<Vector2> uv1,
+        List<Vector4> uv2,
+        List<Vector2> uv3,
+        List<int> tris,
+        BlockTextureMapping mapping,
+        Vector3 origin,
+        float invAtlasTilesX,
+        float invAtlasTilesY)
+    {
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetCenterPostVisualBox(), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectWest), invAtlasTilesX, invAtlasTilesY);
+        AppendShapeBox(vertices, normals, uv0, uv1, uv2, uv3, tris, mapping, origin, FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectEast), invAtlasTilesX, invAtlasTilesY);
     }
 
     private static void AppendRampMesh(

@@ -69,6 +69,7 @@ public static partial class MeshGenerator
             Vector3 origin,
             BlockTextureMapping mapping,
             BlockType blockType,
+            BlockPlacementAxis placementAxis,
             int voxelX,
             int voxelY,
             int voxelZ,
@@ -86,8 +87,18 @@ public static partial class MeshGenerator
             if (IsWallTorch(blockType))
             {
                 float resolvedLight01 = math.max(light01, emission / 15f);
-                AddWallTorchShape(origin, mapping, blockType, invAtlasTilesX, invAtlasTilesY, resolvedLight01, tris);
+                AddWallTorchShape(origin, mapping, blockType, voxelX, voxelY, voxelZ, invAtlasTilesX, invAtlasTilesY, resolvedLight01, tris);
                 return;
+            }
+
+            int decoratedVoxelSizeX = SizeX + 2 * border;
+            int decoratedVoxelSizeZ = SizeZ + 2 * border;
+            int decoratedVoxelPlaneSize = decoratedVoxelSizeX * SizeY;
+            Vector3 visualOffset = ResolveSurfaceAlignedVisualOffset(mapping, blockType, placementAxis, voxelX, voxelY, voxelZ, decoratedVoxelSizeX, decoratedVoxelSizeZ, decoratedVoxelPlaneSize);
+            if (visualOffset != Vector3.zero)
+            {
+                min += visualOffset;
+                max += visualOffset;
             }
 
             AddShapeFace(
@@ -197,24 +208,28 @@ public static partial class MeshGenerator
             Vector3 origin,
             BlockTextureMapping mapping,
             BlockType blockType,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
             float invAtlasTilesX,
             float invAtlasTilesY,
             float light01,
             NativeList<int> tris)
         {
             ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
+            Vector3 visualOffset = ResolveTorchVisualOffset(blockType, voxelX, voxelY, voxelZ, SizeX + 2 * border, SizeZ + 2 * border, (SizeX + 2 * border) * SizeY);
 
             Vector3 modelMin = new Vector3(min.x - 0.5f, min.y, min.z - 0.5f);
             Vector3 modelMax = new Vector3(max.x - 0.5f, max.y, max.z - 0.5f);
 
-            Vector3 p000 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMin.z));
-            Vector3 p001 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMax.z));
-            Vector3 p010 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMin.z));
-            Vector3 p011 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMax.z));
-            Vector3 p100 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMin.z));
-            Vector3 p101 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMax.z));
-            Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z));
-            Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z));
+            Vector3 p000 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMin.z)) + visualOffset;
+            Vector3 p001 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMin.y, modelMax.z)) + visualOffset;
+            Vector3 p010 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMin.z)) + visualOffset;
+            Vector3 p011 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMin.x, modelMax.y, modelMax.z)) + visualOffset;
+            Vector3 p100 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMin.z)) + visualOffset;
+            Vector3 p101 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMin.y, modelMax.z)) + visualOffset;
+            Vector3 p110 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMin.z)) + visualOffset;
+            Vector3 p111 = origin + TransformTorchModelPoint(blockType, new Vector3(modelMax.x, modelMax.y, modelMax.z)) + visualOffset;
 
             AddStaticLitShapeFace(p100, p110, p111, p101, mapping, BlockFace.Right, mapping.GetTint(BlockFace.Right), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
             AddStaticLitShapeFace(p001, p011, p010, p000, mapping, BlockFace.Left, mapping.GetTint(BlockFace.Left), light01, invAtlasTilesX, invAtlasTilesY, tris, light01);
@@ -324,6 +339,262 @@ public static partial class MeshGenerator
                 default:
                     return modelPoint + new Vector3(0.5f, 0f, 0.5f);
             }
+        }
+
+        private Vector3 ResolveTorchVisualOffset(
+            BlockType blockType,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (blockType == BlockType.torch)
+            {
+                if (!TryResolveSupportVisualBox(voxelX, voxelY - 1, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out ShapeBox supportBox))
+                    return Vector3.zero;
+
+                return new Vector3(0f, math.min(0f, supportBox.max.y - 1f), 0f);
+            }
+
+            if (!IsWallTorch(blockType))
+                return Vector3.zero;
+
+            ResolveWallTorchSupport(blockType, voxelX, voxelY, voxelZ, out int supportX, out int supportY, out int supportZ);
+            if (!TryResolveSupportVisualBox(supportX, supportY, supportZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out ShapeBox wallSupportBox))
+                return Vector3.zero;
+
+            Vector3 offset = Vector3.zero;
+            switch (blockType)
+            {
+                case BlockType.WallTorchEast:
+                    offset.x = wallSupportBox.max.x - 1f;
+                    break;
+
+                case BlockType.WallTorchWest:
+                    offset.x = wallSupportBox.min.x;
+                    break;
+
+                case BlockType.WallTorchSouth:
+                    offset.z = wallSupportBox.max.z - 1f;
+                    break;
+
+                case BlockType.WallTorchNorth:
+                    offset.z = wallSupportBox.min.z;
+                    break;
+            }
+
+            offset.y = ((wallSupportBox.min.y + wallSupportBox.max.y) * 0.5f) - 0.5f;
+            return offset;
+        }
+
+        private Vector3 ResolveSurfaceAlignedVisualOffset(
+            BlockTextureMapping mapping,
+            BlockType blockType,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (TorchPlacementUtility.IsWallTorch(blockType))
+                return ResolveTorchVisualOffset(blockType, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
+            BlockPlacementAxis supportAxis = BlockSupportSurfaceUtility.ResolveSurfaceSupportAxis(blockType, mapping, placementAxis);
+            ResolveSurfaceSupportPosition(supportAxis, voxelX, voxelY, voxelZ, out int supportX, out int supportY, out int supportZ);
+            if (!TryResolveSupportVisualBox(supportX, supportY, supportZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out ShapeBox supportBox))
+                return Vector3.zero;
+
+            Vector3 offset = Vector3.zero;
+            switch (BlockPlacementRotationUtility.SanitizeStoredAxis(supportAxis))
+            {
+                case BlockPlacementAxis.YNegative:
+                    offset.y = supportBox.min.y;
+                    break;
+
+                case BlockPlacementAxis.XNegative:
+                    offset.x = supportBox.max.x - 1f;
+                    offset.y = ((supportBox.min.y + supportBox.max.y) * 0.5f) - 0.5f;
+                    break;
+
+                case BlockPlacementAxis.X:
+                    offset.x = supportBox.min.x;
+                    offset.y = ((supportBox.min.y + supportBox.max.y) * 0.5f) - 0.5f;
+                    break;
+
+                case BlockPlacementAxis.ZNegative:
+                    offset.z = supportBox.max.z - 1f;
+                    offset.y = ((supportBox.min.y + supportBox.max.y) * 0.5f) - 0.5f;
+                    break;
+
+                case BlockPlacementAxis.Z:
+                    offset.z = supportBox.min.z;
+                    offset.y = ((supportBox.min.y + supportBox.max.y) * 0.5f) - 0.5f;
+                    break;
+
+                default:
+                    offset.y = math.min(0f, supportBox.max.y - 1f);
+                    break;
+            }
+
+            return offset;
+        }
+
+        private static void ResolveSurfaceSupportPosition(
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            out int supportX,
+            out int supportY,
+            out int supportZ)
+        {
+            supportX = voxelX;
+            supportY = voxelY;
+            supportZ = voxelZ;
+
+            switch (BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+            {
+                case BlockPlacementAxis.YNegative:
+                    supportY = voxelY + 1;
+                    break;
+
+                case BlockPlacementAxis.XNegative:
+                    supportX = voxelX - 1;
+                    break;
+
+                case BlockPlacementAxis.X:
+                    supportX = voxelX + 1;
+                    break;
+
+                case BlockPlacementAxis.ZNegative:
+                    supportZ = voxelZ - 1;
+                    break;
+
+                case BlockPlacementAxis.Z:
+                    supportZ = voxelZ + 1;
+                    break;
+
+                default:
+                    supportY = voxelY - 1;
+                    break;
+            }
+        }
+
+        private static void ResolveWallTorchSupport(BlockType blockType, int voxelX, int voxelY, int voxelZ, out int supportX, out int supportY, out int supportZ)
+        {
+            supportX = voxelX;
+            supportY = voxelY;
+            supportZ = voxelZ;
+
+            switch (blockType)
+            {
+                case BlockType.WallTorchEast:
+                    supportX = voxelX - 1;
+                    break;
+
+                case BlockType.WallTorchWest:
+                    supportX = voxelX + 1;
+                    break;
+
+                case BlockType.WallTorchSouth:
+                    supportZ = voxelZ - 1;
+                    break;
+
+                case BlockType.WallTorchNorth:
+                    supportZ = voxelZ + 1;
+                    break;
+            }
+        }
+
+        private bool TryResolveSupportVisualBox(
+            int x,
+            int y,
+            int z,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out ShapeBox box)
+        {
+            box = default;
+            if (x < 0 || x >= voxelSizeX || y < 0 || y >= SizeY || z < 0 || z >= voxelSizeZ)
+                return false;
+
+            int idx = x + y * voxelSizeX + z * voxelPlaneSize;
+            BlockType supportType = (BlockType)blockTypes[idx];
+            if (supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType))
+                return false;
+
+            int mapIndex = (int)supportType;
+            if ((uint)mapIndex >= (uint)blockMappings.Length)
+                return false;
+
+            BlockTextureMapping supportMapping = blockMappings[mapIndex];
+            switch (BlockShapeUtility.GetEffectiveRenderShape(supportMapping))
+            {
+                case BlockRenderShape.Slab:
+                    box = SlabShapeUtility.GetVisualBox((BlockPlacementAxis)GetBlockPlacementAxisValue(idx));
+                    return true;
+
+                case BlockRenderShape.Fence:
+                    return TryUnionShapeBoxes(BuildFenceVisualBoxes(FenceShapeUtility.ResolveConnectionMask(
+                        x,
+                        y,
+                        z,
+                        blockTypes,
+                        blockMappings,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize)), out box);
+
+                case BlockRenderShape.Fence2:
+                    return TryUnionShapeBoxes(BuildFenceVisualBoxes(FenceShapeUtility.ResolveConnectionMask(
+                        x,
+                        y,
+                        z,
+                        blockTypes,
+                        blockMappings,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize), true), out box);
+
+                case BlockRenderShape.Cuboid:
+                    ResolveShapeBounds(supportMapping, out Vector3 min, out Vector3 max);
+                    box = new ShapeBox(min, max);
+                    return true;
+
+                case BlockRenderShape.MultiCuboid:
+                    return TryUnionShapeBoxes(
+                        BuildNativeMultiCuboidShapeBoxes(
+                            supportMapping,
+                            (BlockPlacementAxis)GetBlockPlacementAxisValue(idx)),
+                        out box);
+
+                default:
+                    box = new ShapeBox(Vector3.zero, Vector3.one);
+                    return supportMapping.isSolid && !supportMapping.isEmpty && !supportMapping.isLiquid;
+            }
+        }
+
+        private static bool TryUnionShapeBoxes(FixedList512Bytes<ShapeBox> boxes, out ShapeBox union)
+        {
+            union = default;
+            if (boxes.Length == 0)
+                return false;
+
+            Vector3 min = boxes[0].min;
+            Vector3 max = boxes[0].max;
+            for (int i = 1; i < boxes.Length; i++)
+            {
+                min = Vector3.Min(min, boxes[i].min);
+                max = Vector3.Max(max, boxes[i].max);
+            }
+
+            union = new ShapeBox(min, max);
+            return true;
         }
 
         private void AddShapeFace(
@@ -623,6 +894,11 @@ public static partial class MeshGenerator
                 case BlockRenderShape.Plane:
                     min = new Vector3(0f, 0f, 0f);
                     max = new Vector3(1f, 0.0625f, 1f);
+                    return;
+
+                case BlockRenderShape.Slab:
+                    min = new Vector3(0f, 0f, 0f);
+                    max = new Vector3(1f, 0.5f, 1f);
                     return;
 
                 default:

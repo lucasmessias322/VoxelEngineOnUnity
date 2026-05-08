@@ -798,6 +798,27 @@ public static partial class MeshGenerator
                     return IsPointInsideShapeBoxes(localPos, fenceBoxes);
                 }
 
+                case BlockRenderShape.Fence2:
+                {
+                    byte connectionMask = FenceShapeUtility.ResolveConnectionMask(
+                        voxelX,
+                        voxelY,
+                        voxelZ,
+                        blockTypes,
+                        blockMappings,
+                        voxelSizeX,
+                        voxelSizeZ,
+                        voxelPlaneSize);
+                    FixedList512Bytes<ShapeBox> fenceBoxes = BuildFenceVisualBoxes(connectionMask, true);
+                    return IsPointInsideShapeBoxes(localPos, fenceBoxes);
+                }
+
+                case BlockRenderShape.Slab:
+                {
+                    BlockPlacementAxis slabAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    return IsPointInsideBox(localPos, SlabShapeUtility.GetVisualBox(slabAxis));
+                }
+
                 default:
                     ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
                     return IsPointInsideBox(localPos, new ShapeBox(fallbackMin, fallbackMax));

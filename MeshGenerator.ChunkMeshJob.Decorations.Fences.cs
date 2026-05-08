@@ -14,6 +14,7 @@ public static partial class MeshGenerator
         private void AddFenceShape(
             Vector3 origin,
             BlockTextureMapping mapping,
+            bool singleRail,
             int voxelX,
             int voxelY,
             int voxelZ,
@@ -35,7 +36,7 @@ public static partial class MeshGenerator
                 voxelSizeZ,
                 voxelPlaneSize);
 
-            FixedList512Bytes<ShapeBox> shapeBoxes = BuildFenceVisualBoxes(connectionMask);
+            FixedList512Bytes<ShapeBox> shapeBoxes = BuildFenceVisualBoxes(connectionMask, singleRail);
             NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
             AddAmbientOccludedShapeBoxes(
                 origin,
@@ -56,34 +57,47 @@ public static partial class MeshGenerator
 
         private FixedList512Bytes<ShapeBox> BuildFenceVisualBoxes(byte connectionMask)
         {
+            return BuildFenceVisualBoxes(connectionMask, false);
+        }
+
+        private FixedList512Bytes<ShapeBox> BuildFenceVisualBoxes(byte connectionMask, bool singleRail)
+        {
             FixedList512Bytes<ShapeBox> boxes = default;
             boxes.Add(FenceShapeUtility.GetCenterPostVisualBox());
 
             if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
             {
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false));
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true));
+                AddFenceRailVisualBoxes(ref boxes, FenceShapeUtility.ConnectWest, singleRail);
             }
 
             if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
             {
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false));
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true));
+                AddFenceRailVisualBoxes(ref boxes, FenceShapeUtility.ConnectEast, singleRail);
             }
 
             if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
             {
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false));
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true));
+                AddFenceRailVisualBoxes(ref boxes, FenceShapeUtility.ConnectSouth, singleRail);
             }
 
             if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
             {
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false));
-                boxes.Add(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true));
+                AddFenceRailVisualBoxes(ref boxes, FenceShapeUtility.ConnectNorth, singleRail);
             }
 
             return boxes;
+        }
+
+        private void AddFenceRailVisualBoxes(ref FixedList512Bytes<ShapeBox> boxes, byte directionFlag, bool singleRail)
+        {
+            if (singleRail)
+            {
+                boxes.Add(FenceShapeUtility.GetSingleRailVisualBox(directionFlag));
+                return;
+            }
+
+            boxes.Add(FenceShapeUtility.GetRailVisualBox(directionFlag, false));
+            boxes.Add(FenceShapeUtility.GetRailVisualBox(directionFlag, true));
         }
 
         private void AddFenceRailIfConnected(

@@ -35,12 +35,20 @@ public static partial class MeshGenerator
                     origin,
                     mapping,
                     blockType,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
                     resolvedLight01,
                     invAtlasTilesX,
                     invAtlasTilesY,
                     tris);
                 return;
             }
+
+            Vector3 visualOffset = ResolveSurfaceAlignedVisualOffset(mapping, blockType, placementAxis, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             FixedList512Bytes<ShapeBox> shapeBoxes = default;
             FixedList4096Bytes<ShapeFaceRect> faceRects = default;
@@ -56,7 +64,7 @@ public static partial class MeshGenerator
                 if (IsModelCuboidRotated(cuboid))
                 {
                     AddRotatedMultiCuboid(
-                        origin,
+                        origin + visualOffset,
                         mapping,
                         cuboid,
                         placementAxis,
@@ -74,6 +82,7 @@ public static partial class MeshGenerator
                 }
 
                 ShapeBox box = BlockShapeUtility.TransformShapeBoxForPlacement(cuboid.ToShapeBox(), mapping, placementAxis);
+                box = OffsetShapeBox(box, visualOffset);
                 shapeBoxes.Add(box);
                 AppendModelCuboidFaceRects(ref faceRects, box, cuboid, mapping, placementAxis);
             }
@@ -81,7 +90,7 @@ public static partial class MeshGenerator
             if (!appendedAnyCuboid)
             {
                 ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
-                ShapeBox fallback = new ShapeBox(fallbackMin, fallbackMax);
+                ShapeBox fallback = OffsetShapeBox(new ShapeBox(fallbackMin, fallbackMax), visualOffset);
                 shapeBoxes.Add(fallback);
                 AppendShapeFaceRects(ref faceRects, fallback);
             }
@@ -115,15 +124,31 @@ public static partial class MeshGenerator
             }
         }
 
+        private static ShapeBox OffsetShapeBox(ShapeBox box, Vector3 offset)
+        {
+            if (offset == Vector3.zero)
+                return box;
+
+            return new ShapeBox(box.min + offset, box.max + offset);
+        }
+
         private void AddWallTorchMultiCuboidShape(
             Vector3 origin,
             BlockTextureMapping mapping,
             BlockType blockType,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
             float light01,
             float invAtlasTilesX,
             float invAtlasTilesY,
             NativeList<int> tris)
         {
+            origin += ResolveTorchVisualOffset(blockType, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+
             int boxCount = GetNativeMultiCuboidBoxCount(mapping);
             bool appendedAnyCuboid = false;
             for (int i = 0; i < boxCount; i++)

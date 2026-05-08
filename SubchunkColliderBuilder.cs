@@ -539,25 +539,30 @@ internal sealed class SubchunkColliderBuilder
                     switch (shape)
                     {
                         case BlockRenderShape.Cuboid:
+                        {
+                            BlockPlacementAxis cuboidAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, worldPos, blockType, mapping, cuboidAxis);
                             BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 min, out Vector3 max);
-                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, new ShapeBox(min, max));
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, OffsetShapeBox(new ShapeBox(min, max), supportOffset));
                             break;
+                        }
 
                         case BlockRenderShape.MultiCuboid:
                         {
                             BlockPlacementAxis multiAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, worldPos, blockType, mapping, multiAxis);
                             int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, blockModelCuboids);
                             if (boxCount <= 0)
                             {
                                 BlockShapeUtility.ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
-                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, new ShapeBox(fallbackMin, fallbackMax));
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, OffsetShapeBox(new ShapeBox(fallbackMin, fallbackMax), supportOffset));
                                 break;
                             }
 
                             for (int boxIndex = 0; boxIndex < boxCount; boxIndex++)
                             {
                                 if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, blockModelCuboids, boxIndex, multiAxis, blockType, out ShapeBox box))
-                                    colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, box);
+                                    colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, OffsetShapeBox(box, supportOffset));
                             }
 
                             break;
@@ -610,6 +615,28 @@ internal sealed class SubchunkColliderBuilder
                             break;
                         }
 
+                        case BlockRenderShape.Fence2:
+                        {
+                            byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, worldPos);
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetCenterPostColliderBox());
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectWest));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectEast));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectSouth));
+                            if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                                colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectNorth));
+                            break;
+                        }
+
+                        case BlockRenderShape.Slab:
+                        {
+                            BlockPlacementAxis slabAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, SlabShapeUtility.GetVisualBox(slabAxis));
+                            break;
+                        }
+
                         default:
                         {
                             Bounds bounds = BlockShapeUtility.GetWorldBounds(localBlockPos, blockType, mapping, BlockPlacementAxis.Y);
@@ -623,6 +650,14 @@ internal sealed class SubchunkColliderBuilder
         }
 
         return colliderCount;
+    }
+
+    private static ShapeBox OffsetShapeBox(ShapeBox box, Vector3 offset)
+    {
+        if (offset == Vector3.zero)
+            return box;
+
+        return new ShapeBox(box.min + offset, box.max + offset);
     }
 
     private int AddShapeColliderBox(GameObject owner, int colliderIndex, Vector3Int blockPos, ShapeBox box)

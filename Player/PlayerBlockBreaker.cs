@@ -2201,6 +2201,20 @@ public class PlayerBlockBreaker : MonoBehaviour
                 ResolvePlacementLookForward(),
                 hitPoint);
 
+        if (TryResolveStackedSlabPlacement(
+                world,
+                placedBlockType,
+                targetBlock,
+                hitNormal,
+                targetType,
+                ref placePos,
+                ref placedBlockType,
+                ref placementAxis,
+                ref blockAtPlacePos))
+        {
+            preserveLockedPlacementAxis = false;
+        }
+
         bool canMergeWireState = placedBlockType == BlockType.wire &&
                                  blockAtPlacePos == BlockType.wire &&
                                  world.CanPlaceWireStateAt(placePos, placementAxis);
@@ -2550,6 +2564,47 @@ public class PlayerBlockBreaker : MonoBehaviour
         return true;
     }
 
+    private bool TryResolveStackedSlabPlacement(
+        World world,
+        BlockType selectedPlacedBlockType,
+        Vector3Int targetBlock,
+        Vector3Int hitNormal,
+        BlockType targetType,
+        ref Vector3Int placePos,
+        ref BlockType placedBlockType,
+        ref BlockPlacementAxis placementAxis,
+        ref BlockType blockAtPlacePos)
+    {
+        if (world == null ||
+            selectedPlacedBlockType != targetType ||
+            !SlabShapeUtility.TryGetDoubleSlabBlockType(selectedPlacedBlockType, out BlockType doubleSlabType))
+        {
+            return false;
+        }
+
+        if (world.blockData == null)
+            return false;
+
+        BlockTextureMapping? slabMapping = world.blockData.GetMapping(selectedPlacedBlockType);
+        if (slabMapping == null || BlockShapeUtility.GetEffectiveRenderShape(slabMapping.Value) != BlockRenderShape.Slab)
+            return false;
+
+        BlockPlacementAxis targetAxis = world.GetPlacementAxisAt(targetBlock, targetType);
+        bool targetIsTopHalf = SlabShapeUtility.IsTopHalf(targetAxis);
+        bool shouldStack =
+            (!targetIsTopHalf && hitNormal.y > 0) ||
+            (targetIsTopHalf && hitNormal.y < 0);
+
+        if (!shouldStack)
+            return false;
+
+        placePos = targetBlock;
+        placedBlockType = doubleSlabType;
+        placementAxis = BlockPlacementAxis.Y;
+        blockAtPlacePos = BlockType.Air;
+        return true;
+    }
+
     private bool DoesPlacementOverlapExistingDynamicBlock(
         Vector3Int placePos,
         BlockType blockType,
@@ -2709,16 +2764,41 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return false;
             }
 
+            case BlockRenderShape.Fence2:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
+                if (testBounds.Intersects(FenceShapeUtility.GetCenterPostColliderBox().ToWorldBounds(blockPos)))
+                    return true;
+
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectWest).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectEast).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(blockPos)))
+                    return true;
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth) &&
+                    testBounds.Intersects(FenceShapeUtility.GetArmColliderBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(blockPos)))
+                    return true;
+                return false;
+            }
+
+            case BlockRenderShape.Slab:
+                return testBounds.Intersects(SlabShapeUtility.GetVisualBox(placementAxis).ToWorldBounds(blockPos));
+
             case BlockRenderShape.MultiCuboid:
             {
                 int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, world.blockData.runtimeMultiCuboidBoxes);
                 if (boxCount <= 0)
                     return testBounds.Intersects(ResolveBlockBounds(blockPos, blockType, placementAxis));
 
+                Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, blockPos, blockType, placementAxis);
                 for (int i = 0; i < boxCount; i++)
                 {
                     if (BlockShapeUtility.TryGetMultiCuboidBox(mapping, world.blockData.runtimeMultiCuboidBoxes, i, placementAxis, blockType, out ShapeBox box) &&
-                        testBounds.Intersects(box.ToWorldBounds(blockPos)))
+                        testBounds.Intersects(OffsetShapeBox(box, supportOffset).ToWorldBounds(blockPos)))
                     {
                         return true;
                     }
@@ -2815,6 +2895,24 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return bounds;
             }
 
+            case BlockRenderShape.Fence2:
+            {
+                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, blockPos);
+                Bounds bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(blockPos);
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectWest).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectEast).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(blockPos));
+                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(blockPos));
+                return bounds;
+            }
+
+            case BlockRenderShape.Slab:
+                return SlabShapeUtility.GetVisualBox(placementAxis).ToWorldBounds(blockPos);
+
             case BlockRenderShape.MultiCuboid:
             {
                 if (BlockShapeUtility.TryGetMultiCuboidBounds(
@@ -2833,5 +2931,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         }
 
         return BlockShapeUtility.GetWorldBounds(blockPos, blockType, value, placementAxis);
+    }
+
+    private static ShapeBox OffsetShapeBox(ShapeBox box, Vector3 offset)
+    {
+        if (offset == Vector3.zero)
+            return box;
+
+        return new ShapeBox(box.min + offset, box.max + offset);
     }
 }

@@ -94,7 +94,7 @@ public static partial class MeshGenerator
                                         break;
 
                                     case BlockRenderShape.Cuboid:
-                                        AddCuboidShape(origin, mapping, blockType, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
+                                        AddCuboidShape(origin, mapping, blockType, placementAxis, x, y, z, invAtlasTilesX, invAtlasTilesY, specialLight01);
                                         break;
 
                                     case BlockRenderShape.MultiCuboid:
@@ -186,6 +186,7 @@ public static partial class MeshGenerator
                                         AddFenceShape(
                                             origin,
                                             mapping,
+                                            false,
                                             x,
                                             y,
                                             z,
@@ -193,6 +194,33 @@ public static partial class MeshGenerator
                                             voxelSizeX,
                                             voxelSizeZ,
                                             voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Fence2:
+                                        AddFenceShape(
+                                            origin,
+                                            mapping,
+                                            true,
+                                            x,
+                                            y,
+                                            z,
+                                            blockTypes,
+                                            voxelSizeX,
+                                            voxelSizeZ,
+                                            voxelPlaneSize,
+                                            invAtlasTilesX,
+                                            invAtlasTilesY,
+                                            specialLight01);
+                                        break;
+
+                                    case BlockRenderShape.Slab:
+                                        AddSlabShape(
+                                            origin,
+                                            mapping,
+                                            placementAxis,
                                             invAtlasTilesX,
                                             invAtlasTilesY,
                                             specialLight01);

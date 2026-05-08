@@ -215,5 +215,24 @@ public static partial class MeshGenerator
                 tris);
         }
 
+        private void AddSlabShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+            AddStaticLitShapeBox(
+                origin,
+                mapping,
+                SlabShapeUtility.GetVisualBox(placementAxis),
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris);
+        }
+
     }
 }
