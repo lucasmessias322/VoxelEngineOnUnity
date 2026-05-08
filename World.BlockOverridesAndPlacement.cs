@@ -89,8 +89,11 @@ public partial class World
         Vector3 lookForward,
         Vector3 hitPoint)
     {
-        if (blockType == BlockType.ConveyorBelt)
+        if (blockType == BlockType.ConveyorBelt ||
+            blockType == BlockType.conveyorBelt_splitter)
+        {
             return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
+        }
 
         if (blockType == BlockType.SolarPanel)
             return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
@@ -242,7 +245,10 @@ public partial class World
 
         mapping = mappingResult.Value;
         BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
-        return mapping.usePlacementAxisRotation ||
+        return blockType == BlockType.ConveyorBelt ||
+               blockType == BlockType.conveyorBelt_splitter ||
+               blockType == BlockType.SolarPanel ||
+               mapping.usePlacementAxisRotation ||
                shape == BlockRenderShape.Stairs ||
                shape == BlockRenderShape.Ramp ||
                shape == BlockRenderShape.VerticalRamp ||

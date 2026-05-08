@@ -35,8 +35,11 @@ internal static class DropCollisionUtility
                     if (!world.TryGetLoadedBlockAt(blockPos, out BlockType blockType))
                         continue;
 
-                    if (blockType == ignoredBlockType)
+                    if (blockType == ignoredBlockType ||
+                        (ignoredBlockType == BlockType.ConveyorBelt && ConveyorBeltUtility.IsConveyorBlock(blockType)))
+                    {
                         continue;
+                    }
 
                     if (!world.IsSolidBlock(blockType))
                         continue;
@@ -158,6 +161,9 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private bool isSleeping;
     private bool isRegisteredInMergeGrid;
     private bool isHeldByRoboticArm;
+    private bool hasLastStackSplitSplitterPos;
+    private Vector3Int lastStackSplitSplitterPos;
+    private float mergeSuppressedUntil;
 
     private struct FaceDef
     {
@@ -195,6 +201,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
     private static Material fallbackDropMaterial;
     private const int MaxPoolSize = 512;
+    private const float SplitterSplitMergeSuppressSeconds = 1.25f;
     private const float ShapeFaceEpsilon = 0.0001f;
     private static Vector2Int currentLegacyAtlasTiles = Vector2Int.one;
     private static bool currentAtlasOriginTopLeft;
@@ -224,12 +231,25 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
     public static bool Spawn(World world, Vector3 worldPosition, BlockType blockType, int amount, Vector3 throwDirection)
     {
+        return Spawn(world, worldPosition, blockType, amount, throwDirection, out _);
+    }
+
+    private static bool Spawn(
+        World world,
+        Vector3 worldPosition,
+        BlockType blockType,
+        int amount,
+        Vector3 throwDirection,
+        out BlockDrop spawnedDrop)
+    {
         if (world == null)
         {
             Debug.LogWarning("[BlockDrop] Spawn cancelado: World.Instance nulo.");
+            spawnedDrop = null;
             return false;
         }
 
+        spawnedDrop = null;
         if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
             return false;
 
@@ -250,6 +270,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         drop.isCollected = false;
         drop.isPooled = false;
         drop.isHeldByRoboticArm = false;
+        drop.hasLastStackSplitSplitterPos = false;
+        drop.mergeSuppressedUntil = 0f;
         drop.transform.localScale = Vector3.one * drop.dropScale;
         drop.spawnTime = Time.time;
         drop.despawnStartTime = drop.spawnTime;
@@ -268,6 +290,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         drop.SetupPhysics(throwDirection);
         drop.RegisterInMergeGrid();
         drop.UpdateDropName();
+        spawnedDrop = drop;
         return true;
     }
 
@@ -345,6 +368,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
         isHeldByRoboticArm = false;
         isCollected = false;
+        hasLastStackSplitSplitterPos = false;
+        mergeSuppressedUntil = 0f;
         transform.SetParent(null, true);
         transform.position = worldPosition;
         transform.rotation = Quaternion.identity;
@@ -2463,6 +2488,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
+                GetHashCode(),
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
@@ -2476,6 +2502,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
     private void ApplyConveyorVelocity(World world)
     {
+        SplitStackAcrossSplitterIfNeeded(world);
+
         if (!ConveyorBeltUtility.TryGetConveyorVelocity(
                 world,
                 transform.position,
@@ -2483,6 +2511,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
+                GetHashCode(),
                 out Vector3 conveyorVelocity))
         {
             return;
@@ -2494,9 +2523,68 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         isSleeping = false;
     }
 
+    private void SplitStackAcrossSplitterIfNeeded(World world)
+    {
+        if (!ConveyorBeltUtility.TryGetSupportedSplitterOutputCount(
+                world,
+                transform.position,
+                collisionHalfExtent,
+                out Vector3Int splitterPos,
+                out int outputCount))
+        {
+            hasLastStackSplitSplitterPos = false;
+            return;
+        }
+
+        if (outputCount <= 1 || stackAmount <= 1)
+            return;
+
+        if (hasLastStackSplitSplitterPos && lastStackSplitSplitterPos == splitterPos)
+            return;
+
+        int segmentCount = Mathf.Min(outputCount, stackAmount);
+        int baseAmount = stackAmount / segmentCount;
+        int remainder = stackAmount % segmentCount;
+
+        MarkStackSplitOnSplitter(splitterPos);
+        stackAmount = baseAmount + (remainder > 0 ? 1 : 0);
+        UpdateDropName();
+
+        for (int i = 1; i < segmentCount; i++)
+        {
+            int segmentAmount = baseAmount + (i < remainder ? 1 : 0);
+            if (segmentAmount <= 0)
+                continue;
+
+            if (!Spawn(world, transform.position, blockType, segmentAmount, Vector3.zero, out BlockDrop splitDrop) ||
+                splitDrop == null)
+            {
+                stackAmount += segmentAmount;
+                UpdateDropName();
+                continue;
+            }
+
+            splitDrop.velocity = velocity;
+            splitDrop.velocity.y = 0f;
+            splitDrop.isGrounded = true;
+            splitDrop.isSleeping = false;
+            splitDrop.MarkStackSplitOnSplitter(splitterPos);
+        }
+    }
+
+    private void MarkStackSplitOnSplitter(Vector3Int splitterPos)
+    {
+        hasLastStackSplitSplitterPos = true;
+        lastStackSplitSplitterPos = splitterPos;
+        mergeSuppressedUntil = Mathf.Max(mergeSuppressedUntil, Time.time + SplitterSplitMergeSuppressSeconds);
+    }
+
     private void TryMergeNearbyDrops()
     {
         if (stackAmount >= maxStackAmount)
+            return;
+
+        if (Time.time < mergeSuppressedUntil)
             return;
 
         if (Time.time - spawnTime < mergeDelaySeconds)
@@ -2556,6 +2644,9 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
             return false;
 
         if (other.stackAmount <= 0)
+            return false;
+
+        if (Time.time < other.mergeSuppressedUntil)
             return false;
 
         if (Time.time - other.spawnTime < other.mergeDelaySeconds)
@@ -2671,6 +2762,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         isGrounded = false;
         isSleeping = false;
         isHeldByRoboticArm = false;
+        hasLastStackSplitSplitterPos = false;
+        mergeSuppressedUntil = 0f;
     }
 }
 
@@ -2715,6 +2808,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     [SerializeField] private Item item;
 
     private const int MaxPoolSize = 1024;
+    private const float SplitterSplitMergeSuppressSeconds = 1.25f;
     private static readonly Stack<InventoryItemDrop> Pool = new Stack<InventoryItemDrop>(128);
     private static readonly Dictionary<Vector3Int, HashSet<InventoryItemDrop>> ActiveDropsByCell = new Dictionary<Vector3Int, HashSet<InventoryItemDrop>>();
     private static readonly List<InventoryItemDrop> MergeCandidates = new List<InventoryItemDrop>(64);
@@ -2734,20 +2828,40 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private bool isSleeping;
     private bool isRegisteredInMergeGrid;
     private bool isHeldByRoboticArm;
+    private bool hasLastStackSplitSplitterPos;
+    private Vector3Int lastStackSplitSplitterPos;
+    private float mergeSuppressedUntil;
     private Transform visualRoot;
     private SpriteRenderer spriteRenderer;
 
     public static bool Spawn(Item item, int amount, Vector3 worldPosition, Vector3 throwDirection)
     {
+        return Spawn(item, amount, worldPosition, throwDirection, out _);
+    }
+
+    private static bool Spawn(
+        Item item,
+        int amount,
+        Vector3 worldPosition,
+        Vector3 throwDirection,
+        out InventoryItemDrop spawnedDrop)
+    {
         if (item == null || amount <= 0)
+        {
+            spawnedDrop = null;
             return false;
+        }
 
         InventoryItemDrop drop = AcquireDrop();
         if (drop == null)
+        {
+            spawnedDrop = null;
             return false;
+        }
 
         drop.transform.SetParent(null, false);
         drop.Initialize(item, amount, worldPosition, throwDirection);
+        spawnedDrop = drop;
         return true;
     }
 
@@ -2816,6 +2930,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isCollected = false;
         isPooled = false;
         isHeldByRoboticArm = false;
+        hasLastStackSplitSplitterPos = false;
+        mergeSuppressedUntil = 0f;
         visualSpinAngle = Random.Range(0f, 360f);
 
         transform.position = worldPosition;
@@ -2900,6 +3016,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 
         isHeldByRoboticArm = false;
         isCollected = false;
+        hasLastStackSplitSplitterPos = false;
+        mergeSuppressedUntil = 0f;
         transform.SetParent(null, true);
         transform.position = worldPosition;
         transform.rotation = Quaternion.identity;
@@ -3238,6 +3356,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
+                GetHashCode(),
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
@@ -3251,6 +3370,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 
     private void ApplyConveyorVelocity(World world)
     {
+        SplitStackAcrossSplitterIfNeeded(world);
+
         if (!ConveyorBeltUtility.TryGetConveyorVelocity(
                 world,
                 transform.position,
@@ -3258,6 +3379,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
+                GetHashCode(),
                 out Vector3 conveyorVelocity))
         {
             return;
@@ -3269,9 +3391,68 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isSleeping = false;
     }
 
+    private void SplitStackAcrossSplitterIfNeeded(World world)
+    {
+        if (!ConveyorBeltUtility.TryGetSupportedSplitterOutputCount(
+                world,
+                transform.position,
+                collisionHalfExtent,
+                out Vector3Int splitterPos,
+                out int outputCount))
+        {
+            hasLastStackSplitSplitterPos = false;
+            return;
+        }
+
+        if (outputCount <= 1 || stackAmount <= 1)
+            return;
+
+        if (hasLastStackSplitSplitterPos && lastStackSplitSplitterPos == splitterPos)
+            return;
+
+        int segmentCount = Mathf.Min(outputCount, stackAmount);
+        int baseAmount = stackAmount / segmentCount;
+        int remainder = stackAmount % segmentCount;
+
+        MarkStackSplitOnSplitter(splitterPos);
+        stackAmount = baseAmount + (remainder > 0 ? 1 : 0);
+        UpdateDropName();
+
+        for (int i = 1; i < segmentCount; i++)
+        {
+            int segmentAmount = baseAmount + (i < remainder ? 1 : 0);
+            if (segmentAmount <= 0)
+                continue;
+
+            if (!Spawn(item, segmentAmount, transform.position, Vector3.zero, out InventoryItemDrop splitDrop) ||
+                splitDrop == null)
+            {
+                stackAmount += segmentAmount;
+                UpdateDropName();
+                continue;
+            }
+
+            splitDrop.velocity = velocity;
+            splitDrop.velocity.y = 0f;
+            splitDrop.isGrounded = true;
+            splitDrop.isSleeping = false;
+            splitDrop.MarkStackSplitOnSplitter(splitterPos);
+        }
+    }
+
+    private void MarkStackSplitOnSplitter(Vector3Int splitterPos)
+    {
+        hasLastStackSplitSplitterPos = true;
+        lastStackSplitSplitterPos = splitterPos;
+        mergeSuppressedUntil = Mathf.Max(mergeSuppressedUntil, Time.time + SplitterSplitMergeSuppressSeconds);
+    }
+
     private void TryMergeNearbyDrops()
     {
         if (stackAmount >= maxStackAmount)
+            return;
+
+        if (Time.time < mergeSuppressedUntil)
             return;
 
         if (Time.time - spawnTime < mergeDelaySeconds)
@@ -3332,6 +3513,9 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
             return false;
 
         if (other.stackAmount <= 0)
+            return false;
+
+        if (Time.time < other.mergeSuppressedUntil)
             return false;
 
         if (Time.time - other.spawnTime < other.mergeDelaySeconds)
@@ -3513,6 +3697,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isGrounded = false;
         isSleeping = false;
         isHeldByRoboticArm = false;
+        hasLastStackSplitSplitterPos = false;
+        mergeSuppressedUntil = 0f;
         item = null;
 
         if (spriteRenderer != null)

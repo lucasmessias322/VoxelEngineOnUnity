@@ -117,7 +117,8 @@ public static partial class MeshGenerator
             ref Vector2 uv2,
             ref Vector2 uv3)
         {
-            if (mapping.blockType != BlockType.ConveyorBelt ||
+            if ((mapping.blockType != BlockType.ConveyorBelt &&
+                 mapping.blockType != BlockType.conveyorBelt_splitter) ||
                 (sampledFace != BlockFace.Top && sampledFace != BlockFace.Bottom))
             {
                 return;
