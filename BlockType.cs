@@ -77,7 +77,10 @@ public enum BlockType
     conveyorBelt_splitter = 72,
     LeverOn = 73,
     LeverOff = 74,
-    button = 75
+    button = 75,
+    oakTreeSapling = 76,
+    birchTreeSapling = 77,
+    Treecutter = 78
 
 
 
@@ -103,6 +106,21 @@ public static class MachineBlockUtility
             default:
                 return false;
         }
+    }
+}
+
+public static class SaplingBlockUtility
+{
+    public static bool IsSapling(BlockType type)
+    {
+        return type == BlockType.oakTreeSapling ||
+               type == BlockType.birchTreeSapling;
+    }
+
+    public static bool CanPlantOn(BlockType groundType)
+    {
+        return groundType == BlockType.Grass ||
+               groundType == BlockType.Dirt;
     }
 }
 

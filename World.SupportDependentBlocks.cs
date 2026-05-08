@@ -25,6 +25,9 @@ public partial class World
         if (!DoesBlockBreakWithoutSupport(blockType))
             return true;
 
+        if (SaplingBlockUtility.IsSapling(blockType))
+            return SaplingBlockUtility.CanPlantOn(GetBlockAt(worldPos + Vector3Int.down));
+
         return HasStableSupportForSupportDependentBlock(worldPos, blockType);
     }
 

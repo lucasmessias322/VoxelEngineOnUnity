@@ -325,6 +325,9 @@ public partial class World
             ProcessQueuedSupportDependentBlockChecks();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessQueuedSaplingGrowth();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessElectricitySimulation();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))

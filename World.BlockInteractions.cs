@@ -114,6 +114,7 @@ public partial class World
         IndexTerrainOverride(worldPos, chunkCoord);
 
         ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, type);
+        HandleSaplingBlockChange(worldPos, current, type);
         HandlePlayerPlacedLogBlockChange(worldPos, current, type, placedByPlayer);
         HandleLeafDecayBlockChange(worldPos, current, type, placedByPlayer);
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
