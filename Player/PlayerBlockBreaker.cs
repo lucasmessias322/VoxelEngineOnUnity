@@ -1792,6 +1792,9 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private bool TryHandleRightClickInteractions()
     {
+        if (TryHandleLeverInteraction())
+            return true;
+
         if (TryHandleEletricConnectorWireInteraction())
             return true;
 
@@ -1814,6 +1817,21 @@ public class PlayerBlockBreaker : MonoBehaviour
         CraftingStationUIController craftingStationUI = CraftingStationUIController.EnsureInstance();
         return craftingStationUI != null &&
                craftingStationUI.TryHandleCrafterInteraction(selector);
+    }
+
+    private bool TryHandleLeverInteraction()
+    {
+        World world = World.Instance;
+        if (world == null || selector == null || !selector.TryGetSelectedBlock(out Vector3Int leverPos, out _))
+            return false;
+
+        BlockType currentType = world.GetBlockAt(leverPos);
+        if (!LeverUtility.IsLeverBlock(currentType))
+            return false;
+
+        BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(leverPos, currentType);
+        world.SetBlockAt(leverPos, LeverUtility.Toggle(currentType), true, placementAxis);
+        return true;
     }
 
     private bool TryHandleEletricConnectorWireInteraction()
@@ -2188,7 +2206,8 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (placePos.y <= 2)
             return false;
 
-        BlockType placedBlockType = TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal);
+        BlockType placedBlockType = LeverUtility.GetPlacementBlockType(
+            TorchPlacementUtility.GetPlacementBlockType(selectedBlockType, hitNormal));
         BlockType blockAtPlacePos = world.GetBlockAt(placePos);
 
         bool preserveLockedPlacementAxis = lockedPlacedBlockType != BlockType.Air &&

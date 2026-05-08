@@ -125,6 +125,10 @@ public static class BlockItemCatalog
             return true;
 
         fallbackBlockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
+        if (fallbackBlockType != blockType)
+            return true;
+
+        fallbackBlockType = LeverUtility.GetInventoryDropBlockType(blockType);
         return fallbackBlockType != blockType;
     }
 }

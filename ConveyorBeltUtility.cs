@@ -368,20 +368,21 @@ public static class ConveyorBeltUtility
 
     private static bool IsSplitterFrontOutputCandidate(World world, Vector3Int splitterPos, Vector3Int step)
     {
-        Vector3Int neighborPos = splitterPos + step;
-        return TryGetConveyorAt(world, neighborPos, out _) &&
-               !IsConveyorFeedingInto(world, neighborPos, splitterPos);
+        return IsConveyorOrientedAwayFromSplitter(world, splitterPos, step);
     }
 
-    private static bool IsConveyorFeedingInto(World world, Vector3Int conveyorPos, Vector3Int targetPos)
+    private static bool IsConveyorOrientedAwayFromSplitter(World world, Vector3Int splitterPos, Vector3Int outputStep)
     {
+        if (outputStep == Vector3Int.zero)
+            return false;
+
+        Vector3Int conveyorPos = splitterPos + outputStep;
         if (!TryGetConveyorAt(world, conveyorPos, out BlockType conveyorType))
             return false;
 
         BlockPlacementAxis axis = ResolveConveyorAxis(world, conveyorPos, conveyorType);
         Vector3Int conveyorForwardStep = ResolveHorizontalStep(GetForwardDirection(axis));
-        return conveyorForwardStep != Vector3Int.zero &&
-               conveyorPos + conveyorForwardStep == targetPos;
+        return conveyorForwardStep == outputStep;
     }
 
     private static void AddSplitterOutputIfConveyor(
@@ -393,7 +394,7 @@ public static class ConveyorBeltUtility
         if (outputStep == Vector3Int.zero)
             return;
 
-        if (TryGetConveyorAt(world, splitterPos + outputStep, out _))
+        if (IsConveyorOrientedAwayFromSplitter(world, splitterPos, outputStep))
             outputs.Add(outputStep);
     }
 

@@ -1143,7 +1143,8 @@ public partial class World
 
     public bool IsElectricalWireEndpointBlockType(BlockType blockType)
     {
-        return blockType == BlockType.EletricConnector ||
+        return LeverUtility.IsLeverBlock(blockType) ||
+               blockType == BlockType.EletricConnector ||
                IsLegacyElectricalEndpointBlock(blockType) ||
                IsConfiguredElectricalEndpointBlock(blockType);
     }
@@ -1189,6 +1190,9 @@ public partial class World
 
     private bool IsElectricalBlock(BlockType blockType)
     {
+        if (blockType == BlockType.LeverOff)
+            return false;
+
         return blockType == BlockType.wire ||
                IsElectricalWireEndpointBlockType(blockType);
     }
@@ -1201,7 +1205,8 @@ public partial class World
     private bool IsElectricalTransportBlock(BlockType blockType)
     {
         return blockType == BlockType.wire ||
-               blockType == BlockType.EletricConnector;
+               blockType == BlockType.EletricConnector ||
+               blockType == BlockType.LeverOn;
     }
 
     private bool AreAdjacentElectricalBlocksConnected(BlockType left, BlockType right)

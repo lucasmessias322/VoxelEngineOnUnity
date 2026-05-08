@@ -253,7 +253,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
             return false;
 
-        blockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
+        blockType = LeverUtility.GetInventoryDropBlockType(
+            TorchPlacementUtility.GetInventoryDropBlockType(blockType));
 
         if (world.blockData != null && (world.blockData.mappings == null || world.blockData.mappings.Length == 0))
             world.blockData.InitializeDictionary();
@@ -3788,6 +3789,7 @@ public static class BlockBreakDropResolver
     private static BlockType ResolveDefaultDropBlockType(BlockType blockType)
     {
         BlockType dropBlockType = BatteryBlockUtility.GetInventoryDropBlockType(blockType);
-        return TorchPlacementUtility.GetInventoryDropBlockType(dropBlockType);
+        dropBlockType = TorchPlacementUtility.GetInventoryDropBlockType(dropBlockType);
+        return LeverUtility.GetInventoryDropBlockType(dropBlockType);
     }
 }

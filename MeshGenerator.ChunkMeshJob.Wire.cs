@@ -608,6 +608,7 @@ public static partial class MeshGenerator
         private bool IsWireEndpointBlock(BlockType blockType)
         {
             return IsConfiguredElectricalEndpoint(blockType) ||
+                   LeverUtility.IsLeverBlock(blockType) ||
                    blockType == BlockType.RoboticArm ||
                    blockType == BlockType.EletricConnector ||
                    blockType == BlockType.SolarPanel ||

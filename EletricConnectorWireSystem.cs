@@ -427,6 +427,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
     private static bool IsLegacyWireEndpointBlock(BlockType blockType)
     {
         return blockType == BlockType.EletricConnector ||
+               LeverUtility.IsLeverBlock(blockType) ||
                blockType == BlockType.RoboticArm ||
                blockType == BlockType.SolarPanel ||
                BatteryBlockUtility.IsBatteryBlock(blockType) ||

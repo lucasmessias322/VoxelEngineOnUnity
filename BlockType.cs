@@ -70,12 +70,53 @@ public enum BlockType
     batteryBlock = 65,
     windmill = 66,
     ledWhiteBlock = 67,
-    ledRedBlock = 73,
-    oakPlanks_fence = 68,
-    oakPlanks_fence2 = 69,
-    oakPlanks_slab = 70,
-    conveyorBelt_splitter = 71,
+    ledRedBlock = 68,
+    oakPlanks_fence = 69,
+    oakPlanks_fence2 = 70,
+    oakPlanks_slab = 71,
+    conveyorBelt_splitter = 72,
+    LeverOn = 73,
+    LeverOff = 74,
+    button = 75
 
+
+
+
+}
+
+public static class LeverUtility
+{
+    public static bool IsLeverBlock(BlockType type)
+    {
+        return type == BlockType.LeverOn ||
+               type == BlockType.LeverOff;
+    }
+
+    public static bool IsLeverOn(BlockType type)
+    {
+        return type == BlockType.LeverOn;
+    }
+
+    public static BlockType Toggle(BlockType type)
+    {
+        if (type == BlockType.LeverOn)
+            return BlockType.LeverOff;
+
+        if (type == BlockType.LeverOff)
+            return BlockType.LeverOn;
+
+        return type;
+    }
+
+    public static BlockType GetPlacementBlockType(BlockType type)
+    {
+        return IsLeverBlock(type) ? BlockType.LeverOff : type;
+    }
+
+    public static BlockType GetInventoryDropBlockType(BlockType type)
+    {
+        return IsLeverBlock(type) ? BlockType.LeverOff : type;
+    }
 }
 
 public static class FluidBlockUtility
