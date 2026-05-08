@@ -1798,6 +1798,13 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (TryHandleEletricConnectorWireInteraction())
             return true;
 
+        SplitterUIController splitterUI = SplitterUIController.EnsureInstance();
+        if (splitterUI != null &&
+            splitterUI.TryHandleSplitterInteraction(selector))
+        {
+            return true;
+        }
+
         ChestUIController chestUI = ChestUIController.EnsureInstance();
         if (chestUI != null &&
             chestUI.TryHandleChestInteraction(selector))

@@ -359,6 +359,9 @@ public class PlayerInventory : MonoBehaviour
         if (ChestUIController.Instance != null)
             ChestUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
 
+        if (SplitterUIController.Instance != null)
+            SplitterUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
+
         if (!isOpen)
             Slot.OnInventoryClosed(this);
     }

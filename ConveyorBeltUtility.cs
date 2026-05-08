@@ -16,7 +16,44 @@ public static class ConveyorBeltUtility
     private static readonly Dictionary<Vector3Int, int> splitterNextOutputIndices = new Dictionary<Vector3Int, int>();
     private static readonly Dictionary<SplitterRouteKey, SplitterRouteAssignment> splitterRouteAssignments =
         new Dictionary<SplitterRouteKey, SplitterRouteAssignment>();
+    private static readonly Dictionary<Vector3Int, SplitterFilterState> splitterFilterStates =
+        new Dictionary<Vector3Int, SplitterFilterState>();
     private static int lastSplitterRoutePruneFrame;
+
+    public enum SplitterFilterFace
+    {
+        Front,
+        Back,
+        Left,
+        Right
+    }
+
+    public readonly struct SplitterFilterOutputInfo
+    {
+        public readonly bool front;
+        public readonly bool back;
+        public readonly bool left;
+        public readonly bool right;
+
+        public SplitterFilterOutputInfo(bool front, bool back, bool left, bool right)
+        {
+            this.front = front;
+            this.back = back;
+            this.left = left;
+            this.right = right;
+        }
+
+        public bool HasAny => front || back || left || right;
+    }
+
+    private struct SplitterFilterState
+    {
+        public Item filterItem;
+        public bool front;
+        public bool back;
+        public bool left;
+        public bool right;
+    }
 
     private readonly struct SplitterRouteKey : IEquatable<SplitterRouteKey>
     {
@@ -28,6 +65,8 @@ public static class ConveyorBeltUtility
             this.splitterPos = splitterPos;
             this.itemRoutingKey = itemRoutingKey;
         }
+
+        public Vector3Int SplitterPos => splitterPos;
 
         public bool Equals(SplitterRouteKey other)
         {
@@ -59,11 +98,15 @@ public static class ConveyorBeltUtility
         private Vector3Int first;
         private Vector3Int second;
         private Vector3Int third;
+        private Vector3Int fourth;
 
         public int Count { get; private set; }
 
         public void Add(Vector3Int step)
         {
+            if (Contains(step) || Count >= 4)
+                return;
+
             switch (Count)
             {
                 case 0:
@@ -74,8 +117,12 @@ public static class ConveyorBeltUtility
                     second = step;
                     break;
 
-                default:
+                case 2:
                     third = step;
+                    break;
+
+                default:
+                    fourth = step;
                     break;
             }
 
@@ -86,7 +133,8 @@ public static class ConveyorBeltUtility
         {
             return (Count > 0 && first == step) ||
                    (Count > 1 && second == step) ||
-                   (Count > 2 && third == step);
+                   (Count > 2 && third == step) ||
+                   (Count > 3 && fourth == step);
         }
 
         public Vector3Int Get(int index)
@@ -95,8 +143,46 @@ public static class ConveyorBeltUtility
             {
                 0 => first,
                 1 => second,
-                _ => third
+                2 => third,
+                _ => fourth
             };
+        }
+
+        public bool TryGetFiltered(SplitterFilterState state, Vector3Int placementForwardStep, out SplitterOutputSet filtered)
+        {
+            filtered = default;
+            if (Count <= 0)
+                return false;
+
+            Vector3Int leftStep = GetLeftStep(placementForwardStep);
+            Vector3Int rightStep = -leftStep;
+
+            if (state.front && Contains(placementForwardStep))
+                filtered.Add(placementForwardStep);
+
+            if (state.back && Contains(-placementForwardStep))
+                filtered.Add(-placementForwardStep);
+
+            if (state.left && Contains(leftStep))
+                filtered.Add(leftStep);
+
+            if (state.right && Contains(rightStep))
+                filtered.Add(rightStep);
+
+            return filtered.Count > 0;
+        }
+
+        public SplitterOutputSet Excluding(SplitterOutputSet excluded)
+        {
+            SplitterOutputSet result = default;
+            for (int i = 0; i < Count; i++)
+            {
+                Vector3Int step = Get(i);
+                if (!excluded.Contains(step))
+                    result.Add(step);
+            }
+
+            return result;
         }
     }
 
@@ -159,6 +245,29 @@ public static class ConveyorBeltUtility
         int itemRoutingKey,
         out Vector3 conveyorVelocity)
     {
+        return TryGetConveyorVelocity(
+            world,
+            itemCenter,
+            collisionHalfExtent,
+            speed,
+            centeringStrength,
+            maxCenteringSpeed,
+            itemRoutingKey,
+            null,
+            out conveyorVelocity);
+    }
+
+    public static bool TryGetConveyorVelocity(
+        World world,
+        Vector3 itemCenter,
+        float collisionHalfExtent,
+        float speed,
+        float centeringStrength,
+        float maxCenteringSpeed,
+        int itemRoutingKey,
+        Item carriedItem,
+        out Vector3 conveyorVelocity)
+    {
         conveyorVelocity = Vector3.zero;
         if (world == null)
             return false;
@@ -176,6 +285,7 @@ public static class ConveyorBeltUtility
                 centeringStrength,
                 maxCenteringSpeed,
                 itemRoutingKey,
+                carriedItem,
                 out conveyorVelocity);
         }
 
@@ -206,6 +316,23 @@ public static class ConveyorBeltUtility
         out Vector3Int splitterPos,
         out int outputCount)
     {
+        return TryGetSupportedSplitterOutputCount(
+            world,
+            itemCenter,
+            collisionHalfExtent,
+            null,
+            out splitterPos,
+            out outputCount);
+    }
+
+    public static bool TryGetSupportedSplitterOutputCount(
+        World world,
+        Vector3 itemCenter,
+        float collisionHalfExtent,
+        Item carriedItem,
+        out Vector3Int splitterPos,
+        out int outputCount)
+    {
         splitterPos = default;
         outputCount = 0;
         if (world == null)
@@ -220,8 +347,95 @@ public static class ConveyorBeltUtility
         BlockPlacementAxis placementAxis = ResolveConveyorAxis(world, splitterPos, BlockType.conveyorBelt_splitter);
         Vector3Int placementForwardStep = ResolveHorizontalStep(GetForwardDirection(placementAxis));
         Vector3Int outputForwardStep = ResolveSplitterOutputForwardStep(world, splitterPos, placementForwardStep);
-        outputCount = GetAvailableSplitterOutputs(world, splitterPos, outputForwardStep).Count;
+        SplitterOutputSet outputs = GetAvailableSplitterOutputs(world, splitterPos, outputForwardStep);
+        outputCount = ResolveFilteredSplitterOutputs(splitterPos, placementForwardStep, outputs, carriedItem).Count;
         return true;
+    }
+
+    public static void SetSplitterFilterItem(Vector3Int splitterPos, Item filterItem)
+    {
+        SplitterFilterState state = GetSplitterFilterState(splitterPos);
+        state.filterItem = filterItem;
+        splitterFilterStates[splitterPos] = state;
+        ClearSplitterRouteCache(splitterPos);
+    }
+
+    public static Item GetSplitterFilterItem(Vector3Int splitterPos)
+    {
+        return splitterFilterStates.TryGetValue(splitterPos, out SplitterFilterState state)
+            ? state.filterItem
+            : null;
+    }
+
+    public static void SetSplitterFilterFaceEnabled(Vector3Int splitterPos, SplitterFilterFace face, bool enabled)
+    {
+        SplitterFilterState state = GetSplitterFilterState(splitterPos);
+        switch (face)
+        {
+            case SplitterFilterFace.Front:
+                state.front = enabled;
+                break;
+
+            case SplitterFilterFace.Back:
+                state.back = enabled;
+                break;
+
+            case SplitterFilterFace.Left:
+                state.left = enabled;
+                break;
+
+            case SplitterFilterFace.Right:
+                state.right = enabled;
+                break;
+        }
+
+        splitterFilterStates[splitterPos] = state;
+        ClearSplitterRouteCache(splitterPos);
+    }
+
+    public static bool GetSplitterFilterFaceEnabled(Vector3Int splitterPos, SplitterFilterFace face)
+    {
+        SplitterFilterState state = GetSplitterFilterState(splitterPos);
+        switch (face)
+        {
+            case SplitterFilterFace.Front:
+                return state.front;
+
+            case SplitterFilterFace.Back:
+                return state.back;
+
+            case SplitterFilterFace.Left:
+                return state.left;
+
+            case SplitterFilterFace.Right:
+                return state.right;
+
+            default:
+                return false;
+        }
+    }
+
+    public static SplitterFilterOutputInfo GetSplitterFilterOutputInfo(World world, Vector3Int splitterPos)
+    {
+        if (world == null ||
+            !TryGetConveyorAt(world, splitterPos, out BlockType conveyorType) ||
+            conveyorType != BlockType.conveyorBelt_splitter)
+        {
+            return default;
+        }
+
+        BlockPlacementAxis placementAxis = ResolveConveyorAxis(world, splitterPos, BlockType.conveyorBelt_splitter);
+        Vector3Int placementForwardStep = ResolveHorizontalStep(GetForwardDirection(placementAxis));
+        Vector3Int outputForwardStep = ResolveSplitterOutputForwardStep(world, splitterPos, placementForwardStep);
+        SplitterOutputSet outputs = GetAvailableSplitterOutputs(world, splitterPos, outputForwardStep);
+        Vector3Int leftStep = GetLeftStep(placementForwardStep);
+        Vector3Int rightStep = -leftStep;
+
+        return new SplitterFilterOutputInfo(
+            outputs.Contains(placementForwardStep),
+            outputs.Contains(-placementForwardStep),
+            outputs.Contains(leftStep),
+            outputs.Contains(rightStep));
     }
 
     public static bool IsConveyorBlock(BlockType blockType)
@@ -304,6 +518,7 @@ public static class ConveyorBeltUtility
         float centeringStrength,
         float maxCenteringSpeed,
         int itemRoutingKey,
+        Item carriedItem,
         out Vector3 conveyorVelocity)
     {
         BlockPlacementAxis placementAxis = ResolveConveyorAxis(world, splitterPos, BlockType.conveyorBelt_splitter);
@@ -311,14 +526,15 @@ public static class ConveyorBeltUtility
         Vector3Int forwardStep = ResolveSplitterOutputForwardStep(world, splitterPos, placementForwardStep);
         Vector3 forward = new Vector3(forwardStep.x, 0f, forwardStep.z);
         SplitterOutputSet outputs = GetAvailableSplitterOutputs(world, splitterPos, forwardStep);
+        SplitterOutputSet routingOutputs = ResolveFilteredSplitterOutputs(splitterPos, placementForwardStep, outputs, carriedItem);
 
-        if (outputs.Count == 0)
+        if (routingOutputs.Count == 0)
         {
             conveyorVelocity = GetLaneCenteringVelocity(itemCenter, splitterPos, forward, centeringStrength, maxCenteringSpeed);
             return conveyorVelocity.sqrMagnitude > 0.0001f;
         }
 
-        Vector3Int selectedStep = ResolveSplitterOutputStep(splitterPos, outputs, itemRoutingKey);
+        Vector3Int selectedStep = ResolveSplitterOutputStep(splitterPos, routingOutputs, itemRoutingKey);
         Vector3 selectedDirection = new Vector3(selectedStep.x, 0f, selectedStep.z);
 
         if (selectedStep != forwardStep && ShouldCarrySplitterItemToCenter(itemCenter, splitterPos, forward))
@@ -335,15 +551,70 @@ public static class ConveyorBeltUtility
         return conveyorVelocity.sqrMagnitude > 0.0001f;
     }
 
+    private static SplitterOutputSet ResolveFilteredSplitterOutputs(
+        Vector3Int splitterPos,
+        Vector3Int placementForwardStep,
+        SplitterOutputSet outputs,
+        Item carriedItem)
+    {
+        if (outputs.Count <= 0 || carriedItem == null)
+            return outputs;
+
+        if (!splitterFilterStates.TryGetValue(splitterPos, out SplitterFilterState state) ||
+            state.filterItem == null ||
+            !outputs.TryGetFiltered(state, placementForwardStep, out SplitterOutputSet filteredOutputs))
+        {
+            return outputs;
+        }
+
+        if (state.filterItem == carriedItem)
+            return filteredOutputs;
+
+        return outputs.Excluding(filteredOutputs);
+    }
+
+    private static SplitterFilterState GetSplitterFilterState(Vector3Int splitterPos)
+    {
+        if (splitterFilterStates.TryGetValue(splitterPos, out SplitterFilterState state))
+            return state;
+
+        state = new SplitterFilterState();
+        splitterFilterStates[splitterPos] = state;
+        return state;
+    }
+
+    private static void ClearSplitterRouteCache(Vector3Int splitterPos)
+    {
+        splitterNextOutputIndices.Remove(splitterPos);
+
+        List<SplitterRouteKey> keysToRemove = null;
+        foreach (SplitterRouteKey key in splitterRouteAssignments.Keys)
+        {
+            if (key.SplitterPos != splitterPos)
+                continue;
+
+            keysToRemove ??= new List<SplitterRouteKey>();
+            keysToRemove.Add(key);
+        }
+
+        if (keysToRemove == null)
+            return;
+
+        for (int i = 0; i < keysToRemove.Count; i++)
+            splitterRouteAssignments.Remove(keysToRemove[i]);
+    }
+
     private static SplitterOutputSet GetAvailableSplitterOutputs(World world, Vector3Int splitterPos, Vector3Int forwardStep)
     {
         SplitterOutputSet outputs = default;
         Vector3Int leftStep = GetLeftStep(forwardStep);
         Vector3Int rightStep = -leftStep;
+        Vector3Int backStep = -forwardStep;
 
         AddSplitterOutputIfConveyor(world, splitterPos, forwardStep, ref outputs);
         AddSplitterOutputIfConveyor(world, splitterPos, leftStep, ref outputs);
         AddSplitterOutputIfConveyor(world, splitterPos, rightStep, ref outputs);
+        AddSplitterOutputIfConveyor(world, splitterPos, backStep, ref outputs);
 
         return outputs;
     }

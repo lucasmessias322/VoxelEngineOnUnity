@@ -2490,6 +2490,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
                 GetHashCode(),
+                ResolveItemForConveyorFilter(),
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
@@ -2513,6 +2514,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
                 GetHashCode(),
+                ResolveItemForConveyorFilter(),
                 out Vector3 conveyorVelocity))
         {
             return;
@@ -2530,6 +2532,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 world,
                 transform.position,
                 collisionHalfExtent,
+                ResolveItemForConveyorFilter(),
                 out Vector3Int splitterPos,
                 out int outputCount))
         {
@@ -2578,6 +2581,11 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         hasLastStackSplitSplitterPos = true;
         lastStackSplitSplitterPos = splitterPos;
         mergeSuppressedUntil = Mathf.Max(mergeSuppressedUntil, Time.time + SplitterSplitMergeSuppressSeconds);
+    }
+
+    private Item ResolveItemForConveyorFilter()
+    {
+        return BlockItemCatalog.TryGetItemForBlock(blockType, out Item mappedItem) ? mappedItem : null;
     }
 
     private void TryMergeNearbyDrops()
@@ -3358,6 +3366,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
                 GetHashCode(),
+                item,
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
         {
@@ -3381,6 +3390,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
                 GetHashCode(),
+                item,
                 out Vector3 conveyorVelocity))
         {
             return;
@@ -3398,6 +3408,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 world,
                 transform.position,
                 collisionHalfExtent,
+                item,
                 out Vector3Int splitterPos,
                 out int outputCount))
         {
