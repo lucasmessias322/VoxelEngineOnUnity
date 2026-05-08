@@ -331,6 +331,9 @@ public partial class World
             ProcessElectricitySimulation();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessTreecutterMachines();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedTreeCapitatorBreaks();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))

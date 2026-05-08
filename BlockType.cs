@@ -101,6 +101,7 @@ public static class MachineBlockUtility
             case BlockType.batteryBlock:
             case BlockType.windmill:
             case BlockType.conveyorBelt_splitter:
+            case BlockType.Treecutter:
                 return true;
 
             default:

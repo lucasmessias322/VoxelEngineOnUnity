@@ -1158,6 +1158,12 @@ public partial class World
             return config.energyPerSecond > 0f;
         }
 
+        if (blockType == BlockType.Treecutter)
+        {
+            config.energyPerSecond = Mathf.Max(0f, treecutterEnergyPerSecond);
+            return config.energyPerSecond > 0f;
+        }
+
         if (!TryGetBlockMapping(blockType, out BlockTextureMapping mapping) || !mapping.isElectricalEndpoint)
             return false;
 
@@ -1222,7 +1228,8 @@ public partial class World
                blockType == BlockType.windmill ||
                BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.ledWhiteBlock ||
-               blockType == BlockType.RoboticArm;
+               blockType == BlockType.RoboticArm ||
+               blockType == BlockType.Treecutter;
     }
 
     private static int CompareElectricalPositions(Vector3Int left, Vector3Int right)

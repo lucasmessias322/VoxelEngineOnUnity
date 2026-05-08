@@ -614,7 +614,8 @@ public static partial class MeshGenerator
                    blockType == BlockType.SolarPanel ||
                    BatteryBlockUtility.IsBatteryBlock(blockType) ||
                    blockType == BlockType.windmill ||
-                   blockType == BlockType.ledWhiteBlock;
+                   blockType == BlockType.ledWhiteBlock ||
+                   blockType == BlockType.Treecutter;
         }
 
         private bool IsConfiguredElectricalEndpoint(BlockType blockType)

@@ -34,4 +34,16 @@ public partial class World
     [SerializeField, Min(0)] private int windMillMinimumGroundClearanceBlocks = 7;
     [SerializeField, Min(1f)] private float batteryCapacity = 240f;
     [SerializeField, Min(0f)] private float directSolarBufferSeconds = 1f;
+
+    [Header("Treecutter")]
+    [SerializeField] private bool enableTreecutterMachines = true;
+    [SerializeField, Min(0.05f)] private float treecutterTickInterval = 0.5f;
+    [SerializeField, Min(1)] private int treecutterMachinesPerTick = 8;
+    [SerializeField, Min(1)] private int treecutterFrontSearchDistanceBlocks = 2;
+    [SerializeField, Min(0)] private int treecutterFrontVerticalSearchBelow = 1;
+    [SerializeField, Min(0)] private int treecutterFrontVerticalSearchAbove = 2;
+    [SerializeField, Min(1)] private int treecutterMaxLogsPerTree = 96;
+    [SerializeField, Min(1)] private int treecutterMaxLeavesPerTree = 384;
+    [SerializeField, Min(1)] private int treecutterLeafSearchDistance = 7;
+    [SerializeField, Min(0f)] private float treecutterEnergyPerSecond = 2f;
 }
