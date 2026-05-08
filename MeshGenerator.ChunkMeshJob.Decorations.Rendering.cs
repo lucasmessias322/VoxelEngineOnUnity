@@ -152,6 +152,64 @@ public static partial class MeshGenerator
             }
         }
 
+        private BlockPlacementAxis ResolveConveyorRenderPlacementAxis(
+            NativeArray<byte> blockTypes,
+            BlockType blockType,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!IsConveyorBlock(blockType) || placementAxis != BlockPlacementAxis.Y)
+                return placementAxis;
+
+            if (TryGetNeighborConveyorRenderAxis(blockTypes, voxelX - 1, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out BlockPlacementAxis axis) ||
+                TryGetNeighborConveyorRenderAxis(blockTypes, voxelX + 1, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, out axis) ||
+                TryGetNeighborConveyorRenderAxis(blockTypes, voxelX, voxelY, voxelZ - 1, voxelSizeX, voxelSizeZ, voxelPlaneSize, out axis) ||
+                TryGetNeighborConveyorRenderAxis(blockTypes, voxelX, voxelY, voxelZ + 1, voxelSizeX, voxelSizeZ, voxelPlaneSize, out axis))
+            {
+                return axis;
+            }
+
+            return BlockPlacementAxis.Z;
+        }
+
+        private bool TryGetNeighborConveyorRenderAxis(
+            NativeArray<byte> blockTypes,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            out BlockPlacementAxis axis)
+        {
+            axis = BlockPlacementAxis.Y;
+            if (!blockTypes.IsCreated ||
+                voxelX < 0 || voxelX >= voxelSizeX ||
+                voxelY < 0 || voxelY >= Chunk.SizeY ||
+                voxelZ < 0 || voxelZ >= voxelSizeZ)
+            {
+                return false;
+            }
+
+            int idx = voxelX + voxelY * voxelSizeX + voxelZ * voxelPlaneSize;
+            if ((uint)idx >= (uint)blockTypes.Length || !IsConveyorBlock((BlockType)blockTypes[idx]))
+                return false;
+
+            axis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+            return axis != BlockPlacementAxis.Y;
+        }
+
+        private static bool IsConveyorBlock(BlockType blockType)
+        {
+            return blockType == BlockType.ConveyorBelt ||
+                   blockType == BlockType.conveyorBelt_splitter;
+        }
+
         private static Vector3 ResolveShapeFaceNormal(BlockFace face)
         {
             return face switch

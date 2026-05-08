@@ -86,6 +86,16 @@ public static partial class MeshGenerator
                                                                    WirePlacementUtility.TryGetWall(rawPlacementData, out BlockPlacementAxis explicitWireAxis, out _)
                                     ? explicitWireAxis
                                     : BlockPlacementRotationUtility.SanitizeStoredAxis((BlockPlacementAxis)rawPlacementData);
+                                placementAxis = ResolveConveyorRenderPlacementAxis(
+                                    blockTypes,
+                                    blockType,
+                                    placementAxis,
+                                    x,
+                                    y,
+                                    z,
+                                    voxelSizeX,
+                                    voxelSizeZ,
+                                    voxelPlaneSize);
 
                                 switch (effectiveShape)
                                 {

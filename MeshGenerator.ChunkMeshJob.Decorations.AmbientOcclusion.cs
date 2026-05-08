@@ -393,7 +393,10 @@ public static partial class MeshGenerator
             ResolveCustomFaceVertexAOFrame(sampledFace, p3, normal, out Vector3 aoNormal3, out Vector3 stepU3, out Vector3 stepV3);
 
             if (currentShape == BlockRenderShape.MultiCuboid)
+            {
                 NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
+            }
 
             AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal0, stepU0, stepV0, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
             AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal1, stepU1, stepV1, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
@@ -583,7 +586,19 @@ public static partial class MeshGenerator
             Vector2 uv1;
             Vector2 uv2;
             Vector2 uv3;
-            if (currentShape == BlockRenderShape.MultiCuboid && usesExplicitAppearance)
+            bool rotateConveyorUv = currentShape == BlockRenderShape.MultiCuboid &&
+                                    IsConveyorBlock(mapping.blockType) &&
+                                    (sampledFace == BlockFace.Top || sampledFace == BlockFace.Bottom);
+            if (rotateConveyorUv)
+            {
+                uv0 = ResolveShapeProjectedUv(sampledFace, p0 - blockOrigin);
+                uv1 = ResolveShapeProjectedUv(sampledFace, p1 - blockOrigin);
+                uv2 = ResolveShapeProjectedUv(sampledFace, p2 - blockOrigin);
+                uv3 = ResolveShapeProjectedUv(sampledFace, p3 - blockOrigin);
+                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3, sourceProjectedUvBounds);
+                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
+            }
+            else if (currentShape == BlockRenderShape.MultiCuboid && usesExplicitAppearance)
             {
                 Vector3 local0 = BlockShapeUtility.InverseTransformPointForPlacement(p0 - blockOrigin, mapping, currentPlacementAxis);
                 Vector3 local1 = BlockShapeUtility.InverseTransformPointForPlacement(p1 - blockOrigin, mapping, currentPlacementAxis);
@@ -609,7 +624,7 @@ public static partial class MeshGenerator
                 if (currentShape == BlockRenderShape.MultiCuboid)
                     NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3, sourceProjectedUvBounds);
             }
-            if (currentShape == BlockRenderShape.MultiCuboid)
+            if (currentShape == BlockRenderShape.MultiCuboid && !rotateConveyorUv)
                 RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
 
             AddAmbientOccludedShapeVertex(p0, uv0, normal, aoNormal, -aoStepU, -aoStepV, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, shapeBoxes, currentShape, currentPlacementAxis, currentRampVariant);
