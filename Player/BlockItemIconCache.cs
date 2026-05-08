@@ -94,6 +94,26 @@ public static class BlockItemIconCache
         public float sortKey;
     }
 
+    private struct MeshIconTriangle
+    {
+        public IconVertex3D a;
+        public IconVertex3D b;
+        public IconVertex3D c;
+        public float shade;
+        public float sortKey;
+
+        public MeshIconTriangle(IconVertex3D a, IconVertex3D b, IconVertex3D c, float shade)
+        {
+            this.a = a;
+            this.b = b;
+            this.c = c;
+            this.shade = shade;
+            sortKey = (a.position.x + a.position.y + a.position.z +
+                       b.position.x + b.position.y + b.position.z +
+                       c.position.x + c.position.y + c.position.z) / 3f;
+        }
+    }
+
     public static bool TryGetIcon(BlockType blockType, out Sprite sprite)
     {
         sprite = null;
@@ -130,6 +150,8 @@ public static class BlockItemIconCache
 
         BlockTextureMapping mapping = mappingResult.Value;
         bool atlasCoordinatesStartTopLeft = blockData.atlasCoordinatesStartTopLeft;
+        if (TryBuildMeshBackedIcon(blockType, atlasTexture, atlasTiles, out Sprite meshBackedSprite))
+            return meshBackedSprite;
 
         if (!TryExtractFacePixels(
                 atlasTexture,
@@ -199,6 +221,82 @@ public static class BlockItemIconCache
         sprite.name = $"BlockIcon_{blockType}_Sprite";
         sprite.hideFlags = HideFlags.HideAndDontSave;
         return sprite;
+    }
+
+    private static bool TryBuildMeshBackedIcon(BlockType blockType, Texture atlasTexture, Vector2Int atlasTiles, out Sprite sprite)
+    {
+        sprite = null;
+
+        World world = World.Instance;
+        if (world == null || atlasTexture == null)
+            return false;
+
+        Mesh mesh = BlockDrop.BuildBlockMesh(world, blockType, out int submeshIndex);
+        if (mesh == null)
+            return false;
+
+        try
+        {
+            if (!TryExtractAtlasPixels(atlasTexture, out Color32[] atlasPixels, out int atlasWidth, out int atlasHeight))
+                return false;
+
+            Vector3[] vertices = mesh.vertices;
+            Vector2[] baseUvs = mesh.uv;
+            List<Vector2> atlasOffsets = new List<Vector2>(vertices.Length);
+            List<Vector2> atlasSizes = new List<Vector2>(vertices.Length);
+            mesh.GetUVs(1, atlasOffsets);
+            mesh.GetUVs(3, atlasSizes);
+
+            if (vertices == null ||
+                baseUvs == null ||
+                vertices.Length == 0 ||
+                baseUvs.Length != vertices.Length ||
+                atlasOffsets.Count != vertices.Length ||
+                atlasSizes.Count != vertices.Length)
+            {
+                return false;
+            }
+
+            int[] triangles = mesh.GetTriangles(Mathf.Clamp(submeshIndex, 0, Mathf.Max(0, mesh.subMeshCount - 1)));
+            if (triangles == null || triangles.Length == 0)
+            {
+                List<int> allTriangles = new List<int>();
+                for (int i = 0; i < mesh.subMeshCount; i++)
+                    allTriangles.AddRange(mesh.GetTriangles(i));
+
+                triangles = allTriangles.ToArray();
+            }
+
+            if (triangles == null || triangles.Length < 3)
+                return false;
+
+            List<MeshIconTriangle> iconTriangles = BuildMeshIconTriangles(vertices, baseUvs, atlasOffsets, atlasSizes, triangles);
+            if (iconTriangles.Count == 0)
+                return false;
+
+            int faceSize = ResolveIconSourceFaceSize(atlasTexture, atlasTiles);
+            int iconSize = Mathf.Clamp(faceSize * 4, 48, 128);
+            Color32[] iconPixels = new Color32[iconSize * iconSize];
+
+            RenderMeshIconTriangles(iconPixels, iconSize, atlasPixels, atlasWidth, atlasHeight, iconTriangles);
+
+            Texture2D iconTexture = new Texture2D(iconSize, iconSize, TextureFormat.RGBA32, false, false);
+            iconTexture.name = $"BlockIcon_{blockType}_Mesh";
+            iconTexture.filterMode = FilterMode.Point;
+            iconTexture.wrapMode = TextureWrapMode.Clamp;
+            iconTexture.SetPixels32(iconPixels);
+            iconTexture.Apply(false, false);
+            iconTexture.hideFlags = HideFlags.HideAndDontSave;
+
+            sprite = Sprite.Create(iconTexture, new Rect(0f, 0f, iconSize, iconSize), new Vector2(0.5f, 0.5f), 100f);
+            sprite.name = $"BlockIcon_{blockType}_MeshSprite";
+            sprite.hideFlags = HideFlags.HideAndDontSave;
+            return true;
+        }
+        finally
+        {
+            DestroyTempTexture(mesh);
+        }
     }
 
     private static bool TryResolveBlockContext(BlockType blockType, out BlockDataSO blockData, out Texture atlasTexture, out Vector2Int atlasTiles)
@@ -372,6 +470,50 @@ public static class BlockItemIconCache
             return TryExtractFromReadableTexture(readableAtlasCopy, pixelRect.x, pixelRect.y, tileWidth, tileHeight, out tilePixels);
 
         return TryExtractFromGpu(atlasTexture, pixelRect, out tilePixels);
+    }
+
+    private static bool TryExtractAtlasPixels(Texture atlasTexture, out Color32[] atlasPixels, out int atlasWidth, out int atlasHeight)
+    {
+        atlasPixels = null;
+        atlasWidth = 0;
+        atlasHeight = 0;
+
+        if (atlasTexture == null || atlasTexture.width <= 0 || atlasTexture.height <= 0)
+            return false;
+
+        atlasWidth = atlasTexture.width;
+        atlasHeight = atlasTexture.height;
+
+        if (atlasTexture is Texture2D readableAtlas && readableAtlas.isReadable)
+        {
+            try
+            {
+                atlasPixels = readableAtlas.GetPixels32();
+                return atlasPixels != null && atlasPixels.Length == atlasWidth * atlasHeight;
+            }
+            catch
+            {
+                atlasPixels = null;
+            }
+        }
+
+        if (!TryGetReadableAtlasCopy(atlasTexture, out Texture2D readableAtlasCopy) || readableAtlasCopy == null)
+            return false;
+
+        atlasPixels = readableAtlasCopy.GetPixels32();
+        return atlasPixels != null && atlasPixels.Length == atlasWidth * atlasHeight;
+    }
+
+    private static int ResolveIconSourceFaceSize(Texture atlasTexture, Vector2Int atlasTiles)
+    {
+        if (atlasTexture == null)
+            return 16;
+
+        int tilesX = Mathf.Max(1, atlasTiles.x);
+        int tilesY = Mathf.Max(1, atlasTiles.y);
+        int tileWidth = Mathf.Max(1, atlasTexture.width / tilesX);
+        int tileHeight = Mathf.Max(1, atlasTexture.height / tilesY);
+        return Mathf.Max(1, Mathf.Min(tileWidth, tileHeight));
     }
 
     private static RectInt ResolvePixelRect(Texture atlasTexture, Vector4 uvRectData)
@@ -754,6 +896,121 @@ public static class BlockItemIconCache
 
         for (int i = 0; i < projectedFaces.Count; i++)
             DrawFacePolygon(destination, iconSize, projectedFaces[i]);
+    }
+
+    private static List<MeshIconTriangle> BuildMeshIconTriangles(
+        Vector3[] vertices,
+        Vector2[] baseUvs,
+        List<Vector2> atlasOffsets,
+        List<Vector2> atlasSizes,
+        int[] triangles)
+    {
+        List<MeshIconTriangle> iconTriangles = new List<MeshIconTriangle>(triangles.Length / 3);
+        Vector3 viewDirection = Vector3.one.normalized;
+
+        for (int i = 0; i + 2 < triangles.Length; i += 3)
+        {
+            int ia = triangles[i];
+            int ib = triangles[i + 1];
+            int ic = triangles[i + 2];
+            if (ia < 0 || ib < 0 || ic < 0 ||
+                ia >= vertices.Length || ib >= vertices.Length || ic >= vertices.Length)
+            {
+                continue;
+            }
+
+            Vector3 a = vertices[ia];
+            Vector3 b = vertices[ib];
+            Vector3 c = vertices[ic];
+            Vector3 normal = Vector3.Cross(b - a, c - a);
+            if (normal.sqrMagnitude <= 0.000001f)
+                continue;
+
+            normal.Normalize();
+            if (Vector3.Dot(normal, viewDirection) <= 0.0001f)
+                continue;
+
+            iconTriangles.Add(new MeshIconTriangle(
+                MakeVertex(a, ResolveAtlasUv(baseUvs[ia], atlasOffsets[ia], atlasSizes[ia])),
+                MakeVertex(b, ResolveAtlasUv(baseUvs[ib], atlasOffsets[ib], atlasSizes[ib])),
+                MakeVertex(c, ResolveAtlasUv(baseUvs[ic], atlasOffsets[ic], atlasSizes[ic])),
+                ResolveMeshTriangleShade(normal)));
+        }
+
+        iconTriangles.Sort((a, b) => a.sortKey.CompareTo(b.sortKey));
+        return iconTriangles;
+    }
+
+    private static Vector2 ResolveAtlasUv(Vector2 baseUv, Vector2 atlasOffset, Vector2 atlasSize)
+    {
+        return new Vector2(
+            atlasOffset.x + baseUv.x * atlasSize.x,
+            atlasOffset.y + baseUv.y * atlasSize.y);
+    }
+
+    private static float ResolveMeshTriangleShade(Vector3 normal)
+    {
+        float x = Mathf.Max(0f, normal.x);
+        float y = Mathf.Max(0f, normal.y);
+        float z = Mathf.Max(0f, normal.z);
+        float total = x + y + z;
+        if (total <= 0.0001f)
+            return LeftShade;
+
+        return (x * RightShade + y * TopShade + z * LeftShade) / total;
+    }
+
+    private static void RenderMeshIconTriangles(
+        Color32[] destination,
+        int iconSize,
+        Color32[] atlasPixels,
+        int atlasWidth,
+        int atlasHeight,
+        List<MeshIconTriangle> triangles)
+    {
+        if (triangles == null || triangles.Count == 0)
+            return;
+
+        float minX = float.MaxValue;
+        float minY = float.MaxValue;
+        float maxX = float.MinValue;
+        float maxY = float.MinValue;
+
+        for (int i = 0; i < triangles.Count; i++)
+        {
+            EncapsulateProjectedVertex(triangles[i].a.position, ref minX, ref minY, ref maxX, ref maxY);
+            EncapsulateProjectedVertex(triangles[i].b.position, ref minX, ref minY, ref maxX, ref maxY);
+            EncapsulateProjectedVertex(triangles[i].c.position, ref minX, ref minY, ref maxX, ref maxY);
+        }
+
+        float margin = Mathf.Max(2f, iconSize * 0.08f);
+        float spanX = Mathf.Max(0.001f, maxX - minX);
+        float spanY = Mathf.Max(0.001f, maxY - minY);
+        float scale = Mathf.Min((iconSize - margin * 2f) / spanX, (iconSize - margin * 2f) / spanY);
+
+        for (int i = 0; i < triangles.Count; i++)
+        {
+            MeshIconTriangle triangle = triangles[i];
+            DrawAtlasTriangle(
+                destination,
+                iconSize,
+                atlasPixels,
+                atlasWidth,
+                atlasHeight,
+                new FaceVertex(ToIconSpace(ProjectIsometric(triangle.a.position, 1f), minX, maxY, scale, margin), triangle.a.uv),
+                new FaceVertex(ToIconSpace(ProjectIsometric(triangle.b.position, 1f), minX, maxY, scale, margin), triangle.b.uv),
+                new FaceVertex(ToIconSpace(ProjectIsometric(triangle.c.position, 1f), minX, maxY, scale, margin), triangle.c.uv),
+                triangle.shade);
+        }
+    }
+
+    private static void EncapsulateProjectedVertex(Vector3 position, ref float minX, ref float minY, ref float maxX, ref float maxY)
+    {
+        Vector2 projected = ProjectIsometric(position, 1f);
+        minX = Mathf.Min(minX, projected.x);
+        minY = Mathf.Min(minY, projected.y);
+        maxX = Mathf.Max(maxX, projected.x);
+        maxY = Mathf.Max(maxY, projected.y);
     }
 
     private static void AppendStairFaces(List<IconFace3D> faces)
@@ -1218,6 +1475,57 @@ public static class BlockItemIconCache
         }
     }
 
+    private static void DrawAtlasTriangle(
+        Color32[] destination,
+        int destinationSize,
+        Color32[] atlasPixels,
+        int atlasWidth,
+        int atlasHeight,
+        FaceVertex a,
+        FaceVertex b,
+        FaceVertex c,
+        float shade)
+    {
+        float minX = Mathf.Min(a.position.x, b.position.x, c.position.x);
+        float maxX = Mathf.Max(a.position.x, b.position.x, c.position.x);
+        float minY = Mathf.Min(a.position.y, b.position.y, c.position.y);
+        float maxY = Mathf.Max(a.position.y, b.position.y, c.position.y);
+
+        int x0 = Mathf.Clamp(Mathf.FloorToInt(minX), 0, destinationSize - 1);
+        int x1 = Mathf.Clamp(Mathf.CeilToInt(maxX), 0, destinationSize - 1);
+        int y0 = Mathf.Clamp(Mathf.FloorToInt(minY), 0, destinationSize - 1);
+        int y1 = Mathf.Clamp(Mathf.CeilToInt(maxY), 0, destinationSize - 1);
+
+        float area = Edge(a.position, b.position, c.position);
+        if (Mathf.Abs(area) < 0.0001f)
+            return;
+
+        for (int y = y0; y <= y1; y++)
+        {
+            for (int x = x0; x <= x1; x++)
+            {
+                Vector2 p = new Vector2(x + 0.5f, y + 0.5f);
+
+                float w0 = Edge(b.position, c.position, p) / area;
+                float w1 = Edge(c.position, a.position, p) / area;
+                float w2 = 1f - w0 - w1;
+
+                if (w0 < 0f || w1 < 0f || w2 < 0f)
+                    continue;
+
+                Vector2 uv = a.uv * w0 + b.uv * w1 + c.uv * w2;
+                Color32 sampled = SampleAtlasNearest(atlasPixels, atlasWidth, atlasHeight, uv);
+                if (sampled.a == 0)
+                    continue;
+
+                sampled = MultiplyColor(sampled, shade);
+
+                int index = y * destinationSize + x;
+                destination[index] = AlphaBlend(destination[index], sampled);
+            }
+        }
+    }
+
     private static float Edge(Vector2 a, Vector2 b, Vector2 p)
     {
         return (p.x - a.x) * (b.y - a.y) - (p.y - a.y) * (b.x - a.x);
@@ -1225,6 +1533,16 @@ public static class BlockItemIconCache
 
     private static Color32 SampleNearest(Color32[] pixels, int width, int height, Vector2 uv)
     {
+        int x = Mathf.Clamp(Mathf.RoundToInt(uv.x * (width - 1)), 0, width - 1);
+        int y = Mathf.Clamp(Mathf.RoundToInt(uv.y * (height - 1)), 0, height - 1);
+        return pixels[y * width + x];
+    }
+
+    private static Color32 SampleAtlasNearest(Color32[] pixels, int width, int height, Vector2 uv)
+    {
+        if (pixels == null || width <= 0 || height <= 0)
+            return new Color32(0, 0, 0, 0);
+
         int x = Mathf.Clamp(Mathf.RoundToInt(uv.x * (width - 1)), 0, width - 1);
         int y = Mathf.Clamp(Mathf.RoundToInt(uv.y * (height - 1)), 0, height - 1);
         return pixels[y * width + x];

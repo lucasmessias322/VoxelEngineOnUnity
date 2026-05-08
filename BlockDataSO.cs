@@ -2806,6 +2806,19 @@ public static class BlockShapeUtility
             : RotateHorizontalPoint(point, placementAxis);
     }
 
+    public static Vector3 InverseTransformPointForPlacement(
+        Vector3 point,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        if (!ShouldRotateShapeForPlacement(mapping))
+            return point;
+
+        return UsesFullPlacementAxisRotation(mapping)
+            ? RotateFullPlacementPoint(point, GetInverseFullPlacementAxis(placementAxis))
+            : RotateHorizontalPoint(point, GetInverseHorizontalPlacementAxis(placementAxis));
+    }
+
     public static Vector3 TransformDirectionForPlacement(
         Vector3 direction,
         BlockTextureMapping mapping,
@@ -3006,6 +3019,47 @@ public static class BlockShapeUtility
 
             default:
                 return point;
+        }
+    }
+
+    private static BlockPlacementAxis GetInverseHorizontalPlacementAxis(BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                return BlockPlacementAxis.XNegative;
+
+            case BlockPlacementAxis.XNegative:
+                return BlockPlacementAxis.X;
+
+            case BlockPlacementAxis.ZNegative:
+                return BlockPlacementAxis.ZNegative;
+
+            default:
+                return axis;
+        }
+    }
+
+    private static BlockPlacementAxis GetInverseFullPlacementAxis(BlockPlacementAxis placementAxis)
+    {
+        BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+        switch (axis)
+        {
+            case BlockPlacementAxis.X:
+                return BlockPlacementAxis.XNegative;
+
+            case BlockPlacementAxis.XNegative:
+                return BlockPlacementAxis.X;
+
+            case BlockPlacementAxis.Z:
+                return BlockPlacementAxis.ZNegative;
+
+            case BlockPlacementAxis.ZNegative:
+                return BlockPlacementAxis.Z;
+
+            default:
+                return axis;
         }
     }
 

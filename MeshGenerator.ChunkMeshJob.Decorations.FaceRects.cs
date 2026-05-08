@@ -75,7 +75,26 @@ public static partial class MeshGenerator
             if (cuboid.TryGetUvRectData(localFace, mapping, out Vector4 cuboidUvRectData))
                 explicitUvRectData = cuboidUvRectData;
 
-            AppendShapeFaceRect(ref faceRects, box, worldFace, tile, tint, true, explicitUvRectData, localFace);
+            ShapeBox localBox = cuboid.ToShapeBox();
+            ResolveShapeBoxProjectedUvBounds(
+                localBox,
+                localFace,
+                out float sourceMinU,
+                out float sourceMaxU,
+                out float sourceMinV,
+                out float sourceMaxV);
+
+            AppendShapeFaceRect(
+                ref faceRects,
+                box,
+                worldFace,
+                tile,
+                tint,
+                true,
+                explicitUvRectData,
+                localFace,
+                true,
+                new Vector4(sourceMinU, sourceMaxU, sourceMinV, sourceMaxV));
         }
 
         private static void AppendShapeFaceRect(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box, BlockFace face)
@@ -91,7 +110,9 @@ public static partial class MeshGenerator
             bool tint,
             bool usesExplicitAppearance,
             Vector4 explicitUvRectData,
-            BlockFace uvFace = BlockFace.Side)
+            BlockFace uvFace = BlockFace.Side,
+            bool hasSourceUvBounds = false,
+            Vector4 sourceUvBounds = default)
         {
             if (uvFace == BlockFace.Side)
                 uvFace = face;
@@ -115,7 +136,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
 
@@ -136,7 +157,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
 
@@ -157,7 +178,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
 
@@ -178,7 +199,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
 
@@ -199,7 +220,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
 
@@ -220,7 +241,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData
                     };
-                    AddShapeFaceRectWithSourceUv(ref faceRects, rect);
+                    AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
                 }
             }
@@ -228,10 +249,62 @@ public static partial class MeshGenerator
 
         private static void AddShapeFaceRectWithSourceUv(
             ref FixedList4096Bytes<ShapeFaceRect> faceRects,
-            ShapeFaceRect rect)
+            ShapeFaceRect rect,
+            bool hasSourceUvBounds = false,
+            Vector4 sourceUvBounds = default)
         {
-            ResolveShapeFaceRectProjectedUvBounds(rect, out rect.sourceMinU, out rect.sourceMaxU, out rect.sourceMinV, out rect.sourceMaxV);
+            if (hasSourceUvBounds)
+            {
+                rect.sourceMinU = sourceUvBounds.x;
+                rect.sourceMaxU = sourceUvBounds.y;
+                rect.sourceMinV = sourceUvBounds.z;
+                rect.sourceMaxV = sourceUvBounds.w;
+            }
+            else
+            {
+                ResolveShapeFaceRectProjectedUvBounds(rect, out rect.sourceMinU, out rect.sourceMaxU, out rect.sourceMinV, out rect.sourceMaxV);
+            }
+
             faceRects.Add(rect);
+        }
+
+        private static void ResolveShapeBoxProjectedUvBounds(
+            ShapeBox box,
+            BlockFace face,
+            out float minU,
+            out float maxU,
+            out float minV,
+            out float maxV)
+        {
+            ShapeFaceRect rect;
+            switch (face)
+            {
+                case BlockFace.Right:
+                    rect = new ShapeFaceRect { face = face, plane = box.max.x, minA = box.min.y, maxA = box.max.y, minB = box.min.z, maxB = box.max.z };
+                    break;
+
+                case BlockFace.Left:
+                    rect = new ShapeFaceRect { face = face, plane = box.min.x, minA = box.min.y, maxA = box.max.y, minB = box.min.z, maxB = box.max.z };
+                    break;
+
+                case BlockFace.Top:
+                    rect = new ShapeFaceRect { face = face, plane = box.max.y, minA = box.min.x, maxA = box.max.x, minB = box.min.z, maxB = box.max.z };
+                    break;
+
+                case BlockFace.Bottom:
+                    rect = new ShapeFaceRect { face = face, plane = box.min.y, minA = box.min.x, maxA = box.max.x, minB = box.min.z, maxB = box.max.z };
+                    break;
+
+                case BlockFace.Front:
+                    rect = new ShapeFaceRect { face = face, plane = box.max.z, minA = box.min.x, maxA = box.max.x, minB = box.min.y, maxB = box.max.y };
+                    break;
+
+                default:
+                    rect = new ShapeFaceRect { face = BlockFace.Back, plane = box.min.z, minA = box.min.x, maxA = box.max.x, minB = box.min.y, maxB = box.max.y };
+                    break;
+            }
+
+            ResolveShapeFaceRectProjectedUvBounds(rect, out minU, out maxU, out minV, out maxV);
         }
 
         private static void ResolveShapeFaceRectProjectedUvBounds(

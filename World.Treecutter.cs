@@ -52,14 +52,14 @@ public partial class World
         if (GetBlockAt(treecutterPos) != BlockType.Treecutter)
             return false;
 
-        if (!IsElectricalEndpointPowered(treecutterPos))
-            return false;
-
         if (!TryFindTreecutterTargetLog(treecutterPos, out Vector3Int targetLogPos))
             return false;
 
         CollectTreecutterTree(targetLogPos);
         if (treecutterCollectedLogs.Count == 0)
+            return false;
+
+        if (!TryConsumeElectricalEnergy(treecutterPos, Mathf.Max(0f, treecutterEnergyPerTree)))
             return false;
 
         BreakCollectedTreecutterTree(treecutterPos);

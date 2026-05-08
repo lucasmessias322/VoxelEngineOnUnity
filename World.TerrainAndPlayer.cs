@@ -45,5 +45,5 @@ public partial class World
     [SerializeField, Min(1)] private int treecutterMaxLogsPerTree = 96;
     [SerializeField, Min(1)] private int treecutterMaxLeavesPerTree = 384;
     [SerializeField, Min(1)] private int treecutterLeafSearchDistance = 7;
-    [SerializeField, Min(0f)] private float treecutterEnergyPerSecond = 2f;
+    [SerializeField, Min(0f)] private float treecutterEnergyPerTree = 80f;
 }

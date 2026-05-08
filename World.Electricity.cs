@@ -1158,12 +1158,6 @@ public partial class World
             return config.energyPerSecond > 0f;
         }
 
-        if (blockType == BlockType.Treecutter)
-        {
-            config.energyPerSecond = Mathf.Max(0f, treecutterEnergyPerSecond);
-            return config.energyPerSecond > 0f;
-        }
-
         if (!TryGetBlockMapping(blockType, out BlockTextureMapping mapping) || !mapping.isElectricalEndpoint)
             return false;
 

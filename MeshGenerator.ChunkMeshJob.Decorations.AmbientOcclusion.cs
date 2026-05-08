@@ -583,7 +583,20 @@ public static partial class MeshGenerator
             Vector2 uv1;
             Vector2 uv2;
             Vector2 uv3;
-            if (currentShape == BlockRenderShape.MultiCuboid && uvFace != sampledFace)
+            if (currentShape == BlockRenderShape.MultiCuboid && usesExplicitAppearance)
+            {
+                Vector3 local0 = BlockShapeUtility.InverseTransformPointForPlacement(p0 - blockOrigin, mapping, currentPlacementAxis);
+                Vector3 local1 = BlockShapeUtility.InverseTransformPointForPlacement(p1 - blockOrigin, mapping, currentPlacementAxis);
+                Vector3 local2 = BlockShapeUtility.InverseTransformPointForPlacement(p2 - blockOrigin, mapping, currentPlacementAxis);
+                Vector3 local3 = BlockShapeUtility.InverseTransformPointForPlacement(p3 - blockOrigin, mapping, currentPlacementAxis);
+
+                uv0 = ResolveShapeProjectedUv(uvFace, local0);
+                uv1 = ResolveShapeProjectedUv(uvFace, local1);
+                uv2 = ResolveShapeProjectedUv(uvFace, local2);
+                uv3 = ResolveShapeProjectedUv(uvFace, local3);
+                NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3, sourceProjectedUvBounds);
+            }
+            else if (currentShape == BlockRenderShape.MultiCuboid && uvFace != sampledFace)
             {
                 ResolveCanonicalModelFaceQuadUv(uvFace, out uv0, out uv1, out uv2, out uv3);
             }
