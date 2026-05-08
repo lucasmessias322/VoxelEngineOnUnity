@@ -2257,6 +2257,9 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!world.CanBlockStayAt(placePos, placedBlockType))
             return false;
 
+        if (!CanPlaceMachineOnNonMachineSupportAt(placePos, placedBlockType))
+            return false;
+
         if (!CanPlaceDynamicBlockFootprintAt(placePos, placedBlockType))
             return false;
 
@@ -2584,6 +2587,36 @@ public class PlayerBlockBreaker : MonoBehaviour
                     if (world.GetBlockAt(pos) != BlockType.Air)
                         return false;
                 }
+            }
+        }
+
+        return true;
+    }
+
+    private bool CanPlaceMachineOnNonMachineSupportAt(Vector3Int origin, BlockType blockType)
+    {
+        if (!MachineBlockUtility.IsMachineBlock(blockType))
+            return true;
+
+        World world = World.Instance;
+        if (world == null)
+            return true;
+
+        int horizontalBlocks = 1;
+        if (world.blockData != null)
+        {
+            BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
+            if (mappingResult != null)
+                horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mappingResult.Value);
+        }
+
+        for (int z = 0; z < horizontalBlocks; z++)
+        {
+            for (int x = 0; x < horizontalBlocks; x++)
+            {
+                Vector3Int supportPos = origin + new Vector3Int(x, -1, z);
+                if (MachineBlockUtility.IsMachineBlock(world.GetBlockAt(supportPos)))
+                    return false;
             }
         }
 

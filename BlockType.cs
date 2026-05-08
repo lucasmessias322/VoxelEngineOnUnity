@@ -84,6 +84,28 @@ public enum BlockType
 
 }
 
+public static class MachineBlockUtility
+{
+    public static bool IsMachineBlock(BlockType type)
+    {
+        switch (type)
+        {
+            case BlockType.SolarPanel:
+            case BlockType.pipe:
+            case BlockType.RoboticArm:
+            case BlockType.ConveyorBelt:
+            case BlockType.EletricConnector:
+            case BlockType.batteryBlock:
+            case BlockType.windmill:
+            case BlockType.conveyorBelt_splitter:
+                return true;
+
+            default:
+                return false;
+        }
+    }
+}
+
 public static class LeverUtility
 {
     public static bool IsLeverBlock(BlockType type)
