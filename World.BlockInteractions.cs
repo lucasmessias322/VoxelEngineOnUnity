@@ -3,6 +3,15 @@ using UnityEngine;
 public partial class World
 {
     private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
+    private bool refreshingConveyorSlopeConnections;
+    private static readonly Vector3Int[] conveyorSlopeRefreshHorizontalOffsets =
+    {
+        Vector3Int.zero,
+        Vector3Int.left,
+        Vector3Int.right,
+        new Vector3Int(0, 0, -1),
+        new Vector3Int(0, 0, 1)
+    };
 
     #region Block Interactions
 
@@ -127,6 +136,47 @@ public partial class World
 
         RequestBlockEditRefresh(worldPos, chunkCoord, current, type);
         BlockChanged?.Invoke(worldPos, current, type);
+
+        if (!refreshingConveyorSlopeConnections)
+            RefreshConveyorSlopeConnectionsAround(worldPos);
+    }
+
+    private void RefreshConveyorSlopeConnectionsAround(Vector3Int worldPos)
+    {
+        refreshingConveyorSlopeConnections = true;
+        try
+        {
+            for (int yOffset = -1; yOffset <= 1; yOffset++)
+            {
+                Vector3Int verticalOffset = new Vector3Int(0, yOffset, 0);
+                for (int i = 0; i < conveyorSlopeRefreshHorizontalOffsets.Length; i++)
+                    TryRefreshConveyorSlopeConnection(worldPos + verticalOffset + conveyorSlopeRefreshHorizontalOffsets[i]);
+            }
+        }
+        finally
+        {
+            refreshingConveyorSlopeConnections = false;
+        }
+    }
+
+    private void TryRefreshConveyorSlopeConnection(Vector3Int beltPos)
+    {
+        BlockType currentType = GetBlockAt(beltPos);
+        if (!ConveyorBeltUtility.IsRegularConveyorBlock(currentType))
+            return;
+
+        BlockPlacementAxis currentAxis = ConveyorBeltUtility.ResolveConveyorAxis(this, beltPos, currentType);
+        bool shouldSlope = ConveyorBeltUtility.ShouldUseSlopedConveyor(this, beltPos, currentAxis);
+        BlockType targetType = shouldSlope ? BlockType.conveyorBelt_45deg : BlockType.ConveyorBelt;
+
+        if (currentType == targetType)
+            return;
+
+        BlockPlacementAxis targetAxis = shouldSlope
+            ? ConveyorBeltUtility.ConvertFlatAxisToSlopedAxis(currentAxis)
+            : ConveyorBeltUtility.ConvertSlopedAxisToFlatAxis(currentAxis);
+
+        SetBlockAt(beltPos, targetType, false, targetAxis);
     }
 
     private void TryConvertCoveredGrassToDirt(Vector3Int worldPos, BlockType placedType, bool placedByPlayer)

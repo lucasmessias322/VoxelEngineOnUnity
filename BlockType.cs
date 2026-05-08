@@ -97,6 +97,7 @@ public static class MachineBlockUtility
             case BlockType.pipe:
             case BlockType.RoboticArm:
             case BlockType.ConveyorBelt:
+            case BlockType.conveyorBelt_45deg:
             case BlockType.EletricConnector:
             case BlockType.batteryBlock:
             case BlockType.windmill:

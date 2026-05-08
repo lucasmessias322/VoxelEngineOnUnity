@@ -94,6 +94,8 @@ public partial class World
         {
             return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
         }
+        if (blockType == BlockType.conveyorBelt_45deg)
+            return RampShapeUtility.ResolvePlacementAxis(lookForward);
 
         if (blockType == BlockType.SolarPanel)
             return ConveyorBeltUtility.ResolvePlacementAxis(lookForward);
@@ -247,6 +249,7 @@ public partial class World
         BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
         return blockType == BlockType.ConveyorBelt ||
                blockType == BlockType.conveyorBelt_splitter ||
+               blockType == BlockType.conveyorBelt_45deg ||
                blockType == BlockType.SolarPanel ||
                mapping.usePlacementAxisRotation ||
                shape == BlockRenderShape.Stairs ||

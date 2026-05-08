@@ -161,54 +161,54 @@ public class BlockSelector : MonoBehaviour
         switch (BlockShapeUtility.GetEffectiveRenderShape(value))
         {
             case BlockRenderShape.Stairs:
-            {
-                StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, pos, (byte)placementAxis);
-                StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
-                bounds = box0.ToWorldBounds(pos);
-                if (boxCount > 1) bounds.Encapsulate(box1.ToWorldBounds(pos));
-                if (boxCount > 2) bounds.Encapsulate(box2.ToWorldBounds(pos));
-                if (boxCount > 3) bounds.Encapsulate(box3.ToWorldBounds(pos));
-                if (boxCount > 4) bounds.Encapsulate(box4.ToWorldBounds(pos));
-                return true;
-            }
+                {
+                    StairShapeVariant variant = StairShapeRuntimeUtility.ResolveShapeVariant(world, pos, (byte)placementAxis);
+                    StairShapeUtility.ResolveBoxes((byte)placementAxis, variant, out int boxCount, out ShapeBox box0, out ShapeBox box1, out ShapeBox box2, out ShapeBox box3, out ShapeBox box4);
+                    bounds = box0.ToWorldBounds(pos);
+                    if (boxCount > 1) bounds.Encapsulate(box1.ToWorldBounds(pos));
+                    if (boxCount > 2) bounds.Encapsulate(box2.ToWorldBounds(pos));
+                    if (boxCount > 3) bounds.Encapsulate(box3.ToWorldBounds(pos));
+                    if (boxCount > 4) bounds.Encapsulate(box4.ToWorldBounds(pos));
+                    return true;
+                }
 
             case BlockRenderShape.Fence:
-            {
-                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
-                bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
-                    bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(pos));
-                return true;
-            }
+                {
+                    byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
+                    bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, false).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectWest, true).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, false).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectEast, true).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, false).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectSouth, true).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, false).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                        bounds.Encapsulate(FenceShapeUtility.GetRailVisualBox(FenceShapeUtility.ConnectNorth, true).ToWorldBounds(pos));
+                    return true;
+                }
 
             case BlockRenderShape.Fence2:
-            {
-                byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
-                bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
-                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectWest).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
-                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectEast).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
-                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(pos));
-                if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
-                    bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(pos));
-                return true;
-            }
+                {
+                    byte connectionMask = FenceShapeUtility.ResolveConnectionMask(world, pos);
+                    bounds = FenceShapeUtility.GetCenterPostVisualBox().ToWorldBounds(pos);
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectWest))
+                        bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectWest).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectEast))
+                        bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectEast).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectSouth))
+                        bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectSouth).ToWorldBounds(pos));
+                    if (FenceShapeUtility.IsFenceConnectionActive(connectionMask, FenceShapeUtility.ConnectNorth))
+                        bounds.Encapsulate(FenceShapeUtility.GetSingleRailVisualBox(FenceShapeUtility.ConnectNorth).ToWorldBounds(pos));
+                    return true;
+                }
 
             case BlockRenderShape.Slab:
                 bounds = SlabShapeUtility.GetVisualBox(placementAxis).ToWorldBounds(pos);
@@ -557,6 +557,9 @@ public class BlockSelector : MonoBehaviour
                 return TryHitCuboidBlock(ray, maxDistance, voxel, blockType, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.MultiCuboid:
+                if (blockType == BlockType.conveyorBelt_45deg)
+                    return TryHitRampBlock(ray, maxDistance, voxel, blockType, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
                 return TryHitMultiCuboidBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.Cross:
@@ -569,7 +572,7 @@ public class BlockSelector : MonoBehaviour
                 return TryHitStairBlock(ray, maxDistance, voxel, blockType, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.Ramp:
-                return TryHitRampBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
+                return TryHitRampBlock(ray, maxDistance, voxel, blockType, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
             case BlockRenderShape.VerticalRamp:
                 return TryHitVerticalRampBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
@@ -1044,6 +1047,7 @@ public class BlockSelector : MonoBehaviour
         Ray ray,
         float maxDistance,
         Vector3Int voxel,
+        BlockType blockType,
         BlockPlacementAxis placementAxis,
         Vector3Int lastNormal,
         out Vector3Int hitNormal,
@@ -1054,7 +1058,13 @@ public class BlockSelector : MonoBehaviour
         hitPoint = Vector3.zero;
         bool hit = false;
         Vector3 origin = voxel;
-        RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, placementAxis);
+        bool slopedConveyor = blockType == BlockType.conveyorBelt_45deg;
+        if (slopedConveyor)
+            placementAxis = ConveyorBeltUtility.ResolveSlopedConveyorRampAxis(World.Instance, voxel, placementAxis);
+
+        RampShapeVariant rampVariant = slopedConveyor
+            ? RampShapeVariant.Straight
+            : RampShapeRuntimeUtility.ResolveShapeVariant(World.Instance, voxel, placementAxis);
 
         RampShapeUtility.ResolveBottomQuad(placementAxis, out Vector3 bottom0, out Vector3 bottom1, out Vector3 bottom2, out Vector3 bottom3);
         hit = TryUpdateCustomHit(ray, maxDistance, lastNormal, origin + bottom0, origin + bottom1, origin + bottom2, origin + bottom3, ref bestDistance, ref hitNormal, ref hitPoint) || hit;

@@ -108,6 +108,24 @@ public static partial class MeshGenerator
             uv3 = new Vector2((uv3.x - minU) * invSpanU, (uv3.y - minV) * invSpanV);
         }
 
+        private static void NormalizeProjectedTriangleUv(
+            ref Vector2 uv0,
+            ref Vector2 uv1,
+            ref Vector2 uv2)
+        {
+            float minU = math.min(math.min(uv0.x, uv1.x), uv2.x);
+            float maxU = math.max(math.max(uv0.x, uv1.x), uv2.x);
+            float minV = math.min(math.min(uv0.y, uv1.y), uv2.y);
+            float maxV = math.max(math.max(uv0.y, uv1.y), uv2.y);
+
+            float invSpanU = 1f / math.max(maxU - minU, 1e-6f);
+            float invSpanV = 1f / math.max(maxV - minV, 1e-6f);
+
+            uv0 = new Vector2((uv0.x - minU) * invSpanU, (uv0.y - minV) * invSpanV);
+            uv1 = new Vector2((uv1.x - minU) * invSpanU, (uv1.y - minV) * invSpanV);
+            uv2 = new Vector2((uv2.x - minU) * invSpanU, (uv2.y - minV) * invSpanV);
+        }
+
         private static void RotateConveyorProjectedUvForPlacement(
             BlockTextureMapping mapping,
             BlockFace sampledFace,
@@ -118,7 +136,8 @@ public static partial class MeshGenerator
             ref Vector2 uv3)
         {
             if ((mapping.blockType != BlockType.ConveyorBelt &&
-                 mapping.blockType != BlockType.conveyorBelt_splitter) ||
+                 mapping.blockType != BlockType.conveyorBelt_splitter &&
+                 mapping.blockType != BlockType.conveyorBelt_45deg) ||
                 (sampledFace != BlockFace.Top && sampledFace != BlockFace.Bottom))
             {
                 return;
@@ -177,6 +196,29 @@ public static partial class MeshGenerator
             return BlockPlacementAxis.Z;
         }
 
+        private BlockPlacementAxis ResolveSlopedConveyorRampPlacementAxis(
+            NativeArray<byte> blockTypes,
+            BlockPlacementAxis conveyorAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            Vector3Int forwardStep = ResolveConveyorForwardStep(conveyorAxis);
+            if (forwardStep == Vector3Int.zero)
+                return BlockPlacementAxis.Z;
+
+            if (HasConveyorBlockAt(blockTypes, voxelX + forwardStep.x, voxelY + 1, voxelZ + forwardStep.z, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return ResolveRampAxisFromHorizontalStep(forwardStep);
+
+            if (HasConveyorBlockAt(blockTypes, voxelX - forwardStep.x, voxelY + 1, voxelZ - forwardStep.z, voxelSizeX, voxelSizeZ, voxelPlaneSize))
+                return ResolveRampAxisFromHorizontalStep(-forwardStep);
+
+            return ResolveRampAxisFromHorizontalStep(forwardStep);
+        }
+
         private bool TryGetNeighborConveyorRenderAxis(
             NativeArray<byte> blockTypes,
             int voxelX,
@@ -204,10 +246,58 @@ public static partial class MeshGenerator
             return axis != BlockPlacementAxis.Y;
         }
 
+        private bool HasConveyorBlockAt(
+            NativeArray<byte> blockTypes,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (!blockTypes.IsCreated ||
+                voxelX < 0 || voxelX >= voxelSizeX ||
+                voxelY < 0 || voxelY >= Chunk.SizeY ||
+                voxelZ < 0 || voxelZ >= voxelSizeZ)
+            {
+                return false;
+            }
+
+            int idx = voxelX + voxelY * voxelSizeX + voxelZ * voxelPlaneSize;
+            return (uint)idx < (uint)blockTypes.Length && IsConveyorBlock((BlockType)blockTypes[idx]);
+        }
+
+        private static Vector3Int ResolveConveyorForwardStep(BlockPlacementAxis placementAxis)
+        {
+            switch (BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+            {
+                case BlockPlacementAxis.X:
+                    return Vector3Int.right;
+
+                case BlockPlacementAxis.XNegative:
+                    return Vector3Int.left;
+
+                case BlockPlacementAxis.ZNegative:
+                    return new Vector3Int(0, 0, 1);
+
+                default:
+                    return new Vector3Int(0, 0, -1);
+            }
+        }
+
+        private static BlockPlacementAxis ResolveRampAxisFromHorizontalStep(Vector3Int step)
+        {
+            if (math.abs(step.x) >= math.abs(step.z))
+                return step.x >= 0 ? BlockPlacementAxis.X : BlockPlacementAxis.XNegative;
+
+            return step.z >= 0 ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative;
+        }
+
         private static bool IsConveyorBlock(BlockType blockType)
         {
             return blockType == BlockType.ConveyorBelt ||
-                   blockType == BlockType.conveyorBelt_splitter;
+                   blockType == BlockType.conveyorBelt_splitter ||
+                   blockType == BlockType.conveyorBelt_45deg;
         }
 
         private static Vector3 ResolveShapeFaceNormal(BlockFace face)

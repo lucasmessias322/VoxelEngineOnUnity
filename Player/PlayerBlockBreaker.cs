@@ -2778,7 +2778,13 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             case BlockRenderShape.Ramp:
             {
-                RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, placementAxis);
+                bool slopedConveyor = blockType == BlockType.conveyorBelt_45deg;
+                if (slopedConveyor)
+                    placementAxis = ConveyorBeltUtility.ResolveSlopedConveyorRampAxis(world, blockPos, placementAxis);
+
+                RampShapeVariant rampVariant = slopedConveyor
+                    ? RampShapeVariant.Straight
+                    : RampShapeRuntimeUtility.ResolveShapeVariant(world, blockPos, placementAxis);
                 var rampBoxes = RampShapeUtility.BuildColliderBoxes(placementAxis, rampVariant);
                 for (int i = 0; i < rampBoxes.Length; i++)
                 {
@@ -2849,6 +2855,19 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             case BlockRenderShape.MultiCuboid:
             {
+                if (blockType == BlockType.conveyorBelt_45deg)
+                {
+                    BlockPlacementAxis rampAxis = ConveyorBeltUtility.ResolveSlopedConveyorRampAxis(world, blockPos, placementAxis);
+                    var rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, RampShapeVariant.Straight);
+                    for (int i = 0; i < rampBoxes.Length; i++)
+                    {
+                        if (testBounds.Intersects(rampBoxes[i].ToWorldBounds(blockPos)))
+                            return true;
+                    }
+
+                    return false;
+                }
+
                 int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, world.blockData.runtimeMultiCuboidBoxes);
                 if (boxCount <= 0)
                     return testBounds.Intersects(ResolveBlockBounds(blockPos, blockType, placementAxis));

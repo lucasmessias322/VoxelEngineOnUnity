@@ -215,6 +215,37 @@ public static class ConveyorBeltUtility
         }
     }
 
+    public static Vector3 GetForwardDirection(BlockType conveyorType, BlockPlacementAxis placementAxis)
+    {
+        return GetForwardDirection(placementAxis);
+    }
+
+    public static BlockPlacementAxis ConvertFlatAxisToSlopedAxis(BlockPlacementAxis placementAxis)
+    {
+        return BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+    }
+
+    public static BlockPlacementAxis ConvertSlopedAxisToFlatAxis(BlockPlacementAxis placementAxis)
+    {
+        return BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+    }
+
+    public static BlockPlacementAxis ResolveSlopedConveyorRampAxis(World world, Vector3Int beltPos, BlockPlacementAxis conveyorAxis)
+    {
+        Vector3 forward = GetForwardDirection(conveyorAxis);
+        Vector3Int forwardStep = ResolveHorizontalStep(forward);
+        if (forwardStep == Vector3Int.zero)
+            return BlockPlacementAxis.Z;
+
+        if (TryGetConveyorAt(world, beltPos + forwardStep + Vector3Int.up, out _))
+            return ResolveRampAxisFromStep(forwardStep);
+
+        if (TryGetConveyorAt(world, beltPos - forwardStep + Vector3Int.up, out _))
+            return ResolveRampAxisFromStep(-forwardStep);
+
+        return ResolveRampAxisFromStep(forwardStep);
+    }
+
     public static bool TryGetConveyorVelocity(
         World world,
         Vector3 itemCenter,
@@ -290,7 +321,7 @@ public static class ConveyorBeltUtility
         }
 
         BlockPlacementAxis placementAxis = ResolveConveyorAxis(world, beltPos, conveyorType);
-        Vector3 forward = GetForwardDirection(placementAxis);
+        Vector3 forward = GetForwardDirection(conveyorType, placementAxis);
         Vector3 centering = GetLaneCenteringVelocity(itemCenter, beltPos, forward, centeringStrength, maxCenteringSpeed);
 
         if (IsForwardBlockedByUnloadedChunk(world, beltPos, forward))
@@ -299,7 +330,8 @@ public static class ConveyorBeltUtility
             return true;
         }
 
-        conveyorVelocity = forward * Mathf.Max(0f, speed) + centering;
+        Vector3 travelDirection = ResolveConveyorTravelDirection(world, beltPos, conveyorType, placementAxis, forward);
+        conveyorVelocity = travelDirection * Mathf.Max(0f, speed) + centering;
         return conveyorVelocity.sqrMagnitude > 0.0001f;
     }
 
@@ -441,7 +473,32 @@ public static class ConveyorBeltUtility
     public static bool IsConveyorBlock(BlockType blockType)
     {
         return blockType == BlockType.ConveyorBelt ||
-               blockType == BlockType.conveyorBelt_splitter;
+               blockType == BlockType.conveyorBelt_splitter ||
+               blockType == BlockType.conveyorBelt_45deg;
+    }
+
+    public static bool IsRegularConveyorBlock(BlockType blockType)
+    {
+        return blockType == BlockType.ConveyorBelt ||
+               blockType == BlockType.conveyorBelt_45deg;
+    }
+
+    public static bool ShouldUseSlopedConveyor(World world, Vector3Int beltPos, BlockPlacementAxis placementAxis)
+    {
+        if (world == null)
+            return false;
+
+        BlockType currentType = world.GetBlockAt(beltPos);
+        if (!IsRegularConveyorBlock(currentType))
+            return false;
+
+        Vector3 forward = GetForwardDirection(currentType, placementAxis);
+        Vector3Int forwardStep = ResolveHorizontalStep(forward);
+        if (forwardStep == Vector3Int.zero)
+            return false;
+
+        return TryGetConveyorAt(world, beltPos + forwardStep + Vector3Int.up, out _) ||
+               TryGetConveyorAt(world, beltPos - forwardStep + Vector3Int.up, out _);
     }
 
     private static bool TryFindSupportConveyor(
@@ -652,7 +709,7 @@ public static class ConveyorBeltUtility
             return false;
 
         BlockPlacementAxis axis = ResolveConveyorAxis(world, conveyorPos, conveyorType);
-        Vector3Int conveyorForwardStep = ResolveHorizontalStep(GetForwardDirection(axis));
+        Vector3Int conveyorForwardStep = ResolveHorizontalStep(GetForwardDirection(conveyorType, axis));
         return conveyorForwardStep == outputStep;
     }
 
@@ -741,7 +798,7 @@ public static class ConveyorBeltUtility
             splitterRouteAssignments.Remove(staleKeys[i]);
     }
 
-    private static BlockPlacementAxis ResolveConveyorAxis(World world, Vector3Int beltPos, BlockType conveyorType)
+    public static BlockPlacementAxis ResolveConveyorAxis(World world, Vector3Int beltPos, BlockType conveyorType)
     {
         BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(
             world.GetPlacementAxisAt(beltPos, conveyorType));
@@ -757,6 +814,37 @@ public static class ConveyorBeltUtility
         }
 
         return BlockPlacementAxis.Z;
+    }
+
+    private static Vector3 ResolveConveyorTravelDirection(
+        World world,
+        Vector3Int beltPos,
+        BlockType conveyorType,
+        BlockPlacementAxis placementAxis,
+        Vector3 forward)
+    {
+        if (conveyorType != BlockType.conveyorBelt_45deg)
+            return forward;
+
+        Vector3Int forwardStep = ResolveHorizontalStep(forward);
+        if (forwardStep == Vector3Int.zero)
+            return forward;
+
+        if (TryGetConveyorAt(world, beltPos + forwardStep + Vector3Int.up, out _))
+            return (forward + Vector3.up).normalized;
+
+        if (TryGetConveyorAt(world, beltPos - forwardStep + Vector3Int.up, out _))
+            return (forward + Vector3.down).normalized;
+
+        return GetForwardDirection(conveyorType, placementAxis);
+    }
+
+    private static BlockPlacementAxis ResolveRampAxisFromStep(Vector3Int step)
+    {
+        if (Mathf.Abs(step.x) >= Mathf.Abs(step.z))
+            return step.x >= 0 ? BlockPlacementAxis.X : BlockPlacementAxis.XNegative;
+
+        return step.z >= 0 ? BlockPlacementAxis.Z : BlockPlacementAxis.ZNegative;
     }
 
     private static bool TryGetNeighborConveyorAxis(World world, Vector3Int neighborPos, out BlockPlacementAxis axis)

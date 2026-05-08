@@ -60,15 +60,17 @@ public static partial class MeshGenerator
             float light01)
         {
             bool rampTopHalf = RampShapeUtility.IsTopHalf(placementAxis);
-            RampShapeVariant rampVariant = ResolveRampShapeVariant(
-                placementAxis,
-                voxelX,
-                voxelY,
-                voxelZ,
-                blockTypes,
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize);
+            RampShapeVariant rampVariant = mapping.blockType == BlockType.conveyorBelt_45deg
+                ? RampShapeVariant.Straight
+                : ResolveRampShapeVariant(
+                    placementAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize);
             NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
 
             BlockFace flatFace = rampTopHalf ? BlockFace.Top : BlockFace.Bottom;

@@ -550,6 +550,15 @@ internal sealed class SubchunkColliderBuilder
                         case BlockRenderShape.MultiCuboid:
                         {
                             BlockPlacementAxis multiAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Y;
+                            if (blockType == BlockType.conveyorBelt_45deg)
+                            {
+                                BlockPlacementAxis rampAxis = ConveyorBeltUtility.ResolveSlopedConveyorRampAxis(world, worldPos, multiAxis);
+                                FixedList512Bytes<ShapeBox> rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, RampShapeVariant.Straight);
+                                for (int i = 0; i < rampBoxes.Length; i++)
+                                    colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, rampBoxes[i]);
+                                break;
+                            }
+
                             Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, worldPos, blockType, mapping, multiAxis);
                             int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, blockModelCuboids);
                             if (boxCount <= 0)
@@ -584,7 +593,13 @@ internal sealed class SubchunkColliderBuilder
                         case BlockRenderShape.Ramp:
                         {
                             BlockPlacementAxis rampAxis = world != null ? world.GetPlacementAxisAt(worldPos, blockType) : BlockPlacementAxis.Z;
-                            RampShapeVariant rampVariant = RampShapeRuntimeUtility.ResolveShapeVariant(world, worldPos, rampAxis);
+                            bool slopedConveyor = blockType == BlockType.conveyorBelt_45deg;
+                            if (slopedConveyor)
+                                rampAxis = ConveyorBeltUtility.ResolveSlopedConveyorRampAxis(world, worldPos, rampAxis);
+
+                            RampShapeVariant rampVariant = slopedConveyor
+                                ? RampShapeVariant.Straight
+                                : RampShapeRuntimeUtility.ResolveShapeVariant(world, worldPos, rampAxis);
                             FixedList512Bytes<ShapeBox> rampBoxes = RampShapeUtility.BuildColliderBoxes(rampAxis, rampVariant);
                             for (int i = 0; i < rampBoxes.Length; i++)
                                 colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, rampBoxes[i]);

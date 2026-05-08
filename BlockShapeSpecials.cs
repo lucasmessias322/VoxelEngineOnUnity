@@ -1470,6 +1470,7 @@ public static class BlockSupportSurfaceUtility
         {
             case BlockType.ConveyorBelt:
             case BlockType.conveyorBelt_splitter:
+            case BlockType.conveyorBelt_45deg:
             case BlockType.SolarPanel:
                 return BlockPlacementAxis.Y;
 
@@ -1487,6 +1488,7 @@ public static class BlockSupportSurfaceUtility
         {
             case BlockType.ConveyorBelt:
             case BlockType.conveyorBelt_splitter:
+            case BlockType.conveyorBelt_45deg:
             case BlockType.SolarPanel:
                 return BlockPlacementAxis.Y;
         }

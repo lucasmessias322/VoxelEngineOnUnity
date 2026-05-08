@@ -2353,7 +2353,10 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
         World world = World.Instance;
         Vector3 nextPosition = transform.position;
-        ApplyConveyorVelocity(world);
+        bool moveVerticalBeforeHorizontal = ApplyConveyorVelocity(world);
+
+        if (moveVerticalBeforeHorizontal)
+            ApplyVerticalMovement(world, ref nextPosition, deltaTime, ignoreConveyors: true);
 
         float moveX = velocity.x * deltaTime;
         if (Mathf.Abs(moveX) > 0.0001f)
@@ -2375,31 +2378,10 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 nextPosition = candidateZ;
         }
 
-        float moveY = velocity.y * deltaTime;
-        if (Mathf.Abs(moveY) > 0.0001f)
-        {
-            Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
-            if (IntersectsSolid(world, candidateY))
-            {
-                if (moveY < 0f)
-                {
-                    nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
-                    float bounceSpeed = -velocity.y * bounceDamping;
-                    velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
-                    isGrounded = true;
-                }
-                else
-                {
-                    velocity.y = 0f;
-                }
-            }
-            else
-            {
-                nextPosition = candidateY;
-                isGrounded = false;
-            }
-        }
-        else if (isGrounded && !IsSupported(world, nextPosition))
+        if (!moveVerticalBeforeHorizontal)
+            ApplyVerticalMovement(world, ref nextPosition, deltaTime, ignoreConveyors: false);
+
+        if (Mathf.Abs(velocity.y * deltaTime) <= 0.0001f && isGrounded && !IsSupported(world, nextPosition))
         {
             isGrounded = false;
         }
@@ -2421,6 +2403,36 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private bool IntersectsSolidIgnoringConveyors(World world, Vector3 center)
     {
         return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent, BlockType.ConveyorBelt);
+    }
+
+    private void ApplyVerticalMovement(World world, ref Vector3 nextPosition, float deltaTime, bool ignoreConveyors)
+    {
+        float moveY = velocity.y * deltaTime;
+        if (Mathf.Abs(moveY) <= 0.0001f)
+            return;
+
+        Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
+        bool intersects = ignoreConveyors
+            ? IntersectsSolidIgnoringConveyors(world, candidateY)
+            : IntersectsSolid(world, candidateY);
+        if (intersects)
+        {
+            if (moveY < 0f)
+            {
+                nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
+                float bounceSpeed = -velocity.y * bounceDamping;
+                velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
+                isGrounded = true;
+            }
+            else
+            {
+                velocity.y = 0f;
+            }
+            return;
+        }
+
+        nextPosition = candidateY;
+        isGrounded = false;
     }
 
     private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
@@ -2502,7 +2514,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         simulationAccumulator = 0f;
     }
 
-    private void ApplyConveyorVelocity(World world)
+    private bool ApplyConveyorVelocity(World world)
     {
         SplitStackAcrossSplitterIfNeeded(world);
 
@@ -2517,13 +2529,16 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 ResolveItemForConveyorFilter(),
                 out Vector3 conveyorVelocity))
         {
-            return;
+            return false;
         }
 
         velocity.x = conveyorVelocity.x;
         velocity.z = conveyorVelocity.z;
+        if (Mathf.Abs(conveyorVelocity.y) > 0.0001f)
+            velocity.y = conveyorVelocity.y;
         isGrounded = true;
         isSleeping = false;
+        return conveyorVelocity.y > 0.0001f;
     }
 
     private void SplitStackAcrossSplitterIfNeeded(World world)
@@ -3229,7 +3244,10 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 
         World world = World.Instance;
         Vector3 nextPosition = transform.position;
-        ApplyConveyorVelocity(world);
+        bool moveVerticalBeforeHorizontal = ApplyConveyorVelocity(world);
+
+        if (moveVerticalBeforeHorizontal)
+            ApplyVerticalMovement(world, ref nextPosition, deltaTime, ignoreConveyors: true);
 
         float moveX = velocity.x * deltaTime;
         if (Mathf.Abs(moveX) > 0.0001f)
@@ -3251,31 +3269,10 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 nextPosition = candidateZ;
         }
 
-        float moveY = velocity.y * deltaTime;
-        if (Mathf.Abs(moveY) > 0.0001f)
-        {
-            Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
-            if (IntersectsSolid(world, candidateY))
-            {
-                if (moveY < 0f)
-                {
-                    nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
-                    float bounceSpeed = -velocity.y * bounceDamping;
-                    velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
-                    isGrounded = true;
-                }
-                else
-                {
-                    velocity.y = 0f;
-                }
-            }
-            else
-            {
-                nextPosition = candidateY;
-                isGrounded = false;
-            }
-        }
-        else if (isGrounded && !IsSupported(world, nextPosition))
+        if (!moveVerticalBeforeHorizontal)
+            ApplyVerticalMovement(world, ref nextPosition, deltaTime, ignoreConveyors: false);
+
+        if (Mathf.Abs(velocity.y * deltaTime) <= 0.0001f && isGrounded && !IsSupported(world, nextPosition))
         {
             isGrounded = false;
         }
@@ -3297,6 +3294,36 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private bool IntersectsSolidIgnoringConveyors(World world, Vector3 center)
     {
         return DropCollisionUtility.IntersectsSolid(world, center, collisionHalfExtent, BlockType.ConveyorBelt);
+    }
+
+    private void ApplyVerticalMovement(World world, ref Vector3 nextPosition, float deltaTime, bool ignoreConveyors)
+    {
+        float moveY = velocity.y * deltaTime;
+        if (Mathf.Abs(moveY) <= 0.0001f)
+            return;
+
+        Vector3 candidateY = nextPosition + new Vector3(0f, moveY, 0f);
+        bool intersects = ignoreConveyors
+            ? IntersectsSolidIgnoringConveyors(world, candidateY)
+            : IntersectsSolid(world, candidateY);
+        if (intersects)
+        {
+            if (moveY < 0f)
+            {
+                nextPosition.y = ResolveVerticalContactY(world, nextPosition.y, candidateY.y, nextPosition.x, nextPosition.z);
+                float bounceSpeed = -velocity.y * bounceDamping;
+                velocity.y = bounceSpeed > 0.35f ? bounceSpeed : 0f;
+                isGrounded = true;
+            }
+            else
+            {
+                velocity.y = 0f;
+            }
+            return;
+        }
+
+        nextPosition = candidateY;
+        isGrounded = false;
     }
 
     private float ResolveVerticalContactY(World world, float fromY, float toY, float x, float z)
@@ -3378,7 +3405,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         simulationAccumulator = 0f;
     }
 
-    private void ApplyConveyorVelocity(World world)
+    private bool ApplyConveyorVelocity(World world)
     {
         SplitStackAcrossSplitterIfNeeded(world);
 
@@ -3393,13 +3420,16 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 item,
                 out Vector3 conveyorVelocity))
         {
-            return;
+            return false;
         }
 
         velocity.x = conveyorVelocity.x;
         velocity.z = conveyorVelocity.z;
+        if (Mathf.Abs(conveyorVelocity.y) > 0.0001f)
+            velocity.y = conveyorVelocity.y;
         isGrounded = true;
         isSleeping = false;
+        return conveyorVelocity.y > 0.0001f;
     }
 
     private void SplitStackAcrossSplitterIfNeeded(World world)

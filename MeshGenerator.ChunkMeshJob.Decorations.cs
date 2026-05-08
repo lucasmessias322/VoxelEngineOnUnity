@@ -161,10 +161,23 @@ public static partial class MeshGenerator
                                         break;
 
                                     case BlockRenderShape.Ramp:
+                                    {
+                                        BlockPlacementAxis rampPlacementAxis = blockType == BlockType.conveyorBelt_45deg
+                                            ? ResolveSlopedConveyorRampPlacementAxis(
+                                                blockTypes,
+                                                placementAxis,
+                                                x,
+                                                y,
+                                                z,
+                                                voxelSizeX,
+                                                voxelSizeZ,
+                                                voxelPlaneSize)
+                                            : (BlockPlacementAxis)rawPlacementData;
+
                                         AddRampShape(
                                             origin,
                                             mapping,
-                                            (BlockPlacementAxis)rawPlacementData,
+                                            rampPlacementAxis,
                                             x,
                                             y,
                                             z,
@@ -175,6 +188,7 @@ public static partial class MeshGenerator
                                             invAtlasTilesY,
                                             specialLight01);
                                         break;
+                                    }
 
                                     case BlockRenderShape.VerticalRamp:
                                         AddVerticalRampShape(

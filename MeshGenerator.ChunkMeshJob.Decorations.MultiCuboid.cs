@@ -48,6 +48,25 @@ public static partial class MeshGenerator
                 return;
             }
 
+            if (blockType == BlockType.conveyorBelt_45deg)
+            {
+                AddSlopedConveyorMultiCuboidShape(
+                    origin,
+                    mapping,
+                    placementAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    light01,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris);
+                return;
+            }
+
             Vector3 visualOffset = ResolveSurfaceAlignedVisualOffset(mapping, blockType, placementAxis, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
 
             FixedList512Bytes<ShapeBox> shapeBoxes = default;
@@ -121,6 +140,295 @@ public static partial class MeshGenerator
                     BlockRenderShape.MultiCuboid,
                     placementAxis,
                     RampShapeVariant.Straight);
+            }
+        }
+
+        private void AddSlopedConveyorMultiCuboidShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis conveyorAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris)
+        {
+            BlockPlacementAxis rampAxis = ResolveSlopedConveyorRampPlacementAxis(
+                blockTypes,
+                conveyorAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            Vector3 visualOffset = ResolveSurfaceAlignedVisualOffset(
+                mapping,
+                BlockType.conveyorBelt_45deg,
+                conveyorAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            FixedList512Bytes<ShapeBox> shapeBoxes = default;
+            int boxCount = GetNativeMultiCuboidBoxCount(mapping);
+            bool appendedAnyCuboid = false;
+            for (int i = 0; i < boxCount && i < 16; i++)
+            {
+                if (!TryGetNativeMultiCuboid(mapping, i, out BlockModelCuboid cuboid))
+                    continue;
+
+                appendedAnyCuboid = true;
+                ShapeBox bounds = GetSlopedConveyorMultiCuboidBounds(cuboid, mapping, conveyorAxis, rampAxis, visualOffset);
+                shapeBoxes.Add(bounds);
+                AddSlopedConveyorMultiCuboidFaces(
+                    origin + visualOffset,
+                    mapping,
+                    cuboid,
+                    conveyorAxis,
+                    rampAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    light01,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris,
+                    shapeBoxes);
+            }
+
+            if (appendedAnyCuboid)
+                return;
+
+            ResolveShapeBounds(mapping, out Vector3 fallbackMin, out Vector3 fallbackMax);
+            BlockModelCuboid fallbackCuboid = new BlockModelCuboid(fallbackMin, fallbackMax);
+            ShapeBox fallbackBounds = GetSlopedConveyorMultiCuboidBounds(fallbackCuboid, mapping, conveyorAxis, rampAxis, visualOffset);
+            shapeBoxes.Add(fallbackBounds);
+            AddSlopedConveyorMultiCuboidFaces(
+                origin + visualOffset,
+                mapping,
+                fallbackCuboid,
+                conveyorAxis,
+                rampAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                light01,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                shapeBoxes);
+        }
+
+        private void AddSlopedConveyorMultiCuboidFaces(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockModelCuboid cuboid,
+            BlockPlacementAxis conveyorAxis,
+            BlockPlacementAxis rampAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            in FixedList512Bytes<ShapeBox> shapeBoxes)
+        {
+            ShapeBox box = cuboid.ToShapeBox();
+            Vector3 center = (box.min + box.max) * 0.5f;
+            bool hasCuboidRotation = IsModelCuboidRotated(cuboid);
+            quaternion rotation = hasCuboidRotation ? CreateCuboidRotation(cuboid.eulerRotation) : quaternion.identity;
+
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Right, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Left, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Top, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Bottom, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Front, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+            AddSlopedConveyorMultiCuboidFace(origin, mapping, cuboid, box, center, rotation, hasCuboidRotation, conveyorAxis, rampAxis, BlockFace.Back, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, light01, invAtlasTilesX, invAtlasTilesY, tris, shapeBoxes);
+        }
+
+        private void AddSlopedConveyorMultiCuboidFace(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockModelCuboid cuboid,
+            ShapeBox box,
+            Vector3 center,
+            quaternion rotation,
+            bool hasCuboidRotation,
+            BlockPlacementAxis conveyorAxis,
+            BlockPlacementAxis rampAxis,
+            BlockFace localFace,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float light01,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            NativeList<int> tris,
+            in FixedList512Bytes<ShapeBox> shapeBoxes)
+        {
+            if (!cuboid.HasFace(localFace))
+                return;
+
+            ResolveCuboidFace(box, localFace, out Vector3 p0, out Vector3 p1, out Vector3 p2, out Vector3 p3, out _);
+            Vector2 uv0 = ResolveShapeProjectedUv(localFace, p0);
+            Vector2 uv1 = ResolveShapeProjectedUv(localFace, p1);
+            Vector2 uv2 = ResolveShapeProjectedUv(localFace, p2);
+            Vector2 uv3 = ResolveShapeProjectedUv(localFace, p3);
+            NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
+
+            p0 = TransformSlopedConveyorCuboidPoint(p0, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis);
+            p1 = TransformSlopedConveyorCuboidPoint(p1, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis);
+            p2 = TransformSlopedConveyorCuboidPoint(p2, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis);
+            p3 = TransformSlopedConveyorCuboidPoint(p3, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis);
+
+            Vector3 normal = Vector3.Normalize(Vector3.Cross(p1 - p0, p2 - p0));
+            if (normal.sqrMagnitude < 0.0001f)
+                normal = Vector3.up;
+
+            BlockFace worldFace = BlockShapeUtility.TransformFaceForPlacement(localFace, mapping, conveyorAxis);
+            AddAmbientOccludedShapeFace(
+                origin + p0,
+                origin + p1,
+                origin + p2,
+                origin + p3,
+                normal,
+                worldFace,
+                normal,
+                (p1 - p0).normalized,
+                (p3 - p0).normalized,
+                mapping,
+                worldFace,
+                localFace,
+                default,
+                true,
+                cuboid.GetTileCoord(localFace, mapping),
+                cuboid.TryGetUvRectData(localFace, mapping, out Vector4 cuboidUvRectData)
+                    ? cuboidUvRectData
+                    : default,
+                mapping.GetTint(localFace),
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                false,
+                shapeBoxes,
+                BlockRenderShape.MultiCuboid,
+                conveyorAxis,
+                RampShapeVariant.Straight);
+        }
+
+        private static ShapeBox GetSlopedConveyorMultiCuboidBounds(
+            BlockModelCuboid cuboid,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis conveyorAxis,
+            BlockPlacementAxis rampAxis,
+            Vector3 visualOffset)
+        {
+            ShapeBox box = cuboid.ToShapeBox();
+            Vector3 center = (box.min + box.max) * 0.5f;
+            bool hasCuboidRotation = IsModelCuboidRotated(cuboid);
+            quaternion rotation = hasCuboidRotation ? CreateCuboidRotation(cuboid.eulerRotation) : quaternion.identity;
+            Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, float.PositiveInfinity);
+            Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, float.NegativeInfinity);
+
+            EncapsulateSlopedConveyorCuboidPoint(box.min.x, box.min.y, box.min.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.max.x, box.min.y, box.min.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.min.x, box.max.y, box.min.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.max.x, box.max.y, box.min.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.min.x, box.min.y, box.max.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.max.x, box.min.y, box.max.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.min.x, box.max.y, box.max.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+            EncapsulateSlopedConveyorCuboidPoint(box.max.x, box.max.y, box.max.z, center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis, visualOffset, ref min, ref max);
+
+            return new ShapeBox(min, max);
+        }
+
+        private static void EncapsulateSlopedConveyorCuboidPoint(
+            float x,
+            float y,
+            float z,
+            Vector3 center,
+            quaternion rotation,
+            bool hasCuboidRotation,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis conveyorAxis,
+            BlockPlacementAxis rampAxis,
+            Vector3 visualOffset,
+            ref Vector3 min,
+            ref Vector3 max)
+        {
+            Vector3 point = TransformSlopedConveyorCuboidPoint(new Vector3(x, y, z), center, rotation, hasCuboidRotation, mapping, conveyorAxis, rampAxis);
+            point += visualOffset;
+            min = Vector3.Min(min, point);
+            max = Vector3.Max(max, point);
+        }
+
+        private static Vector3 TransformSlopedConveyorCuboidPoint(
+            Vector3 point,
+            Vector3 center,
+            quaternion rotation,
+            bool hasCuboidRotation,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis conveyorAxis,
+            BlockPlacementAxis rampAxis)
+        {
+            if (hasCuboidRotation)
+                point = RotateCuboidPoint(point, center, rotation);
+
+            point = BlockShapeUtility.TransformPointForPlacement(point, mapping, conveyorAxis);
+            return TransformPointForSlopedConveyor(point, rampAxis);
+        }
+
+        private static Vector3 TransformPointForSlopedConveyor(Vector3 point, BlockPlacementAxis rampAxis)
+        {
+            float heightOffset = ResolveSlopedConveyorHeightOffset(point, rampAxis);
+            return new Vector3(point.x, point.y + heightOffset, point.z);
+        }
+
+        private static float ResolveSlopedConveyorHeightOffset(Vector3 point, BlockPlacementAxis rampAxis)
+        {
+            switch (BlockPlacementRotationUtility.SanitizeStoredAxis(rampAxis))
+            {
+                case BlockPlacementAxis.X:
+                    return point.x;
+
+                case BlockPlacementAxis.XNegative:
+                    return 1f - point.x;
+
+                case BlockPlacementAxis.ZNegative:
+                    return 1f - point.z;
+
+                default:
+                    return point.z;
             }
         }
 

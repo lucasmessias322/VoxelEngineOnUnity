@@ -462,6 +462,14 @@ public static partial class MeshGenerator
             ResolveCustomFaceVertexAOFrame(sampledFace, p1, normal, out Vector3 aoNormal1, out Vector3 stepU1, out Vector3 stepV1);
             ResolveCustomFaceVertexAOFrame(sampledFace, p2, normal, out Vector3 aoNormal2, out Vector3 stepU2, out Vector3 stepV2);
 
+            if (mapping.blockType == BlockType.conveyorBelt_45deg &&
+                (sampledFace == BlockFace.Top || sampledFace == BlockFace.Bottom))
+            {
+                NormalizeProjectedTriangleUv(ref uv0, ref uv1, ref uv2);
+                Vector2 uv3 = uv2;
+                RotateConveyorProjectedUvForPlacement(mapping, sampledFace, currentPlacementAxis, ref uv0, ref uv1, ref uv2, ref uv3);
+            }
+
             AddAmbientOccludedShapeVertex(origin + p0, uv0, normal, aoNormal0, stepU0, stepV0, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
             AddAmbientOccludedShapeVertex(origin + p1, uv1, normal, aoNormal1, stepU1, stepV1, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
             AddAmbientOccludedShapeVertex(origin + p2, uv2, normal, aoNormal2, stepU2, stepV2, tint, light01, disableAOForCurrentBlock, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, atlasUv, atlasSize, emptyShapeBoxes, currentShape, currentPlacementAxis, currentRampVariant, suppressNeighborRampAO);
@@ -586,7 +594,8 @@ public static partial class MeshGenerator
             Vector2 uv1;
             Vector2 uv2;
             Vector2 uv3;
-            bool rotateConveyorUv = currentShape == BlockRenderShape.MultiCuboid &&
+            bool rotateConveyorUv = (currentShape == BlockRenderShape.MultiCuboid ||
+                                     mapping.blockType == BlockType.conveyorBelt_45deg) &&
                                     IsConveyorBlock(mapping.blockType) &&
                                     (sampledFace == BlockFace.Top || sampledFace == BlockFace.Bottom);
             if (rotateConveyorUv)
@@ -772,6 +781,20 @@ public static partial class MeshGenerator
                 case BlockRenderShape.MultiCuboid:
                 {
                     BlockPlacementAxis multiAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(GetBlockPlacementAxisValue(idx));
+                    if (blockType == BlockType.conveyorBelt_45deg)
+                    {
+                        BlockPlacementAxis rampAxis = ResolveSlopedConveyorRampPlacementAxis(
+                            blockTypes,
+                            multiAxis,
+                            voxelX,
+                            voxelY,
+                            voxelZ,
+                            voxelSizeX,
+                            voxelSizeZ,
+                            voxelPlaneSize);
+                        return RampShapeUtility.ContainsAmbientOcclusionPoint(localPos, rampAxis, RampShapeVariant.Straight);
+                    }
+
                     FixedList512Bytes<ShapeBox> multiBoxes = BuildNativeMultiCuboidShapeBoxes(mapping, multiAxis);
                     return IsPointInsideShapeBoxes(localPos, multiBoxes);
                 }
@@ -790,15 +813,31 @@ public static partial class MeshGenerator
                         return false;
 
                     BlockPlacementAxis rampAxis = (BlockPlacementAxis)GetBlockPlacementAxisValue(idx);
-                    RampShapeVariant rampVariant = ResolveRampShapeVariant(
-                        rampAxis,
-                        voxelX,
-                        voxelY,
-                        voxelZ,
-                        blockTypes,
-                        voxelSizeX,
-                        voxelSizeZ,
-                        voxelPlaneSize);
+                    bool slopedConveyor = blockType == BlockType.conveyorBelt_45deg;
+                    if (slopedConveyor)
+                    {
+                        rampAxis = ResolveSlopedConveyorRampPlacementAxis(
+                            blockTypes,
+                            BlockPlacementRotationUtility.SanitizeStoredAxis(rampAxis),
+                            voxelX,
+                            voxelY,
+                            voxelZ,
+                            voxelSizeX,
+                            voxelSizeZ,
+                            voxelPlaneSize);
+                    }
+
+                    RampShapeVariant rampVariant = slopedConveyor
+                        ? RampShapeVariant.Straight
+                        : ResolveRampShapeVariant(
+                            rampAxis,
+                            voxelX,
+                            voxelY,
+                            voxelZ,
+                            blockTypes,
+                            voxelSizeX,
+                            voxelSizeZ,
+                            voxelPlaneSize);
                     return RampShapeUtility.ContainsAmbientOcclusionPoint(localPos, rampAxis, rampVariant);
                 }
 

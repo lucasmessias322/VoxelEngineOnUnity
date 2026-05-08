@@ -1087,6 +1087,7 @@ public class BlockDataSO : ScriptableObject
 
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
+        PopulateConveyorFallbackMappings();
         BuildMultiCuboidRuntimeData();
         BuildDynamicBlockRuntimeData();
 
@@ -1148,10 +1149,37 @@ public class BlockDataSO : ScriptableObject
             mappings[mappingIndex] = mapping;
         }
 
+        CopyConveyorMultiCuboidRuntimeDataToSlopedConveyor();
+
         runtimeMultiCuboidBoxes = cuboids.Count > 0
             ? cuboids.ToArray()
             : System.Array.Empty<BlockModelCuboid>();
         runtimeMultiCuboidOverflowSearchRadius = ComputeMultiCuboidOverflowSearchRadius();
+    }
+
+    private void CopyConveyorMultiCuboidRuntimeDataToSlopedConveyor()
+    {
+        int sourceIndex = (int)BlockType.ConveyorBelt;
+        int targetIndex = (int)BlockType.conveyorBelt_45deg;
+        if (mappings == null ||
+            sourceIndex < 0 || sourceIndex >= mappings.Length ||
+            targetIndex < 0 || targetIndex >= mappings.Length)
+        {
+            return;
+        }
+
+        BlockTextureMapping source = mappings[sourceIndex];
+        if (source.blockType != BlockType.ConveyorBelt || source.multiCuboidCount <= 0)
+            return;
+
+        BlockTextureMapping target = mappings[targetIndex];
+        if (target.blockType != BlockType.conveyorBelt_45deg)
+            return;
+
+        target.renderShape = BlockRenderShape.MultiCuboid;
+        target.multiCuboidStartIndex = source.multiCuboidStartIndex;
+        target.multiCuboidCount = source.multiCuboidCount;
+        mappings[targetIndex] = target;
     }
 
     private Vector3Int ComputeMultiCuboidOverflowSearchRadius()
@@ -1549,6 +1577,35 @@ public class BlockDataSO : ScriptableObject
         EnsureFallbackMapping(BlockType.WaterFall5, template);
         EnsureFallbackMapping(BlockType.WaterFall6, template);
         EnsureFallbackMapping(BlockType.WaterFall7, template);
+    }
+
+    private void PopulateConveyorFallbackMappings()
+    {
+        if (!TryGetExplicitMapping(BlockType.ConveyorBelt, out BlockTextureMapping template))
+            return;
+
+        EnsureFallbackMapping(BlockType.conveyorBelt_45deg, template);
+        NormalizeSlopedConveyorRuntimeMapping();
+    }
+
+    private void NormalizeSlopedConveyorRuntimeMapping()
+    {
+        int index = (int)BlockType.conveyorBelt_45deg;
+        if (index < 0 || index >= mappings.Length)
+            return;
+
+        BlockTextureMapping mapping = mappings[index];
+        mapping.blockType = BlockType.conveyorBelt_45deg;
+        mapping.renderShape = BlockRenderShape.MultiCuboid;
+        mapping.renderAsDynamicPrefab = false;
+        mapping.isFlat = false;
+        mapping.shapeMin = Vector3.zero;
+        mapping.shapeMax = Vector3.one;
+        mapping.multiCuboidStartIndex = 0;
+        mapping.multiCuboidCount = 0;
+        mapping.usePlacementAxisRotation = true;
+        mapping.placementRotationAxes = BlockPlacementRotationAxes.Horizontal;
+        mappings[index] = mapping;
     }
 
     private bool TryGetTorchTemplateMapping(out BlockTextureMapping template)
