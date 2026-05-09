@@ -615,7 +615,8 @@ public static partial class MeshGenerator
                    BatteryBlockUtility.IsBatteryBlock(blockType) ||
                    blockType == BlockType.windmill ||
                    blockType == BlockType.ledWhiteBlock ||
-                   blockType == BlockType.Treecutter;
+                   blockType == BlockType.Treecutter ||
+                   blockType == BlockType.AutoMiner;
         }
 
         private bool IsConfiguredElectricalEndpoint(BlockType blockType)
@@ -908,6 +909,20 @@ public static partial class MeshGenerator
             if (IsWireEndpointBlockAt(neighborX, neighborY, neighborZ, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize))
                 return true;
 
+            if (IsWallSurfaceEndpointBehindNeighbor(
+                    neighborX,
+                    neighborY,
+                    neighborZ,
+                    surfaceAxis,
+                    attachmentSide,
+                    blockTypes,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize))
+            {
+                return true;
+            }
+
             if (!TryGetWireSurfaceAt(
                     neighborX,
                     neighborY,
@@ -1044,6 +1059,37 @@ public static partial class MeshGenerator
                 return true;
 
             return attachmentSide == neighborAttachmentSide;
+        }
+
+        private bool IsWallSurfaceEndpointBehindNeighbor(
+            int neighborX,
+            int neighborY,
+            int neighborZ,
+            BlockPlacementAxis surfaceAxis,
+            int attachmentSide,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (surfaceAxis == BlockPlacementAxis.Y || attachmentSide == 0)
+                return false;
+
+            if (surfaceAxis == BlockPlacementAxis.X)
+                neighborX += attachmentSide;
+            else if (surfaceAxis == BlockPlacementAxis.Z)
+                neighborZ += attachmentSide;
+            else
+                return false;
+
+            return IsWireEndpointBlockAt(
+                neighborX,
+                neighborY,
+                neighborZ,
+                blockTypes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
         }
 
         private void AddWireSurfaceQuad(

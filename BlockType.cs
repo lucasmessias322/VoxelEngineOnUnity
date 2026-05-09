@@ -81,7 +81,8 @@ public enum BlockType
     oakTreeSapling = 76,
     birchTreeSapling = 77,
     Treecutter = 78,
-    conveyorBelt_45deg = 79
+    conveyorBelt_45deg = 79,
+    AutoMiner = 80,
 
 
 
@@ -103,6 +104,7 @@ public static class MachineBlockUtility
             case BlockType.windmill:
             case BlockType.conveyorBelt_splitter:
             case BlockType.Treecutter:
+            case BlockType.AutoMiner:
                 return true;
 
             default:

@@ -404,6 +404,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             case BlockType.EmeraldOre:
             case BlockType.Crafter:
             case BlockType.StoneFurnance:
+            case BlockType.AutoMiner:
                 return ToolType.Pickaxe;
 
             case BlockType.Snow:
@@ -503,6 +504,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             case BlockType.EmeraldOre:
             case BlockType.Crafter:
             case BlockType.StoneFurnance:
+            case BlockType.AutoMiner:
                 return ToolType.Pickaxe;
 
             case BlockType.Log:
@@ -580,6 +582,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return 0.4f;
 
             case BlockType.StoneFurnance:
+            case BlockType.AutoMiner:
                 return 3.5f;
 
             case BlockType.short_grass4:
@@ -2615,12 +2618,22 @@ public class PlayerBlockBreaker : MonoBehaviour
             for (int x = 0; x < horizontalBlocks; x++)
             {
                 Vector3Int supportPos = origin + new Vector3Int(x, -1, z);
-                if (MachineBlockUtility.IsMachineBlock(world.GetBlockAt(supportPos)))
+                BlockType supportType = world.GetBlockAt(supportPos);
+                if (MachineBlockUtility.IsMachineBlock(supportType) &&
+                    !CanPlaceMachineOnMachineSupport(blockType, supportType))
+                {
                     return false;
+                }
             }
         }
 
         return true;
+    }
+
+    private static bool CanPlaceMachineOnMachineSupport(BlockType placedBlockType, BlockType supportType)
+    {
+        return supportType == BlockType.AutoMiner &&
+               ConveyorBeltUtility.IsConveyorBlock(placedBlockType);
     }
 
     private bool TryResolveStackedSlabPlacement(

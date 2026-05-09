@@ -310,6 +310,18 @@ public class ChestUIController : MonoBehaviour
         return remaining;
     }
 
+    public bool CanInsertItemStackIntoChest(Vector3Int chestBlock, Item item, int amount)
+    {
+        if (item == null || amount <= 0 || !IsChestBlockInWorld(chestBlock))
+            return false;
+
+        if (IsChestOpen && activeChestBlock == chestBlock)
+            SaveActiveChestFromSlots();
+
+        ChestInventoryData data = GetOrCreateChestData(chestBlock);
+        return CountInsertCapacityInChestData(data, item) >= amount;
+    }
+
     public static bool TrySpawnItemStack(Item item, int amount, Vector3 worldPosition, Vector3 throwDirection)
     {
         if (item == null || amount <= 0)
@@ -747,6 +759,31 @@ public class ChestUIController : MonoBehaviour
         }
 
         return remaining;
+    }
+
+    private int CountInsertCapacityInChestData(ChestInventoryData data, Item item)
+    {
+        if (data == null || item == null)
+            return 0;
+
+        int capacity = 0;
+        int stackLimit = Mathf.Max(1, item.maxStack);
+        data.EnsureSize(ChestSlotCount);
+        for (int i = 0; i < data.Items.Length; i++)
+        {
+            Item slotItem = data.Items[i];
+            int slotAmount = data.Amounts[i];
+            if (slotItem == item && slotAmount > 0)
+            {
+                capacity += Mathf.Max(0, stackLimit - slotAmount);
+            }
+            else if (slotItem == null || slotAmount <= 0)
+            {
+                capacity += stackLimit;
+            }
+        }
+
+        return capacity;
     }
 
     private int InsertIntoEmptyChestSlots(Item item, int amount, Slot excludedSlot)

@@ -1088,6 +1088,7 @@ public class BlockDataSO : ScriptableObject
         PopulateTorchFallbackMappings();
         PopulateWaterFallbackMappings();
         PopulateConveyorFallbackMappings();
+        PopulateAutoMinerFallbackMapping();
         BuildMultiCuboidRuntimeData();
         BuildDynamicBlockRuntimeData();
 
@@ -1586,6 +1587,42 @@ public class BlockDataSO : ScriptableObject
 
         EnsureFallbackMapping(BlockType.conveyorBelt_45deg, template);
         NormalizeSlopedConveyorRuntimeMapping();
+    }
+
+    private void PopulateAutoMinerFallbackMapping()
+    {
+        if (TryGetExplicitMapping(BlockType.AutoMiner, out _))
+            return;
+
+        if (!TryGetExplicitMapping(BlockType.StoneFurnance, out BlockTextureMapping template) &&
+            !TryGetExplicitMapping(BlockType.Treecutter, out template))
+        {
+            return;
+        }
+
+        int index = (int)BlockType.AutoMiner;
+        if (index < 0 || index >= mappings.Length)
+            return;
+
+        template.blockType = BlockType.AutoMiner;
+        template.renderShape = BlockRenderShape.Cube;
+        template.renderAsDynamicPrefab = false;
+        template.isFlat = false;
+        template.shapeMin = Vector3.zero;
+        template.shapeMax = Vector3.zero;
+        template.multiCuboidStartIndex = 0;
+        template.multiCuboidCount = 0;
+        template.isEmpty = false;
+        template.isSolid = true;
+        template.isTransparent = false;
+        template.isLiquid = false;
+        template.breaksWithoutSupport = false;
+        template.usePlacementAxisRotation = true;
+        template.placementRotationAxes = BlockPlacementRotationAxes.Horizontal;
+        template.lightOpacity = 15;
+        template.isElectricalEndpoint = true;
+        template.poweredElectricalEnergyPerSecond = 0f;
+        mappings[index] = template;
     }
 
     private void NormalizeSlopedConveyorRuntimeMapping()

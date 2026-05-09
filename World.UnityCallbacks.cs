@@ -291,6 +291,7 @@ public partial class World
         MeshGenerator.ClearSpaghettiCarveMaskNeighborCache();
         MeshGenerator.ClearDataJobTempBufferPool();
         DisposeNativeGenerationCaches();
+        DestroyAutoMinerAreaVisuals();
 
         if (Instance == this)
             Instance = null;
@@ -332,6 +333,12 @@ public partial class World
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessTreecutterMachines();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessAutoMinerMachines();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            UpdateAutoMinerLaserVisuals();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedTreeCapitatorBreaks();

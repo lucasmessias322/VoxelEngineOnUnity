@@ -251,6 +251,7 @@ public static class BlockTextureEntryIdResolver
                 return true;
 
             case BlockType.StoneFurnance:
+            case BlockType.AutoMiner:
                 entryId = face switch
                 {
                     BlockFace.Top => "block/furnace_top",

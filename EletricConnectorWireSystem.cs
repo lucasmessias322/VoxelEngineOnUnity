@@ -1,6 +1,5 @@
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Rendering;
 
 public readonly struct EletricWireConnectionSnapshot
 {
@@ -30,6 +29,13 @@ public class EletricConnectorWireSystem : MonoBehaviour
     [SerializeField] private Material lineMaterial;
     [SerializeField] private Color wireColor = new Color(0.04f, 0.035f, 0.03f, 1f);
     [SerializeField, Min(0.005f)] private float wireWidth = 0.045f;
+    [SerializeField] private VoxelLineRendererStyle wireLineStyle = new VoxelLineRendererStyle
+    {
+        color = new Color(0.04f, 0.035f, 0.03f, 1f),
+        width = 0.045f,
+        capVertices = 6,
+        cornerVertices = 6
+    };
     [SerializeField, Min(2)] private int wireSegments = 18;
     [SerializeField, Min(0f)] private float sagPerBlock = 0.055f;
     [SerializeField, Min(0f)] private float maxSag = 1.15f;
@@ -44,6 +50,13 @@ public class EletricConnectorWireSystem : MonoBehaviour
     [SerializeField] private Color pendingColor = new Color(1f, 0.72f, 0.18f, 1f);
     [SerializeField, Min(0.01f)] private float pendingMarkerRadius = 0.28f;
     [SerializeField, Min(0.005f)] private float pendingMarkerWidth = 0.025f;
+    [SerializeField] private VoxelLineRendererStyle pendingMarkerLineStyle = new VoxelLineRendererStyle
+    {
+        color = new Color(1f, 0.72f, 0.18f, 1f),
+        width = 0.025f,
+        capVertices = 6,
+        cornerVertices = 6
+    };
     [SerializeField, Min(8)] private int pendingMarkerSegments = 28;
     [SerializeField, Min(0f)] private float pendingMarkerPulseAmount = 0.035f;
     [SerializeField, Min(0f)] private float pendingMarkerPulseSpeed = 4f;
@@ -53,8 +66,6 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private readonly List<WireConnection> connections = new List<WireConnection>();
     private World subscribedWorld;
-    private Material runtimeLineMaterial;
-    private bool ownsRuntimeLineMaterial;
     private Transform connectionsRoot;
     private LineRenderer pendingMarker;
     private bool hasPendingConnector;
@@ -121,9 +132,8 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
         ClearConnections();
         DestroyPendingMarker();
-
-        if (ownsRuntimeLineMaterial && runtimeLineMaterial != null)
-            DestroyRuntimeObject(runtimeLineMaterial);
+        wireLineStyle?.DestroyRuntimeMaterial();
+        pendingMarkerLineStyle?.DestroyRuntimeMaterial();
     }
 
     private void Update()
@@ -223,7 +233,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         wireObject.transform.SetParent(EnsureConnectionsRoot(), false);
 
         LineRenderer line = wireObject.AddComponent<LineRenderer>();
-        ConfigureLineRenderer(line, wireColor, wireWidth, loop: false);
+        ConfigureWireLineRenderer(line);
 
         WireConnection connection = new WireConnection
         {
@@ -259,78 +269,67 @@ public class EletricConnectorWireSystem : MonoBehaviour
         return connectionsRoot;
     }
 
-    private void ConfigureLineRenderer(LineRenderer line, Color color, float width, bool loop)
+    private void ConfigureWireLineRenderer(LineRenderer line)
     {
         if (line == null)
             return;
 
-        Material resolvedMaterial = ResolveLineMaterial();
-        if (resolvedMaterial != null)
-            line.sharedMaterial = resolvedMaterial;
-
-        line.useWorldSpace = true;
-        line.loop = loop;
-        line.startWidth = width;
-        line.endWidth = width;
-        line.startColor = color;
-        line.endColor = color;
-        line.numCapVertices = 6;
-        line.numCornerVertices = 6;
-        line.textureMode = LineTextureMode.Stretch;
-        line.alignment = LineAlignment.View;
-        line.shadowCastingMode = ShadowCastingMode.Off;
-        line.receiveShadows = false;
+        VoxelLineRendererStyle style = GetWireLineStyle();
+        style.Configure(line, "Runtime Eletric Wire Line Material", loop: false);
     }
 
-    private Material ResolveLineMaterial()
+    private void ConfigurePendingMarkerLineRenderer(LineRenderer line)
     {
-        if (runtimeLineMaterial != null)
-            return runtimeLineMaterial;
-
-        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
-        if (shader == null)
-            shader = Shader.Find("Sprites/Default");
-        if (shader == null)
-            shader = Shader.Find("Unlit/Color");
-        if (shader == null && lineMaterial != null)
-            shader = lineMaterial.shader;
-        if (shader == null)
-            return null;
-
-        runtimeLineMaterial = new Material(shader)
-        {
-            name = "Runtime Eletric Connector Wire Material",
-            hideFlags = HideFlags.HideAndDontSave
-        };
-        ownsRuntimeLineMaterial = true;
-
-        ApplySolidLineMaterialDefaults(runtimeLineMaterial);
-        return runtimeLineMaterial;
-    }
-
-    private static void ApplySolidLineMaterialDefaults(Material material)
-    {
-        if (material == null)
+        if (line == null)
             return;
 
-        if (material.HasProperty("_Color"))
-            material.SetColor("_Color", Color.white);
-        if (material.HasProperty("_BaseColor"))
-            material.SetColor("_BaseColor", Color.white);
-        if (material.HasProperty("_MainTex"))
-            material.SetTexture("_MainTex", Texture2D.whiteTexture);
-        if (material.HasProperty("_BaseMap"))
-            material.SetTexture("_BaseMap", Texture2D.whiteTexture);
-        if (material.HasProperty("_Atlas"))
-            material.SetTexture("_Atlas", Texture2D.whiteTexture);
+        VoxelLineRendererStyle style = GetPendingMarkerLineStyle();
+        style.Configure(line, "Runtime Eletric Pending Marker Line Material", loop: true);
+    }
 
-        material.mainTexture = Texture2D.whiteTexture;
+    private VoxelLineRendererStyle GetWireLineStyle()
+    {
+        if (wireLineStyle == null)
+        {
+            wireLineStyle = new VoxelLineRendererStyle
+            {
+                material = lineMaterial,
+                color = wireColor,
+                width = Mathf.Max(0.005f, wireWidth),
+                capVertices = 6,
+                cornerVertices = 6
+            };
+        }
+        else if (wireLineStyle.material == null && lineMaterial != null)
+        {
+            wireLineStyle.material = lineMaterial;
+        }
+
+        return wireLineStyle;
+    }
+
+    private VoxelLineRendererStyle GetPendingMarkerLineStyle()
+    {
+        if (pendingMarkerLineStyle == null)
+        {
+            pendingMarkerLineStyle = new VoxelLineRendererStyle
+            {
+                color = pendingColor,
+                width = Mathf.Max(0.005f, pendingMarkerWidth),
+                capVertices = 6,
+                cornerVertices = 6
+            };
+        }
+
+        return pendingMarkerLineStyle;
     }
 
     private void UpdateConnectionLine(WireConnection connection)
     {
         if (connection == null || connection.line == null)
             return;
+
+        ConfigureWireLineRenderer(connection.line);
 
         int segmentCount = Mathf.Max(2, wireSegments);
         connection.line.positionCount = segmentCount;
@@ -356,7 +355,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
         GameObject markerObject = new GameObject("PendingEletricConnectorWire");
         markerObject.transform.SetParent(transform, false);
         pendingMarker = markerObject.AddComponent<LineRenderer>();
-        ConfigureLineRenderer(pendingMarker, pendingColor, pendingMarkerWidth, loop: true);
+        ConfigurePendingMarkerLineRenderer(pendingMarker);
         pendingMarker.gameObject.SetActive(false);
     }
 
@@ -374,7 +373,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
             return;
 
         pendingMarker.gameObject.SetActive(true);
-        ConfigureLineRenderer(pendingMarker, pendingColor, pendingMarkerWidth, loop: true);
+        ConfigurePendingMarkerLineRenderer(pendingMarker);
 
         int segmentCount = Mathf.Max(8, pendingMarkerSegments);
         pendingMarker.positionCount = segmentCount;
@@ -446,7 +445,8 @@ public class EletricConnectorWireSystem : MonoBehaviour
                blockType == BlockType.SolarPanel ||
                BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.windmill ||
-               blockType == BlockType.ledWhiteBlock;
+               blockType == BlockType.ledWhiteBlock ||
+               blockType == BlockType.AutoMiner;
     }
 
     private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
