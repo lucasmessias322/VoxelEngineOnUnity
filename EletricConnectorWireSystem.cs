@@ -284,17 +284,16 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private Material ResolveLineMaterial()
     {
-        if (lineMaterial != null)
-            return lineMaterial;
-
         if (runtimeLineMaterial != null)
             return runtimeLineMaterial;
 
-        Shader shader = Shader.Find("Sprites/Default");
+        Shader shader = Shader.Find("Universal Render Pipeline/Unlit");
         if (shader == null)
-            shader = Shader.Find("Universal Render Pipeline/Unlit");
+            shader = Shader.Find("Sprites/Default");
         if (shader == null)
             shader = Shader.Find("Unlit/Color");
+        if (shader == null && lineMaterial != null)
+            shader = lineMaterial.shader;
         if (shader == null)
             return null;
 
@@ -305,12 +304,27 @@ public class EletricConnectorWireSystem : MonoBehaviour
         };
         ownsRuntimeLineMaterial = true;
 
-        if (runtimeLineMaterial.HasProperty("_Color"))
-            runtimeLineMaterial.SetColor("_Color", Color.white);
-        if (runtimeLineMaterial.HasProperty("_BaseColor"))
-            runtimeLineMaterial.SetColor("_BaseColor", Color.white);
-
+        ApplySolidLineMaterialDefaults(runtimeLineMaterial);
         return runtimeLineMaterial;
+    }
+
+    private static void ApplySolidLineMaterialDefaults(Material material)
+    {
+        if (material == null)
+            return;
+
+        if (material.HasProperty("_Color"))
+            material.SetColor("_Color", Color.white);
+        if (material.HasProperty("_BaseColor"))
+            material.SetColor("_BaseColor", Color.white);
+        if (material.HasProperty("_MainTex"))
+            material.SetTexture("_MainTex", Texture2D.whiteTexture);
+        if (material.HasProperty("_BaseMap"))
+            material.SetTexture("_BaseMap", Texture2D.whiteTexture);
+        if (material.HasProperty("_Atlas"))
+            material.SetTexture("_Atlas", Texture2D.whiteTexture);
+
+        material.mainTexture = Texture2D.whiteTexture;
     }
 
     private void UpdateConnectionLine(WireConnection connection)
