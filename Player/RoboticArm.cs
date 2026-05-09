@@ -63,6 +63,13 @@ public class RoboticArm : DynamicVoxelBlock
     [SerializeField, Min(0.01f)] private float cycleCooldownSeconds = 0.35f;
     [SerializeField] private string grabDropAnimatorBool = "GrabDrop";
 
+    [Header("Animation Optimization")]
+    [Tooltip("Desliga apenas o Animator quando o braco esta fora da simulation distance do World. A logica de transferencia continua pelo tempo.")]
+    [SerializeField] private bool disableAnimatorOutsideSimulationDistance = true;
+    [SerializeField, Min(0.05f)] private float animationSimulationCheckInterval = 0.25f;
+    [SerializeField] private string idleAnimatorStateName = "Idle";
+    [SerializeField] private string transferAnimatorStateName = "GrabDrop";
+
     [Header("Electricity")]
     [SerializeField] private bool requireElectricity = true;
     [SerializeField, Min(0f)] private float energyPerTransferCycle = 8f;
@@ -77,6 +84,15 @@ public class RoboticArm : DynamicVoxelBlock
     private Animator animator;
     private int grabDropAnimatorId;
     private bool hasGrabDropAnimatorBool;
+    private int idleAnimatorStateId;
+    private int transferAnimatorStateId;
+    private bool hasIdleAnimatorState;
+    private bool hasTransferAnimatorState;
+    private bool grabDropAnimationActive;
+    private bool animatorDisabledBySimulationDistance;
+    private bool forceTimedEventsForCurrentTransfer;
+    private float nextAnimationSimulationCheckTime;
+    private float transferAnimationLengthSeconds;
     private Transform resolvedGripAnchor;
     private IRoboticArmGrabbable pendingDrop;
     private IRoboticArmGrabbable heldDrop;
@@ -97,18 +113,22 @@ public class RoboticArm : DynamicVoxelBlock
     private void OnEnable()
     {
         nextScanTime = Time.time + Mathf.Max(0f, initialDelaySeconds);
+        nextAnimationSimulationCheckTime = 0f;
     }
 
     private void Start()
     {
         CacheComponents();
         SetGrabDropAnimation(false);
+        RefreshAnimatorSimulationDistanceState(force: true);
     }
 
     protected override void OnDynamicBlockSpawned()
     {
         CacheComponents();
         nextScanTime = Time.time + Mathf.Max(0f, initialDelaySeconds);
+        nextAnimationSimulationCheckTime = 0f;
+        RefreshAnimatorSimulationDistanceState(force: true);
     }
 
     protected override void OnDynamicBlockDespawned()
@@ -123,6 +143,8 @@ public class RoboticArm : DynamicVoxelBlock
 
     private void Update()
     {
+        RefreshAnimatorSimulationDistanceState(force: false);
+
         if (transferInProgress)
         {
             UpdateTransferTimeline();
@@ -193,6 +215,7 @@ public class RoboticArm : DynamicVoxelBlock
         transferInProgress = true;
         grabEventProcessed = false;
         releaseEventProcessed = false;
+        forceTimedEventsForCurrentTransfer = animatorDisabledBySimulationDistance;
         transferStartTime = Time.time;
         SetGrabDropAnimation(true);
     }
@@ -203,7 +226,7 @@ public class RoboticArm : DynamicVoxelBlock
             return;
 
         float elapsed = Time.time - transferStartTime;
-        if (useTimedTransferEvents)
+        if (ShouldDriveTimedTransferEvents())
         {
             if (!grabEventProcessed && elapsed >= Mathf.Max(0f, grabEventTimeSeconds))
                 TriggerGrabEvent();
@@ -233,6 +256,98 @@ public class RoboticArm : DynamicVoxelBlock
     private float ResolveTransferCycleDuration()
     {
         return Mathf.Max(ResolveReleaseEventTime(), Mathf.Max(0.01f, transferCycleDurationSeconds));
+    }
+
+    private bool ShouldDriveTimedTransferEvents()
+    {
+        return useTimedTransferEvents ||
+               animatorDisabledBySimulationDistance ||
+               forceTimedEventsForCurrentTransfer ||
+               !playTransferAnimation;
+    }
+
+    private void RefreshAnimatorSimulationDistanceState(bool force)
+    {
+        if (animator == null)
+            return;
+
+        if (!disableAnimatorOutsideSimulationDistance)
+        {
+            if (animatorDisabledBySimulationDistance || !animator.enabled)
+                EnableAnimatorAndSyncToTimeline();
+
+            animatorDisabledBySimulationDistance = false;
+            return;
+        }
+
+        if (!force && Time.time < nextAnimationSimulationCheckTime)
+            return;
+
+        nextAnimationSimulationCheckTime = Time.time + Mathf.Max(0.05f, animationSimulationCheckInterval);
+        bool shouldAnimate = IsInsideAnimationSimulationDistance();
+        if (shouldAnimate)
+        {
+            if (animatorDisabledBySimulationDistance || !animator.enabled)
+                EnableAnimatorAndSyncToTimeline();
+
+            animatorDisabledBySimulationDistance = false;
+            return;
+        }
+
+        if (animator.enabled)
+            animator.enabled = false;
+
+        animatorDisabledBySimulationDistance = true;
+        if (transferInProgress)
+            forceTimedEventsForCurrentTransfer = true;
+    }
+
+    private bool IsInsideAnimationSimulationDistance()
+    {
+        World world = World.Instance;
+        if (world == null)
+            return true;
+
+        return world.IsWorldPositionInsidePlayerSimulationDistance(ResolveArmBlockPosition());
+    }
+
+    private void EnableAnimatorAndSyncToTimeline()
+    {
+        if (animator == null)
+            return;
+
+        animator.enabled = true;
+        ApplyGrabDropAnimatorBool();
+        PlayAnimatorStateAtCurrentLogicalTime();
+        animator.Update(0f);
+    }
+
+    private void PlayAnimatorStateAtCurrentLogicalTime()
+    {
+        if (animator == null || !animator.enabled)
+            return;
+
+        if (!playTransferAnimation || !grabDropAnimationActive || !transferInProgress)
+        {
+            if (hasIdleAnimatorState)
+                animator.Play(idleAnimatorStateId, 0, 0f);
+            return;
+        }
+
+        if (hasTransferAnimatorState)
+            animator.Play(transferAnimatorStateId, 0, ResolveTransferAnimationNormalizedTime());
+    }
+
+    private float ResolveTransferAnimationNormalizedTime()
+    {
+        if (!transferInProgress)
+            return 0f;
+
+        float animationDuration = transferAnimationLengthSeconds > 0.001f
+            ? transferAnimationLengthSeconds
+            : ResolveTransferCycleDuration();
+        float normalizedTime = (Time.time - transferStartTime) / Mathf.Max(0.001f, animationDuration);
+        return Mathf.Clamp(normalizedTime, 0f, 0.999f);
     }
 
     private void TriggerGrabEvent()
@@ -335,6 +450,7 @@ public class RoboticArm : DynamicVoxelBlock
         transferInProgress = false;
         grabEventProcessed = false;
         releaseEventProcessed = false;
+        forceTimedEventsForCurrentTransfer = false;
         transferStartTime = 0f;
         SetGrabDropAnimation(false);
         nextScanTime = Time.time + Mathf.Max(0.01f, cycleCooldownSeconds);
@@ -356,6 +472,7 @@ public class RoboticArm : DynamicVoxelBlock
         transferInProgress = false;
         grabEventProcessed = false;
         releaseEventProcessed = false;
+        forceTimedEventsForCurrentTransfer = false;
         transferStartTime = 0f;
         SetGrabDropAnimation(false);
         nextScanTime = Time.time + Mathf.Max(0.01f, scanIntervalSeconds);
@@ -853,6 +970,45 @@ public class RoboticArm : DynamicVoxelBlock
             : Animator.StringToHash(grabDropAnimatorBool);
 
         hasGrabDropAnimatorBool = HasAnimatorBool(animator, grabDropAnimatorId);
+        idleAnimatorStateId = ResolveAnimatorStateId(idleAnimatorStateName);
+        transferAnimatorStateId = ResolveAnimatorStateId(transferAnimatorStateName);
+        hasIdleAnimatorState = idleAnimatorStateId != 0;
+        hasTransferAnimatorState = transferAnimatorStateId != 0;
+        transferAnimationLengthSeconds = ResolveAnimationClipLengthSeconds(transferAnimatorStateName);
+    }
+
+    private int ResolveAnimatorStateId(string stateName)
+    {
+        if (animator == null || string.IsNullOrWhiteSpace(stateName) || animator.layerCount <= 0)
+            return 0;
+
+        int directStateId = Animator.StringToHash(stateName);
+        if (animator.HasState(0, directStateId))
+            return directStateId;
+
+        string layerName = animator.GetLayerName(0);
+        int fullStateId = Animator.StringToHash($"{layerName}.{stateName}");
+        return animator.HasState(0, fullStateId) ? fullStateId : 0;
+    }
+
+    private float ResolveAnimationClipLengthSeconds(string clipName)
+    {
+        if (animator == null ||
+            animator.runtimeAnimatorController == null ||
+            string.IsNullOrWhiteSpace(clipName))
+        {
+            return 0f;
+        }
+
+        AnimationClip[] clips = animator.runtimeAnimatorController.animationClips;
+        for (int i = 0; i < clips.Length; i++)
+        {
+            AnimationClip clip = clips[i];
+            if (clip != null && clip.name == clipName)
+                return Mathf.Max(0.01f, clip.length);
+        }
+
+        return 0f;
     }
 
     private static bool HasAnimatorBool(Animator animatorRef, int parameterId)
@@ -876,10 +1032,16 @@ public class RoboticArm : DynamicVoxelBlock
         if (!playTransferAnimation)
             active = false;
 
-        if (!hasGrabDropAnimatorBool || animator == null)
+        grabDropAnimationActive = active;
+        ApplyGrabDropAnimatorBool();
+    }
+
+    private void ApplyGrabDropAnimatorBool()
+    {
+        if (!hasGrabDropAnimatorBool || animator == null || !animator.enabled)
             return;
 
-        animator.SetBool(grabDropAnimatorId, active);
+        animator.SetBool(grabDropAnimatorId, grabDropAnimationActive);
     }
 }
 

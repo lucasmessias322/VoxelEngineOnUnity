@@ -15,6 +15,25 @@ public partial class World
         return Mathf.Clamp(simulationDistance, 0, Mathf.Max(0, renderDistance));
     }
 
+    public int GetEffectiveSimulationDistanceInChunks()
+    {
+        return GetEffectiveSimulationDistance();
+    }
+
+    public bool IsChunkInsidePlayerSimulationDistance(Vector2Int coord)
+    {
+        Vector2Int center = GetCurrentPlayerChunkCoord();
+        if (center == InvalidChunkCoord)
+            return true;
+
+        return IsCoordInsideSimulationDistance(coord, center);
+    }
+
+    public bool IsWorldPositionInsidePlayerSimulationDistance(Vector3Int worldPos)
+    {
+        return IsChunkInsidePlayerSimulationDistance(GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z));
+    }
+
     private int GetEffectiveColliderDistance()
     {
         return Mathf.Clamp(colliderDistance, 0, Mathf.Max(0, renderDistance));
