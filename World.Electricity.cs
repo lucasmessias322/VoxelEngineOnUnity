@@ -338,16 +338,23 @@ public partial class World
     private void AddTopWireStepExtraEdge(Vector3Int wirePos, Vector3Int horizontalDirection)
     {
         Vector3Int neighbor = wirePos + horizontalDirection;
+        if (TryResolveElectricalTopWireOrEndpoint(neighbor, out Vector3Int sameLevelTarget))
+        {
+            AddElectricalExtraEdge(wirePos, sameLevelTarget);
+            AddElectricalExtraEdge(sameLevelTarget, wirePos);
+            return;
+        }
+
         bool adjacentIsSolid = IsWireSupportBlock(neighbor);
         Vector3Int steppedTarget = adjacentIsSolid
             ? neighbor + Vector3Int.up
             : neighbor + Vector3Int.down;
 
-        if (!IsElectricalTopWireOrEndpoint(steppedTarget))
+        if (!TryResolveElectricalTopWireOrEndpoint(steppedTarget, out Vector3Int resolvedTarget))
             return;
 
-        AddElectricalExtraEdge(wirePos, steppedTarget);
-        AddElectricalExtraEdge(steppedTarget, wirePos);
+        AddElectricalExtraEdge(wirePos, resolvedTarget);
+        AddElectricalExtraEdge(resolvedTarget, wirePos);
     }
 
     private void AddWallWireGeometryExtraEdges(Vector3Int wirePos)
@@ -365,20 +372,20 @@ public partial class World
 
         Vector3Int supportOffset = GetWireAttachmentOffset(wallSurfaceAxis, wallAttachmentSide);
         Vector3Int supportPos = wirePos + supportOffset;
-        if (electricalBlockPositions.Contains(supportPos) && IsElectricalEndpointBlock(GetBlockAt(supportPos)))
+        if (TryResolveElectricalEndpointAt(supportPos, out Vector3Int supportEndpoint))
         {
-            AddElectricalExtraEdge(wirePos, supportPos);
-            AddElectricalExtraEdge(supportPos, wirePos);
+            AddElectricalExtraEdge(wirePos, supportEndpoint);
+            AddElectricalExtraEdge(supportEndpoint, wirePos);
         }
 
         AddWallWireEndpointContinuationEdges(wirePos, wallSurfaceAxis, supportOffset);
 
         Vector3Int supportTop = wirePos + Vector3Int.up + supportOffset;
-        if (!IsElectricalTopWireOrEndpoint(supportTop))
+        if (!TryResolveElectricalTopWireOrEndpoint(supportTop, out Vector3Int supportTopTarget))
             return;
 
-        AddElectricalExtraEdge(wirePos, supportTop);
-        AddElectricalExtraEdge(supportTop, wirePos);
+        AddElectricalExtraEdge(wirePos, supportTopTarget);
+        AddElectricalExtraEdge(supportTopTarget, wirePos);
     }
 
     private void AddWallWireEndpointContinuationEdges(
@@ -407,11 +414,11 @@ public partial class World
         Vector3Int supportOffset)
     {
         Vector3Int endpointPos = wirePos + surfaceStep + supportOffset;
-        if (!electricalBlockPositions.Contains(endpointPos) || !IsElectricalEndpointBlock(GetBlockAt(endpointPos)))
+        if (!TryResolveElectricalEndpointAt(endpointPos, out Vector3Int endpointTarget))
             return;
 
-        AddElectricalExtraEdge(wirePos, endpointPos);
-        AddElectricalExtraEdge(endpointPos, wirePos);
+        AddElectricalExtraEdge(wirePos, endpointTarget);
+        AddElectricalExtraEdge(endpointTarget, wirePos);
     }
 
     private void AddElectricalExtraEdge(Vector3Int from, Vector3Int to)
@@ -458,8 +465,19 @@ public partial class World
 
     private bool IsElectricalTopWireOrEndpoint(Vector3Int position)
     {
+        return TryResolveElectricalTopWireOrEndpoint(position, out _);
+    }
+
+    private bool TryResolveElectricalTopWireOrEndpoint(Vector3Int position, out Vector3Int resolvedPosition)
+    {
+        resolvedPosition = position;
         if (!electricalBlockPositions.Contains(position))
+        {
+            if (TryResolveElectricalEndpointAt(position, out resolvedPosition))
+                return true;
+
             return false;
+        }
 
         BlockType blockType = GetBlockAt(position);
         if (IsElectricalEndpointBlock(blockType))
@@ -468,6 +486,22 @@ public partial class World
         return blockType == BlockType.wire &&
                TryGetElectricalWireState(position, out bool hasTop, out _, out _) &&
                hasTop;
+    }
+
+    private bool TryResolveElectricalEndpointAt(Vector3Int position, out Vector3Int endpointPosition)
+    {
+        endpointPosition = position;
+        if (electricalBlockPositions.Contains(position) && IsElectricalEndpointBlock(GetBlockAt(position)))
+            return true;
+
+        if (!TryResolveDynamicBlockFootprintAt(position, out Vector3Int origin, out BlockType blockType))
+            return false;
+
+        if (!electricalBlockPositions.Contains(origin) || !IsElectricalEndpointBlock(blockType))
+            return false;
+
+        endpointPosition = origin;
+        return true;
     }
 
     private static Vector3Int GetWireAttachmentOffset(BlockPlacementAxis wallSurfaceAxis, int wallAttachmentSide)
@@ -1267,7 +1301,8 @@ public partial class World
                blockType == BlockType.ledWhiteBlock ||
                blockType == BlockType.RoboticArm ||
                blockType == BlockType.Treecutter ||
-               blockType == BlockType.AutoMiner;
+               blockType == BlockType.AutoMiner ||
+               blockType == BlockType.StoneCrusher;
     }
 
     private static int CompareElectricalPositions(Vector3Int left, Vector3Int right)

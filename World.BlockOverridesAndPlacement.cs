@@ -338,6 +338,12 @@ public partial class World
     private bool IsWireSupportBlock(Vector3Int worldPos)
     {
         BlockType supportType = GetBlockAt(worldPos);
+        if ((supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType)) &&
+            TryResolveDynamicBlockFootprintAt(worldPos, out _, out BlockType footprintType))
+        {
+            supportType = footprintType;
+        }
+
         if (supportType == BlockType.Air || FluidBlockUtility.IsWater(supportType) || blockData == null)
             return false;
 
@@ -347,6 +353,49 @@ public partial class World
 
         BlockTextureMapping value = mapping.Value;
         return value.isSolid && !value.isEmpty && !value.isLiquid;
+    }
+
+    private bool TryResolveDynamicBlockFootprintAt(Vector3Int worldPos, out Vector3Int origin, out BlockType blockType)
+    {
+        origin = default;
+        blockType = BlockType.Air;
+        if (blockData == null)
+            return false;
+
+        int maxHorizontalRadius = Mathf.Max(4, blockData.runtimeDynamicBlockOverflowSearchRadius.x);
+        int maxVerticalRadius = Mathf.Max(3, blockData.runtimeDynamicBlockOverflowSearchRadius.y);
+        for (int yOffset = 0; yOffset <= maxVerticalRadius; yOffset++)
+        {
+            for (int zOffset = 0; zOffset <= maxHorizontalRadius; zOffset++)
+            {
+                for (int xOffset = 0; xOffset <= maxHorizontalRadius; xOffset++)
+                {
+                    Vector3Int candidateOrigin = worldPos - new Vector3Int(xOffset, yOffset, zOffset);
+                    BlockType candidateType = GetBlockAt(candidateOrigin);
+                    if (candidateType == BlockType.Air)
+                        continue;
+
+                    BlockTextureMapping? mappingResult = blockData.GetMapping(candidateType);
+                    if (mappingResult == null)
+                        continue;
+
+                    BlockTextureMapping mapping = mappingResult.Value;
+                    if (!mapping.renderAsDynamicPrefab)
+                        continue;
+
+                    int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
+                    int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
+                    if (xOffset >= horizontalBlocks || zOffset >= horizontalBlocks || yOffset >= verticalBlocks)
+                        continue;
+
+                    origin = candidateOrigin;
+                    blockType = candidateType;
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     private static BlockPlacementAxis NormalizeWirePlacementAxis(BlockPlacementAxis axis)

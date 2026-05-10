@@ -578,8 +578,64 @@ public static partial class MeshGenerator
             int voxelSizeZ,
             int voxelPlaneSize)
         {
-            return TryGetBlockTypeAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, out BlockType blockType) &&
-                   IsWireEndpointBlock(blockType);
+            if (TryGetBlockTypeAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize, out BlockType blockType) &&
+                IsWireEndpointBlock(blockType))
+            {
+                return true;
+            }
+
+            return IsDynamicWireEndpointFootprintAt(x, y, z, blockTypes, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+        }
+
+        private bool IsDynamicWireEndpointFootprintAt(
+            int x,
+            int y,
+            int z,
+            NativeArray<byte> blockTypes,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            const int maxHorizontalFootprintSearch = 4;
+            const int maxVerticalFootprintSearch = 3;
+
+            for (int yOffset = 0; yOffset <= maxVerticalFootprintSearch; yOffset++)
+            {
+                for (int zOffset = 0; zOffset <= maxHorizontalFootprintSearch; zOffset++)
+                {
+                    for (int xOffset = 0; xOffset <= maxHorizontalFootprintSearch; xOffset++)
+                    {
+                        if (!TryGetBlockTypeAt(
+                                x - xOffset,
+                                y - yOffset,
+                                z - zOffset,
+                                blockTypes,
+                                voxelSizeX,
+                                voxelSizeZ,
+                                voxelPlaneSize,
+                                out BlockType originType) ||
+                            !IsWireEndpointBlock(originType))
+                        {
+                            continue;
+                        }
+
+                        int mappingIndex = (int)originType;
+                        if ((uint)mappingIndex >= (uint)blockMappings.Length)
+                            continue;
+
+                        BlockTextureMapping mapping = blockMappings[mappingIndex];
+                        if (!mapping.renderAsDynamicPrefab)
+                            continue;
+
+                        int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
+                        int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
+                        if (xOffset < horizontalBlocks && zOffset < horizontalBlocks && yOffset < verticalBlocks)
+                            return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private bool TryGetBlockTypeAt(
@@ -616,7 +672,8 @@ public static partial class MeshGenerator
                    blockType == BlockType.windmill ||
                    blockType == BlockType.ledWhiteBlock ||
                    blockType == BlockType.Treecutter ||
-                   blockType == BlockType.AutoMiner;
+                   blockType == BlockType.AutoMiner ||
+                   blockType == BlockType.StoneCrusher;
         }
 
         private bool IsConfiguredElectricalEndpoint(BlockType blockType)

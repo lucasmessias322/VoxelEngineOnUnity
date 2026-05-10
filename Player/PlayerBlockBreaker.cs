@@ -1815,6 +1815,15 @@ public class PlayerBlockBreaker : MonoBehaviour
             return true;
         }
 
+        StoneCrusherUIController stoneCrusherUI = StoneCrusherUIController.Instance != null
+            ? StoneCrusherUIController.Instance
+            : FindAnyObjectByType<StoneCrusherUIController>();
+        if (stoneCrusherUI != null &&
+            stoneCrusherUI.TryHandleStoneCrusherInteraction(selector))
+        {
+            return true;
+        }
+
         FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
             ? FurnaceUIController.Instance
             : FindAnyObjectByType<FurnaceUIController>();

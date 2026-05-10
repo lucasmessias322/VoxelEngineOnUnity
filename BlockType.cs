@@ -83,6 +83,11 @@ public enum BlockType
     Treecutter = 78,
     conveyorBelt_45deg = 79,
     AutoMiner = 80,
+    StoneCrusher = 81,
+
+    Gravel = 100,
+
+
 
 
 
@@ -105,6 +110,7 @@ public static class MachineBlockUtility
             case BlockType.conveyorBelt_splitter:
             case BlockType.Treecutter:
             case BlockType.AutoMiner:
+            case BlockType.StoneCrusher:
                 return true;
 
             default:

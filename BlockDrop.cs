@@ -297,6 +297,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
     public Transform DropTransform => transform;
 
+    public BlockType DroppedBlockType => blockType;
+
     public bool CanBeGrabbedByRoboticArm =>
         gameObject.activeSelf &&
         !isPooled &&
@@ -2976,6 +2978,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     }
 
     public Transform DropTransform => transform;
+
+    public Item DroppedItem => item;
 
     public bool CanBeGrabbedByRoboticArm =>
         gameObject.activeSelf &&

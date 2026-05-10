@@ -446,7 +446,8 @@ public class EletricConnectorWireSystem : MonoBehaviour
                BatteryBlockUtility.IsBatteryBlock(blockType) ||
                blockType == BlockType.windmill ||
                blockType == BlockType.ledWhiteBlock ||
-               blockType == BlockType.AutoMiner;
+               blockType == BlockType.AutoMiner ||
+               blockType == BlockType.StoneCrusher;
     }
 
     private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
