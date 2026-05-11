@@ -517,24 +517,26 @@ internal sealed class SubchunkColliderBuilder
                         continue;
 
                     Vector3Int localBlockPos = new Vector3Int(x, worldY, z);
+                    Vector3Int worldPos = new Vector3Int(
+                        chunkCoord.x * Chunk.SizeX + x,
+                        worldY,
+                        chunkCoord.y * Chunk.SizeZ + z);
                     BlockRenderShape shape = BlockShapeUtility.GetEffectiveRenderShape(mapping);
                     if (mapping.renderAsDynamicPrefab)
                     {
+                        BlockPlacementAxis dynamicAxis = world != null
+                            ? world.GetPlacementAxisAt(worldPos, blockType)
+                            : BlockPlacementAxis.Y;
                         colliderCount = AddShapeColliderBox(
                             owner,
                             colliderCount,
                             localBlockPos,
-                            BlockShapeUtility.GetDynamicOccupancyBox(mapping));
+                            BlockShapeUtility.GetDynamicOccupancyBox(mapping, dynamicAxis));
                         continue;
                     }
 
                     if (shape == BlockRenderShape.Cube)
                         continue;
-
-                    Vector3Int worldPos = new Vector3Int(
-                        chunkCoord.x * Chunk.SizeX + x,
-                        worldY,
-                        chunkCoord.y * Chunk.SizeZ + z);
 
                     switch (shape)
                     {

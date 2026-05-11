@@ -601,14 +601,17 @@ public static partial class MeshGenerator
 
             for (int yOffset = 0; yOffset <= maxVerticalFootprintSearch; yOffset++)
             {
-                for (int zOffset = 0; zOffset <= maxHorizontalFootprintSearch; zOffset++)
+                for (int zOffset = -maxHorizontalFootprintSearch; zOffset <= maxHorizontalFootprintSearch; zOffset++)
                 {
-                    for (int xOffset = 0; xOffset <= maxHorizontalFootprintSearch; xOffset++)
+                    for (int xOffset = -maxHorizontalFootprintSearch; xOffset <= maxHorizontalFootprintSearch; xOffset++)
                     {
+                        int originX = x - xOffset;
+                        int originY = y - yOffset;
+                        int originZ = z - zOffset;
                         if (!TryGetBlockTypeAt(
-                                x - xOffset,
-                                y - yOffset,
-                                z - zOffset,
+                                originX,
+                                originY,
+                                originZ,
                                 blockTypes,
                                 voxelSizeX,
                                 voxelSizeZ,
@@ -627,9 +630,11 @@ public static partial class MeshGenerator
                         if (!mapping.renderAsDynamicPrefab)
                             continue;
 
-                        int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
-                        int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
-                        if (xOffset < horizontalBlocks && zOffset < horizontalBlocks && yOffset < verticalBlocks)
+                        int originIndex = originX + originY * voxelSizeX + originZ * voxelPlaneSize;
+                        BlockPlacementAxis placementAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(
+                            (BlockPlacementAxis)GetBlockPlacementAxisValue(originIndex));
+                        Vector3Int localOffset = new Vector3Int(xOffset, yOffset, zOffset);
+                        if (BlockShapeUtility.IsLocalOffsetInsideDynamicOccupancy(localOffset, mapping, placementAxis))
                             return true;
                     }
                 }

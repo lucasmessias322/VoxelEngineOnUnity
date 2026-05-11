@@ -362,13 +362,17 @@ public partial class World
         if (blockData == null)
             return false;
 
-        int maxHorizontalRadius = Mathf.Max(4, blockData.runtimeDynamicBlockOverflowSearchRadius.x);
+        int maxHorizontalRadius = Mathf.Max(
+            4,
+            Mathf.Max(
+                blockData.runtimeDynamicBlockOverflowSearchRadius.x,
+                blockData.runtimeDynamicBlockOverflowSearchRadius.z));
         int maxVerticalRadius = Mathf.Max(3, blockData.runtimeDynamicBlockOverflowSearchRadius.y);
         for (int yOffset = 0; yOffset <= maxVerticalRadius; yOffset++)
         {
-            for (int zOffset = 0; zOffset <= maxHorizontalRadius; zOffset++)
+            for (int zOffset = -maxHorizontalRadius; zOffset <= maxHorizontalRadius; zOffset++)
             {
-                for (int xOffset = 0; xOffset <= maxHorizontalRadius; xOffset++)
+                for (int xOffset = -maxHorizontalRadius; xOffset <= maxHorizontalRadius; xOffset++)
                 {
                     Vector3Int candidateOrigin = worldPos - new Vector3Int(xOffset, yOffset, zOffset);
                     BlockType candidateType = GetBlockAt(candidateOrigin);
@@ -383,9 +387,9 @@ public partial class World
                     if (!mapping.renderAsDynamicPrefab)
                         continue;
 
-                    int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
-                    int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
-                    if (xOffset >= horizontalBlocks || zOffset >= horizontalBlocks || yOffset >= verticalBlocks)
+                    BlockPlacementAxis placementAxis = GetPlacementAxisAt(candidateOrigin, candidateType);
+                    Vector3Int localOffset = new Vector3Int(xOffset, yOffset, zOffset);
+                    if (!BlockShapeUtility.IsLocalOffsetInsideDynamicOccupancy(localOffset, mapping, placementAxis))
                         continue;
 
                     origin = candidateOrigin;

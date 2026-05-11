@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 public enum BlockFace { Top = 0, Bottom = 1, Right = 2, Left = 3, Front = 4, Back = 5, Side = 6 }
 public enum BlockRenderShape : byte { Cube = 0, Cross = 1, Cuboid = 2, Plane = 3, Stairs = 4, Fence = 5, Ramp = 6, VerticalRamp = 7, MultiCuboid = 8, Fence2 = 9, Slab = 10 }
@@ -515,7 +516,7 @@ public sealed class DynamicBlockPrefabDefinition
     public BlockType blockType;
     public GameObject prefab;
 
-    [Tooltip("Offset local aplicado a partir da origem do voxel no chunk.")]
+    [Tooltip("Offset local na orientacao base do prefab. Quando Rotate With Placement Axis esta ativo, o offset e convertido junto com a ocupacao do bloco.")]
     public Vector3 localOffset = Vector3.zero;
 
     [Tooltip("Rotacao local adicional do prefab.")]
@@ -556,11 +557,16 @@ public sealed class DynamicBlockPrefabDefinition
     public Color lightColor = Color.white;
 
     [Header("Ocupacao Voxel")]
-    [Tooltip("Quantidade de blocos ocupados no plano horizontal X/Z a partir do voxel de origem.")]
-    [Min(1)] public int occupiedHorizontalBlocks = 1;
+    [Tooltip("Quantidade de blocos ocupados no eixo local X a partir do voxel de origem.")]
+    [FormerlySerializedAs("occupiedHorizontalBlocks")]
+    [Min(1)] public int occupiedWidthBlocks = 1;
+
+    [Tooltip("Quantidade de blocos ocupados no eixo local Z a partir do voxel de origem. 0 mantem compatibilidade e usa a largura.")]
+    [Min(0)] public int occupiedLengthBlocks;
 
     [Tooltip("Quantidade de blocos ocupados para cima a partir do voxel de origem.")]
-    [Min(1)] public int occupiedVerticalBlocks = 1;
+    [FormerlySerializedAs("occupiedVerticalBlocks")]
+    [Min(1)] public int occupiedHeightBlocks = 1;
 }
 
 [System.Serializable]
@@ -1314,8 +1320,12 @@ public class BlockDataSO : ScriptableObject
                 BlockTextureMapping mapping = mappings[mappingIndex];
                 mapping.blockType = definition.blockType;
                 mapping.renderAsDynamicPrefab = true;
-                mapping.dynamicOccupiedHorizontalBlocks = Mathf.Max(1, definition.occupiedHorizontalBlocks);
-                mapping.dynamicOccupiedVerticalBlocks = Mathf.Max(1, definition.occupiedVerticalBlocks);
+                int occupiedWidthBlocks = ResolveDynamicOccupiedWidthBlocks(definition);
+                int occupiedLengthBlocks = ResolveDynamicOccupiedLengthBlocks(definition, occupiedWidthBlocks);
+                int occupiedHeightBlocks = ResolveDynamicOccupiedHeightBlocks(definition);
+                mapping.dynamicOccupiedWidthBlocks = occupiedWidthBlocks;
+                mapping.dynamicOccupiedLengthBlocks = occupiedLengthBlocks;
+                mapping.dynamicOccupiedHeightBlocks = occupiedHeightBlocks;
                 if (definition.rotateWithPlacementAxis)
                 {
                     mapping.usePlacementAxisRotation = true;
@@ -1333,9 +1343,9 @@ public class BlockDataSO : ScriptableObject
                 mapping.lightColor = definition.lightColor;
 
                 runtimeDynamicBlockOverflowSearchRadius = new Vector3Int(
-                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.x, mapping.dynamicOccupiedHorizontalBlocks - 1),
-                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.y, mapping.dynamicOccupiedVerticalBlocks - 1),
-                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.z, mapping.dynamicOccupiedHorizontalBlocks - 1));
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.x, Mathf.Max(occupiedWidthBlocks, occupiedLengthBlocks) - 1),
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.y, occupiedHeightBlocks - 1),
+                    Mathf.Max(runtimeDynamicBlockOverflowSearchRadius.z, Mathf.Max(occupiedWidthBlocks, occupiedLengthBlocks) - 1));
 
                 mappings[mappingIndex] = mapping;
             }
@@ -1375,12 +1385,51 @@ public class BlockDataSO : ScriptableObject
         horizontalBlocks = 1;
         verticalBlocks = 1;
 
+        if (!TryGetDynamicBlockOccupancy(blockType, out int widthBlocks, out int lengthBlocks, out int heightBlocks))
+            return false;
+
+        horizontalBlocks = Mathf.Max(widthBlocks, lengthBlocks);
+        verticalBlocks = heightBlocks;
+        return true;
+    }
+
+    public bool TryGetDynamicBlockOccupancy(
+        BlockType blockType,
+        out int widthBlocks,
+        out int lengthBlocks,
+        out int heightBlocks)
+    {
+        widthBlocks = 1;
+        lengthBlocks = 1;
+        heightBlocks = 1;
+
         if (!TryGetDynamicBlockPrefabDefinition(blockType, out DynamicBlockPrefabDefinition definition))
             return false;
 
-        horizontalBlocks = Mathf.Max(1, definition.occupiedHorizontalBlocks);
-        verticalBlocks = Mathf.Max(1, definition.occupiedVerticalBlocks);
+        widthBlocks = ResolveDynamicOccupiedWidthBlocks(definition);
+        lengthBlocks = ResolveDynamicOccupiedLengthBlocks(definition, widthBlocks);
+        heightBlocks = ResolveDynamicOccupiedHeightBlocks(definition);
         return true;
+    }
+
+    private static int ResolveDynamicOccupiedWidthBlocks(DynamicBlockPrefabDefinition definition)
+    {
+        return definition != null ? Mathf.Max(1, definition.occupiedWidthBlocks) : 1;
+    }
+
+    private static int ResolveDynamicOccupiedLengthBlocks(DynamicBlockPrefabDefinition definition, int occupiedWidthBlocks)
+    {
+        if (definition == null)
+            return 1;
+
+        return definition.occupiedLengthBlocks > 0
+            ? Mathf.Max(1, definition.occupiedLengthBlocks)
+            : Mathf.Max(1, occupiedWidthBlocks);
+    }
+
+    private static int ResolveDynamicOccupiedHeightBlocks(DynamicBlockPrefabDefinition definition)
+    {
+        return definition != null ? Mathf.Max(1, definition.occupiedHeightBlocks) : 1;
     }
 
     private BlockTextureEntryIdMapping FindBlockTextureEntryIdMapping(BlockType blockType)
@@ -1851,8 +1900,11 @@ public struct BlockTextureMapping
     [Tooltip("Cor da luz emitida enquanto o bloco estiver energizado. Preto mantem compatibilidade e emite branco quando Powered Light Emission > 0.")]
     public Color poweredLightColor;
 
-    [HideInInspector] public int dynamicOccupiedHorizontalBlocks;
-    [HideInInspector] public int dynamicOccupiedVerticalBlocks;
+    [FormerlySerializedAs("dynamicOccupiedHorizontalBlocks")]
+    [HideInInspector] public int dynamicOccupiedWidthBlocks;
+    [HideInInspector] public int dynamicOccupiedLengthBlocks;
+    [FormerlySerializedAs("dynamicOccupiedVerticalBlocks")]
+    [HideInInspector] public int dynamicOccupiedHeightBlocks;
 
     [Header("Biome Tinting")]
     [Tooltip("Aplica cor do bioma nesta face?")]
@@ -2434,33 +2486,155 @@ public static class BlockShapeUtility
         return GetEffectiveRenderShape(mapping) != BlockRenderShape.Cube;
     }
 
+    public static int GetDynamicOccupiedWidthBlocks(BlockTextureMapping mapping)
+    {
+        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedWidthBlocks) : 1;
+    }
+
+    public static int GetDynamicOccupiedLengthBlocks(BlockTextureMapping mapping)
+    {
+        if (!mapping.renderAsDynamicPrefab)
+            return 1;
+
+        int widthBlocks = GetDynamicOccupiedWidthBlocks(mapping);
+        return mapping.dynamicOccupiedLengthBlocks > 0
+            ? Mathf.Max(1, mapping.dynamicOccupiedLengthBlocks)
+            : widthBlocks;
+    }
+
+    public static int GetDynamicOccupiedHeightBlocks(BlockTextureMapping mapping)
+    {
+        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedHeightBlocks) : 1;
+    }
+
     public static int GetDynamicOccupiedHorizontalBlocks(BlockTextureMapping mapping)
     {
-        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedHorizontalBlocks) : 1;
+        return Mathf.Max(GetDynamicOccupiedWidthBlocks(mapping), GetDynamicOccupiedLengthBlocks(mapping));
     }
 
     public static int GetDynamicOccupiedVerticalBlocks(BlockTextureMapping mapping)
     {
-        return mapping.renderAsDynamicPrefab ? Mathf.Max(1, mapping.dynamicOccupiedVerticalBlocks) : 1;
+        return GetDynamicOccupiedHeightBlocks(mapping);
     }
 
     public static bool HasExpandedDynamicOccupancy(BlockTextureMapping mapping)
     {
         return mapping.renderAsDynamicPrefab &&
                (GetDynamicOccupiedHorizontalBlocks(mapping) > 1 ||
-                GetDynamicOccupiedVerticalBlocks(mapping) > 1);
+                GetDynamicOccupiedHeightBlocks(mapping) > 1);
     }
 
     public static ShapeBox GetDynamicOccupancyBox(BlockTextureMapping mapping)
     {
-        int horizontalBlocks = GetDynamicOccupiedHorizontalBlocks(mapping);
-        int verticalBlocks = GetDynamicOccupiedVerticalBlocks(mapping);
-        return new ShapeBox(Vector3.zero, new Vector3(horizontalBlocks, verticalBlocks, horizontalBlocks));
+        int widthBlocks = GetDynamicOccupiedWidthBlocks(mapping);
+        int lengthBlocks = GetDynamicOccupiedLengthBlocks(mapping);
+        int heightBlocks = GetDynamicOccupiedHeightBlocks(mapping);
+        return new ShapeBox(Vector3.zero, new Vector3(widthBlocks, heightBlocks, lengthBlocks));
+    }
+
+    public static ShapeBox GetDynamicOccupancyBox(BlockTextureMapping mapping, BlockPlacementAxis placementAxis)
+    {
+        GetDynamicOccupancyOffsetRange(mapping, placementAxis, out Vector3Int minOffset, out Vector3Int maxExclusiveOffset);
+        return new ShapeBox((Vector3)minOffset, (Vector3)maxExclusiveOffset);
     }
 
     public static Bounds GetDynamicOccupancyBounds(Vector3Int blockPos, BlockTextureMapping mapping)
     {
         return GetDynamicOccupancyBox(mapping).ToWorldBounds(blockPos);
+    }
+
+    public static Bounds GetDynamicOccupancyBounds(
+        Vector3Int blockPos,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        return GetDynamicOccupancyBox(mapping, placementAxis).ToWorldBounds(blockPos);
+    }
+
+    public static void GetDynamicOccupancyOffsetRange(
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis,
+        out Vector3Int minOffset,
+        out Vector3Int maxExclusiveOffset)
+    {
+        int widthBlocks = GetDynamicOccupiedWidthBlocks(mapping);
+        int lengthBlocks = GetDynamicOccupiedLengthBlocks(mapping);
+        int heightBlocks = GetDynamicOccupiedHeightBlocks(mapping);
+
+        if (!ShouldRotateDynamicOccupancy(mapping, widthBlocks, lengthBlocks))
+        {
+            minOffset = Vector3Int.zero;
+            maxExclusiveOffset = new Vector3Int(widthBlocks, heightBlocks, lengthBlocks);
+            return;
+        }
+
+        switch (BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+        {
+            case BlockPlacementAxis.X:
+                minOffset = new Vector3Int(0, 0, 1 - widthBlocks);
+                maxExclusiveOffset = new Vector3Int(lengthBlocks, heightBlocks, 1);
+                return;
+
+            case BlockPlacementAxis.ZNegative:
+                minOffset = new Vector3Int(1 - widthBlocks, 0, 1 - lengthBlocks);
+                maxExclusiveOffset = new Vector3Int(1, heightBlocks, 1);
+                return;
+
+            case BlockPlacementAxis.XNegative:
+                minOffset = new Vector3Int(1 - lengthBlocks, 0, 0);
+                maxExclusiveOffset = new Vector3Int(1, heightBlocks, widthBlocks);
+                return;
+
+            default:
+                minOffset = Vector3Int.zero;
+                maxExclusiveOffset = new Vector3Int(widthBlocks, heightBlocks, lengthBlocks);
+                return;
+        }
+    }
+
+    private static bool ShouldRotateDynamicOccupancy(BlockTextureMapping mapping, int widthBlocks, int lengthBlocks)
+    {
+        return mapping.renderAsDynamicPrefab &&
+               mapping.usePlacementAxisRotation &&
+               mapping.placementRotationAxes != BlockPlacementRotationAxes.Vertical &&
+               widthBlocks != lengthBlocks;
+    }
+
+    public static bool IsLocalOffsetInsideDynamicOccupancy(
+        Vector3Int localOffset,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        GetDynamicOccupancyOffsetRange(mapping, placementAxis, out Vector3Int minOffset, out Vector3Int maxExclusiveOffset);
+        return localOffset.x >= minOffset.x && localOffset.x < maxExclusiveOffset.x &&
+               localOffset.y >= minOffset.y && localOffset.y < maxExclusiveOffset.y &&
+               localOffset.z >= minOffset.z && localOffset.z < maxExclusiveOffset.z;
+    }
+
+    public static Vector3 TransformDynamicLocalOffsetForPlacement(
+        Vector3 localOffset,
+        BlockTextureMapping mapping,
+        BlockPlacementAxis placementAxis)
+    {
+        int widthBlocks = GetDynamicOccupiedWidthBlocks(mapping);
+        int lengthBlocks = GetDynamicOccupiedLengthBlocks(mapping);
+        if (!ShouldRotateDynamicOccupancy(mapping, widthBlocks, lengthBlocks))
+            return localOffset;
+
+        switch (BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+        {
+            case BlockPlacementAxis.X:
+                return new Vector3(localOffset.z, localOffset.y, 1f - localOffset.x);
+
+            case BlockPlacementAxis.ZNegative:
+                return new Vector3(1f - localOffset.x, localOffset.y, 1f - localOffset.z);
+
+            case BlockPlacementAxis.XNegative:
+                return new Vector3(1f - localOffset.z, localOffset.y, localOffset.x);
+
+            default:
+                return localOffset;
+        }
     }
 
     public static byte GetEffectiveLightOpacity(BlockTextureMapping mapping)
@@ -2545,7 +2719,7 @@ public static class BlockShapeUtility
         bool hasPositiveSupport)
     {
         if (mapping.renderAsDynamicPrefab)
-            return GetDynamicOccupancyBounds(blockPos, mapping);
+            return GetDynamicOccupancyBounds(blockPos, mapping, placementAxis);
 
         if (TorchPlacementUtility.IsWallTorch(blockType))
             return TorchPlacementUtility.GetWorldBounds(blockPos, blockType, mapping);

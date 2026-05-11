@@ -668,23 +668,52 @@ public class Chunk : MonoBehaviour
 
         Transform instanceTransform = instance.transform;
         instanceTransform.SetParent(EnsureDynamicBlocksRoot(), false);
-        instanceTransform.localPosition = (Vector3)localPos + definition.localOffset;
-        instanceTransform.localRotation = ResolveDynamicBlockRotation(blockType, localPos, definition);
+        BlockPlacementAxis placementAxis = ResolveDynamicBlockPlacementAxis(blockType, localPos, definition);
+        instanceTransform.localPosition = (Vector3)localPos + ResolveDynamicBlockLocalOffset(blockType, definition, placementAxis);
+        instanceTransform.localRotation = ResolveDynamicBlockRotation(definition, placementAxis);
         instanceTransform.localScale = definition.localScale == Vector3.zero ? Vector3.one : definition.localScale;
     }
 
-    private Quaternion ResolveDynamicBlockRotation(
+    private BlockPlacementAxis ResolveDynamicBlockPlacementAxis(
         BlockType blockType,
         Vector3Int localPos,
         DynamicBlockPrefabDefinition definition)
     {
-        Quaternion localRotation = Quaternion.Euler(definition.localEulerAngles);
         if (!definition.rotateWithPlacementAxis || World.Instance == null)
-            return localRotation;
+            return BlockPlacementAxis.Y;
 
         Vector3Int worldPos = GetWorldPositionForLocalBlock(localPos);
-        BlockPlacementAxis axis = World.Instance.GetPlacementAxisAt(worldPos, blockType);
-        return Quaternion.Euler(0f, GetYawForPlacementAxis(axis), 0f) * localRotation;
+        return World.Instance.GetPlacementAxisAt(worldPos, blockType);
+    }
+
+    private static Vector3 ResolveDynamicBlockLocalOffset(
+        BlockType blockType,
+        DynamicBlockPrefabDefinition definition,
+        BlockPlacementAxis placementAxis)
+    {
+        Vector3 localOffset = definition.localOffset;
+        if (!definition.rotateWithPlacementAxis || World.Instance == null || World.Instance.blockData == null)
+            return localOffset;
+
+        BlockTextureMapping? mappingResult = World.Instance.blockData.GetMapping(blockType);
+        if (mappingResult == null)
+            return localOffset;
+
+        return BlockShapeUtility.TransformDynamicLocalOffsetForPlacement(
+            localOffset,
+            mappingResult.Value,
+            placementAxis);
+    }
+
+    private static Quaternion ResolveDynamicBlockRotation(
+        DynamicBlockPrefabDefinition definition,
+        BlockPlacementAxis placementAxis)
+    {
+        Quaternion localRotation = Quaternion.Euler(definition.localEulerAngles);
+        if (!definition.rotateWithPlacementAxis)
+            return localRotation;
+
+        return Quaternion.Euler(0f, GetYawForPlacementAxis(placementAxis), 0f) * localRotation;
     }
 
     private static float GetYawForPlacementAxis(BlockPlacementAxis axis)

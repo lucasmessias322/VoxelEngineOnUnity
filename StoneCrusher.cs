@@ -406,23 +406,23 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         if (blockPosition == origin)
             return true;
 
-        int horizontalBlocks = 1;
-        int verticalBlocks = 1;
         World world = World.Instance;
         if (world != null && world.blockData != null)
         {
             BlockTextureMapping? mappingResult = world.blockData.GetMapping(BlockType.StoneCrusher);
             if (mappingResult.HasValue)
             {
-                horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mappingResult.Value);
-                verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mappingResult.Value);
+                BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(origin, BlockType.StoneCrusher);
+                Vector3Int localOffset = blockPosition - origin;
+                return BlockShapeUtility.IsLocalOffsetInsideDynamicOccupancy(
+                    localOffset,
+                    mappingResult.Value,
+                    placementAxis);
             }
         }
 
         Vector3Int delta = blockPosition - origin;
-        return delta.x >= 0 && delta.x < horizontalBlocks &&
-               delta.y >= 0 && delta.y < verticalBlocks &&
-               delta.z >= 0 && delta.z < horizontalBlocks;
+        return delta.x == 0 && delta.y == 0 && delta.z == 0;
     }
 
     public static bool TryFindAtWorldBlock(Vector3Int blockPosition, out StoneCrusher crusher)

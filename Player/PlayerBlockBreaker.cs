@@ -2269,10 +2269,10 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!world.CanBlockStayAt(placePos, placedBlockType))
             return false;
 
-        if (!CanPlaceMachineOnNonMachineSupportAt(placePos, placedBlockType))
+        if (!CanPlaceMachineOnNonMachineSupportAt(placePos, placedBlockType, placementAxis))
             return false;
 
-        if (!CanPlaceDynamicBlockFootprintAt(placePos, placedBlockType))
+        if (!CanPlaceDynamicBlockFootprintAt(placePos, placedBlockType, placementAxis))
             return false;
 
         if (DoesPlacementOverlapExistingDynamicBlock(placePos, placedBlockType, placementAxis))
@@ -2570,7 +2570,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         return value.isSolid && !value.isEmpty && !value.isLiquid;
     }
 
-    private bool CanPlaceDynamicBlockFootprintAt(Vector3Int origin, BlockType blockType)
+    private bool CanPlaceDynamicBlockFootprintAt(Vector3Int origin, BlockType blockType, BlockPlacementAxis placementAxis)
     {
         World world = World.Instance;
         if (world == null || world.blockData == null)
@@ -2584,13 +2584,17 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (!mapping.renderAsDynamicPrefab)
             return true;
 
-        int horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mapping);
-        int verticalBlocks = BlockShapeUtility.GetDynamicOccupiedVerticalBlocks(mapping);
-        for (int y = 0; y < verticalBlocks; y++)
+        BlockShapeUtility.GetDynamicOccupancyOffsetRange(
+            mapping,
+            placementAxis,
+            out Vector3Int minOffset,
+            out Vector3Int maxExclusiveOffset);
+
+        for (int y = minOffset.y; y < maxExclusiveOffset.y; y++)
         {
-            for (int z = 0; z < horizontalBlocks; z++)
+            for (int z = minOffset.z; z < maxExclusiveOffset.z; z++)
             {
-                for (int x = 0; x < horizontalBlocks; x++)
+                for (int x = minOffset.x; x < maxExclusiveOffset.x; x++)
                 {
                     Vector3Int pos = origin + new Vector3Int(x, y, z);
                     if (pos == origin)
@@ -2605,7 +2609,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         return true;
     }
 
-    private bool CanPlaceMachineOnNonMachineSupportAt(Vector3Int origin, BlockType blockType)
+    private bool CanPlaceMachineOnNonMachineSupportAt(Vector3Int origin, BlockType blockType, BlockPlacementAxis placementAxis)
     {
         if (!MachineBlockUtility.IsMachineBlock(blockType))
             return true;
@@ -2614,17 +2618,24 @@ public class PlayerBlockBreaker : MonoBehaviour
         if (world == null)
             return true;
 
-        int horizontalBlocks = 1;
+        Vector3Int minOffset = Vector3Int.zero;
+        Vector3Int maxExclusiveOffset = Vector3Int.one;
         if (world.blockData != null)
         {
             BlockTextureMapping? mappingResult = world.blockData.GetMapping(blockType);
             if (mappingResult != null)
-                horizontalBlocks = BlockShapeUtility.GetDynamicOccupiedHorizontalBlocks(mappingResult.Value);
+            {
+                BlockShapeUtility.GetDynamicOccupancyOffsetRange(
+                    mappingResult.Value,
+                    placementAxis,
+                    out minOffset,
+                    out maxExclusiveOffset);
+            }
         }
 
-        for (int z = 0; z < horizontalBlocks; z++)
+        for (int z = minOffset.z; z < maxExclusiveOffset.z; z++)
         {
-            for (int x = 0; x < horizontalBlocks; x++)
+            for (int x = minOffset.x; x < maxExclusiveOffset.x; x++)
             {
                 Vector3Int supportPos = origin + new Vector3Int(x, -1, z);
                 BlockType supportType = world.GetBlockAt(supportPos);
