@@ -85,7 +85,8 @@ public enum BlockType
     AutoMiner = 80,
     StoneCrusher = 81,
 
-    Gravel = 100,
+    Gravel = 82,
+    MagneticSeparator = 83
 
 
 
@@ -111,6 +112,8 @@ public static class MachineBlockUtility
             case BlockType.Treecutter:
             case BlockType.AutoMiner:
             case BlockType.StoneCrusher:
+                return true;
+            case BlockType.MagneticSeparator:
                 return true;
 
             default:

@@ -673,7 +673,8 @@ public static partial class MeshGenerator
                    blockType == BlockType.ledWhiteBlock ||
                    blockType == BlockType.Treecutter ||
                    blockType == BlockType.AutoMiner ||
-                   blockType == BlockType.StoneCrusher;
+                   blockType == BlockType.StoneCrusher ||
+                     blockType == BlockType.MagneticSeparator;
         }
 
         private bool IsConfiguredElectricalEndpoint(BlockType blockType)

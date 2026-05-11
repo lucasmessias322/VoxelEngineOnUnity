@@ -1302,7 +1302,8 @@ public partial class World
                blockType == BlockType.RoboticArm ||
                blockType == BlockType.Treecutter ||
                blockType == BlockType.AutoMiner ||
-               blockType == BlockType.StoneCrusher;
+               blockType == BlockType.StoneCrusher ||
+               blockType == BlockType.MagneticSeparator;
     }
 
     private static int CompareElectricalPositions(Vector3Int left, Vector3Int right)
