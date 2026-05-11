@@ -135,6 +135,7 @@ public partial class World
         TryConvertCoveredGrassToDirt(worldPos, type, placedByPlayer);
 
         RequestBlockEditRefresh(worldPos, chunkCoord, current, type);
+        StoneCrusher.NotifyWorldBlockChanged(worldPos, current, type);
         BlockChanged?.Invoke(worldPos, current, type);
 
         if (!refreshingConveyorSlopeConnections)

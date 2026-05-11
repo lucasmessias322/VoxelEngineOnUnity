@@ -1,10 +1,12 @@
 using System.Collections.Generic;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 [DisallowMultipleComponent]
 public sealed class StoneCrusher : DynamicVoxelBlock
 {
     private static readonly List<StoneCrusher> ActiveCrushers = new List<StoneCrusher>(32);
+    private static readonly Dictionary<Vector3Int, CrusherRuntimeState> StoredStates = new Dictionary<Vector3Int, CrusherRuntimeState>();
 
     [Header("IO")]
     [SerializeField] private Transform entryPoint;
@@ -15,8 +17,14 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     [SerializeField] private Vector3 fallbackExitLocalPosition = new Vector3(0f, -0.2f, 1.25f);
 
     [Header("Recipe")]
-    [SerializeField] private BlockType inputBlockType = BlockType.Stone;
-    [SerializeField] private BlockType outputBlockType = BlockType.Gravel;
+    [SerializeField] private Item inputItem;
+    [SerializeField] private Item outputItem;
+    [SerializeField, HideInInspector, FormerlySerializedAs("inputBlockType")] private BlockType legacyInputBlockType = BlockType.Stone;
+    [SerializeField, HideInInspector, FormerlySerializedAs("outputBlockType")] private BlockType legacyOutputBlockType = BlockType.Gravel;
+
+    [Header("Yield Chance")]
+    [SerializeField] private bool useOutputChance;
+    [SerializeField, Range(0f, 100f)] private float outputChancePercent = 100f;
 
     [Header("Detection")]
     [SerializeField, Min(0.05f)] private float entryRadius = 0.55f;
@@ -46,13 +54,56 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     [SerializeField, Min(0f)] private float rollerDegreesPerSecond = 360f;
     [SerializeField] private bool rotateRollersInOppositeDirections = true;
 
+    [Header("Crusher Quad")]
+    [SerializeField] private Transform movingQuad;
+    [SerializeField] private string movingQuadFallbackName = "Quad";
+    [SerializeField] private Vector3 movingQuadLocalDirection = Vector3.forward;
+    [SerializeField, Min(0f)] private float movingQuadTravelDistance = 0.25f;
+    [SerializeField, Min(0f)] private float movingQuadCyclesPerSecond = 1f;
+    [SerializeField] private bool moveQuadOnlyWhileCrushing = true;
+
+    [Header("Animation Optimization")]
+    [SerializeField] private bool disableVisualAnimationsOutsideSimulationDistance = true;
+    [SerializeField, Min(0.05f)] private float visualSimulationCheckInterval = 0.25f;
+
     private float nextScanTime;
     private float crushTimer;
     private bool isCrushing;
     private bool rollersPoweredThisFrame;
+    private bool visualAnimationsPausedBySimulationDistance;
+    private float nextVisualSimulationCheckTime;
+    private float lastVisualAnimationTime;
+    private float movingQuadPhase;
+    private Transform initialMovingQuadTransform;
+    private Vector3 initialMovingQuadLocalPosition;
+    private bool hasInitialMovingQuadLocalPosition;
 
-    public BlockType InputBlockType => inputBlockType;
-    public BlockType OutputBlockType => outputBlockType;
+    private sealed class CrusherRuntimeState
+    {
+        public Item inputItem;
+        public Item outputItem;
+        public BlockType legacyInputBlockType;
+        public BlockType legacyOutputBlockType;
+        public bool useOutputChance;
+        public float outputChancePercent;
+        public float crushDurationSeconds;
+        public bool requireElectricity;
+        public float energyPerSecond;
+        public int maxInputBufferAmount;
+        public int bufferedInputAmount;
+        public int maxOutputBufferAmount;
+        public int bufferedOutputAmount;
+        public bool storeOutputInInternalBuffer;
+        public float crushTimer;
+        public bool isCrushing;
+    }
+
+    public Item InputItem => ResolveInputItem();
+    public Item OutputItem => ResolveOutputItem();
+    public BlockType InputBlockType => ResolveInputBlockType();
+    public BlockType OutputBlockType => ResolveOutputBlockType();
+    public bool UseOutputChance => useOutputChance;
+    public float OutputChancePercent => Mathf.Clamp(outputChancePercent, 0f, 100f);
     public int InputBufferAmount => bufferedInputAmount;
     public int OutputBufferAmount => bufferedOutputAmount;
     public int MaxInputBufferAmount => Mathf.Max(1, maxInputBufferAmount);
@@ -62,15 +113,18 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private void Awake()
     {
+        SyncLegacyRecipeFromItems();
         RegisterCrusher();
         ResolveReferences();
         ResetScanTimer();
+        ResetVisualAnimationTiming();
     }
 
     private void OnEnable()
     {
         RegisterCrusher();
         ResetScanTimer();
+        ResetVisualAnimationTiming();
     }
 
     private void OnDisable()
@@ -80,16 +134,37 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     protected override void OnDynamicBlockSpawned()
     {
+        SyncLegacyRecipeFromItems();
+        RestoreStoredState();
         RegisterCrusher();
         ResolveReferences();
         ResetScanTimer();
+        ResetVisualAnimationTiming();
+    }
+
+    protected override void OnDynamicBlockDespawned()
+    {
+        ActiveCrushers.Remove(this);
+        ResetMovingQuadPosition();
+        ResetVisualAnimationTiming();
+
+        if (ShouldKeepStateAfterDespawn())
+            StoreRuntimeState();
+        else
+            RemoveStoredState(ResolveCrusherBlockPosition());
     }
 
     private void Update()
     {
         rollersPoweredThisFrame = false;
         UpdateCrushing(Time.deltaTime);
-        UpdateRollers();
+
+        float visualDeltaTime = ConsumeVisualAnimationDeltaTime();
+        if (visualDeltaTime <= 0f)
+            return;
+
+        UpdateRollers(visualDeltaTime);
+        UpdateMovingQuad(visualDeltaTime);
     }
 
     private void UpdateCrushing(float deltaTime)
@@ -137,9 +212,13 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool CanConvert()
     {
-        return inputBlockType != BlockType.Air &&
-               outputBlockType != BlockType.Air &&
-               outputBlockType != BlockType.Bedrock &&
+        bool hasInput = ResolveInputItem() != null || ResolveInputBlockType() != BlockType.Air;
+        bool hasOutputItem = ResolveOutputItem() != null;
+        BlockType resolvedOutputBlockType = ResolveOutputBlockType();
+        bool hasOutputBlock = resolvedOutputBlockType != BlockType.Air && resolvedOutputBlockType != BlockType.Bedrock;
+
+        return hasInput &&
+               (hasOutputItem || hasOutputBlock) &&
                World.Instance != null;
     }
 
@@ -206,9 +285,11 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool IsValidBlockInput(BlockDrop drop)
     {
+        BlockType resolvedInputBlockType = ResolveInputBlockType();
         return drop != null &&
                drop.CanBeGrabbedByRoboticArm &&
-               drop.DroppedBlockType == inputBlockType &&
+               resolvedInputBlockType != BlockType.Air &&
+               drop.DroppedBlockType == resolvedInputBlockType &&
                IsInsideEntry(drop.DropTransform) &&
                drop.TryGetRoboticArmItemStack(out _, out int amount) &&
                amount > 0;
@@ -221,8 +302,22 @@ public sealed class StoneCrusher : DynamicVoxelBlock
                IsInsideEntry(drop.DropTransform) &&
                drop.TryGetRoboticArmItemStack(out Item item, out int amount) &&
                amount > 0 &&
+               IsValidInputItem(item);
+    }
+
+    public bool IsValidInputItem(Item item)
+    {
+        if (item == null)
+            return false;
+
+        Item resolvedInputItem = ResolveInputItem();
+        if (resolvedInputItem != null && item == resolvedInputItem)
+            return true;
+
+        BlockType resolvedInputBlockType = ResolveInputBlockType();
+        return resolvedInputBlockType != BlockType.Air &&
                BlockItemCatalog.TryGetBlockForItem(item, out BlockType blockType) &&
-               blockType == inputBlockType;
+               blockType == resolvedInputBlockType;
     }
 
     private bool TryConsumeProcessingEnergy(float deltaTime)
@@ -249,6 +344,9 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool TryStoreOrOutputCrushedGravel()
     {
+        if (!ShouldCreateOutput())
+            return true;
+
         if (storeOutputInInternalBuffer)
         {
             if (bufferedOutputAmount >= MaxOutputBufferAmount)
@@ -261,11 +359,20 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         return TryOutputCrushedGravelDrop();
     }
 
+    private bool ShouldCreateOutput()
+    {
+        if (!useOutputChance)
+            return true;
+
+        float chance01 = Mathf.Clamp01(outputChancePercent / 100f);
+        return chance01 >= 1f || (chance01 > 0f && Random.value < chance01);
+    }
+
     private bool TryOutputCrushedGravelDrop()
     {
-        if (!BlockDrop.Spawn(World.Instance, ResolveExitPosition(), outputBlockType, 1, ResolveOutputThrowDirection()))
+        if (!TrySpawnOutputDrop(1))
         {
-            Debug.LogWarning($"[StoneCrusher] Falha ao gerar {outputBlockType} na saida.");
+            Debug.LogWarning($"[StoneCrusher] Falha ao gerar {ResolveOutputName()} na saida.");
             return false;
         }
 
@@ -277,13 +384,35 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         if (amount <= 0)
             return true;
 
-        if (!BlockDrop.Spawn(World.Instance, ResolveExitPosition(), outputBlockType, amount, ResolveOutputThrowDirection()))
+        if (!TrySpawnOutputDrop(amount))
         {
-            Debug.LogWarning($"[StoneCrusher] Falha ao gerar {outputBlockType} na saida.");
+            Debug.LogWarning($"[StoneCrusher] Falha ao gerar {ResolveOutputName()} na saida.");
             return false;
         }
 
         return true;
+    }
+
+    private bool TrySpawnOutputDrop(int amount)
+    {
+        if (amount <= 0)
+            return true;
+
+        Item resolvedOutputItem = ResolveOutputItem();
+        Vector3 exitPosition = ResolveExitPosition();
+        Vector3 throwDirection = ResolveOutputThrowDirection();
+        if (resolvedOutputItem != null)
+        {
+            if (resolvedOutputItem.TryGetBlockType(out BlockType itemBlockType))
+                return BlockDrop.Spawn(World.Instance, exitPosition, itemBlockType, amount, throwDirection);
+
+            return InventoryItemDrop.Spawn(resolvedOutputItem, amount, exitPosition, throwDirection);
+        }
+
+        BlockType resolvedOutputBlockType = ResolveOutputBlockType();
+        return resolvedOutputBlockType != BlockType.Air &&
+               resolvedOutputBlockType != BlockType.Bedrock &&
+               BlockDrop.Spawn(World.Instance, exitPosition, resolvedOutputBlockType, amount, throwDirection);
     }
 
     public void SetDropOutputToWorld(bool dropToWorld)
@@ -295,6 +424,8 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         storeOutputInInternalBuffer = newStoreOutput;
         if (dropToWorld && bufferedOutputAmount > 0 && TryOutputCrushedGravelDrop(bufferedOutputAmount))
             bufferedOutputAmount = 0;
+
+        StoreRuntimeState();
     }
 
     public int TryInsertInputBuffer(int amount)
@@ -307,6 +438,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             return 0;
 
         bufferedInputAmount += accepted;
+        StoreRuntimeState();
         return accepted;
     }
 
@@ -320,6 +452,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         if (bufferedInputAmount <= 0)
             ResetCrushing();
 
+        StoreRuntimeState();
         return removed;
     }
 
@@ -330,6 +463,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
         int removed = Mathf.Min(amount, bufferedOutputAmount);
         bufferedOutputAmount -= removed;
+        StoreRuntimeState();
         return removed;
     }
 
@@ -353,6 +487,80 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     {
         isCrushing = false;
         crushTimer = 0f;
+    }
+
+    private void StoreRuntimeState()
+    {
+        Vector3Int origin = ResolveCrusherBlockPosition();
+        StoredStates[origin] = new CrusherRuntimeState
+        {
+            inputItem = inputItem,
+            outputItem = outputItem,
+            legacyInputBlockType = legacyInputBlockType,
+            legacyOutputBlockType = legacyOutputBlockType,
+            useOutputChance = useOutputChance,
+            outputChancePercent = outputChancePercent,
+            crushDurationSeconds = crushDurationSeconds,
+            requireElectricity = requireElectricity,
+            energyPerSecond = energyPerSecond,
+            maxInputBufferAmount = maxInputBufferAmount,
+            bufferedInputAmount = bufferedInputAmount,
+            maxOutputBufferAmount = maxOutputBufferAmount,
+            bufferedOutputAmount = bufferedOutputAmount,
+            storeOutputInInternalBuffer = storeOutputInInternalBuffer,
+            crushTimer = crushTimer,
+            isCrushing = isCrushing
+        };
+    }
+
+    private void RestoreStoredState()
+    {
+        Vector3Int origin = ResolveCrusherBlockPosition();
+        if (!StoredStates.TryGetValue(origin, out CrusherRuntimeState state) || state == null)
+            return;
+
+        inputItem = state.inputItem;
+        outputItem = state.outputItem;
+        legacyInputBlockType = state.legacyInputBlockType;
+        legacyOutputBlockType = state.legacyOutputBlockType;
+        useOutputChance = state.useOutputChance;
+        outputChancePercent = state.outputChancePercent;
+        crushDurationSeconds = state.crushDurationSeconds;
+        requireElectricity = state.requireElectricity;
+        energyPerSecond = state.energyPerSecond;
+        maxInputBufferAmount = Mathf.Max(1, state.maxInputBufferAmount);
+        bufferedInputAmount = Mathf.Clamp(state.bufferedInputAmount, 0, MaxInputBufferAmount);
+        maxOutputBufferAmount = Mathf.Max(1, state.maxOutputBufferAmount);
+        bufferedOutputAmount = Mathf.Clamp(state.bufferedOutputAmount, 0, MaxOutputBufferAmount);
+        storeOutputInInternalBuffer = state.storeOutputInInternalBuffer;
+        crushTimer = Mathf.Max(0f, state.crushTimer);
+        isCrushing = state.isCrushing && bufferedInputAmount > 0;
+    }
+
+    private bool ShouldKeepStateAfterDespawn()
+    {
+        World world = World.Instance;
+        if (world == null || world.IsShuttingDown)
+            return false;
+
+        Vector3Int origin = ResolveCrusherBlockPosition();
+        if (world.GetBlockAt(origin) == BlockType.StoneCrusher)
+            return true;
+
+        return false;
+    }
+
+    private static void RemoveStoredState(Vector3Int origin)
+    {
+        StoredStates.Remove(origin);
+    }
+
+    public static void NotifyWorldBlockChanged(Vector3Int worldPos, BlockType previousType, BlockType newType)
+    {
+        if (previousType != BlockType.StoneCrusher || newType == BlockType.StoneCrusher)
+            return;
+
+        RemoveStoredState(worldPos);
     }
 
     private bool IsInsideEntry(Transform dropTransform)
@@ -388,10 +596,61 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         return transform.TransformDirection(localDirection.normalized) * Mathf.Max(0f, outputThrowStrength);
     }
 
+    private Item ResolveInputItem()
+    {
+        if (inputItem != null)
+            return inputItem;
+
+        return BlockItemCatalog.TryGetItemForBlock(legacyInputBlockType, out Item resolvedItem) ? resolvedItem : null;
+    }
+
+    private Item ResolveOutputItem()
+    {
+        if (outputItem != null)
+            return outputItem;
+
+        return BlockItemCatalog.TryGetItemForBlock(legacyOutputBlockType, out Item resolvedItem) ? resolvedItem : null;
+    }
+
+    private BlockType ResolveInputBlockType()
+    {
+        if (inputItem != null && inputItem.TryGetBlockType(out BlockType itemBlockType))
+            return itemBlockType;
+
+        return legacyInputBlockType;
+    }
+
+    private BlockType ResolveOutputBlockType()
+    {
+        if (outputItem != null && outputItem.TryGetBlockType(out BlockType itemBlockType))
+            return itemBlockType;
+
+        return legacyOutputBlockType;
+    }
+
+    private string ResolveOutputName()
+    {
+        Item resolvedOutputItem = ResolveOutputItem();
+        if (resolvedOutputItem != null)
+            return resolvedOutputItem.name;
+
+        return ResolveOutputBlockType().ToString();
+    }
+
+    private void SyncLegacyRecipeFromItems()
+    {
+        if (inputItem != null && inputItem.TryGetBlockType(out BlockType inputBlockType))
+            legacyInputBlockType = inputBlockType;
+
+        if (outputItem != null && outputItem.TryGetBlockType(out BlockType outputBlockType))
+            legacyOutputBlockType = outputBlockType;
+    }
+
     private void ResolveReferences()
     {
         ResolveIOPoints();
         ResolveRollers();
+        ResolveMovingQuad();
     }
 
     private void RegisterCrusher()
@@ -477,7 +736,73 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             rollerB = FindDeepChild(transform, rollerBFallbackName);
     }
 
-    private void UpdateRollers()
+    private void ResolveMovingQuad()
+    {
+        if (movingQuad == null)
+            movingQuad = FindDeepChild(transform, movingQuadFallbackName);
+
+        CacheInitialMovingQuadPosition();
+    }
+
+    private void CacheInitialMovingQuadPosition()
+    {
+        if (movingQuad == null)
+            return;
+
+        if (hasInitialMovingQuadLocalPosition && initialMovingQuadTransform == movingQuad)
+            return;
+
+        initialMovingQuadTransform = movingQuad;
+        initialMovingQuadLocalPosition = movingQuad.localPosition;
+        hasInitialMovingQuadLocalPosition = true;
+    }
+
+    private float ConsumeVisualAnimationDeltaTime()
+    {
+        if (!ShouldUpdateVisualAnimations())
+        {
+            lastVisualAnimationTime = Time.time;
+            return 0f;
+        }
+
+        float deltaTime = Mathf.Max(0f, Time.time - lastVisualAnimationTime);
+        lastVisualAnimationTime = Time.time;
+        return deltaTime;
+    }
+
+    private bool ShouldUpdateVisualAnimations()
+    {
+        if (!disableVisualAnimationsOutsideSimulationDistance)
+        {
+            visualAnimationsPausedBySimulationDistance = false;
+            return true;
+        }
+
+        if (Time.time < nextVisualSimulationCheckTime)
+            return !visualAnimationsPausedBySimulationDistance;
+
+        nextVisualSimulationCheckTime = Time.time + Mathf.Max(0.05f, visualSimulationCheckInterval);
+
+        World world = World.Instance;
+        if (world == null)
+        {
+            visualAnimationsPausedBySimulationDistance = false;
+            return true;
+        }
+
+        bool insideSimulationDistance = world.IsWorldPositionInsidePlayerSimulationDistance(ResolveCrusherBlockPosition());
+        visualAnimationsPausedBySimulationDistance = !insideSimulationDistance;
+        return insideSimulationDistance;
+    }
+
+    private void ResetVisualAnimationTiming()
+    {
+        lastVisualAnimationTime = Time.time;
+        nextVisualSimulationCheckTime = 0f;
+        visualAnimationsPausedBySimulationDistance = false;
+    }
+
+    private void UpdateRollers(float deltaTime)
     {
         if (rollerDegreesPerSecond <= 0f)
             return;
@@ -492,12 +817,46 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             ? rollerLocalRotationAxis.normalized
             : Vector3.forward;
 
-        float angle = rollerDegreesPerSecond * Time.deltaTime;
+        float angle = rollerDegreesPerSecond * Mathf.Max(0f, deltaTime);
         if (rollerA != null)
             rollerA.Rotate(axis, angle, Space.Self);
 
         if (rollerB != null)
             rollerB.Rotate(axis, rotateRollersInOppositeDirections ? -angle : angle, Space.Self);
+    }
+
+    private void UpdateMovingQuad(float deltaTime)
+    {
+        if (moveQuadOnlyWhileCrushing && !ShouldSpinRollers())
+        {
+            ResetMovingQuadPosition();
+            return;
+        }
+
+        if (movingQuadCyclesPerSecond <= 0f || movingQuadTravelDistance <= 0f)
+            return;
+
+        if (movingQuad == null || !hasInitialMovingQuadLocalPosition)
+            ResolveMovingQuad();
+
+        if (movingQuad == null || !hasInitialMovingQuadLocalPosition)
+            return;
+
+        Vector3 direction = movingQuadLocalDirection.sqrMagnitude > 0.0001f
+            ? movingQuadLocalDirection.normalized
+            : Vector3.forward;
+
+        movingQuadPhase = Mathf.Repeat(movingQuadPhase + movingQuadCyclesPerSecond * Mathf.Max(0f, deltaTime), 1f);
+        float signedOffset = Mathf.Sin(movingQuadPhase * Mathf.PI * 2f) * movingQuadTravelDistance;
+        movingQuad.localPosition = initialMovingQuadLocalPosition + direction * signedOffset;
+    }
+
+    private void ResetMovingQuadPosition()
+    {
+        if (movingQuad == null || !hasInitialMovingQuadLocalPosition)
+            return;
+
+        movingQuad.localPosition = initialMovingQuadLocalPosition;
     }
 
     private bool ShouldSpinRollers()

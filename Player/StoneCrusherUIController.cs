@@ -210,8 +210,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         if (activeCrusher == null || incomingItem == null || incomingAmount <= 0)
             return false;
 
-        return BlockItemCatalog.TryGetBlockForItem(incomingItem, out BlockType blockType) &&
-               blockType == activeCrusher.InputBlockType &&
+        return activeCrusher.IsValidInputItem(incomingItem) &&
                incomingAmount <= activeCrusher.GetInputBufferFreeSpace();
     }
 
@@ -265,7 +264,8 @@ public sealed class StoneCrusherUIController : MonoBehaviour
 
     private void SyncInputSlotMutation(Slot slot)
     {
-        if (!BlockItemCatalog.TryGetItemForBlock(activeCrusher.InputBlockType, out Item inputItem))
+        Item inputItem = activeCrusher.InputItem;
+        if (inputItem == null)
         {
             RefreshUi();
             return;
@@ -303,8 +303,8 @@ public sealed class StoneCrusherUIController : MonoBehaviour
 
         if (activeCrusher != null)
         {
-            SetSlotBlock(inputSlot, activeCrusher.InputBlockType, activeCrusher.InputBufferAmount);
-            SetSlotBlock(outputSlot, activeCrusher.OutputBlockType, activeCrusher.OutputBufferAmount);
+            SetSlotItem(inputSlot, activeCrusher.InputItem, activeCrusher.InputBufferAmount);
+            SetSlotItem(outputSlot, activeCrusher.OutputItem, activeCrusher.OutputBufferAmount);
         }
         else
         {
@@ -323,12 +323,12 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         suppressToggleCallbacks = false;
     }
 
-    private static void SetSlotBlock(Slot slot, BlockType blockType, int amount)
+    private static void SetSlotItem(Slot slot, Item item, int amount)
     {
         if (slot == null)
             return;
 
-        if (amount <= 0 || !BlockItemCatalog.TryGetItemForBlock(blockType, out Item item))
+        if (amount <= 0 || item == null)
         {
             slot.SetContents(null, 0);
             return;
