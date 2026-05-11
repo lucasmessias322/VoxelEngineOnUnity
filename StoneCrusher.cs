@@ -110,6 +110,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     public int MaxOutputBufferAmount => Mathf.Max(1, maxOutputBufferAmount);
     public bool DropOutputToWorld => !storeOutputInInternalBuffer;
     public float CrushProgress01 => isCrushing ? Mathf.Clamp01(crushTimer / Mathf.Max(0.05f, crushDurationSeconds)) : 0f;
+    public float EnergyCharge01 => requireElectricity ? GetEnergyChargeAtCrusherFootprint(World.Instance) : 1f;
 
     private void Awake()
     {
@@ -544,10 +545,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             return false;
 
         Vector3Int origin = ResolveCrusherBlockPosition();
-        if (world.GetBlockAt(origin) == BlockType.StoneCrusher)
-            return true;
-
-        return false;
+        return world.GetBlockAt(origin) == ResolveMachineBlockType();
     }
 
     private static void RemoveStoredState(Vector3Int origin)
@@ -557,7 +555,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     public static void NotifyWorldBlockChanged(Vector3Int worldPos, BlockType previousType, BlockType newType)
     {
-        if (previousType != BlockType.StoneCrusher || newType == BlockType.StoneCrusher)
+        if (!IsCrusherMachineBlockType(previousType) || newType == previousType)
             return;
 
         RemoveStoredState(worldPos);
@@ -668,10 +666,11 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         World world = World.Instance;
         if (world != null && world.blockData != null)
         {
-            BlockTextureMapping? mappingResult = world.blockData.GetMapping(BlockType.StoneCrusher);
+            BlockType machineBlockType = ResolveMachineBlockType();
+            BlockTextureMapping? mappingResult = world.blockData.GetMapping(machineBlockType);
             if (mappingResult.HasValue)
             {
-                BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(origin, BlockType.StoneCrusher);
+                BlockPlacementAxis placementAxis = world.GetPlacementAxisAt(origin, machineBlockType);
                 Vector3Int localOffset = blockPosition - origin;
                 return BlockShapeUtility.IsLocalOffsetInsideDynamicOccupancy(
                     localOffset,
@@ -875,6 +874,28 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         return Vector3Int.FloorToInt(transform.position);
     }
 
+    private BlockType ResolveMachineBlockType()
+    {
+        if (IsCrusherMachineBlockType(BlockType))
+            return BlockType;
+
+        World world = World.Instance;
+        if (world != null)
+        {
+            BlockType worldBlockType = world.GetBlockAt(ResolveCrusherBlockPosition());
+            if (IsCrusherMachineBlockType(worldBlockType))
+                return worldBlockType;
+        }
+
+        return BlockType.StoneCrusher;
+    }
+
+    private static bool IsCrusherMachineBlockType(BlockType blockType)
+    {
+        return blockType == BlockType.StoneCrusher ||
+               blockType == BlockType.MagneticSeparator;
+    }
+
     private bool TryConsumeEnergyAtCrusherFootprint(World world, float amount)
     {
         if (world == null)
@@ -901,6 +922,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool TryConsumeEnergyAtAdjacentCrusherBlocks(World world, Vector3Int origin, float amount)
     {
+        BlockType machineBlockType = ResolveMachineBlockType();
         for (int y = 0; y <= 1; y++)
         {
             for (int z = -1; z <= 3; z++)
@@ -908,8 +930,12 @@ public sealed class StoneCrusher : DynamicVoxelBlock
                 for (int x = -1; x <= 3; x++)
                 {
                     Vector3Int candidate = origin + new Vector3Int(x, y, z);
-                    if (candidate == origin || world.GetBlockAt(candidate) != BlockType.StoneCrusher)
+                    if (candidate == origin ||
+                        world.GetBlockAt(candidate) != machineBlockType ||
+                        !ContainsWorldBlock(candidate))
+                    {
                         continue;
+                    }
 
                     if (world.TryConsumeElectricalEnergy(candidate, amount))
                         return true;
@@ -922,6 +948,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool HasEnergyAtAdjacentCrusherBlocks(World world, Vector3Int origin, float amount)
     {
+        BlockType machineBlockType = ResolveMachineBlockType();
         for (int y = 0; y <= 1; y++)
         {
             for (int z = -1; z <= 3; z++)
@@ -929,8 +956,12 @@ public sealed class StoneCrusher : DynamicVoxelBlock
                 for (int x = -1; x <= 3; x++)
                 {
                     Vector3Int candidate = origin + new Vector3Int(x, y, z);
-                    if (candidate == origin || world.GetBlockAt(candidate) != BlockType.StoneCrusher)
+                    if (candidate == origin ||
+                        world.GetBlockAt(candidate) != machineBlockType ||
+                        !ContainsWorldBlock(candidate))
+                    {
                         continue;
+                    }
 
                     if (world.HasElectricalEnergy(candidate, amount))
                         return true;
@@ -939,6 +970,36 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         }
 
         return false;
+    }
+
+    private float GetEnergyChargeAtCrusherFootprint(World world)
+    {
+        if (world == null)
+            return 0f;
+
+        Vector3Int origin = ResolveCrusherBlockPosition();
+        float charge01 = world.GetElectricalEnergyCharge01(origin);
+        BlockType machineBlockType = ResolveMachineBlockType();
+        for (int y = 0; y <= 1; y++)
+        {
+            for (int z = -1; z <= 3; z++)
+            {
+                for (int x = -1; x <= 3; x++)
+                {
+                    Vector3Int candidate = origin + new Vector3Int(x, y, z);
+                    if (candidate == origin ||
+                        world.GetBlockAt(candidate) != machineBlockType ||
+                        !ContainsWorldBlock(candidate))
+                    {
+                        continue;
+                    }
+
+                    charge01 = Mathf.Max(charge01, world.GetElectricalEnergyCharge01(candidate));
+                }
+            }
+        }
+
+        return Mathf.Clamp01(charge01);
     }
 
     private void ResetScanTimer()

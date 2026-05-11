@@ -15,7 +15,16 @@ public sealed class StoneCrusherUIController : MonoBehaviour
     [SerializeField] private Slot inputSlot;
     [SerializeField] private Slot outputSlot;
     [SerializeField] private Image crushProgressFillImage;
+    [SerializeField] private Image energyFillImage;
     [SerializeField] private Toggle dropOutputToggle;
+
+    [Header("Energy UI")]
+    [SerializeField, Range(0f, 1f)] private float criticalEnergyThreshold = 0.25f;
+    [SerializeField, Range(0f, 1f)] private float mediumEnergyThreshold = 0.6f;
+    [SerializeField] private Color criticalEnergyColor = new Color(0.9f, 0.12f, 0.08f, 1f);
+    [SerializeField] private Color mediumEnergyColor = new Color(1f, 0.78f, 0.12f, 1f);
+    [SerializeField] private Color safeEnergyColor = new Color(0.18f, 0.78f, 0.24f, 1f);
+    [SerializeField] private Color emptyEnergyColor = new Color(0.35f, 0.35f, 0.35f, 1f);
 
     [Header("Interaction")]
     [SerializeField] private bool rightClickOpensCrusher = true;
@@ -317,10 +326,36 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         if (crushProgressFillImage != null)
             crushProgressFillImage.fillAmount = activeCrusher != null ? activeCrusher.CrushProgress01 : 0f;
 
+        RefreshEnergyUi();
+
         suppressToggleCallbacks = true;
         if (dropOutputToggle != null)
             dropOutputToggle.SetIsOnWithoutNotify(activeCrusher != null && activeCrusher.DropOutputToWorld);
         suppressToggleCallbacks = false;
+    }
+
+    private void RefreshEnergyUi()
+    {
+        if (energyFillImage == null)
+            return;
+
+        float energyLevel = activeCrusher != null ? activeCrusher.EnergyCharge01 : 0f;
+        energyFillImage.fillAmount = energyLevel;
+        energyFillImage.color = ResolveEnergyColor(energyLevel);
+    }
+
+    private Color ResolveEnergyColor(float energyLevel)
+    {
+        if (activeCrusher == null || energyLevel <= 0.0001f)
+            return emptyEnergyColor;
+
+        if (energyLevel <= criticalEnergyThreshold)
+            return criticalEnergyColor;
+
+        if (energyLevel <= mediumEnergyThreshold)
+            return mediumEnergyColor;
+
+        return safeEnergyColor;
     }
 
     private static void SetSlotItem(Slot slot, Item item, int amount)

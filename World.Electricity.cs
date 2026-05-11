@@ -113,6 +113,22 @@ public partial class World
             : 0f;
     }
 
+    public float GetElectricalEnergyCharge01(Vector3Int consumerPos)
+    {
+        if (!enableElectricitySystem)
+            return 1f;
+
+        EnsureElectricitySimulationReady();
+
+        if (!electricalNetworkByPosition.TryGetValue(consumerPos, out ElectricalNetworkRuntime network))
+            return 0f;
+
+        float capacity = GetElectricalEnergyCapacity(network);
+        return capacity > 0f
+            ? Mathf.Clamp01(GetAvailableElectricalEnergy(network) / capacity)
+            : 0f;
+    }
+
     public bool IsElectricalEndpointPowered(Vector3Int worldPos)
     {
         if (!enableElectricitySystem)
@@ -1132,6 +1148,16 @@ public partial class World
         }
 
         return available;
+    }
+
+    private float GetElectricalEnergyCapacity(ElectricalNetworkRuntime network)
+    {
+        if (network == null)
+            return 0f;
+
+        float capacity = Mathf.Max(0f, network.directCapacity);
+        capacity += network.batteryPositions.Count * GetBatteryCapacity();
+        return capacity;
     }
 
     private void ConsumeElectricalEnergy(ElectricalNetworkRuntime network, float amount)

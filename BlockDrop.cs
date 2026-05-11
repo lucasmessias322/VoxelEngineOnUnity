@@ -164,6 +164,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private bool hasLastStackSplitSplitterPos;
     private Vector3Int lastStackSplitSplitterPos;
     private float mergeSuppressedUntil;
+    private int conveyorRoutingKey;
 
     private struct FaceDef
     {
@@ -217,6 +218,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private static readonly Dictionary<Vector3Int, HashSet<BlockDrop>> ActiveDropsByCell = new Dictionary<Vector3Int, HashSet<BlockDrop>>();
     private static readonly List<BlockDrop> MergeCandidates = new List<BlockDrop>(64);
     private static Transform poolContainer;
+    private static int nextConveyorRoutingKey;
 
     private MeshFilter meshFilter;
     private MeshRenderer meshRenderer;
@@ -273,6 +275,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         drop.isHeldByRoboticArm = false;
         drop.hasLastStackSplitSplitterPos = false;
         drop.mergeSuppressedUntil = 0f;
+        drop.conveyorRoutingKey = AllocateConveyorRoutingKey();
         drop.transform.localScale = Vector3.one * drop.dropScale;
         drop.spawnTime = Time.time;
         drop.despawnStartTime = drop.spawnTime;
@@ -373,6 +376,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         isCollected = false;
         hasLastStackSplitSplitterPos = false;
         mergeSuppressedUntil = 0f;
+        conveyorRoutingKey = AllocateConveyorRoutingKey();
         transform.SetParent(null, true);
         transform.position = worldPosition;
         transform.rotation = Quaternion.identity;
@@ -2219,6 +2223,8 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
         maxStackAmount = Mathf.Max(1, maxStackAmount);
         stackAmount = Mathf.Clamp(stackAmount, 1, maxStackAmount);
+        if (conveyorRoutingKey == 0)
+            conveyorRoutingKey = AllocateConveyorRoutingKey();
         EnsureRuntimeComponents();
     }
 
@@ -2503,7 +2509,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                GetHashCode(),
+                conveyorRoutingKey,
                 ResolveItemForConveyorFilter(),
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
@@ -2527,7 +2533,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                GetHashCode(),
+                conveyorRoutingKey,
                 ResolveItemForConveyorFilter(),
                 out Vector3 conveyorVelocity))
         {
@@ -2603,6 +2609,18 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private Item ResolveItemForConveyorFilter()
     {
         return BlockItemCatalog.TryGetItemForBlock(blockType, out Item mappedItem) ? mappedItem : null;
+    }
+
+    private static int AllocateConveyorRoutingKey()
+    {
+        unchecked
+        {
+            nextConveyorRoutingKey++;
+            if (nextConveyorRoutingKey == 0)
+                nextConveyorRoutingKey++;
+
+            return nextConveyorRoutingKey;
+        }
     }
 
     private void TryMergeNearbyDrops()
@@ -2790,6 +2808,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         isHeldByRoboticArm = false;
         hasLastStackSplitSplitterPos = false;
         mergeSuppressedUntil = 0f;
+        conveyorRoutingKey = 0;
     }
 }
 
@@ -2839,6 +2858,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private static readonly Dictionary<Vector3Int, HashSet<InventoryItemDrop>> ActiveDropsByCell = new Dictionary<Vector3Int, HashSet<InventoryItemDrop>>();
     private static readonly List<InventoryItemDrop> MergeCandidates = new List<InventoryItemDrop>(64);
     private static Transform poolContainer;
+    private static int nextConveyorRoutingKey;
 
     private float spawnTime;
     private float despawnStartTime;
@@ -2857,6 +2877,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     private bool hasLastStackSplitSplitterPos;
     private Vector3Int lastStackSplitSplitterPos;
     private float mergeSuppressedUntil;
+    private int conveyorRoutingKey;
     private Transform visualRoot;
     private SpriteRenderer spriteRenderer;
 
@@ -2943,6 +2964,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         mergeDelaySeconds = Mathf.Max(0f, mergeDelaySeconds);
         maxStackAmount = Mathf.Max(1, maxStackAmount);
         stackAmount = Mathf.Clamp(stackAmount, 1, maxStackAmount);
+        if (conveyorRoutingKey == 0)
+            conveyorRoutingKey = AllocateConveyorRoutingKey();
         EnsureRuntimeComponents();
     }
 
@@ -2958,6 +2981,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isHeldByRoboticArm = false;
         hasLastStackSplitSplitterPos = false;
         mergeSuppressedUntil = 0f;
+        conveyorRoutingKey = AllocateConveyorRoutingKey();
         visualSpinAngle = Random.Range(0f, 360f);
 
         transform.position = worldPosition;
@@ -3046,6 +3070,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isCollected = false;
         hasLastStackSplitSplitterPos = false;
         mergeSuppressedUntil = 0f;
+        conveyorRoutingKey = AllocateConveyorRoutingKey();
         transform.SetParent(null, true);
         transform.position = worldPosition;
         transform.rotation = Quaternion.identity;
@@ -3396,7 +3421,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                GetHashCode(),
+                conveyorRoutingKey,
                 item,
                 out Vector3 conveyorVelocity) ||
             conveyorVelocity.sqrMagnitude <= 0.0001f)
@@ -3420,7 +3445,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
                 conveyorSpeed,
                 conveyorCenteringStrength,
                 conveyorMaxCenteringSpeed,
-                GetHashCode(),
+                conveyorRoutingKey,
                 item,
                 out Vector3 conveyorVelocity))
         {
@@ -3491,6 +3516,18 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         hasLastStackSplitSplitterPos = true;
         lastStackSplitSplitterPos = splitterPos;
         mergeSuppressedUntil = Mathf.Max(mergeSuppressedUntil, Time.time + SplitterSplitMergeSuppressSeconds);
+    }
+
+    private static int AllocateConveyorRoutingKey()
+    {
+        unchecked
+        {
+            nextConveyorRoutingKey++;
+            if (nextConveyorRoutingKey == 0)
+                nextConveyorRoutingKey++;
+
+            return nextConveyorRoutingKey;
+        }
     }
 
     private void TryMergeNearbyDrops()
@@ -3745,6 +3782,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         isHeldByRoboticArm = false;
         hasLastStackSplitSplitterPos = false;
         mergeSuppressedUntil = 0f;
+        conveyorRoutingKey = 0;
         item = null;
 
         if (spriteRenderer != null)
