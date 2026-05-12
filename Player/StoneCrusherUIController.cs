@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -14,9 +15,15 @@ public sealed class StoneCrusherUIController : MonoBehaviour
     [SerializeField] private GameObject crusherPanel;
     [SerializeField] private Slot inputSlot;
     [SerializeField] private Slot outputSlot;
+    [SerializeField] private Slot[] outputSlots;
     [SerializeField] private Image crushProgressFillImage;
     [SerializeField] private Image energyFillImage;
     [SerializeField] private Toggle dropOutputToggle;
+
+    [Header("Magnetic Separator UI")]
+    [SerializeField, Min(1)] private int magneticSeparatorOutputSlotCount = 3;
+    [SerializeField] private bool createMissingMagneticSeparatorOutputSlots = true;
+    [SerializeField, Min(0f)] private float generatedOutputSlotSpacing = 56f;
 
     [Header("Energy UI")]
     [SerializeField, Range(0f, 1f)] private float criticalEnergyThreshold = 0.25f;
@@ -32,12 +39,13 @@ public sealed class StoneCrusherUIController : MonoBehaviour
     [SerializeField] private bool closeWhenInventoryCloses = true;
     [SerializeField] private bool closeWhenTooFar = true;
     [SerializeField] private bool closeWhenCrusherRemoved = true;
-    [Min(0.5f)] [SerializeField] private float maxInteractDistance = 4f;
+    [Min(0.5f)][SerializeField] private float maxInteractDistance = 4f;
 
     private StoneCrusher activeCrusher;
     private Vector3Int activeCrusherBlock = InvalidBlock;
     private bool suppressSlotCallbacks;
     private bool suppressToggleCallbacks;
+    private readonly List<Slot> resolvedOutputSlots = new List<Slot>(3);
 
     public bool IsCrusherOpen => activeCrusher != null && crusherPanel != null && crusherPanel.activeSelf;
 
@@ -51,6 +59,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
 
         Instance = this;
         ResolveReferences();
+        ResolveOutputSlots();
         ConfigureSlots();
         SubscribeSlots();
         SubscribeToggle();
@@ -157,6 +166,17 @@ public sealed class StoneCrusherUIController : MonoBehaviour
             outputSlot.SetRequireInventorySlotMapping(false);
             outputSlot.SetManualInteraction(canPickup: true, canInsert: false);
         }
+
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
+        {
+            Slot slot = resolvedOutputSlots[i];
+            if (slot == null)
+                continue;
+
+            slot.SetRequireInventorySlotMapping(false);
+            slot.SetManualInteraction(canPickup: true, canInsert: false);
+            slot.gameObject.SetActive(i == 0);
+        }
     }
 
     private void SubscribeSlots()
@@ -167,12 +187,16 @@ public sealed class StoneCrusherUIController : MonoBehaviour
             inputSlot.BeforePlaceIntoSlot += HandleInputBeforePlace;
         }
 
-        if (outputSlot != null)
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
         {
-            outputSlot.SlotChanged += HandleSlotChanged;
-            outputSlot.BeforePlaceIntoSlot += HandleOutputBeforePlace;
-            outputSlot.BeforeTakeFromSlot += HandleOutputBeforeTake;
-            outputSlot.QuickTransferRequested += HandleOutputQuickTransfer;
+            Slot slot = resolvedOutputSlots[i];
+            if (slot == null)
+                continue;
+
+            slot.SlotChanged += HandleSlotChanged;
+            slot.BeforePlaceIntoSlot += HandleOutputBeforePlace;
+            slot.BeforeTakeFromSlot += HandleOutputBeforeTake;
+            slot.QuickTransferRequested += HandleOutputQuickTransfer;
         }
     }
 
@@ -184,12 +208,16 @@ public sealed class StoneCrusherUIController : MonoBehaviour
             inputSlot.BeforePlaceIntoSlot -= HandleInputBeforePlace;
         }
 
-        if (outputSlot != null)
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
         {
-            outputSlot.SlotChanged -= HandleSlotChanged;
-            outputSlot.BeforePlaceIntoSlot -= HandleOutputBeforePlace;
-            outputSlot.BeforeTakeFromSlot -= HandleOutputBeforeTake;
-            outputSlot.QuickTransferRequested -= HandleOutputQuickTransfer;
+            Slot slot = resolvedOutputSlots[i];
+            if (slot == null)
+                continue;
+
+            slot.SlotChanged -= HandleSlotChanged;
+            slot.BeforePlaceIntoSlot -= HandleOutputBeforePlace;
+            slot.BeforeTakeFromSlot -= HandleOutputBeforeTake;
+            slot.QuickTransferRequested -= HandleOutputQuickTransfer;
         }
     }
 
@@ -233,7 +261,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         return activeCrusher != null &&
                currentItem != null &&
                amountToTake > 0 &&
-               amountToTake <= activeCrusher.OutputBufferAmount;
+               amountToTake <= GetDisplayedOutputAmount(slot);
     }
 
     private bool HandleOutputQuickTransfer(Slot slot)
@@ -242,7 +270,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
             return false;
 
         Item item = slot.item;
-        int amount = Mathf.Min(slot.amount, activeCrusher.OutputBufferAmount);
+        int amount = Mathf.Min(slot.amount, GetDisplayedOutputAmount(slot));
         if (item == null || amount <= 0)
             return false;
 
@@ -251,7 +279,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         if (moved <= 0)
             return false;
 
-        activeCrusher.RemoveOutputBuffer(moved);
+        activeCrusher.RemoveOutputBuffer(GetOutputSlotIndex(slot), moved);
         RefreshUi();
         return true;
     }
@@ -267,7 +295,7 @@ public sealed class StoneCrusherUIController : MonoBehaviour
             return;
         }
 
-        if (slot == outputSlot)
+        if (IsOutputSlot(slot))
             SyncOutputSlotMutation(slot);
     }
 
@@ -299,26 +327,27 @@ public sealed class StoneCrusherUIController : MonoBehaviour
     private void SyncOutputSlotMutation(Slot slot)
     {
         int displayedAmount = slot.IsEmpty ? 0 : slot.amount;
-        int realAmount = activeCrusher.OutputBufferAmount;
+        int realAmount = GetDisplayedOutputAmount(slot);
         if (displayedAmount < realAmount)
-            activeCrusher.RemoveOutputBuffer(realAmount - displayedAmount);
+            activeCrusher.RemoveOutputBuffer(GetOutputSlotIndex(slot), realAmount - displayedAmount);
 
         RefreshUi();
     }
 
     private void RefreshUi()
     {
+        RefreshOutputSlotVisibility();
         suppressSlotCallbacks = true;
 
         if (activeCrusher != null)
         {
             SetSlotItem(inputSlot, activeCrusher.InputItem, activeCrusher.InputBufferAmount);
-            SetSlotItem(outputSlot, activeCrusher.OutputItem, activeCrusher.OutputBufferAmount);
+            RefreshOutputSlots();
         }
         else
         {
             ClearSlot(inputSlot);
-            ClearSlot(outputSlot);
+            ClearOutputSlots();
         }
 
         suppressSlotCallbacks = false;
@@ -376,6 +405,142 @@ public sealed class StoneCrusherUIController : MonoBehaviour
     {
         if (slot != null)
             slot.SetContents(null, 0);
+    }
+
+    private void RefreshOutputSlots()
+    {
+        int activeSlotCount = GetActiveOutputSlotCount();
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
+        {
+            Slot slot = resolvedOutputSlots[i];
+            if (i < activeSlotCount)
+                SetSlotItem(slot, activeCrusher.GetOutputItem(i), activeCrusher.GetOutputBufferAmount(i));
+            else
+                ClearSlot(slot);
+        }
+    }
+
+    private void ClearOutputSlots()
+    {
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
+            ClearSlot(resolvedOutputSlots[i]);
+    }
+
+    private void RefreshOutputSlotVisibility()
+    {
+        int activeSlotCount = GetActiveOutputSlotCount();
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
+        {
+            Slot slot = resolvedOutputSlots[i];
+            if (slot != null)
+                slot.gameObject.SetActive(i < activeSlotCount);
+        }
+    }
+
+    private int GetActiveOutputSlotCount()
+    {
+        if (activeCrusher == null)
+            return resolvedOutputSlots.Count > 0 ? 1 : 0;
+
+        int requestedCount = Mathf.Max(1, activeCrusher.OutputSlotCount);
+        return Mathf.Clamp(requestedCount, 0, resolvedOutputSlots.Count);
+    }
+
+    private int GetDisplayedOutputAmount(Slot slot)
+    {
+        int slotIndex = GetOutputSlotIndex(slot);
+        if (slotIndex < 0)
+            return 0;
+
+        return GetDisplayedOutputAmount(slotIndex, GetActiveOutputSlotCount());
+    }
+
+    private int GetDisplayedOutputAmount(int slotIndex, int activeSlotCount)
+    {
+        if (activeCrusher == null || slotIndex < 0 || slotIndex >= activeSlotCount)
+            return 0;
+
+        return activeCrusher.GetOutputBufferAmount(slotIndex);
+    }
+
+    private bool IsOutputSlot(Slot slot)
+    {
+        return GetOutputSlotIndex(slot) >= 0;
+    }
+
+    private int GetOutputSlotIndex(Slot slot)
+    {
+        if (slot == null)
+            return -1;
+
+        for (int i = 0; i < resolvedOutputSlots.Count; i++)
+        {
+            if (resolvedOutputSlots[i] == slot)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private void ResolveOutputSlots()
+    {
+        resolvedOutputSlots.Clear();
+        AddOutputSlot(outputSlot);
+
+        if (outputSlots != null)
+        {
+            for (int i = 0; i < outputSlots.Length; i++)
+                AddOutputSlot(outputSlots[i]);
+        }
+
+        if (!createMissingMagneticSeparatorOutputSlots || outputSlot == null)
+            return;
+
+        int requiredCount = Mathf.Max(1, magneticSeparatorOutputSlotCount);
+        while (resolvedOutputSlots.Count < requiredCount)
+        {
+            Slot generatedSlot = CreateGeneratedOutputSlot(resolvedOutputSlots.Count);
+            if (generatedSlot == null)
+                break;
+
+            AddOutputSlot(generatedSlot);
+        }
+    }
+
+    private void AddOutputSlot(Slot slot)
+    {
+        if (slot == null || resolvedOutputSlots.Contains(slot))
+            return;
+
+        resolvedOutputSlots.Add(slot);
+    }
+
+    private Slot CreateGeneratedOutputSlot(int slotIndex)
+    {
+        if (outputSlot == null || outputSlot.transform == null || outputSlot.transform.parent == null)
+            return null;
+
+        GameObject slotObject = Instantiate(outputSlot.gameObject, outputSlot.transform.parent);
+        slotObject.name = $"Output Slot ({slotIndex + 1})";
+        slotObject.SetActive(false);
+
+        RectTransform sourceRect = outputSlot.transform as RectTransform;
+        RectTransform generatedRect = slotObject.transform as RectTransform;
+        LayoutGroup parentLayout = outputSlot.transform.parent.GetComponent<LayoutGroup>();
+        if (sourceRect != null && generatedRect != null && parentLayout == null)
+        {
+            generatedRect.anchorMin = sourceRect.anchorMin;
+            generatedRect.anchorMax = sourceRect.anchorMax;
+            generatedRect.pivot = sourceRect.pivot;
+            generatedRect.sizeDelta = sourceRect.sizeDelta;
+            generatedRect.anchoredPosition = sourceRect.anchoredPosition + new Vector2(generatedOutputSlotSpacing * slotIndex, 0f);
+        }
+
+        Slot generatedSlot = slotObject.GetComponent<Slot>();
+        if (generatedSlot != null)
+            generatedSlot.SetContents(null, 0);
+
+        return generatedSlot;
     }
 
     private bool ShouldCloseCrusher()

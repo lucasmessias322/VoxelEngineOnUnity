@@ -26,6 +26,14 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     [SerializeField] private bool useOutputChance;
     [SerializeField, Range(0f, 100f)] private float outputChancePercent = 100f;
 
+    [Header("Magnetic Separator Outputs")]
+    [SerializeField] private OutputYield[] magneticSeparatorOutputs =
+    {
+        new OutputYield { resourceItemPath = "Itens/Item/Iron_ingot", fallbackBlockType = BlockType.IronOre, chancePercent = 5f, maxBufferAmount = 128 },
+        new OutputYield { resourceItemPath = "Itens/Item/Gold_ingot", fallbackBlockType = BlockType.GoldOre, chancePercent = 1f, maxBufferAmount = 128 },
+        new OutputYield { resourceItemPath = "Itens/Item/copper_ingot", fallbackBlockType = BlockType.Copper_ore, chancePercent = 10f, maxBufferAmount = 128 }
+    };
+
     [Header("Detection")]
     [SerializeField, Min(0.05f)] private float entryRadius = 0.55f;
     [SerializeField, Min(0.05f)] private float entryVerticalTolerance = 2f;
@@ -78,6 +86,17 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     private Vector3 initialMovingQuadLocalPosition;
     private bool hasInitialMovingQuadLocalPosition;
 
+    [System.Serializable]
+    private sealed class OutputYield
+    {
+        public Item item;
+        public string resourceItemPath;
+        public BlockType fallbackBlockType = BlockType.Air;
+        [Range(0f, 100f)] public float chancePercent = 100f;
+        [Min(1)] public int maxBufferAmount = 128;
+        [Min(0)] public int bufferedAmount;
+    }
+
     private sealed class CrusherRuntimeState
     {
         public Item inputItem;
@@ -94,8 +113,19 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         public int maxOutputBufferAmount;
         public int bufferedOutputAmount;
         public bool storeOutputInInternalBuffer;
+        public MagneticOutputRuntimeState[] magneticOutputs;
         public float crushTimer;
         public bool isCrushing;
+    }
+
+    private sealed class MagneticOutputRuntimeState
+    {
+        public Item item;
+        public string resourceItemPath;
+        public BlockType fallbackBlockType;
+        public float chancePercent;
+        public int maxBufferAmount;
+        public int bufferedAmount;
     }
 
     public Item InputItem => ResolveInputItem();
@@ -108,6 +138,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     public int OutputBufferAmount => bufferedOutputAmount;
     public int MaxInputBufferAmount => Mathf.Max(1, maxInputBufferAmount);
     public int MaxOutputBufferAmount => Mathf.Max(1, maxOutputBufferAmount);
+    public int OutputSlotCount => UsesMagneticSeparatorOutputs() ? Mathf.Max(1, GetMagneticOutputCount()) : 1;
     public bool DropOutputToWorld => !storeOutputInInternalBuffer;
     public float CrushProgress01 => isCrushing ? Mathf.Clamp01(crushTimer / Mathf.Max(0.05f, crushDurationSeconds)) : 0f;
     public float EnergyCharge01 => requireElectricity ? GetEnergyChargeAtCrusherFootprint(World.Instance) : 1f;
@@ -214,12 +245,12 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     private bool CanConvert()
     {
         bool hasInput = ResolveInputItem() != null || ResolveInputBlockType() != BlockType.Air;
-        bool hasOutputItem = ResolveOutputItem() != null;
-        BlockType resolvedOutputBlockType = ResolveOutputBlockType();
-        bool hasOutputBlock = resolvedOutputBlockType != BlockType.Air && resolvedOutputBlockType != BlockType.Bedrock;
+        bool hasOutput = UsesMagneticSeparatorOutputs()
+            ? HasAnyMagneticSeparatorOutput()
+            : HasSingleOutput();
 
         return hasInput &&
-               (hasOutputItem || hasOutputBlock) &&
+               hasOutput &&
                World.Instance != null;
     }
 
@@ -340,11 +371,31 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool CanAcceptCrushedOutput()
     {
-        return !storeOutputInInternalBuffer || bufferedOutputAmount < MaxOutputBufferAmount;
+        if (!storeOutputInInternalBuffer)
+            return true;
+
+        if (!UsesMagneticSeparatorOutputs())
+            return bufferedOutputAmount < MaxOutputBufferAmount;
+
+        int outputCount = GetMagneticOutputCount();
+        for (int i = 0; i < outputCount; i++)
+        {
+            OutputYield output = magneticSeparatorOutputs[i];
+            if (!IsValidMagneticSeparatorOutput(output))
+                continue;
+
+            if (output.bufferedAmount >= GetMagneticMaxBufferAmount(output))
+                return false;
+        }
+
+        return true;
     }
 
     private bool TryStoreOrOutputCrushedGravel()
     {
+        if (UsesMagneticSeparatorOutputs())
+            return TryStoreOrOutputMagneticSeparatorOutputs();
+
         if (!ShouldCreateOutput())
             return true;
 
@@ -360,12 +411,40 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         return TryOutputCrushedGravelDrop();
     }
 
+    private bool TryStoreOrOutputMagneticSeparatorOutputs()
+    {
+        int outputCount = GetMagneticOutputCount();
+        for (int i = 0; i < outputCount; i++)
+        {
+            OutputYield output = magneticSeparatorOutputs[i];
+            if (!IsValidMagneticSeparatorOutput(output) || !ShouldCreateOutput(output.chancePercent))
+                continue;
+
+            if (storeOutputInInternalBuffer)
+            {
+                int maxAmount = GetMagneticMaxBufferAmount(output);
+                if (output.bufferedAmount >= maxAmount)
+                    return false;
+
+                output.bufferedAmount = Mathf.Clamp(output.bufferedAmount + 1, 0, maxAmount);
+                continue;
+            }
+
+            if (!TrySpawnMagneticSeparatorOutputDrop(output, 1))
+                return false;
+        }
+
+        return true;
+    }
+
     private bool ShouldCreateOutput()
     {
-        if (!useOutputChance)
-            return true;
+        return !useOutputChance || ShouldCreateOutput(outputChancePercent);
+    }
 
-        float chance01 = Mathf.Clamp01(outputChancePercent / 100f);
+    private static bool ShouldCreateOutput(float chancePercent)
+    {
+        float chance01 = Mathf.Clamp01(chancePercent / 100f);
         return chance01 >= 1f || (chance01 > 0f && Random.value < chance01);
     }
 
@@ -396,24 +475,38 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     private bool TrySpawnOutputDrop(int amount)
     {
+        return TrySpawnOutputDrop(ResolveOutputItem(), ResolveOutputBlockType(), amount);
+    }
+
+    private bool TrySpawnMagneticSeparatorOutputDrop(OutputYield output, int amount)
+    {
+        if (!TrySpawnOutputDrop(ResolveMagneticOutputItem(output), ResolveMagneticOutputBlockType(output), amount))
+        {
+            Debug.LogWarning($"[StoneCrusher] Falha ao gerar {ResolveMagneticOutputName(output)} na saida.");
+            return false;
+        }
+
+        return true;
+    }
+
+    private bool TrySpawnOutputDrop(Item item, BlockType blockType, int amount)
+    {
         if (amount <= 0)
             return true;
 
-        Item resolvedOutputItem = ResolveOutputItem();
         Vector3 exitPosition = ResolveExitPosition();
         Vector3 throwDirection = ResolveOutputThrowDirection();
-        if (resolvedOutputItem != null)
+        if (item != null)
         {
-            if (resolvedOutputItem.TryGetBlockType(out BlockType itemBlockType))
+            if (item.TryGetBlockType(out BlockType itemBlockType))
                 return BlockDrop.Spawn(World.Instance, exitPosition, itemBlockType, amount, throwDirection);
 
-            return InventoryItemDrop.Spawn(resolvedOutputItem, amount, exitPosition, throwDirection);
+            return InventoryItemDrop.Spawn(item, amount, exitPosition, throwDirection);
         }
 
-        BlockType resolvedOutputBlockType = ResolveOutputBlockType();
-        return resolvedOutputBlockType != BlockType.Air &&
-               resolvedOutputBlockType != BlockType.Bedrock &&
-               BlockDrop.Spawn(World.Instance, exitPosition, resolvedOutputBlockType, amount, throwDirection);
+        return blockType != BlockType.Air &&
+               blockType != BlockType.Bedrock &&
+               BlockDrop.Spawn(World.Instance, exitPosition, blockType, amount, throwDirection);
     }
 
     public void SetDropOutputToWorld(bool dropToWorld)
@@ -423,8 +516,8 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             return;
 
         storeOutputInInternalBuffer = newStoreOutput;
-        if (dropToWorld && bufferedOutputAmount > 0 && TryOutputCrushedGravelDrop(bufferedOutputAmount))
-            bufferedOutputAmount = 0;
+        if (dropToWorld)
+            FlushOutputBuffersToWorld();
 
         StoreRuntimeState();
     }
@@ -459,7 +552,18 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     public int RemoveOutputBuffer(int amount)
     {
-        if (amount <= 0 || bufferedOutputAmount <= 0)
+        return RemoveOutputBuffer(0, amount);
+    }
+
+    public int RemoveOutputBuffer(int outputIndex, int amount)
+    {
+        if (amount <= 0)
+            return 0;
+
+        if (UsesMagneticSeparatorOutputs())
+            return RemoveMagneticOutputBuffer(outputIndex, amount);
+
+        if (bufferedOutputAmount <= 0)
             return 0;
 
         int removed = Mathf.Min(amount, bufferedOutputAmount);
@@ -475,7 +579,141 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
     public int GetOutputBufferFreeSpace()
     {
+        return GetOutputBufferFreeSpace(0);
+    }
+
+    public int GetOutputBufferFreeSpace(int outputIndex)
+    {
+        if (UsesMagneticSeparatorOutputs())
+        {
+            OutputYield output = GetMagneticOutput(outputIndex);
+            return output != null ? Mathf.Max(0, GetMagneticMaxBufferAmount(output) - output.bufferedAmount) : 0;
+        }
+
         return Mathf.Max(0, MaxOutputBufferAmount - bufferedOutputAmount);
+    }
+
+    public Item GetOutputItem(int outputIndex)
+    {
+        if (!UsesMagneticSeparatorOutputs())
+            return outputIndex == 0 ? ResolveOutputItem() : null;
+
+        return ResolveMagneticOutputItem(GetMagneticOutput(outputIndex));
+    }
+
+    public BlockType GetOutputBlockType(int outputIndex)
+    {
+        if (!UsesMagneticSeparatorOutputs())
+            return outputIndex == 0 ? ResolveOutputBlockType() : BlockType.Air;
+
+        return ResolveMagneticOutputBlockType(GetMagneticOutput(outputIndex));
+    }
+
+    public int GetOutputBufferAmount(int outputIndex)
+    {
+        if (!UsesMagneticSeparatorOutputs())
+            return outputIndex == 0 ? bufferedOutputAmount : 0;
+
+        OutputYield output = GetMagneticOutput(outputIndex);
+        return output != null ? Mathf.Max(0, output.bufferedAmount) : 0;
+    }
+
+    public int GetMaxOutputBufferAmount(int outputIndex)
+    {
+        if (!UsesMagneticSeparatorOutputs())
+            return outputIndex == 0 ? MaxOutputBufferAmount : 0;
+
+        OutputYield output = GetMagneticOutput(outputIndex);
+        return output != null ? GetMagneticMaxBufferAmount(output) : 0;
+    }
+
+    private void FlushOutputBuffersToWorld()
+    {
+        if (!UsesMagneticSeparatorOutputs())
+        {
+            if (bufferedOutputAmount > 0 && TryOutputCrushedGravelDrop(bufferedOutputAmount))
+                bufferedOutputAmount = 0;
+
+            return;
+        }
+
+        int outputCount = GetMagneticOutputCount();
+        for (int i = 0; i < outputCount; i++)
+        {
+            OutputYield output = magneticSeparatorOutputs[i];
+            if (output == null || output.bufferedAmount <= 0)
+                continue;
+
+            if (TrySpawnMagneticSeparatorOutputDrop(output, output.bufferedAmount))
+                output.bufferedAmount = 0;
+        }
+    }
+
+    private int RemoveMagneticOutputBuffer(int outputIndex, int amount)
+    {
+        OutputYield output = GetMagneticOutput(outputIndex);
+        if (output == null || output.bufferedAmount <= 0)
+            return 0;
+
+        int removed = Mathf.Min(amount, output.bufferedAmount);
+        output.bufferedAmount -= removed;
+        StoreRuntimeState();
+        return removed;
+    }
+
+    private bool UsesMagneticSeparatorOutputs()
+    {
+        return IsMagneticSeparatorMachine() && GetMagneticOutputCount() > 0;
+    }
+
+    private int GetMagneticOutputCount()
+    {
+        return magneticSeparatorOutputs != null ? magneticSeparatorOutputs.Length : 0;
+    }
+
+    private OutputYield GetMagneticOutput(int outputIndex)
+    {
+        if (magneticSeparatorOutputs == null || outputIndex < 0 || outputIndex >= magneticSeparatorOutputs.Length)
+            return null;
+
+        return magneticSeparatorOutputs[outputIndex];
+    }
+
+    private bool HasSingleOutput()
+    {
+        bool hasOutputItem = ResolveOutputItem() != null;
+        BlockType resolvedOutputBlockType = ResolveOutputBlockType();
+        bool hasOutputBlock = resolvedOutputBlockType != BlockType.Air && resolvedOutputBlockType != BlockType.Bedrock;
+        return hasOutputItem || hasOutputBlock;
+    }
+
+    private bool HasAnyMagneticSeparatorOutput()
+    {
+        int outputCount = GetMagneticOutputCount();
+        for (int i = 0; i < outputCount; i++)
+        {
+            if (IsValidMagneticSeparatorOutput(magneticSeparatorOutputs[i]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool IsValidMagneticSeparatorOutput(OutputYield output)
+    {
+        if (output == null)
+            return false;
+
+        if (ResolveMagneticOutputItem(output) != null)
+            return true;
+
+        BlockType blockType = ResolveMagneticOutputBlockType(output);
+        return blockType != BlockType.Air && blockType != BlockType.Bedrock;
+    }
+
+    private static int GetMagneticMaxBufferAmount(OutputYield output)
+    {
+        return output != null ? Mathf.Max(1, output.maxBufferAmount) : 0;
     }
 
     private void ResetCrushing()
@@ -509,6 +747,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             maxOutputBufferAmount = maxOutputBufferAmount,
             bufferedOutputAmount = bufferedOutputAmount,
             storeOutputInInternalBuffer = storeOutputInInternalBuffer,
+            magneticOutputs = CaptureMagneticOutputRuntimeState(),
             crushTimer = crushTimer,
             isCrushing = isCrushing
         };
@@ -534,8 +773,80 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         maxOutputBufferAmount = Mathf.Max(1, state.maxOutputBufferAmount);
         bufferedOutputAmount = Mathf.Clamp(state.bufferedOutputAmount, 0, MaxOutputBufferAmount);
         storeOutputInInternalBuffer = state.storeOutputInInternalBuffer;
+        RestoreMagneticOutputRuntimeState(state.magneticOutputs);
         crushTimer = Mathf.Max(0f, state.crushTimer);
         isCrushing = state.isCrushing && bufferedInputAmount > 0;
+    }
+
+    private MagneticOutputRuntimeState[] CaptureMagneticOutputRuntimeState()
+    {
+        int outputCount = GetMagneticOutputCount();
+        if (outputCount <= 0)
+            return null;
+
+        MagneticOutputRuntimeState[] states = new MagneticOutputRuntimeState[outputCount];
+        for (int i = 0; i < outputCount; i++)
+        {
+            OutputYield output = magneticSeparatorOutputs[i];
+            if (output == null)
+                continue;
+
+            states[i] = new MagneticOutputRuntimeState
+            {
+                item = output.item,
+                resourceItemPath = output.resourceItemPath,
+                fallbackBlockType = output.fallbackBlockType,
+                chancePercent = output.chancePercent,
+                maxBufferAmount = output.maxBufferAmount,
+                bufferedAmount = output.bufferedAmount
+            };
+        }
+
+        return states;
+    }
+
+    private void RestoreMagneticOutputRuntimeState(MagneticOutputRuntimeState[] states)
+    {
+        if (states == null || states.Length == 0)
+            return;
+
+        EnsureMagneticOutputArray(states.Length);
+        int outputCount = Mathf.Min(states.Length, GetMagneticOutputCount());
+        for (int i = 0; i < outputCount; i++)
+        {
+            MagneticOutputRuntimeState state = states[i];
+            OutputYield output = magneticSeparatorOutputs[i];
+            if (state == null || output == null)
+                continue;
+
+            output.item = state.item;
+            output.resourceItemPath = state.resourceItemPath;
+            output.fallbackBlockType = state.fallbackBlockType;
+            output.chancePercent = state.chancePercent;
+            output.maxBufferAmount = Mathf.Max(1, state.maxBufferAmount);
+            output.bufferedAmount = Mathf.Clamp(state.bufferedAmount, 0, GetMagneticMaxBufferAmount(output));
+        }
+    }
+
+    private void EnsureMagneticOutputArray(int count)
+    {
+        count = Mathf.Max(0, count);
+        if (magneticSeparatorOutputs != null && magneticSeparatorOutputs.Length >= count)
+            return;
+
+        OutputYield[] oldOutputs = magneticSeparatorOutputs;
+        magneticSeparatorOutputs = new OutputYield[count];
+        if (oldOutputs != null)
+        {
+            for (int i = 0; i < oldOutputs.Length; i++)
+                magneticSeparatorOutputs[i] = oldOutputs[i];
+        }
+
+        for (int i = 0; i < magneticSeparatorOutputs.Length; i++)
+        {
+            if (magneticSeparatorOutputs[i] == null)
+                magneticSeparatorOutputs[i] = new OutputYield();
+        }
     }
 
     private bool ShouldKeepStateAfterDespawn()
@@ -626,6 +937,36 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         return legacyOutputBlockType;
     }
 
+    private Item ResolveMagneticOutputItem(OutputYield output)
+    {
+        if (output == null)
+            return null;
+
+        if (output.item != null)
+            return output.item;
+
+        if (!string.IsNullOrWhiteSpace(output.resourceItemPath))
+        {
+            Item resourceItem = Resources.Load<Item>(output.resourceItemPath);
+            if (resourceItem != null)
+                return resourceItem;
+        }
+
+        BlockType blockType = ResolveMagneticOutputBlockType(output);
+        return BlockItemCatalog.TryGetItemForBlock(blockType, out Item resolvedItem) ? resolvedItem : null;
+    }
+
+    private static BlockType ResolveMagneticOutputBlockType(OutputYield output)
+    {
+        if (output == null)
+            return BlockType.Air;
+
+        if (output.item != null && output.item.TryGetBlockType(out BlockType itemBlockType))
+            return itemBlockType;
+
+        return output.fallbackBlockType;
+    }
+
     private string ResolveOutputName()
     {
         Item resolvedOutputItem = ResolveOutputItem();
@@ -633,6 +974,15 @@ public sealed class StoneCrusher : DynamicVoxelBlock
             return resolvedOutputItem.name;
 
         return ResolveOutputBlockType().ToString();
+    }
+
+    private string ResolveMagneticOutputName(OutputYield output)
+    {
+        Item resolvedOutputItem = ResolveMagneticOutputItem(output);
+        if (resolvedOutputItem != null)
+            return resolvedOutputItem.name;
+
+        return ResolveMagneticOutputBlockType(output).ToString();
     }
 
     private void SyncLegacyRecipeFromItems()
@@ -887,7 +1237,27 @@ public sealed class StoneCrusher : DynamicVoxelBlock
                 return worldBlockType;
         }
 
+        if (IsNamedLikeMagneticSeparator())
+            return BlockType.MagneticSeparator;
+
         return BlockType.StoneCrusher;
+    }
+
+    private bool IsMagneticSeparatorMachine()
+    {
+        if (BlockType == BlockType.MagneticSeparator)
+            return true;
+
+        World world = World.Instance;
+        if (world != null && world.GetBlockAt(ResolveCrusherBlockPosition()) == BlockType.MagneticSeparator)
+            return true;
+
+        return IsNamedLikeMagneticSeparator();
+    }
+
+    private bool IsNamedLikeMagneticSeparator()
+    {
+        return name.Contains("MagneticSeparator") || name.Contains("Magnetic Separator");
     }
 
     private static bool IsCrusherMachineBlockType(BlockType blockType)
