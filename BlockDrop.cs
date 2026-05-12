@@ -141,7 +141,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
 
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
-    [SerializeField, Min(1)] private int maxStackAmount = 64;
+    [SerializeField, Min(1)] private int maxStackAmount = 100;
     [SerializeField, Min(0f)] private float mergeRadius = 1.15f;
     [SerializeField, Min(0.02f)] private float mergeCheckInterval = 0.2f;
     [SerializeField, Min(0f)] private float mergeDelaySeconds = 0.15f;
