@@ -45,6 +45,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     [Header("Connection Rules")]
     [SerializeField, Min(1f)] private float maxConnectionDistanceBlocks = 16f;
+    [SerializeField, Min(1)] private int maxConnectionsPerBlock = 4;
 
     [Header("Selection Visual")]
     [SerializeField] private Color pendingColor = new Color(1f, 0.72f, 0.18f, 1f);
@@ -71,6 +72,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
     private bool hasPendingConnector;
     private Vector3Int pendingConnector;
     private float nextValidationTime;
+    private readonly Dictionary<Vector3Int, int> endpointConnectionCounts = new Dictionary<Vector3Int, int>(64);
 
     public static EletricConnectorWireSystem EnsureInstance()
     {
@@ -189,6 +191,20 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
         if (TryRemoveConnection(start, end))
             return true;
+
+        if (!CanCreateWireConnection(start, end))
+        {
+            Debug.Log(
+                "[EletricConnectorWireSystem] Conexao recusada: maquinas consumidoras nao podem ser ligadas diretamente entre si. Use um produtor, distribuidor ou armazenador de energia em uma das pontas.");
+            return true;
+        }
+
+        if (!HasAvailableConnectionSlot(start, end, out Vector3Int fullEndpoint))
+        {
+            Debug.Log(
+                $"[EletricConnectorWireSystem] Conexao recusada: o bloco em {fullEndpoint} ja tem o limite de {GetMaxConnectionsPerBlock()} conexoes.");
+            return true;
+        }
 
         if (consumeWireOnConnection && hotbar != null && !hotbar.TryConsumeSelected(1))
             return true;
@@ -452,6 +468,75 @@ public class EletricConnectorWireSystem : MonoBehaviour
                blockType == BlockType.MagneticSeparator ;
     }
 
+    public static bool IsValidWireConnectionPair(BlockType startType, BlockType endType)
+    {
+        if (!IsWireEndpointBlock(startType) || !IsWireEndpointBlock(endType))
+            return false;
+
+        return IsWireConnectionHubBlock(startType) ||
+               IsWireConnectionHubBlock(endType);
+    }
+
+    private static bool IsWireConnectionHubBlock(BlockType blockType)
+    {
+        return blockType == BlockType.EletricConnector ||
+               LeverUtility.IsLeverBlock(blockType) ||
+               blockType == BlockType.SolarPanel ||
+               blockType == BlockType.windmill ||
+               BatteryBlockUtility.IsBatteryBlock(blockType);
+    }
+
+    private bool CanCreateWireConnection(Vector3Int start, Vector3Int end)
+    {
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        return IsValidWireConnectionPair(world.GetBlockAt(start), world.GetBlockAt(end));
+    }
+
+    private bool HasAvailableConnectionSlot(Vector3Int start, Vector3Int end, out Vector3Int fullEndpoint)
+    {
+        int maxConnections = GetMaxConnectionsPerBlock();
+        int startCount = CountConnectionsForEndpoint(start);
+        if (startCount >= maxConnections)
+        {
+            fullEndpoint = start;
+            return false;
+        }
+
+        int endCount = CountConnectionsForEndpoint(end);
+        if (endCount >= maxConnections)
+        {
+            fullEndpoint = end;
+            return false;
+        }
+
+        fullEndpoint = default;
+        return true;
+    }
+
+    private int CountConnectionsForEndpoint(Vector3Int endpoint)
+    {
+        int count = 0;
+        for (int i = 0; i < connections.Count; i++)
+        {
+            WireConnection connection = connections[i];
+            if (connection == null)
+                continue;
+
+            if (connection.start == endpoint || connection.end == endpoint)
+                count++;
+        }
+
+        return count;
+    }
+
+    private int GetMaxConnectionsPerBlock()
+    {
+        return Mathf.Max(1, maxConnectionsPerBlock);
+    }
+
     private bool TryRemoveConnection(Vector3Int start, Vector3Int end)
     {
         SortEndpoints(ref start, ref end);
@@ -483,16 +568,35 @@ public class EletricConnectorWireSystem : MonoBehaviour
 
     private void PruneInvalidConnections()
     {
-        for (int i = connections.Count - 1; i >= 0; i--)
+        endpointConnectionCounts.Clear();
+        int maxConnections = GetMaxConnectionsPerBlock();
+
+        for (int i = 0; i < connections.Count;)
         {
             WireConnection connection = connections[i];
             if (connection == null ||
                 !IsConnectorStillValid(connection.start) ||
-                !IsConnectorStillValid(connection.end))
+                !IsConnectorStillValid(connection.end) ||
+                !CanCreateWireConnection(connection.start, connection.end))
             {
                 RemoveConnectionAt(i);
+                continue;
             }
+
+            endpointConnectionCounts.TryGetValue(connection.start, out int startCount);
+            endpointConnectionCounts.TryGetValue(connection.end, out int endCount);
+            if (startCount >= maxConnections || endCount >= maxConnections)
+            {
+                RemoveConnectionAt(i);
+                continue;
+            }
+
+            endpointConnectionCounts[connection.start] = startCount + 1;
+            endpointConnectionCounts[connection.end] = endCount + 1;
+            i++;
         }
+
+        endpointConnectionCounts.Clear();
     }
 
     private void RefreshConnectionLines()

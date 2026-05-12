@@ -316,6 +316,13 @@ public partial class World
                 continue;
             }
 
+            if (!EletricConnectorWireSystem.IsValidWireConnectionPair(
+                    GetBlockAt(connection.Start),
+                    GetBlockAt(connection.End)))
+            {
+                continue;
+            }
+
             AddElectricalExtraEdge(connection.Start, connection.End);
             AddElectricalExtraEdge(connection.End, connection.Start);
         }
