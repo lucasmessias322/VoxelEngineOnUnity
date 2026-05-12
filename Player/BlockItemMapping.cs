@@ -39,15 +39,15 @@ public static class BlockItemCatalog
     {
         EnsureInitialized();
 
-        if (itemByBlockType.TryGetValue(blockType, out item) && item != null)
-            return true;
-
         if (TryGetFallbackInventoryBlockType(blockType, out BlockType fallbackBlockType) &&
             itemByBlockType.TryGetValue(fallbackBlockType, out item) &&
             item != null)
         {
             return true;
         }
+
+        if (itemByBlockType.TryGetValue(blockType, out item) && item != null)
+            return true;
 
         item = null;
         return false;
@@ -107,6 +107,16 @@ public static class BlockItemCatalog
 
             if (itemByBlockType.TryGetValue(blockType, out Item existingItem) && existingItem != item)
             {
+                if (ShouldPreferDuplicateBlockItem(blockType, existingItem, item))
+                {
+                    int existingIndex = validBlockItems.IndexOf(existingItem);
+                    if (existingIndex >= 0)
+                        validBlockItems[existingIndex] = item;
+
+                    itemByBlockType[blockType] = item;
+                    continue;
+                }
+
                 Debug.LogWarning($"[BlockItemCatalog] BlockType '{blockType}' esta duplicado entre '{existingItem.name}' e '{item.name}'. O primeiro item carregado sera mantido.");
                 continue;
             }
@@ -118,9 +128,27 @@ public static class BlockItemCatalog
         cachedBlockItems = validBlockItems.ToArray();
     }
 
+    private static bool ShouldPreferDuplicateBlockItem(BlockType blockType, Item existingItem, Item candidateItem)
+    {
+        return blockType == BlockType.TransportTube &&
+               IsPreferredTransportTubeItem(candidateItem) &&
+               !IsPreferredTransportTubeItem(existingItem);
+    }
+
+    private static bool IsPreferredTransportTubeItem(Item item)
+    {
+        return item != null &&
+               (string.Equals(item.name, "TransportTube", System.StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(item.itemName, "TransportTube", System.StringComparison.OrdinalIgnoreCase));
+    }
+
     private static bool TryGetFallbackInventoryBlockType(BlockType blockType, out BlockType fallbackBlockType)
     {
         fallbackBlockType = BatteryBlockUtility.GetInventoryDropBlockType(blockType);
+        if (fallbackBlockType != blockType)
+            return true;
+
+        fallbackBlockType = TransportTubeUtility.GetInventoryDropBlockType(blockType);
         if (fallbackBlockType != blockType)
             return true;
 

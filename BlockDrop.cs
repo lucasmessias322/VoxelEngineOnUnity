@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using Unity.Collections;
 
 internal static class DropCollisionUtility
 {
@@ -83,6 +84,19 @@ internal static class DropCollisionUtility
         BlockPlacementAxis placementAxis,
         Bounds testBounds)
     {
+        if (TransportTubeUtility.IsTransportTubeBlock(blockType))
+        {
+            byte connectionMask = TransportTubeUtility.ResolveConnectionMask(world, blockPos);
+            FixedList512Bytes<ShapeBox> tubeBoxes = TransportTubeUtility.BuildVisualBoxes(connectionMask, placementAxis);
+            for (int i = 0; i < tubeBoxes.Length; i++)
+            {
+                if (tubeBoxes[i].ToWorldBounds(blockPos).Intersects(testBounds))
+                    return true;
+            }
+
+            return false;
+        }
+
         BlockModelCuboid[] cuboids = world.blockData != null ? world.blockData.runtimeMultiCuboidBoxes : null;
         int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, cuboids);
         if (boxCount <= 0)
@@ -255,8 +269,9 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         if (blockType == BlockType.Air || blockType == BlockType.Bedrock)
             return false;
 
-        blockType = LeverUtility.GetInventoryDropBlockType(
-            TorchPlacementUtility.GetInventoryDropBlockType(blockType));
+        blockType = TransportTubeUtility.GetInventoryDropBlockType(
+            LeverUtility.GetInventoryDropBlockType(
+                TorchPlacementUtility.GetInventoryDropBlockType(blockType)));
 
         if (world.blockData != null && (world.blockData.mappings == null || world.blockData.mappings.Length == 0))
             world.blockData.InitializeDictionary();
@@ -3872,6 +3887,7 @@ public static class BlockBreakDropResolver
     private static BlockType ResolveDefaultDropBlockType(BlockType blockType)
     {
         BlockType dropBlockType = BatteryBlockUtility.GetInventoryDropBlockType(blockType);
+        dropBlockType = TransportTubeUtility.GetInventoryDropBlockType(dropBlockType);
         dropBlockType = TorchPlacementUtility.GetInventoryDropBlockType(dropBlockType);
         return LeverUtility.GetInventoryDropBlockType(dropBlockType);
     }

@@ -4,6 +4,7 @@ public partial class World
 {
     private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
     private bool refreshingConveyorSlopeConnections;
+    private bool refreshingTransportTubeConnections;
     private static readonly Vector3Int[] conveyorSlopeRefreshHorizontalOffsets =
     {
         Vector3Int.zero,
@@ -11,6 +12,16 @@ public partial class World
         Vector3Int.right,
         new Vector3Int(0, 0, -1),
         new Vector3Int(0, 0, 1)
+    };
+    private static readonly Vector3Int[] transportTubeRefreshHorizontalOffsets =
+    {
+        Vector3Int.zero,
+        Vector3Int.left,
+        Vector3Int.right,
+        new Vector3Int(0, 0, -1),
+        new Vector3Int(0, 0, 1),
+        Vector3Int.down,
+        Vector3Int.up
     };
 
     #region Block Interactions
@@ -98,7 +109,12 @@ public partial class World
         }
         else if (current == type)
         {
-            return;
+            if (!TransportTubeUtility.IsTransportTubeBlock(type) ||
+                BlockPlacementRotationUtility.SanitizeStoredAxis(GetPlacementAxisAt(worldPos, type)) ==
+                BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+            {
+                return;
+            }
         }
 
         // Occupied positions clear temporary billboard suppression, but permanent
@@ -140,6 +156,42 @@ public partial class World
 
         if (!refreshingConveyorSlopeConnections)
             RefreshConveyorSlopeConnectionsAround(worldPos);
+
+        if (!refreshingTransportTubeConnections)
+            RefreshTransportTubeConnectionsAround(worldPos);
+    }
+
+    private void RefreshTransportTubeConnectionsAround(Vector3Int worldPos)
+    {
+        refreshingTransportTubeConnections = true;
+        try
+        {
+            for (int i = 0; i < transportTubeRefreshHorizontalOffsets.Length; i++)
+                TryRefreshTransportTubeConnection(worldPos + transportTubeRefreshHorizontalOffsets[i]);
+        }
+        finally
+        {
+            refreshingTransportTubeConnections = false;
+        }
+    }
+
+    private void TryRefreshTransportTubeConnection(Vector3Int tubePos)
+    {
+        BlockType currentType = GetBlockAt(tubePos);
+        if (!TransportTubeUtility.IsTransportTubeBlock(currentType))
+            return;
+
+        BlockPlacementAxis currentAxis = GetPlacementAxisAt(tubePos, currentType);
+        TransportTubeUtility.TubeState targetState = TransportTubeUtility.ResolveState(this, tubePos, currentAxis);
+        BlockPlacementAxis targetAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(targetState.placementAxis);
+
+        if (currentType == targetState.blockType &&
+            BlockPlacementRotationUtility.SanitizeStoredAxis(currentAxis) == targetAxis)
+        {
+            return;
+        }
+
+        SetBlockAt(tubePos, targetState.blockType, false, targetAxis);
     }
 
     private void RefreshConveyorSlopeConnectionsAround(Vector3Int worldPos)

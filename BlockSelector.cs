@@ -1,5 +1,6 @@
 using UnityEngine;
 using Unity.Mathematics;
+using Unity.Collections;
 
 [RequireComponent(typeof(LineRenderer))]
 public class BlockSelector : MonoBehaviour
@@ -215,6 +216,12 @@ public class BlockSelector : MonoBehaviour
                 return true;
 
             case BlockRenderShape.MultiCuboid:
+                if (TransportTubeUtility.IsTransportTubeBlock(blockType) &&
+                    TransportTubeUtility.TryGetVisualBounds(world, pos, placementAxis, out bounds))
+                {
+                    return true;
+                }
+
                 if (BlockShapeUtility.TryGetMultiCuboidBounds(
                     pos,
                     value,
@@ -559,6 +566,9 @@ public class BlockSelector : MonoBehaviour
             case BlockRenderShape.MultiCuboid:
                 if (blockType == BlockType.conveyorBelt_45deg)
                     return TryHitRampBlock(ray, maxDistance, voxel, blockType, placementAxis, lastNormal, out hitNormal, out hitPoint);
+
+                if (TransportTubeUtility.IsTransportTubeBlock(blockType))
+                    return TryHitTransportTubeBlock(ray, maxDistance, voxel, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
                 return TryHitMultiCuboidBlock(ray, maxDistance, voxel, value, placementAxis, lastNormal, out hitNormal, out hitPoint);
 
@@ -1162,6 +1172,40 @@ public class BlockSelector : MonoBehaviour
         hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectEast, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
         hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectSouth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
         hit = TryHitFenceRail(ray, maxDistance, voxel, connectionMask, FenceShapeUtility.ConnectNorth, lastNormal, ref bestDistance, ref hitNormal, ref hitPoint) || hit;
+        return hit;
+    }
+
+    private bool TryHitTransportTubeBlock(
+        Ray ray,
+        float maxDistance,
+        Vector3Int voxel,
+        BlockPlacementAxis placementAxis,
+        Vector3Int lastNormal,
+        out Vector3Int hitNormal,
+        out Vector3 hitPoint)
+    {
+        byte connectionMask = TransportTubeUtility.ResolveConnectionMask(World.Instance, voxel);
+        FixedList512Bytes<ShapeBox> boxes = TransportTubeUtility.BuildVisualBoxes(connectionMask, placementAxis);
+
+        float bestDistance = float.PositiveInfinity;
+        hitNormal = Vector3Int.zero;
+        hitPoint = Vector3.zero;
+        bool hit = false;
+
+        for (int i = 0; i < boxes.Length; i++)
+        {
+            if (!TryHitShapeBox(ray, maxDistance, boxes[i].ToWorldBounds(voxel), lastNormal, out float distance, out Vector3Int normal, out Vector3 point))
+                continue;
+
+            if (distance >= bestDistance)
+                continue;
+
+            bestDistance = distance;
+            hitNormal = normal;
+            hitPoint = point;
+            hit = true;
+        }
+
         return hit;
     }
 

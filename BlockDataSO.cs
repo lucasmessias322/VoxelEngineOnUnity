@@ -1157,6 +1157,7 @@ public class BlockDataSO : ScriptableObject
         }
 
         CopyConveyorMultiCuboidRuntimeDataToSlopedConveyor();
+        NormalizeTransportTubeRuntimeMappings();
 
         runtimeMultiCuboidBoxes = cuboids.Count > 0
             ? cuboids.ToArray()
@@ -1187,6 +1188,48 @@ public class BlockDataSO : ScriptableObject
         target.multiCuboidStartIndex = source.multiCuboidStartIndex;
         target.multiCuboidCount = source.multiCuboidCount;
         mappings[targetIndex] = target;
+    }
+
+    private void NormalizeTransportTubeRuntimeMappings()
+    {
+        BlockTextureMapping? template = null;
+        int templateIndex = (int)BlockType.TransportTube;
+        if (mappings != null && templateIndex >= 0 && templateIndex < mappings.Length)
+            template = mappings[templateIndex];
+
+        NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube, template);
+        NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube_L, template);
+        NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube_T, template);
+    }
+
+    private void NormalizeTransportTubeRuntimeMapping(BlockType blockType, BlockTextureMapping? template)
+    {
+        int index = (int)blockType;
+        if (mappings == null || index < 0 || index >= mappings.Length)
+            return;
+
+        BlockTextureMapping mapping = mappings[index];
+        if (mapping.blockType != blockType)
+            return;
+
+        mapping.renderShape = BlockRenderShape.MultiCuboid;
+        mapping.usePlacementAxisRotation = true;
+        mapping.placementRotationAxes = BlockPlacementRotationAxes.Horizontal;
+
+        if (template.HasValue && blockType != BlockType.TransportTube)
+        {
+            BlockTextureMapping source = template.Value;
+            mapping.top = source.top;
+            mapping.bottom = source.bottom;
+            mapping.right = source.right;
+            mapping.left = source.left;
+            mapping.front = source.front;
+            mapping.back = source.back;
+            mapping.side = source.side;
+            mapping.CopyUvRectDataFrom(source);
+        }
+
+        mappings[index] = mapping;
     }
 
     private Vector3Int ComputeMultiCuboidOverflowSearchRadius()

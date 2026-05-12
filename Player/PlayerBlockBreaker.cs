@@ -2652,6 +2652,12 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private static bool CanPlaceMachineOnMachineSupport(BlockType placedBlockType, BlockType supportType)
     {
+        if (TransportTubeUtility.IsTransportTubeBlock(placedBlockType) &&
+            MachineBlockUtility.IsMachineBlock(supportType))
+        {
+            return true;
+        }
+
         return supportType == BlockType.AutoMiner &&
                ConveyorBeltUtility.IsConveyorBlock(placedBlockType);
     }

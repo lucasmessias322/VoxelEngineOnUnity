@@ -86,7 +86,11 @@ public enum BlockType
     StoneCrusher = 81,
 
     Gravel = 82,
-    MagneticSeparator = 83
+    MagneticSeparator = 83,
+    TransportTube = 84,
+    TransportTube_L = 85,
+    TransportTube_T = 86,
+
 
 
 
@@ -112,6 +116,9 @@ public static class MachineBlockUtility
             case BlockType.Treecutter:
             case BlockType.AutoMiner:
             case BlockType.StoneCrusher:
+            case BlockType.TransportTube:
+            case BlockType.TransportTube_L:
+            case BlockType.TransportTube_T:
                 return true;
             case BlockType.MagneticSeparator:
                 return true;
