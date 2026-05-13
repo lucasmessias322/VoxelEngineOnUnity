@@ -1821,6 +1821,13 @@ public class PlayerBlockBreaker : MonoBehaviour
             return true;
         }
 
+        SteamEngineUIController steamEngineUI = SteamEngineUIController.EnsureInstance();
+        if (steamEngineUI != null &&
+            steamEngineUI.TryHandleSteamEngineInteraction(selector))
+        {
+            return true;
+        }
+
         FurnaceUIController furnaceUI = FurnaceUIController.Instance != null
             ? FurnaceUIController.Instance
             : FindAnyObjectByType<FurnaceUIController>();

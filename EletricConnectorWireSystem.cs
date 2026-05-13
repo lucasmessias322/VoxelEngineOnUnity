@@ -465,6 +465,7 @@ public class EletricConnectorWireSystem : MonoBehaviour
                blockType == BlockType.AutoMiner ||
                blockType == BlockType.StoneCrusher ||
                blockType == BlockType.Treecutter ||
+               blockType == BlockType.SteamEngine ||
                blockType == BlockType.MagneticSeparator ;
     }
 

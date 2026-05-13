@@ -359,6 +359,9 @@ public class PlayerInventory : MonoBehaviour
         if (StoneCrusherUIController.Instance != null)
             StoneCrusherUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
 
+        if (SteamEngineUIController.Instance != null)
+            SteamEngineUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
+
         if (ChestUIController.Instance != null)
             ChestUIController.Instance.HandleInventoryVisibilityChanged(isOpen);
 

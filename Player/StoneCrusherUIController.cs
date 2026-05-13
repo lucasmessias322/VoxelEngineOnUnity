@@ -119,6 +119,9 @@ public sealed class StoneCrusherUIController : MonoBehaviour
         if (FurnaceUIController.Instance != null)
             FurnaceUIController.Instance.CloseFurnacePanel();
 
+        if (SteamEngineUIController.Instance != null)
+            SteamEngineUIController.Instance.CloseSteamEnginePanel();
+
         if (SplitterUIController.Instance != null)
             SplitterUIController.Instance.CloseSplitterPanel();
 

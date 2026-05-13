@@ -113,7 +113,7 @@ public static class FluidPipeUtility
         return true;
     }
 
-    private static bool CanConnect(World world, Vector3Int blockPos, Vector3Int directionToNeighbor)
+    public static bool CanConnect(World world, Vector3Int blockPos, Vector3Int directionToNeighbor)
     {
         if (world == null)
             return false;
@@ -121,6 +121,9 @@ public static class FluidPipeUtility
         Vector3Int neighborPos = blockPos + directionToNeighbor;
         BlockType neighborType = world.GetBlockAt(neighborPos);
         if (IsFluidPipeBlock(neighborType))
+            return true;
+
+        if (neighborType == BlockType.SteamEngine)
             return true;
 
         if (neighborType != BlockType.WaterPump)
@@ -150,6 +153,9 @@ public static class FluidPipeUtility
         int idx = x + y * voxelSizeX + z * voxelPlaneSize;
         BlockType neighborType = (BlockType)blockTypes[idx];
         if (IsFluidPipeBlock(neighborType))
+            return true;
+
+        if (neighborType == BlockType.SteamEngine)
             return true;
 
         if (neighborType != BlockType.WaterPump)

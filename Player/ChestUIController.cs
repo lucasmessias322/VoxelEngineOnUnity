@@ -145,6 +145,9 @@ public class ChestUIController : MonoBehaviour
         if (FurnaceUIController.Instance != null)
             FurnaceUIController.Instance.CloseFurnacePanel();
 
+        if (SteamEngineUIController.Instance != null)
+            SteamEngineUIController.Instance.CloseSteamEnginePanel();
+
         if (CraftingStationUIController.Instance != null)
             CraftingStationUIController.Instance.CloseCrafterUI(returnItemsToInventory: true);
 

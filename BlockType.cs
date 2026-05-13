@@ -131,6 +131,7 @@ public static class MachineBlockUtility
             case BlockType.FluidPipe:
             case BlockType.FluidPipe_ShapeL:
             case BlockType.FluidPipe_ShapeT:
+            case BlockType.SteamEngine:
                 return true;
             case BlockType.MagneticSeparator:
                 return true;

@@ -131,6 +131,9 @@ public class CraftingStationUIController : MonoBehaviour
         if (FurnaceUIController.Instance != null)
             FurnaceUIController.Instance.CloseFurnacePanel();
 
+        if (SteamEngineUIController.Instance != null)
+            SteamEngineUIController.Instance.CloseSteamEnginePanel();
+
         OpenCraftingTable(crafterBlock);
         CraftingMenuUI.Instance?.RefreshAvailableRecipes();
         return true;

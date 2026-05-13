@@ -680,6 +680,7 @@ public static partial class MeshGenerator
                    blockType == BlockType.Treecutter ||
                    blockType == BlockType.AutoMiner ||
                    blockType == BlockType.StoneCrusher ||
+                   blockType == BlockType.SteamEngine ||
                      blockType == BlockType.MagneticSeparator;
         }
 

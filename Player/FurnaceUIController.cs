@@ -216,6 +216,10 @@ public class FurnaceUIController : MonoBehaviour
 
         furnacePanel.SetActive(true);
         lastKnownPanelOpen = true;
+
+        if (SteamEngineUIController.Instance != null)
+            SteamEngineUIController.Instance.CloseSteamEnginePanel();
+
         HandleFurnacePanelStateChanged(true, force: true);
         RefreshSlotVisuals();
         RefreshFuelUi();

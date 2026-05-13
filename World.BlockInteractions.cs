@@ -156,6 +156,7 @@ public partial class World
         HandleWaterBlockChange(worldPos, current, type, placedByPlayer);
         HandleSupportDependentBlockChange(worldPos, current, type);
         HandleElectricityBlockChange(worldPos, current, type);
+        HandleSteamEngineBlockChange(worldPos, current, type);
         if (waterWillPermanentlyDestroyBillboard)
             PermanentlySuppressGrassBillboardAt(worldPos, requestRebuild: false);
         torchFireParticleController?.NotifyBlockChanged(worldPos, current, type);
