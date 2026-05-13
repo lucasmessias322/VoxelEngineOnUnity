@@ -31,6 +31,20 @@ public partial class World
         return Mathf.Clamp(requestedHeight, 3, Chunk.SizeY - 1);
     }
 
+    private BiomeType GetResolvedFlatWorldBiome()
+    {
+        switch (flatWorldBiome)
+        {
+            case BiomeType.Desert:
+            case BiomeType.Savanna:
+            case BiomeType.Meadow:
+            case BiomeType.Taiga:
+                return flatWorldBiome;
+            default:
+                return BiomeType.Meadow;
+        }
+    }
+
     public Material[] Material
     {
         get => ActiveWorldMaterials;

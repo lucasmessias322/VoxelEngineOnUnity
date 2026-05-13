@@ -76,6 +76,9 @@ public partial class World
     private bool lastEnableAmbientOcclusion = true;
     private bool lastEnableWater = true;
     private bool lastEnableChunkDetailLod = true;
+    private WorldTerrainMode lastTerrainMode = WorldTerrainMode.Normal;
+    private int lastFlatWorldHeight = 64;
+    private BiomeType lastFlatWorldBiome = BiomeType.Meadow;
     private int lastWorldMaterialProfileHash = int.MinValue;
     private int lastChunkDetailLodDistance = 10;
     private TreeLeafQualityMode lastTreeLeafQuality = TreeLeafQualityMode.Medium;

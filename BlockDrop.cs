@@ -3818,6 +3818,9 @@ public static class BlockBreakDropResolver
 
     public static bool TrySpawnDrop(World world, Vector3 worldPosition, BlockType brokenBlockType, Vector3 throwDirection)
     {
+        if (brokenBlockType == BlockType.Leaves)
+            return TrySpawnOakLeafSaplingDrop(world, worldPosition, throwDirection);
+
         if (!TryResolveDrop(world, brokenBlockType, out Item dropItem, out BlockType dropBlockType, out int amount))
             return false;
 
@@ -3831,6 +3834,9 @@ public static class BlockBreakDropResolver
     {
         if (inventory == null)
             return false;
+
+        if (brokenBlockType == BlockType.Leaves)
+            return TryAddOakLeafSaplingDropToInventory(inventory, world);
 
         if (!TryResolveDrop(world, brokenBlockType, out Item dropItem, out BlockType dropBlockType, out int amount))
             return false;
@@ -3855,6 +3861,9 @@ public static class BlockBreakDropResolver
         if (brokenBlockType == BlockType.Air || brokenBlockType == BlockType.Bedrock)
             return false;
 
+        if (brokenBlockType == BlockType.Leaves)
+            return false;
+
         if (world != null &&
             world.blockData != null &&
             world.blockData.TryGetCustomDrop(brokenBlockType, out dropItem, out amount))
@@ -3865,6 +3874,41 @@ public static class BlockBreakDropResolver
 
         dropBlockType = ResolveDefaultDropBlockType(brokenBlockType);
         return dropBlockType != BlockType.Air && dropBlockType != BlockType.Bedrock;
+    }
+
+    public static int RollOakLeafSaplingDropCount(World world, int leafCount)
+    {
+        int clampedLeafCount = Mathf.Max(0, leafCount);
+        int drops = 0;
+        for (int i = 0; i < clampedLeafCount; i++)
+        {
+            if (RollOakLeafSaplingDrop(world))
+                drops++;
+        }
+
+        return drops;
+    }
+
+    private static bool TrySpawnOakLeafSaplingDrop(World world, Vector3 worldPosition, Vector3 throwDirection)
+    {
+        if (!RollOakLeafSaplingDrop(world))
+            return true;
+
+        return BlockDrop.Spawn(world, worldPosition, BlockType.oakTreeSapling, 1, throwDirection);
+    }
+
+    private static bool TryAddOakLeafSaplingDropToInventory(PlayerInventory inventory, World world)
+    {
+        if (!RollOakLeafSaplingDrop(world))
+            return true;
+
+        return inventory.TryAddBlockDrop(BlockType.oakTreeSapling, 1);
+    }
+
+    private static bool RollOakLeafSaplingDrop(World world)
+    {
+        int oneIn = world != null ? world.OakLeafSaplingDropOneIn : 40;
+        return Random.Range(0, Mathf.Max(1, oneIn)) == 0;
     }
 
     private static bool TrySpawnItemDrop(

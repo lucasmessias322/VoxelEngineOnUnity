@@ -15,6 +15,8 @@ public partial class World
         new Dictionary<Vector3Int, AutoMinerLaserVisual>(64);
     private readonly HashSet<Vector3Int> autoMinerTouchedAreaLinePositions =
         new HashSet<Vector3Int>();
+    private readonly Queue<Vector3Int> autoMinerTransportTubeQueue = new Queue<Vector3Int>(128);
+    private readonly HashSet<Vector3Int> autoMinerTransportTubeVisited = new HashSet<Vector3Int>();
     private readonly List<Vector3Int> autoMinerAreaLineRemovalBuffer = new List<Vector3Int>(64);
     private readonly List<Vector3Int> autoMinerLaserRemovalBuffer = new List<Vector3Int>(64);
 
@@ -26,6 +28,15 @@ public partial class World
     {
         public LineRenderer line;
         public float hideTime;
+    }
+
+    private struct AutoMinerTransportTubeOutput
+    {
+        public Vector3Int tubePos;
+        public Vector3Int exitDirection;
+        public Vector3Int targetPos;
+        public Vector3 dropPosition;
+        public bool insertIntoChest;
     }
 
     #region Auto Miner
@@ -185,11 +196,15 @@ public partial class World
     private bool CanAutoMinerOutputDrop(Vector3Int autoMinerPos, BlockType targetType)
     {
         Vector3Int topPos = autoMinerPos + Vector3Int.up;
-        if (GetBlockAt(topPos) != BlockType.chest)
+        BlockType topType = GetBlockAt(topPos);
+        if (topType != BlockType.chest && !TransportTubeUtility.IsTransportTubeNetworkBlock(topType))
             return true;
 
         if (!TryResolveAutoMinerDrop(targetType, out Item outputItem, out int amount))
             return false;
+
+        if (TransportTubeUtility.IsTransportTubeNetworkBlock(topType))
+            return TryFindAutoMinerTransportTubeOutput(topPos, outputItem, amount, out _);
 
         ChestUIController chestUI = ChestUIController.EnsureInstance();
         return chestUI != null && chestUI.CanInsertItemStackIntoChest(topPos, outputItem, amount);
@@ -202,7 +217,8 @@ public partial class World
 
         int remaining = Mathf.Max(1, amount);
         Vector3Int topPos = autoMinerPos + Vector3Int.up;
-        if (GetBlockAt(topPos) == BlockType.chest)
+        BlockType topType = GetBlockAt(topPos);
+        if (topType == BlockType.chest)
         {
             ChestUIController chestUI = ChestUIController.EnsureInstance();
             if (chestUI != null)
@@ -211,12 +227,291 @@ public partial class World
             return remaining <= 0;
         }
 
+        if (TransportTubeUtility.IsTransportTubeNetworkBlock(topType))
+        {
+            if (!TryFindAutoMinerTransportTubeOutput(topPos, outputItem, remaining, out AutoMinerTransportTubeOutput tubeOutput))
+                return false;
+
+            return TryDeliverAutoMinerTransportTubeOutput(tubeOutput, outputItem, remaining);
+        }
+
         if (remaining <= 0)
             return true;
 
         Vector3 dropPosition = GetAutoMinerDropPosition(autoMinerPos);
         Vector3 throwDirection = Vector3.up * 0.65f;
         return ChestUIController.TrySpawnItemStack(outputItem, remaining, dropPosition, throwDirection);
+    }
+
+    private bool TryFindAutoMinerTransportTubeOutput(
+        Vector3Int startTubePos,
+        Item item,
+        int amount,
+        out AutoMinerTransportTubeOutput output)
+    {
+        output = default;
+        if (item == null || amount <= 0 || !TransportTubeUtility.IsTransportTubeNetworkBlock(GetBlockAt(startTubePos)))
+            return false;
+
+        autoMinerTransportTubeQueue.Clear();
+        autoMinerTransportTubeVisited.Clear();
+
+        autoMinerTransportTubeQueue.Enqueue(startTubePos);
+        autoMinerTransportTubeVisited.Add(startTubePos);
+
+        bool hasStartFallbackOutput = false;
+        AutoMinerTransportTubeOutput startFallbackOutput = default;
+        int inspectedCount = 0;
+        int searchLimit = Mathf.Max(16, autoMinerTransportTubeSearchLimit);
+
+        while (autoMinerTransportTubeQueue.Count > 0 && inspectedCount < searchLimit)
+        {
+            Vector3Int tubePos = autoMinerTransportTubeQueue.Dequeue();
+            inspectedCount++;
+
+            bool isStartTube = tubePos == startTubePos;
+            Vector3Int blockedOutputDirection = isStartTube ? Vector3Int.down : Vector3Int.zero;
+            if (TryResolveAutoMinerTransportTubeOutputAt(
+                    tubePos,
+                    blockedOutputDirection,
+                    item,
+                    amount,
+                    out AutoMinerTransportTubeOutput candidateOutput))
+            {
+                if (!isStartTube)
+                {
+                    output = candidateOutput;
+                    return true;
+                }
+
+                if (!hasStartFallbackOutput)
+                {
+                    startFallbackOutput = candidateOutput;
+                    hasStartFallbackOutput = true;
+                }
+            }
+
+            QueueConnectedAutoMinerTransportTubes(tubePos);
+        }
+
+        if (!hasStartFallbackOutput)
+            return false;
+
+        output = startFallbackOutput;
+        return true;
+    }
+
+    private void QueueConnectedAutoMinerTransportTubes(Vector3Int tubePos)
+    {
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.left);
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.right);
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.back);
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.forward);
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.down);
+        TryQueueConnectedAutoMinerTransportTube(tubePos, Vector3Int.up);
+    }
+
+    private void TryQueueConnectedAutoMinerTransportTube(Vector3Int tubePos, Vector3Int direction)
+    {
+        Vector3Int neighborPos = tubePos + direction;
+        if (autoMinerTransportTubeVisited.Contains(neighborPos) ||
+            !TransportTubeUtility.IsTransportTubeNetworkBlock(GetBlockAt(neighborPos)))
+        {
+            return;
+        }
+
+        autoMinerTransportTubeVisited.Add(neighborPos);
+        autoMinerTransportTubeQueue.Enqueue(neighborPos);
+    }
+
+    private bool TryResolveAutoMinerTransportTubeOutputAt(
+        Vector3Int tubePos,
+        Vector3Int blockedOutputDirection,
+        Item item,
+        int amount,
+        out AutoMinerTransportTubeOutput output)
+    {
+        output = default;
+        BlockType tubeType = GetBlockAt(tubePos);
+        if (!TransportTubeUtility.IsTransportTubeBlock(tubeType))
+            return false;
+
+        byte connectionMask = TransportTubeUtility.ResolveConnectionMask(this, tubePos);
+        int connectionCount = TransportTubeUtility.CountConnections(connectionMask);
+
+        if (connectionCount == 0)
+        {
+            BlockPlacementAxis fallbackAxis = GetPlacementAxisAt(tubePos, tubeType);
+            return TryResolveAutoMinerTransportTubeFallbackOutput(
+                tubePos,
+                fallbackAxis,
+                blockedOutputDirection,
+                item,
+                amount,
+                out output);
+        }
+
+        if (connectionCount != 1)
+            return false;
+
+        Vector3Int connectedDirection = GetSingleAutoMinerTransportTubeConnectionDirection(connectionMask);
+        Vector3Int outputDirection = -connectedDirection;
+        return TryBuildAutoMinerTransportTubeOutput(
+            tubePos,
+            outputDirection,
+            blockedOutputDirection,
+            item,
+            amount,
+            out output);
+    }
+
+    private bool TryResolveAutoMinerTransportTubeFallbackOutput(
+        Vector3Int tubePos,
+        BlockPlacementAxis fallbackAxis,
+        Vector3Int blockedOutputDirection,
+        Item item,
+        int amount,
+        out AutoMinerTransportTubeOutput output)
+    {
+        output = default;
+        fallbackAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(fallbackAxis);
+
+        if (fallbackAxis == BlockPlacementAxis.YNegative)
+        {
+            return TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.up, blockedOutputDirection, item, amount, out output) ||
+                   TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.down, blockedOutputDirection, item, amount, out output);
+        }
+
+        if (fallbackAxis == BlockPlacementAxis.X || fallbackAxis == BlockPlacementAxis.XNegative)
+        {
+            return TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.right, blockedOutputDirection, item, amount, out output) ||
+                   TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.left, blockedOutputDirection, item, amount, out output);
+        }
+
+        return TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.forward, blockedOutputDirection, item, amount, out output) ||
+               TryBuildAutoMinerTransportTubeOutput(tubePos, Vector3Int.back, blockedOutputDirection, item, amount, out output);
+    }
+
+    private bool TryBuildAutoMinerTransportTubeOutput(
+        Vector3Int tubePos,
+        Vector3Int outputDirection,
+        Vector3Int blockedOutputDirection,
+        Item item,
+        int amount,
+        out AutoMinerTransportTubeOutput output)
+    {
+        output = default;
+        if (outputDirection == Vector3Int.zero || outputDirection == blockedOutputDirection)
+            return false;
+
+        Vector3Int targetPos = tubePos + outputDirection;
+        BlockType targetType = GetBlockAt(targetPos);
+        if (targetType == BlockType.chest)
+        {
+            ChestUIController chestUI = ChestUIController.EnsureInstance();
+            if (chestUI == null || !chestUI.CanInsertItemStackIntoChest(targetPos, item, amount))
+                return false;
+
+            output = new AutoMinerTransportTubeOutput
+            {
+                tubePos = tubePos,
+                exitDirection = outputDirection,
+                targetPos = targetPos,
+                dropPosition = GetAutoMinerTransportTubeDropPosition(tubePos, targetPos, outputDirection, targetType),
+                insertIntoChest = true
+            };
+            return true;
+        }
+
+        if (!CanAutoMinerTransportTubeDropInto(targetType))
+            return false;
+
+        output = new AutoMinerTransportTubeOutput
+        {
+            tubePos = tubePos,
+            exitDirection = outputDirection,
+            targetPos = targetPos,
+            dropPosition = GetAutoMinerTransportTubeDropPosition(tubePos, targetPos, outputDirection, targetType),
+            insertIntoChest = false
+        };
+        return true;
+    }
+
+    private bool TryDeliverAutoMinerTransportTubeOutput(AutoMinerTransportTubeOutput output, Item item, int amount)
+    {
+        int remaining = Mathf.Max(1, amount);
+        if (output.insertIntoChest)
+        {
+            ChestUIController chestUI = ChestUIController.EnsureInstance();
+            if (chestUI != null)
+                remaining = chestUI.InsertItemStackIntoChest(output.targetPos, item, remaining);
+
+            return remaining <= 0;
+        }
+
+        Vector3 throwDirection = GetAutoMinerTransportTubeThrowDirection(output.exitDirection);
+        return ChestUIController.TrySpawnItemStack(item, remaining, output.dropPosition, throwDirection);
+    }
+
+    private bool CanAutoMinerTransportTubeDropInto(BlockType targetType)
+    {
+        if (targetType == BlockType.Air ||
+            FluidBlockUtility.IsWater(targetType) ||
+            ConveyorBeltUtility.IsConveyorBlock(targetType))
+        {
+            return true;
+        }
+
+        return !TransportTubeUtility.IsTransportTubeNetworkBlock(targetType) && !IsSolidBlock(targetType);
+    }
+
+    private Vector3 GetAutoMinerTransportTubeDropPosition(
+        Vector3Int tubePos,
+        Vector3Int targetPos,
+        Vector3Int outputDirection,
+        BlockType targetType)
+    {
+        if (ConveyorBeltUtility.IsConveyorBlock(targetType))
+        {
+            return targetPos + new Vector3(
+                0.5f,
+                Mathf.Max(0f, autoMinerDropConveyorTopOffset),
+                0.5f);
+        }
+
+        Vector3 direction = new Vector3(outputDirection.x, outputDirection.y, outputDirection.z);
+        return tubePos + Vector3.one * 0.5f +
+               direction.normalized * (0.5f + Mathf.Max(0f, autoMinerTransportTubeExitOffset));
+    }
+
+    private static Vector3 GetAutoMinerTransportTubeThrowDirection(Vector3Int outputDirection)
+    {
+        Vector3 direction = new Vector3(outputDirection.x, outputDirection.y, outputDirection.z);
+        if (direction.sqrMagnitude <= 0.0001f)
+            return Vector3.up * 0.65f;
+
+        Vector3 throwDirection = direction.normalized * 0.9f + Vector3.up * 0.35f;
+        return throwDirection.sqrMagnitude > 0.0001f ? throwDirection : Vector3.up * 0.65f;
+    }
+
+    private static Vector3Int GetSingleAutoMinerTransportTubeConnectionDirection(byte connectionMask)
+    {
+        if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectWest))
+            return Vector3Int.left;
+
+        if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectEast))
+            return Vector3Int.right;
+
+        if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectSouth))
+            return Vector3Int.back;
+
+        if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectNorth))
+            return Vector3Int.forward;
+
+        if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectDown))
+            return Vector3Int.down;
+
+        return Vector3Int.up;
     }
 
     private bool TryResolveAutoMinerDrop(BlockType targetType, out Item outputItem, out int amount)

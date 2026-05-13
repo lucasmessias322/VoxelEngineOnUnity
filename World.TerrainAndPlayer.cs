@@ -11,6 +11,8 @@ public partial class World
     [SerializeField, Min(0f)] private float leafDecayTimeBudgetMS = 0.5f;
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
+    [Tooltip("Chance de uma folha de oak dropar oakTreeSapling. 20 = Minecraft vanilla (1/20). Valores maiores deixam mais raro.")]
+    [SerializeField, Min(1)] private int oakLeafSaplingDropOneIn = 40;
 
     [Header("Support Dependent Blocks")]
     [SerializeField, Min(1)] private int supportDependentBlockChecksPerFrame = 24;
@@ -46,6 +48,7 @@ public partial class World
     [SerializeField, Min(1)] private int treecutterMaxLeavesPerTree = 384;
     [SerializeField, Min(1)] private int treecutterLeafSearchDistance = 7;
     [SerializeField, Min(0f)] private float treecutterEnergyPerTree = 80f;
+    [SerializeField, Min(0.05f)] private float treecutterBreakDurationSeconds = 2f;
 
     [Header("Auto Miner")]
     [SerializeField] private bool enableAutoMinerMachines = true;
@@ -58,6 +61,8 @@ public partial class World
     [SerializeField] private bool autoMinerMineOnlyLoadedColumns = true;
     [SerializeField, Min(0f)] private float autoMinerDropTopOffset = 0.32f;
     [SerializeField, Min(0f)] private float autoMinerDropConveyorTopOffset = 0.28f;
+    [SerializeField, Min(16)] private int autoMinerTransportTubeSearchLimit = 512;
+    [SerializeField, Min(0f)] private float autoMinerTransportTubeExitOffset = 0.18f;
     [SerializeField] private bool showAutoMinerMiningArea = true;
     [SerializeField] private Color autoMinerAreaLineColor = new Color(1f, 0.78f, 0.05f, 0.9f);
     [SerializeField, Min(0.001f)] private float autoMinerAreaLineWidth = 0.035f;
@@ -83,4 +88,12 @@ public partial class World
         emissionIntensity = 1.6f
     };
     [SerializeField, Min(0.02f)] private float autoMinerLaserDurationSeconds = 0.22f;
+
+    [Header("Transport Tubes")]
+    [SerializeField] private bool enableTransportTubeFilters = true;
+    [SerializeField, Min(0.05f)] private float transportTubeFilterTickInterval = 0.35f;
+    [SerializeField, Min(1)] private int transportTubeFiltersPerTick = 8;
+    [SerializeField, Min(1)] private int transportTubeFilterItemsPerTick = 1;
+    [SerializeField, Min(16)] private int transportTubeFilterSearchLimit = 512;
+    [SerializeField, Min(0f)] private float transportTubeExitOffset = 0.18f;
 }

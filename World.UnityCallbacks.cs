@@ -61,6 +61,9 @@ public partial class World
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
         lastEnableWater = enableWater;
         lastEnableChunkDetailLod = enableChunkDetailLod;
+        lastTerrainMode = terrainMode;
+        lastFlatWorldHeight = GetResolvedFlatWorldHeight();
+        lastFlatWorldBiome = GetResolvedFlatWorldBiome();
         lastChunkDetailLodDistance = chunkDetailLodDistance;
         lastTreeLeafQuality = treeLeafQuality;
         lastTreeLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
@@ -249,6 +252,7 @@ public partial class World
     {
         TerrainLayerProfileSO.ProfileChanged -= HandleTerrainLayerProfileChanged;
         BiomeDefinitionSO.DefinitionChanged -= HandleBiomeDefinitionChanged;
+        HideTreecutterBreakCrackVisual();
     }
 
     private void OnDestroy()
@@ -292,6 +296,7 @@ public partial class World
         MeshGenerator.ClearDataJobTempBufferPool();
         DisposeNativeGenerationCaches();
         DestroyAutoMinerAreaVisuals();
+        DestroyTreecutterBreakCrackVisuals();
 
         if (Instance == this)
             Instance = null;
@@ -336,6 +341,9 @@ public partial class World
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessAutoMinerMachines();
+
+        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
+            ProcessTransportTubeFilters();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             UpdateAutoMinerLaserVisuals();

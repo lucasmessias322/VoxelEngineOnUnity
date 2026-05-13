@@ -128,7 +128,7 @@ public partial class World
         // heightmap, superficie, cavernas, minerios, agua, arvores, edits e iluminacao.
         MeshGenerator.ScheduleDataJob(
             coord, cachedNativeNoiseLayers, cachedNativeBlockMappings, cachedNativeEffectiveLightOpacityByBlock, cachedNativeLightEmissionByBlock,
-            baseHeight, IsFlatWorldMode(), GetResolvedFlatWorldHeight(), offsetX, offsetZ, seaLevel, enableWater,
+            baseHeight, IsFlatWorldMode(), GetResolvedFlatWorldHeight(), GetResolvedFlatWorldBiome(), offsetX, offsetZ, seaLevel, enableWater,
             GetBiomeNoiseSettings(),
             GetTerrainDensitySettings(),
             seed,

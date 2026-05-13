@@ -84,6 +84,9 @@ public partial class World
     [Tooltip("Altura Y do bloco de superficie no modo Flat. Se ficar vazio/zerado, usa baseHeight ou 64.")]
     [Min(3)]
     public int flatWorldHeight = 64;
+    [Tooltip("Bioma usado em todo o mundo quando o modo de terreno esta em Flat.")]
+    public BiomeType flatWorldBiome = BiomeType.Meadow;
+    [SerializeField, HideInInspector] private bool flatWorldBiomeInitialized;
     public int baseHeight = 64;
     public int heightVariation = 32;
     public int seed = 1337;

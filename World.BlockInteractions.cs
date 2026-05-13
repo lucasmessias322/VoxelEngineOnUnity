@@ -109,7 +109,7 @@ public partial class World
         }
         else if (current == type)
         {
-            if (!TransportTubeUtility.IsTransportTubeBlock(type) ||
+            if (!TransportTubeUtility.IsTransportTubeNetworkBlock(type) ||
                 BlockPlacementRotationUtility.SanitizeStoredAxis(GetPlacementAxisAt(worldPos, type)) ==
                 BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
             {
@@ -178,6 +178,20 @@ public partial class World
     private void TryRefreshTransportTubeConnection(Vector3Int tubePos)
     {
         BlockType currentType = GetBlockAt(tubePos);
+        if (currentType == BlockType.TransportTubeFilter)
+        {
+            if (!TryResolveTransportTubeFilterBackToChestAxis(tubePos, out BlockPlacementAxis targetFilterAxis))
+                return;
+
+            BlockPlacementAxis currentFilterAxis = GetPlacementAxisAt(tubePos, currentType);
+            targetFilterAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(targetFilterAxis);
+            if (BlockPlacementRotationUtility.SanitizeStoredAxis(currentFilterAxis) == targetFilterAxis)
+                return;
+
+            SetBlockAt(tubePos, currentType, false, targetFilterAxis);
+            return;
+        }
+
         if (!TransportTubeUtility.IsTransportTubeBlock(currentType))
             return;
 

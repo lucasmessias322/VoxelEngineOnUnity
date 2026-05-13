@@ -141,7 +141,7 @@ public partial class World : MonoBehaviour
             if (worldPos.y > flatColumnContext.surfaceHeight)
                 return BlockType.Air;
 
-            return FlatWorldUtility.GetBlockTypeAtHeight(worldPos.y, flatColumnContext.surfaceHeight);
+            return FlatWorldUtility.GetBlockTypeAtHeight(worldPos.y, flatColumnContext.surface);
         }
 
         if (densitySettings.enabled)
@@ -192,7 +192,13 @@ public partial class World : MonoBehaviour
 
     private TerrainColumnContext CreateFlatColumnContext(int worldX, int worldZ)
     {
-        return FlatWorldUtility.CreateColumnContext(worldX, worldZ, GetResolvedFlatWorldHeight(), Chunk.SizeY);
+        return FlatWorldUtility.CreateColumnContext(
+            worldX,
+            worldZ,
+            GetResolvedFlatWorldHeight(),
+            Chunk.SizeY,
+            GetResolvedFlatWorldBiome(),
+            GetBiomeNoiseSettings());
     }
 
     private int GetSurfaceHeight(int worldX, int worldZ)

@@ -34,6 +34,12 @@ public static class TransportTubeUtility
                blockType == BlockType.TransportTube_T;
     }
 
+    public static bool IsTransportTubeNetworkBlock(BlockType blockType)
+    {
+        return IsTransportTubeBlock(blockType) ||
+               blockType == BlockType.TransportTubeFilter;
+    }
+
     public static BlockType GetInventoryDropBlockType(BlockType blockType)
     {
         return IsTransportTubeBlock(blockType) ? BlockType.TransportTube : blockType;
@@ -189,7 +195,7 @@ public static class TransportTubeUtility
 
     private static bool HasTubeAt(World world, Vector3Int pos)
     {
-        return world != null && IsTransportTubeBlock(world.GetBlockAt(pos));
+        return world != null && IsTransportTubeNetworkBlock(world.GetBlockAt(pos));
     }
 
     private static bool CanConnect(
@@ -205,7 +211,7 @@ public static class TransportTubeUtility
             return false;
 
         int idx = x + y * voxelSizeX + z * voxelPlaneSize;
-        return IsTransportTubeBlock((BlockType)blockTypes[idx]);
+        return IsTransportTubeNetworkBlock((BlockType)blockTypes[idx]);
     }
 
     private static BlockPlacementAxis ResolveFallbackStraightAxis(BlockPlacementAxis fallbackAxis)

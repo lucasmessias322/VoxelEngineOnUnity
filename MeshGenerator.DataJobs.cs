@@ -71,6 +71,9 @@ public static partial class MeshGenerator
         public int border;
         public float seaLevel;
         public int baseHeight;
+        public bool useFlatWorld;
+        public int flatWorldHeight;
+        public BiomeType flatWorldBiome;
         public int CliffTreshold;
         public BiomeNoiseSettings biomeNoiseSettings;
 
@@ -94,6 +97,18 @@ public static partial class MeshGenerator
             int realLz = lz - effectiveBorder;
             int worldX = coord.x * SizeX + realLx;
             int worldZ = coord.y * SizeZ + realLz;
+
+            if (useFlatWorld)
+            {
+                columnContexts[index] = FlatWorldUtility.CreateColumnContext(
+                    worldX,
+                    worldZ,
+                    flatWorldHeight,
+                    SizeY,
+                    flatWorldBiome,
+                    biomeNoiseSettings);
+                return;
+            }
 
             int centerIdx = lx + lz * paddedSize;
             if ((uint)centerIdx >= (uint)heightCache.Length)
@@ -341,8 +356,8 @@ public static partial class MeshGenerator
             int maxSurfaceDepth = useFlatWorld
                 ? FlatWorldUtility.SurfaceLayerDepth
                 : math.max(1, surface.surfaceLayerDepth);
-            BlockType surfaceBlock = useFlatWorld ? BlockType.Grass : surface.surfaceBlock;
-            BlockType subsurfaceBlock = useFlatWorld ? BlockType.Stone : surface.subsurfaceBlock;
+            BlockType surfaceBlock = surface.surfaceBlock;
+            BlockType subsurfaceBlock = surface.subsurfaceBlock;
             int solidLayersPainted = 0;
 
             for (int y = surfaceY; y >= 3 && solidLayersPainted < maxSurfaceDepth; y--)

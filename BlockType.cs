@@ -90,6 +90,12 @@ public enum BlockType
     TransportTube = 84,
     TransportTube_L = 85,
     TransportTube_T = 86,
+    TransportTubeFilter = 87,
+    WaterPump = 88,
+    FluidPipe = 89,
+    FluidPipe_ShapeL = 90,
+    FluidPipe_ShapeT = 91
+
 
 
 
@@ -119,6 +125,7 @@ public static class MachineBlockUtility
             case BlockType.TransportTube:
             case BlockType.TransportTube_L:
             case BlockType.TransportTube_T:
+            case BlockType.TransportTubeFilter:
                 return true;
             case BlockType.MagneticSeparator:
                 return true;
@@ -140,7 +147,8 @@ public static class SaplingBlockUtility
     public static bool CanPlantOn(BlockType groundType)
     {
         return groundType == BlockType.Grass ||
-               groundType == BlockType.Dirt;
+               groundType == BlockType.Dirt ||
+               groundType == BlockType.Snow;
     }
 }
 

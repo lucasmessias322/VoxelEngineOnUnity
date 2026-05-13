@@ -102,6 +102,7 @@ public partial class World : MonoBehaviour
     private bool cachedEnableBiomeTintBlending;
     private BiomeTintQualityMode cachedBiomeTintQuality;
     private WorldTerrainMode cachedBiomeTintTerrainMode;
+    private BiomeType cachedBiomeTintFlatWorldBiome;
     private readonly Dictionary<BiomeType, BiomeDefinitionSO> biomeDefinitionsByType = new Dictionary<BiomeType, BiomeDefinitionSO>();
     private BiomeDefinitionSO[] cachedBiomeDefinitions = Array.Empty<BiomeDefinitionSO>();
     private bool biomeDefinitionsDirty = true;
@@ -129,12 +130,14 @@ public partial class World : MonoBehaviour
         if (!biomeTintCacheSettingsInitialized ||
             cachedEnableBiomeTintBlending != enableBiomeTintBlending ||
             cachedBiomeTintQuality != biomeTintQuality ||
-            cachedBiomeTintTerrainMode != terrainMode)
+            cachedBiomeTintTerrainMode != terrainMode ||
+            cachedBiomeTintFlatWorldBiome != GetResolvedFlatWorldBiome())
         {
             chunkBiomeTintCache.Clear();
             cachedEnableBiomeTintBlending = enableBiomeTintBlending;
             cachedBiomeTintQuality = biomeTintQuality;
             cachedBiomeTintTerrainMode = terrainMode;
+            cachedBiomeTintFlatWorldBiome = GetResolvedFlatWorldBiome();
             biomeTintCacheSettingsInitialized = true;
         }
     }
@@ -363,6 +366,9 @@ public partial class World : MonoBehaviour
 
     private BiomeType GetBiomeAt(int worldX, int worldZ)
     {
+        if (IsFlatWorldMode())
+            return GetResolvedFlatWorldBiome();
+
         return BiomeUtility.GetBiomeType(worldX, worldZ, GetBiomeNoiseSettings());
     }
 
@@ -576,10 +582,11 @@ public partial class World : MonoBehaviour
 
         if (IsFlatWorldMode())
         {
-            BiomeTintSample meadow = new BiomeTintSample(
-                GetGrassTintForBiome(BiomeType.Meadow),
-                GetFoliageTintForBiome(BiomeType.Meadow));
-            tints = BuildChunkBiomeTints(meadow, meadow, meadow, meadow, meadow, chunkMinX, chunkMinZ);
+            BiomeType flatBiome = GetResolvedFlatWorldBiome();
+            BiomeTintSample flatTint = new BiomeTintSample(
+                GetGrassTintForBiome(flatBiome),
+                GetFoliageTintForBiome(flatBiome));
+            tints = BuildChunkBiomeTints(flatTint, flatTint, flatTint, flatTint, flatTint, chunkMinX, chunkMinZ);
         }
         else if (!enableBiomeTintBlending)
         {

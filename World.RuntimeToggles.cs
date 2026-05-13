@@ -78,6 +78,13 @@ public partial class World
         bool waterChanged = lastEnableWater != enableWater;
         bool chunkDetailLodChanged = lastEnableChunkDetailLod != enableChunkDetailLod ||
                                      lastChunkDetailLodDistance != chunkDetailLodDistance;
+        int resolvedFlatWorldHeight = GetResolvedFlatWorldHeight();
+        BiomeType resolvedFlatWorldBiome = GetResolvedFlatWorldBiome();
+        bool terrainModeChanged = lastTerrainMode != terrainMode;
+        bool flatWorldSettingsChanged =
+            IsFlatWorldMode() &&
+            (lastFlatWorldHeight != resolvedFlatWorldHeight ||
+             lastFlatWorldBiome != resolvedFlatWorldBiome);
         bool leafQualityChanged = lastTreeLeafQuality != treeLeafQuality;
         int currentLeafFoliageSettingsHash = ComputeTreeLeafFoliageSettingsHash();
         bool leafFoliageSettingsChanged = lastTreeLeafFoliageSettingsHash != currentLeafFoliageSettingsHash;
@@ -93,6 +100,9 @@ public partial class World
         lastEnableAmbientOcclusion = enableAmbientOcclusion;
         lastEnableWater = enableWater;
         lastEnableChunkDetailLod = enableChunkDetailLod;
+        lastTerrainMode = terrainMode;
+        lastFlatWorldHeight = resolvedFlatWorldHeight;
+        lastFlatWorldBiome = resolvedFlatWorldBiome;
         lastChunkDetailLodDistance = chunkDetailLodDistance;
         lastTreeLeafQuality = treeLeafQuality;
         lastTreeLeafFoliageSettingsHash = currentLeafFoliageSettingsHash;
@@ -112,6 +122,8 @@ public partial class World
             !aoChanged &&
             !waterChanged &&
             !chunkDetailLodChanged &&
+            !terrainModeChanged &&
+            !flatWorldSettingsChanged &&
             !leafQualityChanged &&
             !leafFoliageSettingsChanged &&
             !horizontalLightingChanged &&

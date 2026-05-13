@@ -475,6 +475,7 @@ public partial class World
             baseHeight,
             IsFlatWorldMode(),
             GetResolvedFlatWorldHeight(),
+            GetResolvedFlatWorldBiome(),
             offsetX,
             offsetZ,
             seaLevel,

@@ -280,9 +280,6 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     bool ShouldDropBlock(BlockType blockType, bool canHarvest)
     {
-        if (blockType == BlockType.Leaves)
-            return false;
-
         return !RequiresCorrectToolForDrop(blockType) || canHarvest;
     }
 
@@ -2652,7 +2649,7 @@ public class PlayerBlockBreaker : MonoBehaviour
 
     private static bool CanPlaceMachineOnMachineSupport(BlockType placedBlockType, BlockType supportType)
     {
-        if (TransportTubeUtility.IsTransportTubeBlock(placedBlockType) &&
+        if (TransportTubeUtility.IsTransportTubeNetworkBlock(placedBlockType) &&
             MachineBlockUtility.IsMachineBlock(supportType))
         {
             return true;

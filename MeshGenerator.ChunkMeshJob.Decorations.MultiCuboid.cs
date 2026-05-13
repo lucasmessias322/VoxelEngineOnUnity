@@ -85,7 +85,19 @@ public static partial class MeshGenerator
                 return;
             }
 
+            Vector3 transportTubeFilterVerticalOffset = ResolveTransportTubeFilterRenderPlacement(
+                ref mapping,
+                blockType,
+                ref placementAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
             Vector3 visualOffset = ResolveSurfaceAlignedVisualOffset(mapping, blockType, placementAxis, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize);
+            visualOffset += transportTubeFilterVerticalOffset;
 
             FixedList512Bytes<ShapeBox> shapeBoxes = default;
             FixedList4096Bytes<ShapeFaceRect> faceRects = default;
@@ -159,6 +171,59 @@ public static partial class MeshGenerator
                     placementAxis,
                     RampShapeVariant.Straight);
             }
+        }
+
+        private Vector3 ResolveTransportTubeFilterRenderPlacement(
+            ref BlockTextureMapping mapping,
+            BlockType blockType,
+            ref BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize)
+        {
+            if (blockType != BlockType.TransportTubeFilter)
+                return Vector3.zero;
+
+            BlockPlacementAxis axis = BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis);
+            if (axis == BlockPlacementAxis.Y && HasMultiCuboidBlockAt(voxelX, voxelY - 1, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, BlockType.chest))
+            {
+                mapping.placementRotationAxes = BlockPlacementRotationAxes.Both;
+                placementAxis = BlockPlacementAxis.Z;
+                return new Vector3(0f, 0f, -0.3125f);
+            }
+
+            if (axis == BlockPlacementAxis.YNegative && HasMultiCuboidBlockAt(voxelX, voxelY + 1, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, BlockType.chest))
+            {
+                mapping.placementRotationAxes = BlockPlacementRotationAxes.Both;
+                placementAxis = BlockPlacementAxis.ZNegative;
+                return new Vector3(0f, 0f, 0.3125f);
+            }
+
+            return Vector3.zero;
+        }
+
+        private bool HasMultiCuboidBlockAt(
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            BlockType blockType)
+        {
+            if (!blockTypes.IsCreated ||
+                voxelX < 0 || voxelX >= voxelSizeX ||
+                voxelY < 0 || voxelY >= Chunk.SizeY ||
+                voxelZ < 0 || voxelZ >= voxelSizeZ)
+            {
+                return false;
+            }
+
+            int idx = voxelX + voxelY * voxelSizeX + voxelZ * voxelPlaneSize;
+            return (uint)idx < (uint)blockTypes.Length && (BlockType)blockTypes[idx] == blockType;
         }
 
         private void AddSlopedConveyorMultiCuboidShape(

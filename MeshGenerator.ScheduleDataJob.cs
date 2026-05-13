@@ -18,6 +18,7 @@ public static partial class MeshGenerator
         int baseHeight,
         bool useFlatWorld,
         int flatWorldHeight,
+        BiomeType selectedFlatWorldBiome,
         float globalOffsetX,
         float globalOffsetZ,
         float seaLevel,
@@ -182,6 +183,9 @@ public static partial class MeshGenerator
             border = dataBorderSize,
             seaLevel = seaLevel,
             baseHeight = baseHeight,
+            useFlatWorld = useFlatWorld,
+            flatWorldHeight = resolvedFlatWorldHeight,
+            flatWorldBiome = selectedFlatWorldBiome,
             CliffTreshold = CliffTreshold,
             biomeNoiseSettings = biomeNoiseSettings
         };
@@ -210,6 +214,7 @@ public static partial class MeshGenerator
             baseHeight = baseHeight,
             useFlatWorld = useFlatWorld,
             flatWorldHeight = resolvedFlatWorldHeight,
+            flatWorldBiome = selectedFlatWorldBiome,
             offsetX = globalOffsetX,
             offsetZ = globalOffsetZ,
             seaLevel = seaLevel,

@@ -52,6 +52,7 @@ public static class ChunkData
         public int baseHeight;
         public bool useFlatWorld;
         public int flatWorldHeight;
+        public BiomeType flatWorldBiome;
         public float offsetX;
         public float offsetZ;
         public float seaLevel;
@@ -578,7 +579,15 @@ public static class ChunkData
         private TerrainColumnContext GetColumnContextInternal(int worldX, int worldZ)
         {
             if (useFlatWorld)
-                return FlatWorldUtility.CreateColumnContext(worldX, worldZ, flatWorldHeight, SizeY);
+            {
+                return FlatWorldUtility.CreateColumnContext(
+                    worldX,
+                    worldZ,
+                    flatWorldHeight,
+                    SizeY,
+                    flatWorldBiome,
+                    biomeNoiseSettings);
+            }
 
             if (TryGetColumnContextFromCache(worldX, worldZ, out TerrainColumnContext cachedColumnContext))
                 return cachedColumnContext;

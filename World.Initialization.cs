@@ -16,6 +16,12 @@ public partial class World
         EnsureTerrainLayerArraysInitialized();
         EnsureTerrainSplineShaperInitialized();
         flatWorldHeight = GetResolvedFlatWorldHeight();
+        if (!flatWorldBiomeInitialized)
+        {
+            flatWorldBiome = BiomeType.Meadow;
+            flatWorldBiomeInitialized = true;
+        }
+        flatWorldBiome = GetResolvedFlatWorldBiome();
 
         offsetX = seed * 17.123f;
         offsetZ = seed * -9.753f;

@@ -254,6 +254,7 @@ public partial class World
             return;
         }
 
+        BlockBreakDropResolver.TrySpawnDrop(this, worldPos, BlockType.Leaves, Vector3.zero);
         SetBlockAt(worldPos, BlockType.Air);
     }
 
@@ -382,6 +383,8 @@ public partial class World
                blockType == BlockType.birch_log ||
                blockType == BlockType.acacia_log;
     }
+
+    public int OakLeafSaplingDropOneIn => Mathf.Max(1, oakLeafSaplingDropOneIn);
 
     private void HandlePlayerPlacedLogBlockChange(
         Vector3Int worldPos,
