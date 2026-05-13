@@ -103,7 +103,8 @@ public partial class World
         if (blockType == BlockType.wire)
             return (BlockPlacementAxis)WirePlacementUtility.ResolvePlacementCode(hitNormal);
 
-        if (TransportTubeUtility.IsTransportTubeNetworkBlock(blockType))
+        if (TransportTubeUtility.IsTransportTubeNetworkBlock(blockType) ||
+            FluidPipeUtility.IsFluidPipeBlock(blockType))
         {
             if (hitNormal.x != 0)
                 return BlockPlacementAxis.X;

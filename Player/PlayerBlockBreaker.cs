@@ -2655,6 +2655,12 @@ public class PlayerBlockBreaker : MonoBehaviour
             return true;
         }
 
+        if (FluidPipeUtility.IsFluidPipeBlock(placedBlockType) &&
+            MachineBlockUtility.IsMachineBlock(supportType))
+        {
+            return true;
+        }
+
         return supportType == BlockType.AutoMiner &&
                ConveyorBeltUtility.IsConveyorBlock(placedBlockType);
     }

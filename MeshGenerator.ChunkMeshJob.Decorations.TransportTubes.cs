@@ -148,6 +148,125 @@ public static partial class MeshGenerator
             return false;
         }
 
+        private void AddFluidPipeShape(
+            Vector3 origin,
+            BlockTextureMapping mapping,
+            BlockPlacementAxis placementAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01)
+        {
+            byte connectionMask = FluidPipeUtility.ResolveConnectionMask(
+                voxelX,
+                voxelY,
+                voxelZ,
+                blockTypes,
+                blockPlacementAxes,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize);
+
+            NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
+            if (TryAddBlockbenchFluidPipeShape(
+                    origin,
+                    connectionMask,
+                    placementAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    light01,
+                    tris))
+            {
+                return;
+            }
+
+            FixedList512Bytes<ShapeBox> shapeBoxes =
+                FluidPipeUtility.BuildVisualBoxes(connectionMask, placementAxis);
+
+            if (TryAddProceduralFluidPipeShapeWithImportedUv(
+                    origin,
+                    shapeBoxes,
+                    connectionMask,
+                    placementAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    light01,
+                    tris))
+            {
+                return;
+            }
+
+            AddAmbientOccludedShapeBoxes(
+                origin,
+                mapping,
+                light01,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                tris,
+                shapeBoxes);
+        }
+
+        private bool TryAddBlockbenchFluidPipeShape(
+            Vector3 origin,
+            byte connectionMask,
+            BlockPlacementAxis fallbackAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01,
+            NativeList<int> tris)
+        {
+            FluidPipeUtility.PipeState state = FluidPipeUtility.ResolveState(connectionMask, fallbackAxis);
+            if (state.blockType != BlockType.FluidPipe ||
+                state.placementAxis == BlockPlacementAxis.YNegative)
+            {
+                return false;
+            }
+
+            return TryAddImportedTransportTubeModel(
+                origin,
+                BlockType.FluidPipe,
+                state.placementAxis,
+                voxelX,
+                voxelY,
+                voxelZ,
+                voxelSizeX,
+                voxelSizeZ,
+                voxelPlaneSize,
+                invAtlasTilesX,
+                invAtlasTilesY,
+                light01,
+                tris);
+        }
+
         private bool TryAddImportedTransportTubeModel(
             Vector3 origin,
             BlockType visualBlockType,
@@ -208,6 +327,63 @@ public static partial class MeshGenerator
 
             if (!appendedAnyCuboid || shapeBoxes.Length == 0)
                 return appendedAnyCuboid;
+
+            CullHiddenShapeFaceRects(ref faceRects, shapeBoxes);
+            MergeShapeFaceRects(ref faceRects);
+
+            for (int i = 0; i < faceRects.Length; i++)
+            {
+                AddAmbientOccludedShapeRect(
+                    origin,
+                    visualMapping,
+                    faceRects[i],
+                    light01,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    tris,
+                    shapeBoxes,
+                    BlockRenderShape.MultiCuboid,
+                    visualAxis,
+                    RampShapeVariant.Straight);
+            }
+
+            return true;
+        }
+
+        private bool TryAddProceduralFluidPipeShapeWithImportedUv(
+            Vector3 origin,
+            in FixedList512Bytes<ShapeBox> shapeBoxes,
+            byte connectionMask,
+            BlockPlacementAxis fallbackAxis,
+            int voxelX,
+            int voxelY,
+            int voxelZ,
+            int voxelSizeX,
+            int voxelSizeZ,
+            int voxelPlaneSize,
+            float invAtlasTilesX,
+            float invAtlasTilesY,
+            float light01,
+            NativeList<int> tris)
+        {
+            if (shapeBoxes.Length <= 0)
+                return false;
+
+            FluidPipeUtility.PipeState state = FluidPipeUtility.ResolveState(connectionMask, fallbackAxis);
+            BlockTextureMapping visualMapping = GetLogicalBlockMapping(state.blockType);
+            BlockPlacementAxis visualAxis = state.placementAxis;
+            if (GetNativeMultiCuboidBoxCount(visualMapping) <= 0)
+                return false;
+
+            FixedList4096Bytes<ShapeFaceRect> faceRects = default;
+            for (int i = 0; i < shapeBoxes.Length; i++)
+                AppendTransportTubeProceduralFaceRects(ref faceRects, shapeBoxes[i], visualMapping, visualAxis);
 
             CullHiddenShapeFaceRects(ref faceRects, shapeBoxes);
             MergeShapeFaceRects(ref faceRects);

@@ -571,6 +571,16 @@ internal sealed class SubchunkColliderBuilder
                                 break;
                             }
 
+                            if (FluidPipeUtility.IsFluidPipeBlock(blockType))
+                            {
+                                byte connectionMask = FluidPipeUtility.ResolveConnectionMask(world, worldPos);
+                                FixedList512Bytes<ShapeBox> pipeBoxes =
+                                    FluidPipeUtility.BuildVisualBoxes(connectionMask, multiAxis);
+                                for (int i = 0; i < pipeBoxes.Length; i++)
+                                    colliderCount = AddShapeColliderBox(owner, colliderCount, localBlockPos, pipeBoxes[i]);
+                                break;
+                            }
+
                             Vector3 supportOffset = BlockSupportSurfaceUtility.GetSurfaceAlignedWorldOffset(world, worldPos, blockType, mapping, multiAxis);
                             int boxCount = BlockShapeUtility.GetMultiCuboidBoxCount(mapping, blockModelCuboids);
                             if (boxCount <= 0)

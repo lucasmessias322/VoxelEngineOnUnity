@@ -46,6 +46,24 @@ public static partial class MeshGenerator
                 return;
             }
 
+            if (FluidPipeUtility.IsFluidPipeBlock(blockType))
+            {
+                AddFluidPipeShape(
+                    origin,
+                    mapping,
+                    placementAxis,
+                    voxelX,
+                    voxelY,
+                    voxelZ,
+                    voxelSizeX,
+                    voxelSizeZ,
+                    voxelPlaneSize,
+                    invAtlasTilesX,
+                    invAtlasTilesY,
+                    light01);
+                return;
+            }
+
             if (IsWallTorch(blockType))
             {
                 float resolvedLight01 = math.max(light01, mapping.lightEmission / 15f);

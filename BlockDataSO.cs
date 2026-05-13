@@ -1158,6 +1158,7 @@ public class BlockDataSO : ScriptableObject
 
         CopyConveyorMultiCuboidRuntimeDataToSlopedConveyor();
         NormalizeTransportTubeRuntimeMappings();
+        NormalizeFluidPipeRuntimeMappings();
 
         runtimeMultiCuboidBoxes = cuboids.Count > 0
             ? cuboids.ToArray()
@@ -1229,6 +1230,29 @@ public class BlockDataSO : ScriptableObject
             mapping.CopyUvRectDataFrom(source);
         }
 
+        mappings[index] = mapping;
+    }
+
+    private void NormalizeFluidPipeRuntimeMappings()
+    {
+        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe);
+        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeL);
+        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeT);
+    }
+
+    private void NormalizeFluidPipeRuntimeMapping(BlockType blockType)
+    {
+        int index = (int)blockType;
+        if (mappings == null || index < 0 || index >= mappings.Length)
+            return;
+
+        BlockTextureMapping mapping = mappings[index];
+        if (mapping.blockType != blockType)
+            return;
+
+        mapping.renderShape = BlockRenderShape.MultiCuboid;
+        mapping.usePlacementAxisRotation = true;
+        mapping.placementRotationAxes = BlockPlacementRotationAxes.Horizontal;
         mappings[index] = mapping;
     }
 

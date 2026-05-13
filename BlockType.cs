@@ -94,7 +94,8 @@ public enum BlockType
     WaterPump = 88,
     FluidPipe = 89,
     FluidPipe_ShapeL = 90,
-    FluidPipe_ShapeT = 91
+    FluidPipe_ShapeT = 91,
+    SteamEngine = 92,
 
 
 
@@ -126,6 +127,10 @@ public static class MachineBlockUtility
             case BlockType.TransportTube_L:
             case BlockType.TransportTube_T:
             case BlockType.TransportTubeFilter:
+            case BlockType.WaterPump:
+            case BlockType.FluidPipe:
+            case BlockType.FluidPipe_ShapeL:
+            case BlockType.FluidPipe_ShapeT:
                 return true;
             case BlockType.MagneticSeparator:
                 return true;

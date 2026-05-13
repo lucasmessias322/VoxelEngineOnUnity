@@ -152,6 +152,10 @@ public static class BlockItemCatalog
         if (fallbackBlockType != blockType)
             return true;
 
+        fallbackBlockType = FluidPipeUtility.GetInventoryDropBlockType(blockType);
+        if (fallbackBlockType != blockType)
+            return true;
+
         fallbackBlockType = TorchPlacementUtility.GetInventoryDropBlockType(blockType);
         if (fallbackBlockType != blockType)
             return true;

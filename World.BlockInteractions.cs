@@ -5,6 +5,7 @@ public partial class World
     private readonly Vector2Int[] blockChangeChunksToRebuildBuffer = new Vector2Int[9];
     private bool refreshingConveyorSlopeConnections;
     private bool refreshingTransportTubeConnections;
+    private bool refreshingFluidPipeConnections;
     private static readonly Vector3Int[] conveyorSlopeRefreshHorizontalOffsets =
     {
         Vector3Int.zero,
@@ -14,6 +15,16 @@ public partial class World
         new Vector3Int(0, 0, 1)
     };
     private static readonly Vector3Int[] transportTubeRefreshHorizontalOffsets =
+    {
+        Vector3Int.zero,
+        Vector3Int.left,
+        Vector3Int.right,
+        new Vector3Int(0, 0, -1),
+        new Vector3Int(0, 0, 1),
+        Vector3Int.down,
+        Vector3Int.up
+    };
+    private static readonly Vector3Int[] fluidPipeRefreshOffsets =
     {
         Vector3Int.zero,
         Vector3Int.left,
@@ -109,7 +120,7 @@ public partial class World
         }
         else if (current == type)
         {
-            if (!TransportTubeUtility.IsTransportTubeNetworkBlock(type) ||
+            if ((!TransportTubeUtility.IsTransportTubeNetworkBlock(type) && !FluidPipeUtility.IsFluidPipeBlock(type)) ||
                 BlockPlacementRotationUtility.SanitizeStoredAxis(GetPlacementAxisAt(worldPos, type)) ==
                 BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
             {
@@ -159,6 +170,9 @@ public partial class World
 
         if (!refreshingTransportTubeConnections)
             RefreshTransportTubeConnectionsAround(worldPos);
+
+        if (!refreshingFluidPipeConnections)
+            RefreshFluidPipeConnectionsAround(worldPos);
     }
 
     private void RefreshTransportTubeConnectionsAround(Vector3Int worldPos)
@@ -206,6 +220,39 @@ public partial class World
         }
 
         SetBlockAt(tubePos, targetState.blockType, false, targetAxis);
+    }
+
+    private void RefreshFluidPipeConnectionsAround(Vector3Int worldPos)
+    {
+        refreshingFluidPipeConnections = true;
+        try
+        {
+            for (int i = 0; i < fluidPipeRefreshOffsets.Length; i++)
+                TryRefreshFluidPipeConnection(worldPos + fluidPipeRefreshOffsets[i]);
+        }
+        finally
+        {
+            refreshingFluidPipeConnections = false;
+        }
+    }
+
+    private void TryRefreshFluidPipeConnection(Vector3Int pipePos)
+    {
+        BlockType currentType = GetBlockAt(pipePos);
+        if (!FluidPipeUtility.IsFluidPipeBlock(currentType))
+            return;
+
+        BlockPlacementAxis currentAxis = GetPlacementAxisAt(pipePos, currentType);
+        FluidPipeUtility.PipeState targetState = FluidPipeUtility.ResolveState(this, pipePos, currentAxis);
+        BlockPlacementAxis targetAxis = BlockPlacementRotationUtility.SanitizeStoredAxis(targetState.placementAxis);
+
+        if (currentType == targetState.blockType &&
+            BlockPlacementRotationUtility.SanitizeStoredAxis(currentAxis) == targetAxis)
+        {
+            return;
+        }
+
+        SetBlockAt(pipePos, targetState.blockType, false, targetAxis);
     }
 
     private void RefreshConveyorSlopeConnectionsAround(Vector3Int worldPos)

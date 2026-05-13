@@ -1634,6 +1634,12 @@ public static class BlockSupportSurfaceUtility
                 return true;
 
             case BlockRenderShape.MultiCuboid:
+                if (FluidPipeUtility.IsFluidPipeBlock(blockType) &&
+                    FluidPipeUtility.TryGetVisualBounds(world, blockPos, world.GetPlacementAxisAt(blockPos, blockType), out bounds))
+                {
+                    return true;
+                }
+
                 if (BlockShapeUtility.TryGetMultiCuboidBounds(
                     blockPos,
                     mapping,
