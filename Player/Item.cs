@@ -53,6 +53,12 @@ public class Item : ScriptableObject
     [FormerlySerializedAs("icon")]
     public Sprite itemSprite;
 
+    [Header("Block Texture Override")]
+    [Tooltip("Opcional para itens de bloco: aplica este entryId em todas as faces do bloco. Faces preenchidas abaixo sobrescrevem este valor. Vazio mantem o BlockDataSO.")]
+    public string blockAllFacesTextureEntryId;
+    [Tooltip("Opcional para itens de bloco: entryIds por face usados no atlas de blocos. Preencha somente as faces que devem substituir o BlockDataSO durante a transicao.")]
+    public BlockFaceTextureEntryIdSet blockTextureEntryIds = new BlockFaceTextureEntryIdSet();
+
     [Header("Held Visual")]
     [Tooltip("Optional prefab shown in the player's hand when this item is selected.")]
     public GameObject heldPrefab;
@@ -86,6 +92,28 @@ public class Item : ScriptableObject
 
         resolvedBlockType = BlockType.Air;
         return false;
+    }
+
+    public bool HasBlockTextureEntryDefinitions()
+    {
+        return IsBlockItem &&
+               (!string.IsNullOrWhiteSpace(blockAllFacesTextureEntryId) ||
+                (blockTextureEntryIds != null && blockTextureEntryIds.HasAny()));
+    }
+
+    public bool TryGetBlockTextureEntryId(BlockFace face, out string entryId)
+    {
+        entryId = string.Empty;
+        if (!IsBlockItem || !HasBlockTextureEntryDefinitions())
+            return false;
+
+        if (blockTextureEntryIds != null && blockTextureEntryIds.TryGet(face, out entryId))
+            return true;
+
+        entryId = string.IsNullOrWhiteSpace(blockAllFacesTextureEntryId)
+            ? string.Empty
+            : blockAllFacesTextureEntryId.Trim();
+        return !string.IsNullOrEmpty(entryId);
     }
 
     private void OnValidate()

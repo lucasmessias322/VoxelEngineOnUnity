@@ -34,8 +34,6 @@ public static class VoxelAtlasCompatibility
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
 
-        blockData.NormalizeBuiltInTextureEntryIds(generator);
-
         bool updatedAnyMapping = ApplyBlockMappings(generator, blockData);
         bool updatedAnyCuboid = ApplyMultiCuboidMappings(generator, blockData);
 
@@ -66,8 +64,6 @@ public static class VoxelAtlasCompatibility
 
         if (generator.GeneratedAtlas == null || generator.UvMap.Count == 0)
             return false;
-
-        blockData.NormalizeBuiltInTextureEntryIds(generator);
 
         bool updatedAnyMapping = CaptureBlockMappingEntryIds(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
         bool updatedAnyCuboid = CaptureMultiCuboidEntryIds(generator, blockData, legacyAtlasTiles, atlasOriginTopLeft);
@@ -143,15 +139,14 @@ public static class VoxelAtlasCompatibility
     {
         entryId = string.Empty;
         if (blockData != null &&
-            blockData.TryGetTextureEntryId(blockType, face, out string explicitEntryId) &&
+            blockData.TryGetPreferredTextureEntryId(blockType, face, out string explicitEntryId) &&
             !string.IsNullOrWhiteSpace(explicitEntryId))
         {
             entryId = explicitEntryId;
             return true;
         }
 
-        return BlockTextureEntryIdResolver.TryGetCanonicalEntryId(blockType, face, out entryId) &&
-               !string.IsNullOrWhiteSpace(entryId);
+        return false;
     }
 
     private static bool ApplyMultiCuboidMappings(
@@ -344,7 +339,6 @@ public static class VoxelAtlasCompatibility
             blockData.TryGetResolvedTextureEntryId(generator, blockType, face, out string entryId) &&
             generator.TryGetUv(entryId, out uvRect))
         {
-            blockData.SetTextureEntryId(blockType, face, entryId);
             return true;
         }
 

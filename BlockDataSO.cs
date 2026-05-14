@@ -896,9 +896,36 @@ public class BlockDataSO : ScriptableObject
                record.entryIds.TryGet(face, out entryId);
     }
 
+    public bool TryGetItemTextureEntryId(BlockType blockType, BlockFace face, out string entryId)
+    {
+        entryId = string.Empty;
+        return BlockItemCatalog.TryGetItemForBlock(blockType, out Item item) &&
+               item != null &&
+               item.TryGetBlockTextureEntryId(face, out entryId);
+    }
+
+    public bool TryGetPreferredTextureEntryId(BlockType blockType, BlockFace face, out string entryId)
+    {
+        if (TryGetItemTextureEntryId(blockType, face, out entryId))
+            return true;
+
+        if (TryGetTextureEntryId(blockType, face, out entryId))
+            return true;
+
+        return BlockTextureEntryIdResolver.TryGetCanonicalEntryId(blockType, face, out entryId) &&
+               !string.IsNullOrWhiteSpace(entryId);
+    }
+
     public bool TryGetResolvedTextureEntryId(TextureAtlasGenerator generator, BlockType blockType, BlockFace face, out string entryId)
     {
         entryId = string.Empty;
+
+        if (TryGetItemTextureEntryId(blockType, face, out string itemEntryId) &&
+            (generator == null || generator.TryGetUv(itemEntryId, out _)))
+        {
+            entryId = itemEntryId;
+            return true;
+        }
 
         if (TryGetTextureEntryId(blockType, face, out string explicitEntryId) &&
             (generator == null || generator.TryGetUv(explicitEntryId, out _)))
