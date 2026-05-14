@@ -84,7 +84,6 @@ public enum BlockType
     conveyorBelt_45deg = 79,
     AutoMiner = 80,
     StoneCrusher = 81,
-
     Gravel = 82,
     MagneticSeparator = 83,
     TransportTube = 84,
@@ -100,6 +99,7 @@ public enum BlockType
     ClayBricksWall = 94,
     ClayBricksWall_Ramp = 95,
     ClayBricksWall_VerticalRamp = 96,
+    FluidPipe_ShapeCross = 97,
 
 
 
@@ -136,6 +136,7 @@ public static class MachineBlockUtility
             case BlockType.FluidPipe:
             case BlockType.FluidPipe_ShapeL:
             case BlockType.FluidPipe_ShapeT:
+            case BlockType.FluidPipe_ShapeCross:
             case BlockType.SteamEngine:
                 return true;
             case BlockType.MagneticSeparator:

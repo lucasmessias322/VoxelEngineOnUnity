@@ -341,6 +341,45 @@ public static class ConveyorBeltUtility
                TryFindSupportConveyor(world, itemCenter, collisionHalfExtent, out _, out _);
     }
 
+    public static bool TryGetSupportConveyorVisualFrame(
+        World world,
+        Vector3 itemCenter,
+        float collisionHalfExtent,
+        out Vector3 surfaceNormal,
+        out Vector3 visualForward)
+    {
+        surfaceNormal = Vector3.up;
+        visualForward = Vector3.forward;
+
+        if (world == null ||
+            !TryFindSupportConveyor(world, itemCenter, collisionHalfExtent, out Vector3Int beltPos, out BlockType conveyorType))
+        {
+            return false;
+        }
+
+        BlockPlacementAxis placementAxis = ResolveConveyorAxis(world, beltPos, conveyorType);
+        Vector3 beltForward = GetForwardDirection(conveyorType, placementAxis);
+        Vector3 travelDirection = conveyorType == BlockType.conveyorBelt_splitter
+            ? beltForward
+            : ResolveConveyorTravelDirection(world, beltPos, conveyorType, placementAxis, beltForward);
+
+        if (travelDirection.sqrMagnitude <= 0.0001f)
+            travelDirection = beltForward;
+
+        visualForward = travelDirection.normalized;
+        Vector3 lateral = Mathf.Abs(beltForward.x) > Mathf.Abs(beltForward.z)
+            ? Vector3.forward
+            : Vector3.right;
+
+        surfaceNormal = Vector3.Cross(visualForward, lateral).normalized;
+        if (surfaceNormal.sqrMagnitude <= 0.0001f)
+            surfaceNormal = Vector3.up;
+        else if (surfaceNormal.y < 0f)
+            surfaceNormal = -surfaceNormal;
+
+        return true;
+    }
+
     public static bool TryGetSupportedSplitterOutputCount(
         World world,
         Vector3 itemCenter,

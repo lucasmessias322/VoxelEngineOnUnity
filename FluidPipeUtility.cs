@@ -22,7 +22,8 @@ public static class FluidPipeUtility
     {
         return blockType == BlockType.FluidPipe ||
                blockType == BlockType.FluidPipe_ShapeL ||
-               blockType == BlockType.FluidPipe_ShapeT;
+               blockType == BlockType.FluidPipe_ShapeT ||
+               blockType == BlockType.FluidPipe_ShapeCross;
     }
 
     public static BlockType GetInventoryDropBlockType(BlockType blockType)
@@ -58,6 +59,9 @@ public static class FluidPipeUtility
 
             return new PipeState(BlockType.FluidPipe_ShapeL, ResolveCornerAxis(connectionMask));
         }
+
+        if (connectionCount == 4)
+            return new PipeState(BlockType.FluidPipe_ShapeCross, BlockPlacementAxis.Z);
 
         return new PipeState(BlockType.FluidPipe_ShapeT, ResolveTJunctionAxis(connectionMask));
     }

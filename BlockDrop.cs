@@ -143,7 +143,6 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
     [SerializeField] private bool preventDespawnOnConveyor = true;
-    [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
     [SerializeField] private float launchForce = 2.2f;
     [SerializeField] private float pickupDelaySeconds = 0.5f;
@@ -2262,8 +2261,6 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         if (!gameObject.activeSelf || isPooled || isCollected || isHeldByRoboticArm)
             return;
 
-        transform.Rotate(Vector3.up, rotateSpeed * Time.deltaTime, Space.World);
-
         WakeIfSupportWasRemoved();
         WakeIfOnConveyor();
 
@@ -2846,7 +2843,6 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     [Header("Drop")]
     [SerializeField] private float lifeTimeSeconds = 30f;
     [SerializeField] private bool preventDespawnOnConveyor = true;
-    [SerializeField] private float rotateSpeed = 110f;
     [SerializeField] private float dropScale = 0.35f;
     [SerializeField, Min(0.05f)] private float itemVisualWorldHeight = 0.42f;
     [SerializeField, Min(0.05f)] private float itemVisualMaxWorldWidth = 0.7f;
@@ -3182,8 +3178,6 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
             ReturnToPool();
             return;
         }
-
-        visualSpinAngle = (visualSpinAngle + rotateSpeed * Time.deltaTime) % 360f;
 
         WakeIfSupportWasRemoved();
         WakeIfOnConveyor();
@@ -3716,17 +3710,24 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
         if (visualRoot == null)
             return;
 
-        float bob = Mathf.Sin((Time.time - spawnTime) * 5f) * 0.05f;
-        visualRoot.localPosition = new Vector3(0f, 0.18f + bob, 0f);
+        bool supportedByConveyor = ConveyorBeltUtility.TryGetSupportConveyorVisualFrame(
+            World.Instance,
+            transform.position,
+            collisionHalfExtent,
+            out Vector3 conveyorSurfaceNormal,
+            out Vector3 conveyorVisualForward);
 
-        Camera cameraRef = Camera.main;
-        if (cameraRef != null)
+        visualRoot.localPosition = new Vector3(0f, 0.18f, 0f);
+
+        if (supportedByConveyor)
         {
-            visualRoot.rotation = cameraRef.transform.rotation * Quaternion.Euler(0f, 0f, visualSpinAngle);
+            visualRoot.rotation = Quaternion.LookRotation(conveyorSurfaceNormal, conveyorVisualForward) *
+                                  Quaternion.Euler(0f, 0f, visualSpinAngle);
             return;
         }
 
-        visualRoot.rotation = Quaternion.Euler(0f, visualSpinAngle, 0f);
+        visualRoot.rotation = Quaternion.LookRotation(Vector3.up, Vector3.forward) *
+                              Quaternion.Euler(0f, 0f, visualSpinAngle);
     }
 
     private void UpdateDropName()

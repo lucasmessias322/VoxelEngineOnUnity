@@ -111,6 +111,8 @@ public static partial class MeshGenerator
                 ResolveAtlasRect(mapping, BlockFace.Front, invAtlasTilesX, invAtlasTilesY, out Vector2 lineAtlasUv, out Vector2 lineAtlasSize);
                 ResolveAtlasRect(mapping, BlockFace.Back, invAtlasTilesX, invAtlasTilesY, out Vector2 shortLineAtlasUv, out Vector2 shortLineAtlasSize);
                 ResolveAtlasRect(mapping, BlockFace.Top, invAtlasTilesX, invAtlasTilesY, out Vector2 dotAtlasUv, out Vector2 dotAtlasSize);
+                shortLineAtlasUv = lineAtlasUv;
+                shortLineAtlasSize = lineAtlasSize;
 
                 if (wireHasTopOnCurrentCell)
                 {

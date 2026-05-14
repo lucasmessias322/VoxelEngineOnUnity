@@ -1238,6 +1238,7 @@ public class BlockDataSO : ScriptableObject
         NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe);
         NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeL);
         NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeT);
+        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeCross);
     }
 
     private void NormalizeFluidPipeRuntimeMapping(BlockType blockType)

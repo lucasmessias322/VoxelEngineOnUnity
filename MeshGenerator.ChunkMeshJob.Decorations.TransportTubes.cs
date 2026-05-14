@@ -248,9 +248,10 @@ public static partial class MeshGenerator
             int connectionCount = TransportTubeUtility.CountConnections(connectionMask);
 
             if (state.blockType == BlockType.FluidPipe_ShapeL ||
-                state.blockType == BlockType.FluidPipe_ShapeT)
+                state.blockType == BlockType.FluidPipe_ShapeT ||
+                state.blockType == BlockType.FluidPipe_ShapeCross)
             {
-                if (connectionCount > 3)
+                if (state.blockType != BlockType.FluidPipe_ShapeCross && connectionCount > 3)
                     return false;
 
                 if (TransportTubeUtility.HasVerticalConnection(connectionMask))
@@ -426,7 +427,9 @@ public static partial class MeshGenerator
         {
             byte sourceMask = visualBlockType == BlockType.FluidPipe_ShapeL
                 ? (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectSouth)
-                : (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectEast | TransportTubeUtility.ConnectSouth);
+                : visualBlockType == BlockType.FluidPipe_ShapeCross
+                    ? (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectEast | TransportTubeUtility.ConnectSouth | TransportTubeUtility.ConnectNorth)
+                    : (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectEast | TransportTubeUtility.ConnectSouth);
 
             if (!TryResolveFluidPipeJunctionRotation(sourceMask, connectionMask, out FluidPipeJunctionRotation rotation))
                 return false;
@@ -510,31 +513,18 @@ public static partial class MeshGenerator
                 return;
 
             ResolveCuboidFace(sourceBox, localFace, out Vector3 sourceP0, out Vector3 sourceP1, out Vector3 sourceP2, out Vector3 sourceP3, out Vector3 sourceNormal);
-
-            Vector2 uv0 = ResolveShapeProjectedUv(localFace, sourceP0);
-            Vector2 uv1 = ResolveShapeProjectedUv(localFace, sourceP1);
-            Vector2 uv2 = ResolveShapeProjectedUv(localFace, sourceP2);
-            Vector2 uv3 = ResolveShapeProjectedUv(localFace, sourceP3);
-            ResolveShapeBoxProjectedUvBounds(
-                sourceBox,
-                localFace,
-                out float sourceMinU,
-                out float sourceMaxU,
-                out float sourceMinV,
-                out float sourceMaxV);
-            NormalizeProjectedQuadUv(
-                ref uv0,
-                ref uv1,
-                ref uv2,
-                ref uv3,
-                new Vector4(sourceMinU, sourceMaxU, sourceMinV, sourceMaxV));
-
             Vector3 p0 = RotateFluidPipeJunctionPoint(sourceP0, rotation);
             Vector3 p1 = RotateFluidPipeJunctionPoint(sourceP1, rotation);
             Vector3 p2 = RotateFluidPipeJunctionPoint(sourceP2, rotation);
             Vector3 p3 = RotateFluidPipeJunctionPoint(sourceP3, rotation);
             Vector3 normal = RotateFluidPipeJunctionDirection(sourceNormal, rotation).normalized;
             BlockFace worldFace = ResolveTransportTubeFaceFromNormal(normal);
+
+            Vector2 uv0 = ResolveShapeProjectedUv(worldFace, p0);
+            Vector2 uv1 = ResolveShapeProjectedUv(worldFace, p1);
+            Vector2 uv2 = ResolveShapeProjectedUv(worldFace, p2);
+            Vector2 uv3 = ResolveShapeProjectedUv(worldFace, p3);
+            NormalizeProjectedQuadUv(ref uv0, ref uv1, ref uv2, ref uv3);
 
             AddAmbientOccludedCustomQuad(
                 origin,
@@ -567,9 +557,9 @@ public static partial class MeshGenerator
                 RampShapeVariant.Straight,
                 false,
                 hasExplicitAppearance: true,
-                explicitTile: cuboid.GetTileCoord(localFace, visualMapping),
-                explicitTint: visualMapping.GetTint(localFace),
-                explicitUvRectData: cuboid.TryGetUvRectData(localFace, visualMapping, out Vector4 cuboidUvRectData)
+                explicitTile: cuboid.GetTileCoord(worldFace, visualMapping),
+                explicitTint: visualMapping.GetTint(worldFace),
+                explicitUvRectData: cuboid.TryGetUvRectData(worldFace, visualMapping, out Vector4 cuboidUvRectData)
                     ? cuboidUvRectData
                     : default);
         }

@@ -333,8 +333,9 @@ public partial class World
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessQueuedSaplingGrowth();
 
-        if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
-            ProcessElectricitySimulation();
+        // Keep generators and consumers on a real-time cadence even when
+        // chunk, water, or lighting work exhausts the frame budget.
+        ProcessElectricitySimulation();
 
         if (HasUpdateBudgetRemaining(updateFrameStartTime, updateBudgetSeconds))
             ProcessTreecutterMachines();

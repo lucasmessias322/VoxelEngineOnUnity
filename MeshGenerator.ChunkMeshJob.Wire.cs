@@ -12,7 +12,7 @@ public static partial class MeshGenerator
     private partial struct ChunkMeshJob
     {
         private const float WireConnectionOverlap = 0.01f;
-        private const float WireUvEdgeInset = 0.001f;
+        private const float WireUvEdgeInset = 0.125f;
 
         private static void OffsetWireTopQuad(ref Vector3 p0, ref Vector3 p1, ref Vector3 p2, ref Vector3 p3)
         {
@@ -167,6 +167,27 @@ public static partial class MeshGenerator
 
             if (connectSouth)
                 AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, normalOffset: layerStep * 4f, projectTextureFromSurface: true);
+
+            if (IsWireCornerJoint(connectWest, connectEast, connectSouth, connectNorth))
+            {
+                AddWireSurfaceQuad(
+                    origin,
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    dotAtlasUv,
+                    dotAtlasSize,
+                    light01,
+                    tint,
+                    tris,
+                    0,
+                    normalOffset: layerStep * 5f);
+            }
         }
 
         private void RenderWireWallSurface(
@@ -342,6 +363,34 @@ public static partial class MeshGenerator
 
             if (connectNegT)
                 AddWireSurfaceQuad(origin, p0, p1, p2, p3, 0.5f - armHalfWidth, 0.5f + armHalfWidth, -WireConnectionOverlap, 0.5f + WireConnectionOverlap, shortLineAtlasUv, shortLineAtlasSize, light01, tint, tris, 1, normalOffset: layerStep * 4f, projectTextureFromSurface: true);
+
+            if (IsWireCornerJoint(connectNegS, connectPosS, connectNegT, connectPosT))
+            {
+                AddWireSurfaceQuad(
+                    origin,
+                    p0,
+                    p1,
+                    p2,
+                    p3,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    0.5f - centerHalfSize,
+                    0.5f + centerHalfSize,
+                    dotAtlasUv,
+                    dotAtlasSize,
+                    light01,
+                    tint,
+                    tris,
+                    0,
+                    normalOffset: layerStep * 5f);
+            }
+        }
+
+        private static bool IsWireCornerJoint(bool negativeS, bool positiveS, bool negativeT, bool positiveT)
+        {
+            int sConnections = (negativeS ? 1 : 0) + (positiveS ? 1 : 0);
+            int tConnections = (negativeT ? 1 : 0) + (positiveT ? 1 : 0);
+            return sConnections == 1 && tConnections == 1;
         }
 
         private enum WireTopConnectionMode : byte
