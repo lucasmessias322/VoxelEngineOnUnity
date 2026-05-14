@@ -1199,8 +1199,6 @@ public class BlockDataSO : ScriptableObject
             template = mappings[templateIndex];
 
         NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube, template);
-        NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube_L, template);
-        NormalizeTransportTubeRuntimeMapping(BlockType.TransportTube_T, template);
     }
 
     private void NormalizeTransportTubeRuntimeMapping(BlockType blockType, BlockTextureMapping? template)
@@ -1236,9 +1234,6 @@ public class BlockDataSO : ScriptableObject
     private void NormalizeFluidPipeRuntimeMappings()
     {
         NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe);
-        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeL);
-        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeT);
-        NormalizeFluidPipeRuntimeMapping(BlockType.FluidPipe_ShapeCross);
     }
 
     private void NormalizeFluidPipeRuntimeMapping(BlockType blockType)

@@ -87,30 +87,14 @@ public enum BlockType
     Gravel = 82,
     MagneticSeparator = 83,
     TransportTube = 84,
-    TransportTube_L = 85,
-    TransportTube_T = 86,
     TransportTubeFilter = 87,
     WaterPump = 88,
     FluidPipe = 89,
-    FluidPipe_ShapeL = 90,
-    FluidPipe_ShapeT = 91,
     SteamEngine = 92,
     white_concrete = 93,
     ClayBricksWall = 94,
     ClayBricksWall_Ramp = 95,
     ClayBricksWall_VerticalRamp = 96,
-    FluidPipe_ShapeCross = 97,
-
-    FluidPipe_ShapeCross3   = 98,
-
-
-
-
-
-
-
-
-
 }
 
 public static class MachineBlockUtility
@@ -132,14 +116,9 @@ public static class MachineBlockUtility
             case BlockType.AutoMiner:
             case BlockType.StoneCrusher:
             case BlockType.TransportTube:
-            case BlockType.TransportTube_L:
-            case BlockType.TransportTube_T:
             case BlockType.TransportTubeFilter:
             case BlockType.WaterPump:
             case BlockType.FluidPipe:
-            case BlockType.FluidPipe_ShapeL:
-            case BlockType.FluidPipe_ShapeT:
-            case BlockType.FluidPipe_ShapeCross:
             case BlockType.SteamEngine:
                 return true;
             case BlockType.MagneticSeparator:

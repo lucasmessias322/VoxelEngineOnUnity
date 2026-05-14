@@ -127,6 +127,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -169,6 +170,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -211,6 +213,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -253,6 +256,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -295,6 +299,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -337,6 +342,7 @@ public static partial class MeshGenerator
                         currentPlacementAxis,
                         currentRampVariant,
                         rect.usesFluidPipeImportedUv,
+                        rect.usesTransportTubeImportedUv,
                         rect.fluidPipeAxis,
                         rect.fluidPipeAxisMin,
                         rect.fluidPipeAxisMax);
@@ -592,6 +598,7 @@ public static partial class MeshGenerator
             BlockPlacementAxis currentPlacementAxis,
             RampShapeVariant currentRampVariant,
             bool usesFluidPipeImportedUv = false,
+            bool usesTransportTubeImportedUv = false,
             int fluidPipeAxis = 0,
             float fluidPipeAxisMin = 0f,
             float fluidPipeAxisMax = 1f)
@@ -647,6 +654,13 @@ public static partial class MeshGenerator
                     local1 = TransformFluidPipeImportedUvPoint(local1, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
                     local2 = TransformFluidPipeImportedUvPoint(local2, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
                     local3 = TransformFluidPipeImportedUvPoint(local3, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
+                }
+                else if (usesTransportTubeImportedUv)
+                {
+                    local0 = TransformTransportTubeImportedUvPoint(local0, fluidPipeAxis);
+                    local1 = TransformTransportTubeImportedUvPoint(local1, fluidPipeAxis);
+                    local2 = TransformTransportTubeImportedUvPoint(local2, fluidPipeAxis);
+                    local3 = TransformTransportTubeImportedUvPoint(local3, fluidPipeAxis);
                 }
                 else
                 {

@@ -20,10 +20,7 @@ public static class FluidPipeUtility
 
     public static bool IsFluidPipeBlock(BlockType blockType)
     {
-        return blockType == BlockType.FluidPipe ||
-               blockType == BlockType.FluidPipe_ShapeL ||
-               blockType == BlockType.FluidPipe_ShapeT ||
-               blockType == BlockType.FluidPipe_ShapeCross;
+        return blockType == BlockType.FluidPipe;
     }
 
     public static BlockType GetInventoryDropBlockType(BlockType blockType)

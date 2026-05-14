@@ -35,8 +35,12 @@ public static partial class MeshGenerator
                 voxelPlaneSize);
 
             NativeList<int> tris = mapping.isTransparent ? transparentTriangles : opaqueTriangles;
-            if (TryAddBlockbenchTransportTubeShape(
+            FixedList512Bytes<ShapeBox> shapeBoxes =
+                TransportTubeUtility.BuildVisualBoxes(connectionMask, placementAxis);
+
+            if (TryAddProceduralTransportTubeShapeWithImportedUv(
                     origin,
+                    shapeBoxes,
                     connectionMask,
                     placementAxis,
                     voxelX,
@@ -53,12 +57,8 @@ public static partial class MeshGenerator
                 return;
             }
 
-            FixedList512Bytes<ShapeBox> shapeBoxes =
-                TransportTubeUtility.BuildVisualBoxes(connectionMask, placementAxis);
-
-            if (TryAddProceduralTransportTubeShapeWithImportedUv(
+            if (TryAddBlockbenchTransportTubeShape(
                     origin,
-                    shapeBoxes,
                     connectionMask,
                     placementAxis,
                     voxelX,
@@ -142,9 +142,6 @@ public static partial class MeshGenerator
                     tris);
             }
 
-            // The imported L/T cuboids preserve their Blockbench UVs, but their arms are
-            // offset inside the voxel and no longer line up with straight tube neighbors.
-            // Let the procedural path below keep the physical connection shape correct.
             return false;
         }
 
@@ -246,50 +243,6 @@ public static partial class MeshGenerator
         {
             FluidPipeUtility.PipeState state = FluidPipeUtility.ResolveState(connectionMask, fallbackAxis);
             int connectionCount = TransportTubeUtility.CountConnections(connectionMask);
-
-            if (state.blockType == BlockType.FluidPipe_ShapeL ||
-                state.blockType == BlockType.FluidPipe_ShapeT ||
-                state.blockType == BlockType.FluidPipe_ShapeCross)
-            {
-                if (state.blockType != BlockType.FluidPipe_ShapeCross && connectionCount > 3)
-                    return false;
-
-                if (TransportTubeUtility.HasVerticalConnection(connectionMask))
-                {
-                    if (state.blockType == BlockType.FluidPipe_ShapeCross)
-                        return false;
-
-                    return TryAddRotatedImportedFluidPipeJunctionModel(
-                        origin,
-                        state.blockType,
-                        connectionMask,
-                        voxelX,
-                        voxelY,
-                        voxelZ,
-                        voxelSizeX,
-                        voxelSizeZ,
-                        voxelPlaneSize,
-                        invAtlasTilesX,
-                        invAtlasTilesY,
-                        light01,
-                        tris);
-                }
-
-                return TryAddImportedTransportTubeModel(
-                    origin,
-                    state.blockType,
-                    state.placementAxis,
-                    voxelX,
-                    voxelY,
-                    voxelZ,
-                    voxelSizeX,
-                    voxelSizeZ,
-                    voxelPlaneSize,
-                    invAtlasTilesX,
-                    invAtlasTilesY,
-                    light01,
-                    tris);
-            }
 
             if (state.placementAxis == BlockPlacementAxis.YNegative ||
                 TransportTubeUtility.HasVerticalConnection(connectionMask) ||
@@ -406,184 +359,6 @@ public static partial class MeshGenerator
             return true;
         }
 
-        private struct FluidPipeJunctionRotation
-        {
-            public Vector3Int xAxis;
-            public Vector3Int yAxis;
-            public Vector3Int zAxis;
-        }
-
-        private bool TryAddRotatedImportedFluidPipeJunctionModel(
-            Vector3 origin,
-            BlockType visualBlockType,
-            byte connectionMask,
-            int voxelX,
-            int voxelY,
-            int voxelZ,
-            int voxelSizeX,
-            int voxelSizeZ,
-            int voxelPlaneSize,
-            float invAtlasTilesX,
-            float invAtlasTilesY,
-            float light01,
-            NativeList<int> tris)
-        {
-            byte sourceMask = visualBlockType == BlockType.FluidPipe_ShapeL
-                ? (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectSouth)
-                : visualBlockType == BlockType.FluidPipe_ShapeCross
-                    ? (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectEast | TransportTubeUtility.ConnectSouth | TransportTubeUtility.ConnectNorth)
-                    : (byte)(TransportTubeUtility.ConnectWest | TransportTubeUtility.ConnectEast | TransportTubeUtility.ConnectSouth);
-
-            FluidPipeJunctionRotation rotation;
-            bool resolvedRotation = visualBlockType == BlockType.FluidPipe_ShapeCross
-                ? TryResolveFluidPipeCrossRotation(connectionMask, out rotation)
-                : TryResolveFluidPipeJunctionRotation(sourceMask, connectionMask, out rotation);
-
-            if (!resolvedRotation)
-                return false;
-
-            BlockTextureMapping visualMapping = GetLogicalBlockMapping(visualBlockType);
-            int boxCount = GetNativeMultiCuboidBoxCount(visualMapping);
-            if (boxCount <= 0)
-                return false;
-
-            bool appendedAnyCuboid = false;
-            for (int i = 0; i < boxCount && i < 16; i++)
-            {
-                if (!TryGetNativeMultiCuboid(visualMapping, i, out BlockModelCuboid cuboid))
-                    continue;
-
-                appendedAnyCuboid = true;
-                AddRotatedImportedFluidPipeJunctionCuboid(
-                    origin,
-                    visualMapping,
-                    cuboid,
-                    rotation,
-                    voxelX,
-                    voxelY,
-                    voxelZ,
-                    voxelSizeX,
-                    voxelSizeZ,
-                    voxelPlaneSize,
-                    invAtlasTilesX,
-                    invAtlasTilesY,
-                    light01,
-                    tris);
-            }
-
-            return appendedAnyCuboid;
-        }
-
-        private void AddRotatedImportedFluidPipeJunctionCuboid(
-            Vector3 origin,
-            BlockTextureMapping visualMapping,
-            BlockModelCuboid cuboid,
-            FluidPipeJunctionRotation rotation,
-            int voxelX,
-            int voxelY,
-            int voxelZ,
-            int voxelSizeX,
-            int voxelSizeZ,
-            int voxelPlaneSize,
-            float invAtlasTilesX,
-            float invAtlasTilesY,
-            float light01,
-            NativeList<int> tris)
-        {
-            ShapeBox sourceBox = cuboid.ToShapeBox();
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Right, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Left, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Top, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Bottom, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Front, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-            AddRotatedImportedFluidPipeJunctionFace(origin, visualMapping, cuboid, sourceBox, rotation, BlockFace.Back, voxelX, voxelY, voxelZ, voxelSizeX, voxelSizeZ, voxelPlaneSize, invAtlasTilesX, invAtlasTilesY, light01, tris);
-        }
-
-        private void AddRotatedImportedFluidPipeJunctionFace(
-            Vector3 origin,
-            BlockTextureMapping visualMapping,
-            BlockModelCuboid cuboid,
-            ShapeBox sourceBox,
-            FluidPipeJunctionRotation rotation,
-            BlockFace localFace,
-            int voxelX,
-            int voxelY,
-            int voxelZ,
-            int voxelSizeX,
-            int voxelSizeZ,
-            int voxelPlaneSize,
-            float invAtlasTilesX,
-            float invAtlasTilesY,
-            float light01,
-            NativeList<int> tris)
-        {
-            if (!cuboid.HasFace(localFace))
-                return;
-
-            ResolveCuboidFace(sourceBox, localFace, out Vector3 sourceP0, out Vector3 sourceP1, out Vector3 sourceP2, out Vector3 sourceP3, out Vector3 sourceNormal);
-            Vector3 p0 = RotateFluidPipeJunctionPoint(sourceP0, rotation);
-            Vector3 p1 = RotateFluidPipeJunctionPoint(sourceP1, rotation);
-            Vector3 p2 = RotateFluidPipeJunctionPoint(sourceP2, rotation);
-            Vector3 p3 = RotateFluidPipeJunctionPoint(sourceP3, rotation);
-            Vector3 normal = RotateFluidPipeJunctionDirection(sourceNormal, rotation).normalized;
-            BlockFace worldFace = ResolveTransportTubeFaceFromNormal(normal);
-
-            Vector2 uv0 = ResolveShapeProjectedUv(localFace, sourceP0);
-            Vector2 uv1 = ResolveShapeProjectedUv(localFace, sourceP1);
-            Vector2 uv2 = ResolveShapeProjectedUv(localFace, sourceP2);
-            Vector2 uv3 = ResolveShapeProjectedUv(localFace, sourceP3);
-            ResolveShapeBoxProjectedUvBounds(
-                sourceBox,
-                localFace,
-                out float sourceMinU,
-                out float sourceMaxU,
-                out float sourceMinV,
-                out float sourceMaxV);
-            NormalizeProjectedQuadUv(
-                ref uv0,
-                ref uv1,
-                ref uv2,
-                ref uv3,
-                new Vector4(sourceMinU, sourceMaxU, sourceMinV, sourceMaxV));
-
-            AddAmbientOccludedCustomQuad(
-                origin,
-                visualMapping,
-                worldFace,
-                p0,
-                p1,
-                p2,
-                p3,
-                uv0,
-                uv1,
-                uv2,
-                uv3,
-                normal,
-                normal,
-                (p1 - p0).normalized,
-                (p3 - p0).normalized,
-                light01,
-                voxelX,
-                voxelY,
-                voxelZ,
-                voxelSizeX,
-                voxelSizeZ,
-                voxelPlaneSize,
-                invAtlasTilesX,
-                invAtlasTilesY,
-                tris,
-                BlockRenderShape.MultiCuboid,
-                BlockPlacementAxis.Y,
-                RampShapeVariant.Straight,
-                false,
-                hasExplicitAppearance: true,
-                explicitTile: cuboid.GetTileCoord(localFace, visualMapping),
-                explicitTint: visualMapping.GetTint(localFace),
-                explicitUvRectData: cuboid.TryGetUvRectData(localFace, visualMapping, out Vector4 cuboidUvRectData)
-                    ? cuboidUvRectData
-                    : default);
-        }
-
         private static bool IsFluidPipePlanarCrossConnectionMask(byte connectionMask)
         {
             return CountFluidPipeOppositeConnectionPairs(connectionMask) == 2;
@@ -608,178 +383,6 @@ public static partial class MeshGenerator
         {
             return TransportTubeUtility.IsConnectionActive(connectionMask, negativeFlag) &&
                    TransportTubeUtility.IsConnectionActive(connectionMask, positiveFlag);
-        }
-
-        private static bool TryResolveFluidPipeCrossRotation(
-            byte targetMask,
-            out FluidPipeJunctionRotation rotation)
-        {
-            rotation = default;
-
-            bool westEast = HasFluidPipeConnectionPair(targetMask, TransportTubeUtility.ConnectWest, TransportTubeUtility.ConnectEast);
-            bool southNorth = HasFluidPipeConnectionPair(targetMask, TransportTubeUtility.ConnectSouth, TransportTubeUtility.ConnectNorth);
-            bool downUp = HasFluidPipeConnectionPair(targetMask, TransportTubeUtility.ConnectDown, TransportTubeUtility.ConnectUp);
-
-            if ((westEast ? 1 : 0) + (southNorth ? 1 : 0) + (downUp ? 1 : 0) != 2)
-                return false;
-
-            if (westEast && southNorth)
-            {
-                rotation = new FluidPipeJunctionRotation
-                {
-                    xAxis = Vector3Int.right,
-                    yAxis = Vector3Int.up,
-                    zAxis = Vector3Int.forward
-                };
-                return true;
-            }
-
-            if (westEast && downUp)
-            {
-                rotation = new FluidPipeJunctionRotation
-                {
-                    xAxis = Vector3Int.right,
-                    yAxis = Vector3Int.back,
-                    zAxis = Vector3Int.up
-                };
-                return true;
-            }
-
-            rotation = new FluidPipeJunctionRotation
-            {
-                xAxis = Vector3Int.forward,
-                yAxis = Vector3Int.right,
-                zAxis = Vector3Int.up
-            };
-            return true;
-        }
-
-        private static bool TryResolveFluidPipeJunctionRotation(
-            byte sourceMask,
-            byte targetMask,
-            out FluidPipeJunctionRotation rotation)
-        {
-            rotation = default;
-            for (int xIndex = 0; xIndex < 6; xIndex++)
-            {
-                Vector3Int xAxis = GetFluidPipeRotationAxis(xIndex);
-                for (int yIndex = 0; yIndex < 6; yIndex++)
-                {
-                    Vector3Int yAxis = GetFluidPipeRotationAxis(yIndex);
-                    if (DotFluidPipeRotationAxes(xAxis, yAxis) != 0)
-                        continue;
-
-                    Vector3Int zAxis = CrossFluidPipeRotationAxes(xAxis, yAxis);
-                    if (zAxis == Vector3Int.zero)
-                        continue;
-
-                    FluidPipeJunctionRotation candidate = new FluidPipeJunctionRotation
-                    {
-                        xAxis = xAxis,
-                        yAxis = yAxis,
-                        zAxis = zAxis
-                    };
-
-                    if (TransformFluidPipeConnectionMask(sourceMask, candidate) != targetMask)
-                        continue;
-
-                    rotation = candidate;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static byte TransformFluidPipeConnectionMask(byte sourceMask, FluidPipeJunctionRotation rotation)
-        {
-            byte transformed = 0;
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectWest, Vector3Int.left);
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectEast, Vector3Int.right);
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectSouth, Vector3Int.back);
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectNorth, Vector3Int.forward);
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectDown, Vector3Int.down);
-            AddTransformedFluidPipeConnection(ref transformed, sourceMask, rotation, TransportTubeUtility.ConnectUp, Vector3Int.up);
-            return transformed;
-        }
-
-        private static void AddTransformedFluidPipeConnection(
-            ref byte transformedMask,
-            byte sourceMask,
-            FluidPipeJunctionRotation rotation,
-            byte sourceFlag,
-            Vector3Int sourceDirection)
-        {
-            if (!TransportTubeUtility.IsConnectionActive(sourceMask, sourceFlag))
-                return;
-
-            Vector3Int targetDirection = RotateFluidPipeJunctionDirection(sourceDirection, rotation);
-            transformedMask |= GetFluidPipeConnectionFlag(targetDirection);
-        }
-
-        private static Vector3 RotateFluidPipeJunctionPoint(Vector3 point, FluidPipeJunctionRotation rotation)
-        {
-            Vector3 centered = point - new Vector3(0.5f, 0.5f, 0.5f);
-            return new Vector3(0.5f, 0.5f, 0.5f) + RotateFluidPipeJunctionDirection(centered, rotation);
-        }
-
-        private static Vector3 RotateFluidPipeJunctionDirection(Vector3 direction, FluidPipeJunctionRotation rotation)
-        {
-            Vector3 xAxis = rotation.xAxis;
-            Vector3 yAxis = rotation.yAxis;
-            Vector3 zAxis = rotation.zAxis;
-            return xAxis * direction.x + yAxis * direction.y + zAxis * direction.z;
-        }
-
-        private static Vector3Int RotateFluidPipeJunctionDirection(Vector3Int direction, FluidPipeJunctionRotation rotation)
-        {
-            return rotation.xAxis * direction.x + rotation.yAxis * direction.y + rotation.zAxis * direction.z;
-        }
-
-        private static Vector3Int GetFluidPipeRotationAxis(int index)
-        {
-            switch (index)
-            {
-                case 0: return Vector3Int.right;
-                case 1: return Vector3Int.left;
-                case 2: return Vector3Int.up;
-                case 3: return Vector3Int.down;
-                case 4: return Vector3Int.forward;
-                default: return Vector3Int.back;
-            }
-        }
-
-        private static Vector3Int CrossFluidPipeRotationAxes(Vector3Int a, Vector3Int b)
-        {
-            return new Vector3Int(
-                a.y * b.z - a.z * b.y,
-                a.z * b.x - a.x * b.z,
-                a.x * b.y - a.y * b.x);
-        }
-
-        private static int DotFluidPipeRotationAxes(Vector3Int a, Vector3Int b)
-        {
-            return a.x * b.x + a.y * b.y + a.z * b.z;
-        }
-
-        private static byte GetFluidPipeConnectionFlag(Vector3Int direction)
-        {
-            if (direction == Vector3Int.left)
-                return TransportTubeUtility.ConnectWest;
-
-            if (direction == Vector3Int.right)
-                return TransportTubeUtility.ConnectEast;
-
-            if (direction == Vector3Int.back)
-                return TransportTubeUtility.ConnectSouth;
-
-            if (direction == Vector3Int.forward)
-                return TransportTubeUtility.ConnectNorth;
-
-            if (direction == Vector3Int.down)
-                return TransportTubeUtility.ConnectDown;
-
-            return TransportTubeUtility.ConnectUp;
         }
 
         private bool TryAddProceduralFluidPipeShapeWithImportedUv(
@@ -904,10 +507,10 @@ public static partial class MeshGenerator
                 textureFace,
                 true,
                 new Vector4(sourceMinU, sourceMaxU, sourceMinV, sourceMaxV),
-                true,
-                axis,
-                axisMin,
-                axisMax);
+                usesFluidPipeImportedUv: true,
+                fluidPipeAxis: axis,
+                fluidPipeAxisMin: axisMin,
+                fluidPipeAxisMax: axisMax);
         }
 
         private static void ResolveFluidPipeAxisRange(ShapeBox box, int axis, out float axisMin, out float axisMax)
@@ -1163,15 +766,13 @@ public static partial class MeshGenerator
             if (shapeBoxes.Length <= 0)
                 return false;
 
-            TransportTubeUtility.TubeState state = TransportTubeUtility.ResolveState(connectionMask, fallbackAxis);
-            BlockTextureMapping visualMapping = GetLogicalBlockMapping(state.blockType);
-            BlockPlacementAxis visualAxis = state.placementAxis;
+            BlockTextureMapping visualMapping = GetLogicalBlockMapping(BlockType.TransportTube);
+            BlockPlacementAxis visualAxis = BlockPlacementAxis.Z;
             if (GetNativeMultiCuboidBoxCount(visualMapping) <= 0)
                 return false;
 
             FixedList4096Bytes<ShapeFaceRect> faceRects = default;
-            for (int i = 0; i < shapeBoxes.Length; i++)
-                AppendTransportTubeProceduralFaceRects(ref faceRects, shapeBoxes[i], visualMapping, visualAxis);
+            AppendAxisAwareTransportTubeProceduralFaceRects(ref faceRects, shapeBoxes, visualMapping, connectionMask);
 
             CullHiddenShapeFaceRects(ref faceRects, shapeBoxes);
             MergeShapeFaceRects(ref faceRects);
@@ -1199,6 +800,113 @@ public static partial class MeshGenerator
             }
 
             return true;
+        }
+
+        private void AppendAxisAwareTransportTubeProceduralFaceRects(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            in FixedList512Bytes<ShapeBox> shapeBoxes,
+            BlockTextureMapping visualMapping,
+            byte connectionMask)
+        {
+            if (!TryGetNativeMultiCuboid(visualMapping, 0, out BlockModelCuboid sourceCuboid))
+                return;
+
+            for (int i = 0; i < shapeBoxes.Length; i++)
+            {
+                ShapeBox box = shapeBoxes[i];
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Right);
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Left);
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Top);
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Bottom);
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Front);
+                AppendAxisAwareTransportTubeProceduralFaceRect(ref faceRects, box, sourceCuboid, visualMapping, connectionMask, BlockFace.Back);
+            }
+        }
+
+        private static void AppendAxisAwareTransportTubeProceduralFaceRect(
+            ref FixedList4096Bytes<ShapeFaceRect> faceRects,
+            ShapeBox box,
+            BlockModelCuboid sourceCuboid,
+            BlockTextureMapping visualMapping,
+            byte connectionMask,
+            BlockFace face)
+        {
+            ShapeBox sourceBox = sourceCuboid.ToShapeBox();
+            int axis = ResolveTransportTubeVisualAxis(box, connectionMask);
+            if (IsFluidPipeAxisCapFace(axis, face) &&
+                !IsFluidPipeExternalExitFace(box, axis, face))
+            {
+                return;
+            }
+
+            BlockFace textureFace = ResolveAxisAwareFluidPipeTextureFace(axis, face);
+            if (!sourceCuboid.HasFace(textureFace))
+                return;
+
+            ResolveShapeBoxProjectedUvBounds(
+                sourceBox,
+                textureFace,
+                out float sourceMinU,
+                out float sourceMaxU,
+                out float sourceMinV,
+                out float sourceMaxV);
+            ResolveFluidPipeAxisRange(box, axis, out float axisMin, out float axisMax);
+
+            AppendShapeFaceRect(
+                ref faceRects,
+                box,
+                face,
+                sourceCuboid.GetTileCoord(textureFace, visualMapping),
+                visualMapping.GetTint(textureFace),
+                true,
+                sourceCuboid.TryGetUvRectData(textureFace, visualMapping, out Vector4 cuboidUvRectData)
+                    ? cuboidUvRectData
+                    : default,
+                textureFace,
+                true,
+                new Vector4(sourceMinU, sourceMaxU, sourceMinV, sourceMaxV),
+                usesTransportTubeImportedUv: true,
+                fluidPipeAxis: axis,
+                fluidPipeAxisMin: axisMin,
+                fluidPipeAxisMax: axisMax);
+        }
+
+        private static int ResolveTransportTubeVisualAxis(ShapeBox box, byte connectionMask)
+        {
+            int axis = ResolveFluidPipeArmAxis(box);
+            if (axis != 0)
+                return axis;
+
+            if (TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectDown) ||
+                TransportTubeUtility.IsConnectionActive(connectionMask, TransportTubeUtility.ConnectUp))
+            {
+                return 2;
+            }
+
+            return ResolveFluidPipeCenterUvAxis(connectionMask);
+        }
+
+        private const float TransportTubeUvCrossMin = 0.3125f;
+
+        private static Vector3 TransformTransportTubeImportedUvPoint(Vector3 localPoint, int transportTubeAxis)
+        {
+            switch (transportTubeAxis)
+            {
+                case 1:
+                    return new Vector3(
+                        localPoint.z,
+                        localPoint.y,
+                        localPoint.x);
+
+                case 2:
+                    return new Vector3(
+                        localPoint.x,
+                        localPoint.z - TransportTubeUvCrossMin,
+                        localPoint.y);
+
+                default:
+                    return localPoint;
+            }
         }
 
         private void AppendTransportTubeProceduralFaceRects(

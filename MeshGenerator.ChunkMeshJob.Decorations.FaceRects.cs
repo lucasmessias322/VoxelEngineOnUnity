@@ -30,6 +30,7 @@ public static partial class MeshGenerator
             public bool usesExplicitAppearance;
             public Vector4 explicitUvRectData;
             public bool usesFluidPipeImportedUv;
+            public bool usesTransportTubeImportedUv;
             public int fluidPipeAxis;
             public float fluidPipeAxisMin;
             public float fluidPipeAxisMax;
@@ -118,6 +119,7 @@ public static partial class MeshGenerator
             bool hasSourceUvBounds = false,
             Vector4 sourceUvBounds = default,
             bool usesFluidPipeImportedUv = false,
+            bool usesTransportTubeImportedUv = false,
             int fluidPipeAxis = 0,
             float fluidPipeAxisMin = 0f,
             float fluidPipeAxisMax = 1f)
@@ -144,6 +146,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -169,6 +172,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -194,6 +198,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -219,6 +224,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -244,6 +250,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -269,6 +276,7 @@ public static partial class MeshGenerator
                         usesExplicitAppearance = usesExplicitAppearance,
                         explicitUvRectData = explicitUvRectData,
                         usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        usesTransportTubeImportedUv = usesTransportTubeImportedUv,
                         fluidPipeAxis = fluidPipeAxis,
                         fluidPipeAxisMin = fluidPipeAxisMin,
                         fluidPipeAxisMax = fluidPipeAxisMax
@@ -461,6 +469,7 @@ public static partial class MeshGenerator
         {
             return a.usesExplicitAppearance == b.usesExplicitAppearance &&
                    a.usesFluidPipeImportedUv == b.usesFluidPipeImportedUv &&
+                   a.usesTransportTubeImportedUv == b.usesTransportTubeImportedUv &&
                    a.fluidPipeAxis == b.fluidPipeAxis &&
                    math.abs(a.fluidPipeAxisMin - b.fluidPipeAxisMin) <= 0.0001f &&
                    math.abs(a.fluidPipeAxisMax - b.fluidPipeAxisMax) <= 0.0001f &&
@@ -713,6 +722,7 @@ public static partial class MeshGenerator
                 usesExplicitAppearance = source.usesExplicitAppearance,
                 explicitUvRectData = source.explicitUvRectData,
                 usesFluidPipeImportedUv = source.usesFluidPipeImportedUv,
+                usesTransportTubeImportedUv = source.usesTransportTubeImportedUv,
                 fluidPipeAxis = source.fluidPipeAxis,
                 fluidPipeAxisMin = source.fluidPipeAxisMin,
                 fluidPipeAxisMax = source.fluidPipeAxisMax

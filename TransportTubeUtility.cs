@@ -29,9 +29,7 @@ public static class TransportTubeUtility
 
     public static bool IsTransportTubeBlock(BlockType blockType)
     {
-        return blockType == BlockType.TransportTube ||
-               blockType == BlockType.TransportTube_L ||
-               blockType == BlockType.TransportTube_T;
+        return blockType == BlockType.TransportTube;
     }
 
     public static bool IsTransportTubeNetworkBlock(BlockType blockType)
@@ -71,10 +69,10 @@ public static class TransportTubeUtility
             if (HasOppositePair(connectionMask, ConnectDown, ConnectUp))
                 return new TubeState(BlockType.TransportTube, BlockPlacementAxis.YNegative);
 
-            return new TubeState(BlockType.TransportTube_L, ResolveCornerAxis(connectionMask));
+            return new TubeState(BlockType.TransportTube, ResolveCornerAxis(connectionMask));
         }
 
-        return new TubeState(BlockType.TransportTube_T, ResolveTJunctionAxis(connectionMask));
+        return new TubeState(BlockType.TransportTube, ResolveTJunctionAxis(connectionMask));
     }
 
     public static bool HasVerticalConnection(byte connectionMask)
@@ -152,27 +150,20 @@ public static class TransportTubeUtility
     public static FixedList512Bytes<ShapeBox> BuildVisualBoxes(byte connectionMask, BlockPlacementAxis fallbackAxis)
     {
         FixedList512Bytes<ShapeBox> boxes = default;
-        boxes.Add(GetCenterVisualBox());
-
         int connectionCount = CountConnections(connectionMask);
         if (connectionCount == 0)
         {
-            AddFallbackStraightArms(ref boxes, fallbackAxis);
+            AddFallbackStraightRun(ref boxes, fallbackAxis);
             return boxes;
         }
 
         if (connectionCount == 1)
         {
-            AddSingleConnectionStraightArms(ref boxes, connectionMask);
+            AddSingleConnectionStraightRun(ref boxes, connectionMask);
             return boxes;
         }
 
-        AddArmIfConnected(ref boxes, connectionMask, ConnectWest);
-        AddArmIfConnected(ref boxes, connectionMask, ConnectEast);
-        AddArmIfConnected(ref boxes, connectionMask, ConnectSouth);
-        AddArmIfConnected(ref boxes, connectionMask, ConnectNorth);
-        AddArmIfConnected(ref boxes, connectionMask, ConnectDown);
-        AddArmIfConnected(ref boxes, connectionMask, ConnectUp);
+        AddConnectedAxisRuns(ref boxes, connectionMask);
         return boxes;
     }
 
@@ -289,52 +280,92 @@ public static class TransportTubeUtility
                IsConnectionActive(connectionMask, positiveFlag);
     }
 
-    private static void AddArmIfConnected(ref FixedList512Bytes<ShapeBox> boxes, byte connectionMask, byte directionFlag)
+    private static ShapeBox GetConnectionRunVisualBox(byte directionFlag)
     {
-        if (IsConnectionActive(connectionMask, directionFlag))
-            boxes.Add(GetArmVisualBox(directionFlag));
+        return directionFlag switch
+        {
+            ConnectWest => new ShapeBox(new Vector3(0f, TubeFloorY, TubeMin), new Vector3(TubeMax, TubeTopY, TubeMax)),
+            ConnectEast => new ShapeBox(new Vector3(TubeMin, TubeFloorY, TubeMin), new Vector3(1f, TubeTopY, TubeMax)),
+            ConnectSouth => new ShapeBox(new Vector3(TubeMin, TubeFloorY, 0f), new Vector3(TubeMax, TubeTopY, TubeMax)),
+            ConnectNorth => new ShapeBox(new Vector3(TubeMin, TubeFloorY, TubeMin), new Vector3(TubeMax, TubeTopY, 1f)),
+            ConnectDown => new ShapeBox(new Vector3(TubeMin, 0f, TubeMin), new Vector3(TubeMax, TubeTopY, TubeMax)),
+            _ => new ShapeBox(new Vector3(TubeMin, TubeFloorY, TubeMin), new Vector3(TubeMax, 1f, TubeMax))
+        };
     }
 
-    private static void AddFallbackStraightArms(ref FixedList512Bytes<ShapeBox> boxes, BlockPlacementAxis fallbackAxis)
+    private static ShapeBox GetStraightRunVisualBox(int axis)
+    {
+        return axis switch
+        {
+            1 => new ShapeBox(new Vector3(0f, TubeFloorY, TubeMin), new Vector3(1f, TubeTopY, TubeMax)),
+            2 => new ShapeBox(new Vector3(TubeMin, 0f, TubeMin), new Vector3(TubeMax, 1f, TubeMax)),
+            _ => new ShapeBox(new Vector3(TubeMin, TubeFloorY, 0f), new Vector3(TubeMax, TubeTopY, 1f))
+        };
+    }
+
+    private static void AddFallbackStraightRun(ref FixedList512Bytes<ShapeBox> boxes, BlockPlacementAxis fallbackAxis)
     {
         fallbackAxis = ResolveFallbackStraightAxis(fallbackAxis);
         switch (fallbackAxis)
         {
             case BlockPlacementAxis.X:
             case BlockPlacementAxis.XNegative:
-                boxes.Add(GetArmVisualBox(ConnectWest));
-                boxes.Add(GetArmVisualBox(ConnectEast));
+                boxes.Add(GetStraightRunVisualBox(1));
                 break;
 
             case BlockPlacementAxis.YNegative:
-                boxes.Add(GetArmVisualBox(ConnectDown));
-                boxes.Add(GetArmVisualBox(ConnectUp));
+                boxes.Add(GetStraightRunVisualBox(2));
                 break;
 
             default:
-                boxes.Add(GetArmVisualBox(ConnectSouth));
-                boxes.Add(GetArmVisualBox(ConnectNorth));
+                boxes.Add(GetStraightRunVisualBox(3));
                 break;
         }
     }
 
-    private static void AddSingleConnectionStraightArms(ref FixedList512Bytes<ShapeBox> boxes, byte connectionMask)
+    private static void AddSingleConnectionStraightRun(ref FixedList512Bytes<ShapeBox> boxes, byte connectionMask)
     {
         if (IsConnectionActive(connectionMask, ConnectWest) || IsConnectionActive(connectionMask, ConnectEast))
         {
-            boxes.Add(GetArmVisualBox(ConnectWest));
-            boxes.Add(GetArmVisualBox(ConnectEast));
+            boxes.Add(GetStraightRunVisualBox(1));
             return;
         }
 
         if (IsConnectionActive(connectionMask, ConnectDown) || IsConnectionActive(connectionMask, ConnectUp))
         {
-            boxes.Add(GetArmVisualBox(ConnectDown));
-            boxes.Add(GetArmVisualBox(ConnectUp));
+            boxes.Add(GetStraightRunVisualBox(2));
             return;
         }
 
-        boxes.Add(GetArmVisualBox(ConnectSouth));
-        boxes.Add(GetArmVisualBox(ConnectNorth));
+        boxes.Add(GetStraightRunVisualBox(3));
+    }
+
+    private static void AddConnectedAxisRuns(ref FixedList512Bytes<ShapeBox> boxes, byte connectionMask)
+    {
+        AddAxisRunOrConnections(ref boxes, connectionMask, ConnectWest, ConnectEast, 1);
+        AddAxisRunOrConnections(ref boxes, connectionMask, ConnectDown, ConnectUp, 2);
+        AddAxisRunOrConnections(ref boxes, connectionMask, ConnectSouth, ConnectNorth, 3);
+    }
+
+    private static void AddAxisRunOrConnections(
+        ref FixedList512Bytes<ShapeBox> boxes,
+        byte connectionMask,
+        byte negativeFlag,
+        byte positiveFlag,
+        int axis)
+    {
+        bool negative = IsConnectionActive(connectionMask, negativeFlag);
+        bool positive = IsConnectionActive(connectionMask, positiveFlag);
+        if (negative && positive)
+        {
+            boxes.Add(GetStraightRunVisualBox(axis));
+            return;
+        }
+
+        if (negative)
+            boxes.Add(GetConnectionRunVisualBox(negativeFlag));
+
+        if (positive)
+            boxes.Add(GetConnectionRunVisualBox(positiveFlag));
     }
 }
