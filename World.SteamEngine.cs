@@ -88,15 +88,21 @@ public partial class World
 
     public int InsertSteamEngineFuel(Vector3Int steamEnginePos, Item item, int amount)
     {
+        return InsertSteamEngineFuel(steamEnginePos, item, amount, int.MaxValue);
+    }
+
+    public int InsertSteamEngineFuel(Vector3Int steamEnginePos, Item item, int amount, int maxFuelAmount)
+    {
         if (!IsSteamEngineBlockInWorld(steamEnginePos) ||
             !CanUseSteamEngineFuel(item) ||
-            amount <= 0)
+            amount <= 0 ||
+            maxFuelAmount <= 0)
         {
             return amount;
         }
 
         SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
-        int stackLimit = Mathf.Max(1, item.maxStack);
+        int stackLimit = Mathf.Min(Mathf.Max(1, item.maxStack), Mathf.Max(0, maxFuelAmount));
         if (state.FuelItem == null || state.FuelAmount <= 0)
         {
             int moved = Mathf.Min(stackLimit, amount);
@@ -115,6 +121,32 @@ public partial class World
 
         state.FuelAmount += addNow;
         return amount - addNow;
+    }
+
+    public int GetInsertableSteamEngineFuelCount(Vector3Int steamEnginePos, Item item, int amount, int maxFuelAmount)
+    {
+        if (!IsSteamEngineBlockInWorld(steamEnginePos) ||
+            !CanUseSteamEngineFuel(item) ||
+            amount <= 0 ||
+            maxFuelAmount <= 0)
+        {
+            return 0;
+        }
+
+        int stackLimit = Mathf.Min(Mathf.Max(1, item.maxStack), Mathf.Max(0, maxFuelAmount));
+        if (!steamEngineStates.TryGetValue(steamEnginePos, out SteamEngineRuntimeState state) ||
+            state == null ||
+            state.FuelItem == null ||
+            state.FuelAmount <= 0)
+        {
+            return Mathf.Min(stackLimit, amount);
+        }
+
+        if (state.FuelItem != item)
+            return 0;
+
+        int freeSpace = Mathf.Max(0, stackLimit - state.FuelAmount);
+        return Mathf.Min(freeSpace, amount);
     }
 
     public void SetSteamEngineFuelContents(Vector3Int steamEnginePos, Item item, int amount)
@@ -218,8 +250,7 @@ public partial class World
             if (!IsSteamEngineBlockInWorld(steamEnginePos) || !HasSteamEngineWaterSupply(steamEnginePos))
                 continue;
 
-            if (!steamEngineStates.TryGetValue(steamEnginePos, out SteamEngineRuntimeState state))
-                continue;
+            SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
 
             if (state.BurnTimer > 0f || HasUsableSteamEngineFuel(state))
                 count++;

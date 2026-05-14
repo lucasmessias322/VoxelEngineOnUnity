@@ -48,6 +48,11 @@ public class RoboticArm : DynamicVoxelBlock
     [SerializeField] private bool enableFurnaceExtraction = true;
     [SerializeField] private bool enableFurnaceInsertion = true;
 
+    [Header("Steam Engine Transfer")]
+    [SerializeField] private bool enableSteamEngineInsertion = true;
+    [SerializeField] private bool limitSteamEngineFuelFill = true;
+    [SerializeField, Min(1)] private int maxSteamEngineFuelItems = 5;
+
     [Header("Animation Events")]
     [SerializeField] private bool playTransferAnimation = true;
     [Tooltip("Quando ligado, o proprio braco chama Grab/Drop pelos tempos abaixo. Os eventos da animacao ainda podem chamar as mesmas funcoes, sem duplicar a acao.")]
@@ -424,6 +429,9 @@ public class RoboticArm : DynamicVoxelBlock
         if (TryInsertHeldDropIntoFurnaceBehind(releasedDrop))
             return;
 
+        if (TryInsertHeldDropIntoSteamEngineBehind(releasedDrop))
+            return;
+
         if (TryInsertHeldDropIntoChestBehind(releasedDrop))
             return;
 
@@ -552,6 +560,33 @@ public class RoboticArm : DynamicVoxelBlock
             preferredChestItem = peekItem;
             grabAmount = Mathf.Min(grabAmount, acceptedAmount);
         }
+        else if (TryResolveSteamEngineBehind(out World steamEngineWorld, out Vector3Int steamEngineBlock))
+        {
+            if (!chestUI.TryPeekItemStackFromChest(
+                    chestBlock,
+                    grabAmount,
+                    item => steamEngineWorld.GetInsertableSteamEngineFuelCount(
+                        steamEngineBlock,
+                        item,
+                        grabAmount,
+                        ResolveSteamEngineFuelInsertionLimit()) > 0,
+                    out Item steamPeekItem,
+                    out int steamPeekAmount))
+            {
+                return false;
+            }
+
+            int acceptedAmount = steamEngineWorld.GetInsertableSteamEngineFuelCount(
+                steamEngineBlock,
+                steamPeekItem,
+                Mathf.Min(grabAmount, steamPeekAmount),
+                ResolveSteamEngineFuelInsertionLimit());
+            if (acceptedAmount <= 0)
+                return false;
+
+            preferredChestItem = steamPeekItem;
+            grabAmount = Mathf.Min(grabAmount, acceptedAmount);
+        }
 
         GameObject transferObject = new GameObject($"RoboticArmChestTransfer_{chestBlock.x}_{chestBlock.y}_{chestBlock.z}");
         transferObject.transform.position = ResolvePickupCenter();
@@ -595,6 +630,19 @@ public class RoboticArm : DynamicVoxelBlock
                 Mathf.Min(grabAmount, peekAmount),
                 ResolveFurnaceInputInsertionLimit(),
                 ResolveFurnaceFuelInsertionLimit());
+            if (acceptedAmount <= 0)
+                return false;
+
+            grabAmount = Mathf.Min(grabAmount, acceptedAmount);
+        }
+        else if (TryResolveSteamEngineBehind(out World steamEngineWorld, out Vector3Int steamEngineBlock) &&
+                 furnaceUI.TryPeekOutputStackFromFurnace(furnaceBlock, grabAmount, out Item steamPeekItem, out int steamPeekAmount))
+        {
+            int acceptedAmount = steamEngineWorld.GetInsertableSteamEngineFuelCount(
+                steamEngineBlock,
+                steamPeekItem,
+                Mathf.Min(grabAmount, steamPeekAmount),
+                ResolveSteamEngineFuelInsertionLimit());
             if (acceptedAmount <= 0)
                 return false;
 
@@ -794,6 +842,36 @@ public class RoboticArm : DynamicVoxelBlock
         return remaining <= 0;
     }
 
+    private bool TryInsertHeldDropIntoSteamEngineBehind(IRoboticArmGrabbable grabbable)
+    {
+        if (!enableSteamEngineInsertion || grabbable is not IRoboticArmItemStack itemStack)
+            return false;
+
+        World world = World.Instance;
+        if (world == null)
+            return false;
+
+        Vector3Int steamEngineBlock = ResolveReleaseBlockPosition();
+        if (world.GetBlockAt(steamEngineBlock) != BlockType.SteamEngine ||
+            !itemStack.TryGetRoboticArmItemStack(out Item item, out int amount))
+        {
+            return false;
+        }
+
+        int insertAmount = Mathf.Min(amount, ResolveItemsPerGrab());
+        int remaining = world.InsertSteamEngineFuel(
+            steamEngineBlock,
+            item,
+            insertAmount,
+            ResolveSteamEngineFuelInsertionLimit());
+        int inserted = insertAmount - remaining;
+        if (inserted <= 0)
+            return false;
+
+        itemStack.RemoveFromRoboticArmStack(inserted);
+        return remaining <= 0;
+    }
+
     private int ResolveItemsPerGrab()
     {
         return Mathf.Max(1, itemsPerGrab);
@@ -809,6 +887,11 @@ public class RoboticArm : DynamicVoxelBlock
         return limitFurnaceFuelFill ? Mathf.Max(1, maxFurnaceFuelItems) : int.MaxValue;
     }
 
+    private int ResolveSteamEngineFuelInsertionLimit()
+    {
+        return limitSteamEngineFuelFill ? Mathf.Max(1, maxSteamEngineFuelItems) : int.MaxValue;
+    }
+
     private int ResolveMaxGrabAmountForItem(Item item, int availableAmount)
     {
         if (item == null || availableAmount <= 0)
@@ -819,7 +902,17 @@ public class RoboticArm : DynamicVoxelBlock
             return 0;
 
         if (!TryResolveFurnaceBehind(out FurnaceUIController furnaceUI, out Vector3Int furnaceBlock))
-            return grabAmount;
+        {
+            if (!TryResolveSteamEngineBehind(out World steamEngineWorld, out Vector3Int steamEngineBlock))
+                return grabAmount;
+
+            int steamEngineAcceptedAmount = steamEngineWorld.GetInsertableSteamEngineFuelCount(
+                steamEngineBlock,
+                item,
+                grabAmount,
+                ResolveSteamEngineFuelInsertionLimit());
+            return Mathf.Min(grabAmount, steamEngineAcceptedAmount);
+        }
 
         int acceptedAmount = furnaceUI.GetInsertableItemCountForFurnace(
             furnaceBlock,
@@ -843,6 +936,16 @@ public class RoboticArm : DynamicVoxelBlock
             ? FurnaceUIController.Instance
             : FindAnyObjectByType<FurnaceUIController>();
         return furnaceUI != null;
+    }
+
+    private bool TryResolveSteamEngineBehind(out World world, out Vector3Int steamEngineBlock)
+    {
+        world = World.Instance;
+        steamEngineBlock = ResolveReleaseBlockPosition();
+
+        return enableSteamEngineInsertion &&
+               world != null &&
+               world.GetBlockAt(steamEngineBlock) == BlockType.SteamEngine;
     }
 
     private Vector3Int ResolveArmBlockPosition()

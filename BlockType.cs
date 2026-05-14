@@ -96,6 +96,11 @@ public enum BlockType
     FluidPipe_ShapeL = 90,
     FluidPipe_ShapeT = 91,
     SteamEngine = 92,
+    white_concrete = 93,
+    ClayBricksWall = 94,
+    ClayBricksWall_Ramp = 95,
+    ClayBricksWall_VerticalRamp = 96,
+
 
 
 

@@ -63,6 +63,8 @@ public partial class World
         public readonly List<Vector3Int> steamEnginePositions = new List<Vector3Int>(8);
         public readonly List<Vector3Int> poweredBlockPositions = new List<Vector3Int>(8);
         public int consumerCursor;
+        public float steamGenerationBudget;
+        public float steamGenerationBudgetTime;
     }
 
     #region Electricity
@@ -75,7 +77,7 @@ public partial class World
         amount = Mathf.Max(0f, amount);
         EnsureElectricitySimulationReady();
 
-        if (!electricalNetworkByPosition.TryGetValue(consumerPos, out ElectricalNetworkRuntime network))
+        if (!TryGetElectricalNetworkForPosition(consumerPos, out ElectricalNetworkRuntime network))
             return false;
 
         if (amount <= 0f)
@@ -96,7 +98,7 @@ public partial class World
         amount = Mathf.Max(0f, amount);
         EnsureElectricitySimulationReady();
 
-        if (!electricalNetworkByPosition.TryGetValue(consumerPos, out ElectricalNetworkRuntime network))
+        if (!TryGetElectricalNetworkForPosition(consumerPos, out ElectricalNetworkRuntime network))
             return false;
 
         if (amount <= 0f)
@@ -144,7 +146,7 @@ public partial class World
 
         EnsureElectricitySimulationReady();
 
-        if (!electricalNetworkByPosition.TryGetValue(consumerPos, out ElectricalNetworkRuntime network))
+        if (!TryGetElectricalNetworkForPosition(consumerPos, out ElectricalNetworkRuntime network))
             return 0f;
 
         float capacity = GetElectricalEnergyCapacity(network);
@@ -220,6 +222,7 @@ public partial class World
 
         CleanupBatteryEnergyStorage();
         BuildElectricConnectorExtraEdges();
+        BuildSteamEngineFrontExtraEdges();
         BuildWireGeometryExtraEdges();
 
         foreach (Vector3Int position in electricalBlockPositions)
@@ -231,6 +234,19 @@ public partial class World
         RemoveStalePoweredElectricalBlocksAfterNetworkRebuild();
         RefreshElectricalNetworkBufferLookup();
         electricalNetworksDirty = false;
+    }
+
+    private bool TryGetElectricalNetworkForPosition(Vector3Int position, out ElectricalNetworkRuntime network)
+    {
+        if (electricalNetworkByPosition.TryGetValue(position, out network))
+            return true;
+
+        if (!IsElectricalBlock(GetBlockAt(position)))
+            return false;
+
+        electricalNetworksDirty = true;
+        EnsureElectricityNetworksBuilt();
+        return electricalNetworkByPosition.TryGetValue(position, out network);
     }
 
     private void EnsureElectricalBlockIndexBuilt()
@@ -307,6 +323,7 @@ public partial class World
             return false;
 
         AddLocalWireGeometryExtraEdgesForAddedBlock(position);
+        AddLocalSteamEngineFrontExtraEdgesForAddedBlock(position);
         CollectConnectedElectricalNetworks(position, blockType);
 
         ElectricalNetworkRuntime targetNetwork;
@@ -395,6 +412,18 @@ public partial class World
 
         AddTopWireGeometryExtraEdges(position);
         AddWallWireGeometryExtraEdges(position);
+    }
+
+    private void AddLocalSteamEngineFrontExtraEdgesForAddedBlock(Vector3Int position)
+    {
+        AddSteamEngineFrontExtraEdgeForPosition(position);
+
+        for (int i = 0; i < sixDirections.Length; i++)
+        {
+            Vector3Int candidate = position + sixDirections[i];
+            if (electricalBlockPositions.Contains(candidate))
+                AddSteamEngineFrontExtraEdgeForPosition(candidate);
+        }
     }
 
     private void CollectConnectedElectricalNetworks(Vector3Int position, BlockType blockType)
@@ -654,6 +683,68 @@ public partial class World
             AddWireGeometryExtraEdgesForPosition(position);
     }
 
+    private void BuildSteamEngineFrontExtraEdges()
+    {
+        foreach (Vector3Int position in electricalBlockPositions)
+            AddSteamEngineFrontExtraEdgeForPosition(position);
+    }
+
+    private void AddSteamEngineFrontExtraEdgeForPosition(Vector3Int steamEnginePos)
+    {
+        if (!electricalBlockPositions.Contains(steamEnginePos) ||
+            GetBlockAt(steamEnginePos) != BlockType.SteamEngine)
+        {
+            return;
+        }
+
+        AddAdjacentRoboticArmExtraEdgesForSteamEngine(steamEnginePos);
+
+        Vector3Int frontPos = steamEnginePos + ResolveSteamEngineFrontStep(steamEnginePos);
+        if (!TryResolveElectricalEndpointAt(frontPos, out Vector3Int endpointTarget))
+            return;
+
+        if (endpointTarget == steamEnginePos)
+            return;
+
+        AddElectricalExtraEdge(steamEnginePos, endpointTarget);
+        AddElectricalExtraEdge(endpointTarget, steamEnginePos);
+    }
+
+    private void AddAdjacentRoboticArmExtraEdgesForSteamEngine(Vector3Int steamEnginePos)
+    {
+        for (int i = 0; i < sixDirections.Length; i++)
+        {
+            Vector3Int candidate = steamEnginePos + sixDirections[i];
+            if (!electricalBlockPositions.Contains(candidate) ||
+                GetBlockAt(candidate) != BlockType.RoboticArm)
+            {
+                continue;
+            }
+
+            AddElectricalExtraEdge(steamEnginePos, candidate);
+            AddElectricalExtraEdge(candidate, steamEnginePos);
+        }
+    }
+
+    private Vector3Int ResolveSteamEngineFrontStep(Vector3Int steamEnginePos)
+    {
+        BlockPlacementAxis placementAxis = GetPlacementAxisAt(steamEnginePos, BlockType.SteamEngine);
+        switch (BlockPlacementRotationUtility.SanitizeStoredAxis(placementAxis))
+        {
+            case BlockPlacementAxis.X:
+                return Vector3Int.right;
+
+            case BlockPlacementAxis.XNegative:
+                return Vector3Int.left;
+
+            case BlockPlacementAxis.ZNegative:
+                return Vector3Int.forward;
+
+            default:
+                return Vector3Int.back;
+        }
+    }
+
     private void AddTopWireGeometryExtraEdges(Vector3Int wirePos)
     {
         if (!TryGetElectricalWireState(
@@ -869,6 +960,7 @@ public partial class World
             int readySteamEngineCount = CountReadySteamEngines(network.steamEnginePositions);
             network.directCapacity = ResolveElectricalDirectCapacity(network, activeWindMillCount, readySteamEngineCount);
             network.directEnergy = Mathf.Clamp(network.directEnergy, 0f, network.directCapacity);
+            RefillSteamGenerationBudget(network, readySteamEngineCount);
 
             float passiveProducedEnergy =
                 (network.solarPanelCount * solarRate * daylightMultiplier +
@@ -879,15 +971,32 @@ public partial class World
             else
                 network.directEnergy = 0f;
 
-            float steamDemand = Mathf.Max(
+            float steamDemand = Mathf.Min(
                 GetSteamEngineDemandForNetwork(network, deltaTime),
-                GetSteamEngineIdleEnergyDemand(readySteamEngineCount, deltaTime));
+                GetSteamGenerationBudget(network));
             float steamProducedEnergy = TickSteamEnginesAndGetProducedEnergy(
                 network.steamEnginePositions,
                 steamDemand,
                 deltaTime);
             if (steamProducedEnergy > 0f)
+            {
+                SpendSteamGenerationBudget(network, steamProducedEnergy);
                 AddProducedElectricalEnergy(network, steamProducedEnergy);
+            }
+
+            float idleSteamDemand = Mathf.Max(
+                0f,
+                GetSteamEngineIdleEnergyDemand(readySteamEngineCount, deltaTime) - steamProducedEnergy);
+            idleSteamDemand = Mathf.Min(idleSteamDemand, GetSteamGenerationBudget(network));
+            float idleSteamProducedEnergy = TickSteamEnginesAndGetProducedEnergy(
+                network.steamEnginePositions,
+                idleSteamDemand,
+                deltaTime);
+            if (idleSteamProducedEnergy > 0f)
+            {
+                SpendSteamGenerationBudget(network, idleSteamProducedEnergy);
+                AddProducedElectricalEnergy(network, idleSteamProducedEnergy);
+            }
 
             UpdatePoweredBlocksForNetwork(network, deltaTime);
         }
@@ -943,7 +1052,12 @@ public partial class World
         if (network == null || requestedEnergy <= 0f)
             return true;
 
-        return GetAvailableSteamEngineEnergy(network.steamEnginePositions) + 0.0001f >= requestedEnergy;
+        int readySteamEngineCount = CountReadySteamEngines(network.steamEnginePositions);
+        RefillSteamGenerationBudget(network, readySteamEngineCount);
+        float availableSteamEnergy = Mathf.Min(
+            GetAvailableSteamEngineEnergy(network.steamEnginePositions),
+            GetSteamGenerationBudget(network));
+        return availableSteamEnergy + 0.0001f >= requestedEnergy;
     }
 
     private float TryProduceSteamEnergyForImmediateDemand(ElectricalNetworkRuntime network, float requestedEnergy)
@@ -961,10 +1075,66 @@ public partial class World
         if (steamRate <= 0f)
             return 0f;
 
-        return TickSteamEnginesAndGetProducedEnergy(
+        RefillSteamGenerationBudget(network, readySteamEngineCount);
+        float producibleEnergy = Mathf.Min(requestedEnergy, GetSteamGenerationBudget(network));
+        if (producibleEnergy <= 0.0001f)
+            return 0f;
+
+        float producedEnergy = TickSteamEnginesAndGetProducedEnergy(
             network.steamEnginePositions,
-            requestedEnergy,
-            Mathf.Max(0.0001f, requestedEnergy / steamRate));
+            producibleEnergy,
+            Mathf.Max(0.0001f, producibleEnergy / steamRate));
+        SpendSteamGenerationBudget(network, producedEnergy);
+        return producedEnergy;
+    }
+
+    private void RefillSteamGenerationBudget(ElectricalNetworkRuntime network, int readySteamEngineCount)
+    {
+        if (network == null)
+            return;
+
+        float steamRate = Mathf.Max(0, readySteamEngineCount) * Mathf.Max(0f, steamEngineEnergyPerSecond);
+        if (steamRate <= 0f)
+        {
+            network.steamGenerationBudget = 0f;
+            network.steamGenerationBudgetTime = Time.time;
+            return;
+        }
+
+        float now = Time.time;
+        if (network.steamGenerationBudgetTime <= 0f)
+        {
+            network.steamGenerationBudgetTime = now;
+            network.steamGenerationBudget = Mathf.Min(
+                GetSteamGenerationBudgetCapacity(steamRate),
+                network.steamGenerationBudget);
+            return;
+        }
+
+        float elapsed = Mathf.Max(0f, now - network.steamGenerationBudgetTime);
+        network.steamGenerationBudgetTime = now;
+        network.steamGenerationBudget = Mathf.Min(
+            GetSteamGenerationBudgetCapacity(steamRate),
+            Mathf.Max(0f, network.steamGenerationBudget) + elapsed * steamRate);
+    }
+
+    private float GetSteamGenerationBudget(ElectricalNetworkRuntime network)
+    {
+        return network != null ? Mathf.Max(0f, network.steamGenerationBudget) : 0f;
+    }
+
+    private float GetSteamGenerationBudgetCapacity(float steamRate)
+    {
+        float bufferSeconds = Mathf.Max(Mathf.Max(0f, directSolarBufferSeconds), Mathf.Max(0.0001f, electricityTickInterval));
+        return Mathf.Max(0f, steamRate) * bufferSeconds;
+    }
+
+    private void SpendSteamGenerationBudget(ElectricalNetworkRuntime network, float producedEnergy)
+    {
+        if (network == null || producedEnergy <= 0f)
+            return;
+
+        network.steamGenerationBudget = Mathf.Max(0f, network.steamGenerationBudget - producedEnergy);
     }
 
     private void RefreshElectricalDirectCapacityForNetwork(
