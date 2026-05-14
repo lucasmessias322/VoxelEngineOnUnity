@@ -101,6 +101,9 @@ public enum BlockType
     ClayBricksWall_VerticalRamp = 96,
     FluidPipe_ShapeCross = 97,
 
+    FluidPipe_ShapeCross3   = 98,
+
+
 
 
 
