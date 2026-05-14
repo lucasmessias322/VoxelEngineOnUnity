@@ -29,6 +29,10 @@ public static partial class MeshGenerator
             public bool tint;
             public bool usesExplicitAppearance;
             public Vector4 explicitUvRectData;
+            public bool usesFluidPipeImportedUv;
+            public int fluidPipeAxis;
+            public float fluidPipeAxisMin;
+            public float fluidPipeAxisMax;
         }
 
 
@@ -112,7 +116,11 @@ public static partial class MeshGenerator
             Vector4 explicitUvRectData,
             BlockFace uvFace = BlockFace.Side,
             bool hasSourceUvBounds = false,
-            Vector4 sourceUvBounds = default)
+            Vector4 sourceUvBounds = default,
+            bool usesFluidPipeImportedUv = false,
+            int fluidPipeAxis = 0,
+            float fluidPipeAxisMin = 0f,
+            float fluidPipeAxisMax = 1f)
         {
             if (uvFace == BlockFace.Side)
                 uvFace = face;
@@ -134,7 +142,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -155,7 +167,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -176,7 +192,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -197,7 +217,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -218,7 +242,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -239,7 +267,11 @@ public static partial class MeshGenerator
                         tileY = tile.y,
                         tint = tint,
                         usesExplicitAppearance = usesExplicitAppearance,
-                        explicitUvRectData = explicitUvRectData
+                        explicitUvRectData = explicitUvRectData,
+                        usesFluidPipeImportedUv = usesFluidPipeImportedUv,
+                        fluidPipeAxis = fluidPipeAxis,
+                        fluidPipeAxisMin = fluidPipeAxisMin,
+                        fluidPipeAxisMax = fluidPipeAxisMax
                     };
                     AddShapeFaceRectWithSourceUv(ref faceRects, rect, hasSourceUvBounds, sourceUvBounds);
                     return;
@@ -428,6 +460,10 @@ public static partial class MeshGenerator
         private static bool HasSameAppearance(ShapeFaceRect a, ShapeFaceRect b)
         {
             return a.usesExplicitAppearance == b.usesExplicitAppearance &&
+                   a.usesFluidPipeImportedUv == b.usesFluidPipeImportedUv &&
+                   a.fluidPipeAxis == b.fluidPipeAxis &&
+                   math.abs(a.fluidPipeAxisMin - b.fluidPipeAxisMin) <= 0.0001f &&
+                   math.abs(a.fluidPipeAxisMax - b.fluidPipeAxisMax) <= 0.0001f &&
                    (!a.usesExplicitAppearance ||
                     (a.tint == b.tint &&
                      a.uvFace == b.uvFace &&
@@ -675,7 +711,11 @@ public static partial class MeshGenerator
                 tileY = source.tileY,
                 tint = source.tint,
                 usesExplicitAppearance = source.usesExplicitAppearance,
-                explicitUvRectData = source.explicitUvRectData
+                explicitUvRectData = source.explicitUvRectData,
+                usesFluidPipeImportedUv = source.usesFluidPipeImportedUv,
+                fluidPipeAxis = source.fluidPipeAxis,
+                fluidPipeAxisMin = source.fluidPipeAxisMin,
+                fluidPipeAxisMax = source.fluidPipeAxisMax
             });
         }
 

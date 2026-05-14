@@ -125,7 +125,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
 
@@ -163,7 +167,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
 
@@ -201,7 +209,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
 
@@ -239,7 +251,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
 
@@ -277,7 +293,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
 
@@ -315,7 +335,11 @@ public static partial class MeshGenerator
                         shapeBoxes,
                         currentShape,
                         currentPlacementAxis,
-                        currentRampVariant);
+                        currentRampVariant,
+                        rect.usesFluidPipeImportedUv,
+                        rect.fluidPipeAxis,
+                        rect.fluidPipeAxisMin,
+                        rect.fluidPipeAxisMax);
                     return;
                 }
             }
@@ -566,7 +590,11 @@ public static partial class MeshGenerator
             in FixedList512Bytes<ShapeBox> shapeBoxes,
             BlockRenderShape currentShape,
             BlockPlacementAxis currentPlacementAxis,
-            RampShapeVariant currentRampVariant)
+            RampShapeVariant currentRampVariant,
+            bool usesFluidPipeImportedUv = false,
+            int fluidPipeAxis = 0,
+            float fluidPipeAxisMin = 0f,
+            float fluidPipeAxisMax = 1f)
         {
             int vIndex = GetCurrentSliceVertexIndex();
             Vector2 atlasUv;
@@ -609,10 +637,24 @@ public static partial class MeshGenerator
             }
             else if (currentShape == BlockRenderShape.MultiCuboid && usesExplicitAppearance)
             {
-                Vector3 local0 = BlockShapeUtility.InverseTransformPointForPlacement(p0 - blockOrigin, mapping, currentPlacementAxis);
-                Vector3 local1 = BlockShapeUtility.InverseTransformPointForPlacement(p1 - blockOrigin, mapping, currentPlacementAxis);
-                Vector3 local2 = BlockShapeUtility.InverseTransformPointForPlacement(p2 - blockOrigin, mapping, currentPlacementAxis);
-                Vector3 local3 = BlockShapeUtility.InverseTransformPointForPlacement(p3 - blockOrigin, mapping, currentPlacementAxis);
+                Vector3 local0 = p0 - blockOrigin;
+                Vector3 local1 = p1 - blockOrigin;
+                Vector3 local2 = p2 - blockOrigin;
+                Vector3 local3 = p3 - blockOrigin;
+                if (usesFluidPipeImportedUv)
+                {
+                    local0 = TransformFluidPipeImportedUvPoint(local0, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
+                    local1 = TransformFluidPipeImportedUvPoint(local1, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
+                    local2 = TransformFluidPipeImportedUvPoint(local2, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
+                    local3 = TransformFluidPipeImportedUvPoint(local3, fluidPipeAxis, fluidPipeAxisMin, fluidPipeAxisMax);
+                }
+                else
+                {
+                    local0 = BlockShapeUtility.InverseTransformPointForPlacement(local0, mapping, currentPlacementAxis);
+                    local1 = BlockShapeUtility.InverseTransformPointForPlacement(local1, mapping, currentPlacementAxis);
+                    local2 = BlockShapeUtility.InverseTransformPointForPlacement(local2, mapping, currentPlacementAxis);
+                    local3 = BlockShapeUtility.InverseTransformPointForPlacement(local3, mapping, currentPlacementAxis);
+                }
 
                 uv0 = ResolveShapeProjectedUv(uvFace, local0);
                 uv1 = ResolveShapeProjectedUv(uvFace, local1);
