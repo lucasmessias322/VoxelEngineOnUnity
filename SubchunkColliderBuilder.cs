@@ -735,8 +735,13 @@ internal sealed class SubchunkColliderBuilder
     private static bool TryGetCollidableMapping(BlockType blockType, BlockTextureMapping[] blockMappings, out BlockTextureMapping mapping)
     {
         mapping = default;
-        if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType) || TorchPlacementUtility.IsTorchLike(blockType))
+        if (blockType == BlockType.Air ||
+            blockType == BlockType.Leaves ||
+            FluidBlockUtility.IsWater(blockType) ||
+            TorchPlacementUtility.IsTorchLike(blockType))
+        {
             return false;
+        }
 
         int mapIndex = (int)blockType;
         if (mapIndex < 0 || mapIndex >= blockMappings.Length)

@@ -10,9 +10,11 @@ public partial class World
     [Min(1)] public int saplingRequiredClearanceBlocks = 10;
     [Range(0, 15)] public byte saplingRequiredLightLevel = 9;
     [Min(1)] public int saplingGrowthChecksPerFrame = 2;
+    [Min(1)] public int saplingGrowthQueueScansPerFrame = 16;
 
     private readonly Queue<Vector3Int> queuedSaplingGrowth = new Queue<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly Dictionary<Vector3Int, float> queuedSaplingGrowTimes = new Dictionary<Vector3Int, float>(InitialInteractiveBlockLightRefreshCapacity);
+    private float nextSaplingGrowthQueueWakeTime = float.PositiveInfinity;
 
     private void HandleSaplingBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType)
     {
@@ -34,8 +36,10 @@ public partial class World
         float minDelay = Mathf.Max(1f, oakSaplingMinGrowSeconds);
         float maxDelay = Mathf.Max(minDelay, oakSaplingMaxGrowSeconds);
         float delay = Mathf.Lerp(minDelay, maxDelay, Hash01(worldPos.x, worldPos.y, worldPos.z));
-        queuedSaplingGrowTimes[worldPos] = Time.time + delay;
+        float growAt = Time.time + delay;
+        queuedSaplingGrowTimes[worldPos] = growAt;
         queuedSaplingGrowth.Enqueue(worldPos);
+        nextSaplingGrowthQueueWakeTime = Mathf.Min(nextSaplingGrowthQueueWakeTime, growAt);
     }
 
     private void ProcessQueuedSaplingGrowth()
@@ -43,10 +47,15 @@ public partial class World
         if (!enableSaplingGrowth || queuedSaplingGrowth.Count == 0)
             return;
 
-        int processed = 0;
-        int attempts = queuedSaplingGrowth.Count;
-        int perFrameLimit = Mathf.Max(1, saplingGrowthChecksPerFrame);
         float now = Time.time;
+        if (nextSaplingGrowthQueueWakeTime > now)
+            return;
+
+        nextSaplingGrowthQueueWakeTime = float.PositiveInfinity;
+        int processed = 0;
+        int perFrameLimit = Mathf.Max(1, saplingGrowthChecksPerFrame);
+        int maxAttempts = Mathf.Max(perFrameLimit, saplingGrowthQueueScansPerFrame);
+        int attempts = Mathf.Min(queuedSaplingGrowth.Count, maxAttempts);
 
         while (processed < perFrameLimit && attempts-- > 0 && queuedSaplingGrowth.Count > 0)
         {
@@ -57,6 +66,7 @@ public partial class World
             if (growAt > now)
             {
                 queuedSaplingGrowth.Enqueue(pos);
+                nextSaplingGrowthQueueWakeTime = Mathf.Min(nextSaplingGrowthQueueWakeTime, growAt);
                 continue;
             }
 
@@ -73,6 +83,11 @@ public partial class World
             QueueOakSaplingGrowth(pos);
             processed++;
         }
+
+        if (queuedSaplingGrowth.Count == 0)
+            nextSaplingGrowthQueueWakeTime = float.PositiveInfinity;
+        else if (attempts <= 0 || processed >= perFrameLimit)
+            nextSaplingGrowthQueueWakeTime = Mathf.Min(nextSaplingGrowthQueueWakeTime, now);
     }
 
     private bool TryGrowOakSapling(Vector3Int saplingPos)

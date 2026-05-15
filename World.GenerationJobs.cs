@@ -294,7 +294,7 @@ public partial class World : MonoBehaviour
 
         private bool IsBlockCollidable(BlockType blockType)
         {
-            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            if (blockType == BlockType.Air || blockType == BlockType.Leaves || FluidBlockUtility.IsWater(blockType))
                 return false;
             if (TorchPlacementUtility.IsTorchLike(blockType))
                 return false;
@@ -373,7 +373,7 @@ public partial class World : MonoBehaviour
 
         private bool IsBlockCollidable(BlockType blockType)
         {
-            if (blockType == BlockType.Air || FluidBlockUtility.IsWater(blockType))
+            if (blockType == BlockType.Air || blockType == BlockType.Leaves || FluidBlockUtility.IsWater(blockType))
                 return false;
             if (TorchPlacementUtility.IsTorchLike(blockType))
                 return false;

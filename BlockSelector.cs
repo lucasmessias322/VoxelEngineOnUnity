@@ -17,6 +17,7 @@ public class BlockSelector : MonoBehaviour
     public Vector3Int BillboardGroundBlockPos { get; private set; } = new Vector3Int(int.MinValue, 0, 0);
 
     private LineRenderer line;
+    private PlayerBlockBreaker blockBreaker;
     private Vector3Int currentBlock;
     private bool hasBlock;
     private readonly Vector3[] selectionLinePoints = new Vector3[16];
@@ -34,6 +35,8 @@ public class BlockSelector : MonoBehaviour
         line.enabled = false;
         line.numCapVertices = 4;
         line.numCornerVertices = 4;
+
+        blockBreaker = GetComponent<PlayerBlockBreaker>();
     }
 
     void Update()
@@ -100,6 +103,12 @@ public class BlockSelector : MonoBehaviour
         if (!isBillboard && TryGetCustomBounds(pos, blockType, out Bounds customBounds))
             bounds = customBounds;
 
+        if (TryGetBreakShakeForSelection(pos, isBillboard, bounds.center, out Vector3 shakeOffset, out float shakeScale))
+        {
+            bounds.center += shakeOffset;
+            bounds.size *= Mathf.Max(0.0001f, shakeScale);
+        }
+
         Vector3 p = bounds.min - Vector3.one * offset;
         Vector3 size = bounds.size + Vector3.one * offset * 2f;
 
@@ -133,6 +142,21 @@ public class BlockSelector : MonoBehaviour
         selectionLinePoints[15] = v001;
 
         line.SetPositions(selectionLinePoints);
+    }
+
+    private bool TryGetBreakShakeForSelection(Vector3Int pos, bool isBillboard, Vector3 center, out Vector3 offset, out float scale)
+    {
+        offset = Vector3.zero;
+        scale = 1f;
+
+        if (blockBreaker == null)
+            blockBreaker = GetComponent<PlayerBlockBreaker>();
+
+        if (blockBreaker == null)
+            blockBreaker = FindAnyObjectByType<PlayerBlockBreaker>();
+
+        return blockBreaker != null &&
+               blockBreaker.TryGetActiveBreakShake(pos, isBillboard, center, out offset, out scale);
     }
 
     private bool TryGetCustomBounds(Vector3Int pos, BlockType blockType, out Bounds bounds)

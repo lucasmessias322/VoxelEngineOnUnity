@@ -16,6 +16,11 @@ public partial class World
     private readonly HashSet<Vector3Int> persistentLeafBlocks = new HashSet<Vector3Int>(InitialBlockEditCapacity);
     private readonly Queue<LeafSupportSearchNode> leafSupportSearchQueue = new Queue<LeafSupportSearchNode>(InitialInteractiveBlockLightRefreshCapacity);
     private readonly HashSet<Vector3Int> leafSupportVisited = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Queue<LeafSupportScanCandidate> queuedLeafSupportScans = new Queue<LeafSupportScanCandidate>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly HashSet<Vector3Int> queuedLeafSupportScanSet = new HashSet<Vector3Int>(InitialInteractiveBlockLightRefreshCapacity);
+    private readonly Dictionary<Vector2Int, int> leafDecayDirtyChunkMasks = new Dictionary<Vector2Int, int>(InitialQueuedChunkWorkCapacity);
+    private float nextLeafDecayQueueWakeTime = float.PositiveInfinity;
+    private float nextLeafDecayVisualFlushTime = float.PositiveInfinity;
 
     private static readonly Vector3Int[] TreeCapitatorNeighborOffsets = CreateTreeCapitatorNeighborOffsets();
 
@@ -47,6 +52,12 @@ public partial class World
     {
         public Vector3Int position;
         public int distance;
+    }
+
+    private struct LeafSupportScanCandidate
+    {
+        public Vector3Int center;
+        public int radius;
     }
 
     #region Tree Maintenance
@@ -183,28 +194,49 @@ public partial class World
 
     private void ProcessQueuedLeafDecay()
     {
-        if (!enableLeafDecay || queuedLeafDecay.Count == 0)
+        if (!enableLeafDecay)
             return;
 
         float now = Time.time;
         float stepStartTime = Time.realtimeSinceStartup;
         float timeBudgetSeconds = leafDecayTimeBudgetMS > 0f ? leafDecayTimeBudgetMS / 1000f : 0f;
-        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
-        int processed = 0;
-        int attempts = queuedLeafDecay.Count;
 
-        while (processed < Mathf.Max(1, leafDecayChecksPerFrame) && attempts-- > 0)
+        ProcessQueuedLeafSupportScans(stepStartTime, timeBudgetSeconds);
+
+        if (queuedLeafDecay.Count == 0)
+        {
+            FlushLeafDecayBlockRefreshes(false);
+            return;
+        }
+
+        if (nextLeafDecayQueueWakeTime > now)
+        {
+            FlushLeafDecayBlockRefreshes(false);
+            return;
+        }
+
+        nextLeafDecayQueueWakeTime = float.PositiveInfinity;
+        Vector2Int simulationCenter = GetCurrentPlayerChunkCoord();
+        int perFrameChecks = Mathf.Max(1, leafDecayChecksPerFrame);
+        int maxAttempts = Mathf.Max(perFrameChecks, leafDecayQueueScansPerFrame);
+        int processed = 0;
+        int attempts = Mathf.Min(queuedLeafDecay.Count, maxAttempts);
+        bool hitTimeBudget = false;
+
+        while (processed < perFrameChecks && attempts-- > 0 && queuedLeafDecay.Count > 0)
         {
             if (timeBudgetSeconds > 0f && Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+            {
+                hitTimeBudget = true;
                 break;
+            }
 
             LeafDecayCandidate candidate = queuedLeafDecay.Dequeue();
             queuedLeafDecaySet.Remove(candidate.position);
 
             if (candidate.nextCheckTime > now)
             {
-                queuedLeafDecay.Enqueue(candidate);
-                queuedLeafDecaySet.Add(candidate.position);
+                RequeueLeafDecayCandidate(candidate);
                 continue;
             }
 
@@ -217,6 +249,17 @@ public partial class World
             EvaluateLeafDecay(candidate.position, now);
             processed++;
         }
+
+        FlushLeafDecayBlockRefreshes(false);
+
+        if (queuedLeafDecay.Count == 0)
+            nextLeafDecayQueueWakeTime = float.PositiveInfinity;
+        else if (hitTimeBudget || processed >= perFrameChecks)
+            nextLeafDecayQueueWakeTime = Mathf.Min(nextLeafDecayQueueWakeTime, now);
+        else if (attempts <= 0 && processed == 0)
+            nextLeafDecayQueueWakeTime = Mathf.Min(
+                nextLeafDecayQueueWakeTime,
+                now + Mathf.Max(0.02f, leafDecayStepInterval * 0.25f));
     }
 
     private void EvaluateLeafDecay(Vector3Int worldPos, float now)
@@ -254,8 +297,91 @@ public partial class World
             return;
         }
 
-        BlockBreakDropResolver.TrySpawnDrop(this, worldPos, BlockType.Leaves, Vector3.zero);
-        SetBlockAt(worldPos, BlockType.Air);
+        DecayLeafBlock(worldPos);
+    }
+
+    private void DecayLeafBlock(Vector3Int worldPos)
+    {
+        if (SetLeafDecayBlockToAir(worldPos))
+            BlockBreakDropResolver.TrySpawnDrop(this, worldPos, BlockType.Leaves, Vector3.zero);
+    }
+
+    private bool SetLeafDecayBlockToAir(Vector3Int worldPos)
+    {
+        const BlockType previousType = BlockType.Leaves;
+        const BlockType newType = BlockType.Air;
+
+        if (worldPos.y <= 2 || GetBlockAt(worldPos) != previousType)
+            return false;
+
+        Vector2Int chunkCoord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        blockOverrides[worldPos] = newType;
+        UpdateStoredPlacementAxis(worldPos, newType, BlockPlacementAxis.Y);
+
+        EnsureTerrainOverrideIndexBuilt();
+        IndexTerrainOverride(worldPos, chunkCoord);
+
+        ApplyBlockToLoadedChunkCache(worldPos, chunkCoord, newType);
+        HandleLeafDecayBlockChange(worldPos, previousType, newType, false);
+        HandleSupportDependentBlockChange(worldPos, previousType, newType);
+
+        torchFireParticleController?.NotifyBlockChanged(worldPos, previousType, newType);
+        QueueLeafDecayBlockRefresh(worldPos, chunkCoord, previousType, newType);
+        StoneCrusher.NotifyWorldBlockChanged(worldPos, previousType, newType);
+        BlockChanged?.Invoke(worldPos, previousType, newType);
+        return true;
+    }
+
+    private void QueueLeafDecayBlockRefresh(
+        Vector3Int worldPos,
+        Vector2Int chunkCoord,
+        BlockType previousType,
+        BlockType newType)
+    {
+        int dirtySubchunkMask = GetDirtySubchunkMaskForBlockChange(worldPos, previousType, newType);
+        bool hadPendingVisualRefresh = leafDecayDirtyChunkMasks.Count > 0;
+        int chunksToRebuildCount = CollectBlockEditRebuildChunks(worldPos, chunkCoord);
+        for (int i = 0; i < chunksToRebuildCount; i++)
+            AddDirtySubchunkMask(leafDecayDirtyChunkMasks, blockChangeChunksToRebuildBuffer[i], dirtySubchunkMask);
+
+        if (!hadPendingVisualRefresh && leafDecayDirtyChunkMasks.Count > 0)
+            nextLeafDecayVisualFlushTime = Time.time + Mathf.Max(0.02f, leafDecayVisualFlushIntervalSeconds);
+
+        if (leafDecayRefreshBlockLighting)
+        {
+            QueueInteractiveBlockLightRefresh(
+                worldPos,
+                previousType,
+                newType,
+                Mathf.Max(0f, leafDecayRebuildDelaySeconds));
+        }
+    }
+
+    private void FlushLeafDecayBlockRefreshes(bool force)
+    {
+        if (leafDecayDirtyChunkMasks.Count == 0)
+        {
+            nextLeafDecayVisualFlushTime = float.PositiveInfinity;
+            return;
+        }
+
+        if (!force && Time.time < nextLeafDecayVisualFlushTime)
+            return;
+
+        float refreshDelay = Mathf.Max(0f, leafDecayRebuildDelaySeconds);
+        bool smoothRefresh = refreshDelay > 0f;
+        bool rebuildColliders = leafDecayRebuildColliders && IsSolidBlock(BlockType.Leaves);
+
+        foreach (KeyValuePair<Vector2Int, int> kv in leafDecayDirtyChunkMasks)
+        {
+            if (smoothRefresh)
+                RequestChunkRebuildDelayed(kv.Key, kv.Value, rebuildColliders, refreshDelay);
+            else
+                RequestChunkRebuild(kv.Key, kv.Value, rebuildColliders);
+        }
+
+        leafDecayDirtyChunkMasks.Clear();
+        nextLeafDecayVisualFlushTime = float.PositiveInfinity;
     }
 
     private void HandleLeafDecayBlockChange(Vector3Int worldPos, BlockType previousType, BlockType newType, bool placedByPlayer)
@@ -277,7 +403,7 @@ public partial class World
             leafDecayUnsupportedSince.Remove(worldPos);
 
         if (wasLeafSupport != isLeafSupport)
-            QueueNearbyLeavesForDecay(worldPos, Mathf.Max(1, leafDecaySupportDistance));
+            QueueLeafSupportScan(worldPos, Mathf.Max(1, leafDecaySupportDistance));
 
         if (wasLeaf != isLeaf)
         {
@@ -316,16 +442,56 @@ public partial class World
         }
     }
 
+    private void QueueLeafSupportScan(Vector3Int center, int radius)
+    {
+        if (!queuedLeafSupportScanSet.Add(center))
+            return;
+
+        queuedLeafSupportScans.Enqueue(new LeafSupportScanCandidate
+        {
+            center = center,
+            radius = radius
+        });
+    }
+
+    private void ProcessQueuedLeafSupportScans(float stepStartTime, float timeBudgetSeconds)
+    {
+        if (queuedLeafSupportScans.Count == 0)
+            return;
+
+        int perFrameLimit = Mathf.Max(1, leafDecaySupportScansPerFrame);
+        for (int i = 0; i < perFrameLimit && queuedLeafSupportScans.Count > 0; i++)
+        {
+            if (i > 0 &&
+                timeBudgetSeconds > 0f &&
+                Time.realtimeSinceStartup - stepStartTime >= timeBudgetSeconds)
+            {
+                break;
+            }
+
+            LeafSupportScanCandidate candidate = queuedLeafSupportScans.Dequeue();
+            queuedLeafSupportScanSet.Remove(candidate.center);
+            QueueNearbyLeavesForDecay(candidate.center, candidate.radius);
+        }
+    }
+
     private void TryQueueLeafDecay(Vector3Int worldPos, float delaySeconds = 0f)
     {
         if (!enableLeafDecay || !queuedLeafDecaySet.Add(worldPos))
             return;
 
-        queuedLeafDecay.Enqueue(new LeafDecayCandidate
+        RequeueLeafDecayCandidate(new LeafDecayCandidate
         {
             position = worldPos,
             nextCheckTime = Time.time + Mathf.Max(0f, delaySeconds)
         });
+    }
+
+    private void RequeueLeafDecayCandidate(LeafDecayCandidate candidate)
+    {
+        queuedLeafDecay.Enqueue(candidate);
+        queuedLeafDecaySet.Add(candidate.position);
+        nextLeafDecayQueueWakeTime = Mathf.Min(nextLeafDecayQueueWakeTime, candidate.nextCheckTime);
     }
 
     private bool HasLeafSupport(Vector3Int origin)

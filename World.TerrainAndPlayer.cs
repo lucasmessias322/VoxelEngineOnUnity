@@ -8,9 +8,15 @@ public partial class World
     [SerializeField] private bool enableLeafDecay = true;
     [SerializeField, Min(1)] private int leafDecaySupportDistance = 4;
     [SerializeField, Min(1)] private int leafDecayChecksPerFrame = 8;
+    [SerializeField, Min(1)] private int leafDecayQueueScansPerFrame = 32;
+    [SerializeField, Min(1)] private int leafDecaySupportScansPerFrame = 1;
     [SerializeField, Min(0f)] private float leafDecayTimeBudgetMS = 0.5f;
     [SerializeField, Min(0.05f)] private float leafDecayStepInterval = 0.15f;
     [SerializeField, Min(0f)] private float leafDecayGraceSeconds = 1.2f;
+    [SerializeField, Min(0f)] private float leafDecayRebuildDelaySeconds = 0.06f;
+    [SerializeField, Min(0.02f)] private float leafDecayVisualFlushIntervalSeconds = 0.25f;
+    [SerializeField] private bool leafDecayRefreshBlockLighting = false;
+    [SerializeField] private bool leafDecayRebuildColliders = false;
     [Tooltip("Chance de uma folha de oak dropar oakTreeSapling. 20 = Minecraft vanilla (1/20). Valores maiores deixam mais raro.")]
     [SerializeField, Min(1)] private int oakLeafSaplingDropOneIn = 40;
 

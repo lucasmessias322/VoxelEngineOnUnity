@@ -2845,7 +2845,7 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
     [SerializeField] private float lifeTimeSeconds = 30f;
     [SerializeField] private bool preventDespawnOnConveyor = true;
     [SerializeField] private float dropScale = 0.35f;
-    [SerializeField, Min(0.05f)] private float itemVisualWorldHeight = 0.42f;
+    [SerializeField, Min(0.05f)] private float itemVisualWorldHeight = 0.7f;
     [SerializeField, Min(0.05f)] private float itemVisualMaxWorldWidth = 0.7f;
     [SerializeField] private float launchForce = 2.2f;
     [SerializeField] private float pickupDelaySeconds = 0.25f;
@@ -2870,8 +2870,8 @@ public class InventoryItemDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticAr
 
     [Header("Stacking")]
     [SerializeField, Min(1)] private int stackAmount = 1;
-    [SerializeField, Min(1)] private int maxStackAmount = 64;
-    [SerializeField, Min(0f)] private float mergeRadius = 1.15f;
+    [SerializeField, Min(1)] private int maxStackAmount = 100;
+    [SerializeField, Min(0f)] private float mergeRadius = 1.5f;
     [SerializeField, Min(0.02f)] private float mergeCheckInterval = 0.2f;
     [SerializeField, Min(0f)] private float mergeDelaySeconds = 0.15f;
 

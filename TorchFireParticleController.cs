@@ -5,6 +5,9 @@ using UnityEngine;
 [RequireComponent(typeof(World))]
 public sealed class TorchFireParticleController : MonoBehaviour
 {
+    [Header("Runtime")]
+    [SerializeField] private bool enableTorchFireParticles = false;
+
     [Header("Scan")]
     [SerializeField, Min(0.05f)] private float scanInterval = 0.2f;
     [SerializeField, Min(1)] private int horizontalScanRadius = 12;
@@ -61,6 +64,12 @@ public sealed class TorchFireParticleController : MonoBehaviour
         if (!Application.isPlaying || world == null)
             return;
 
+        if (!enableTorchFireParticles)
+        {
+            ClearAllEffects();
+            return;
+        }
+
         ResolveObserver();
         if (observer == null)
         {
@@ -82,6 +91,12 @@ public sealed class TorchFireParticleController : MonoBehaviour
     {
         if (!Application.isPlaying || world == null)
             return;
+
+        if (!enableTorchFireParticles)
+        {
+            RemoveEffect(worldPos);
+            return;
+        }
 
         ResolveObserver();
         if (observer == null)

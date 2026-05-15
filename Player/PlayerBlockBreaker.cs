@@ -126,6 +126,17 @@ public class PlayerBlockBreaker : MonoBehaviour
     public bool IsBreakInProgress => breakingBlock.x != int.MinValue;
     public float BreakProgressNormalized => Mathf.Clamp01(breakProgress01);
     public int PlaceActionVersion => placeActionVersion;
+    public float EffectiveCrackOverlayScale
+    {
+        get
+        {
+            float scale = Mathf.Max(1.001f, crackOverlayScale);
+            if (enableBreakShaderShake)
+                scale = Mathf.Max(scale, breakVisualOverlayScale + 0.002f);
+
+            return scale;
+        }
+    }
 
     void Awake()
     {
@@ -716,14 +727,11 @@ public class PlayerBlockBreaker : MonoBehaviour
         Bounds overlayBounds = ResolveBlockBounds(blockPos, overlayType);
         Vector3 shakeOffset = Vector3.zero;
         float shakeScale = 1f;
-        if (enableBreakShaderShake && !breakingIsBillboard)
-        {
-            shakeOffset = ComputeBreakShakeOffset(overlayBounds.center, progress01);
-            shakeScale = ComputeBreakShakeScale(overlayBounds.center, progress01);
-        }
+        if (!breakingIsBillboard)
+            TryGetBreakShakeSample(overlayBounds.center, progress01, out shakeOffset, out shakeScale);
 
         crackOverlayObject.transform.position = overlayBounds.center + shakeOffset;
-        crackOverlayObject.transform.localScale = overlayBounds.size * crackOverlayScale * shakeScale;
+        crackOverlayObject.transform.localScale = overlayBounds.size * EffectiveCrackOverlayScale * shakeScale;
 
         Texture2D[] activeStages = ResolveBreakCrackStages(overlayType);
         if (!HasBreakCrackStages(activeStages))
@@ -764,8 +772,7 @@ public class PlayerBlockBreaker : MonoBehaviour
         Bounds bounds = ResolveBlockBounds(blockPos, blockType);
         Vector3 center = bounds.center;
         Vector3 halfExtents = bounds.extents + Vector3.one * breakShaderBoundsPadding;
-        Vector3 shakeOffset = ComputeBreakShakeOffset(center, progress01);
-        float shakeScale = ComputeBreakShakeScale(center, progress01);
+        TryGetBreakShakeSample(center, progress01, out Vector3 shakeOffset, out float shakeScale);
 
         UpdateBreakVisualOverlay(blockPos, blockType, bounds, hitNormal, shakeOffset, shakeScale);
 
@@ -1674,6 +1681,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             Mathf.Sin(t * 1.31f),
             Mathf.Sin(t * 1.73f + 2f),
             Mathf.Cos(t * 1.11f + 0.6f));
+        direction += Vector3.one * 0.00001f;
 
         if (direction.sqrMagnitude <= 0.00001f)
             return Vector3.zero;
@@ -1690,6 +1698,32 @@ public class PlayerBlockBreaker : MonoBehaviour
         return 1f + Mathf.Max(0f, breakShakeScaleStrength) *
             (0.4f + Mathf.Clamp01(progress01) * 0.6f) *
             (0.65f + pulse * 0.35f);
+    }
+
+    public bool TryGetBreakShakeSample(Vector3 center, float progress01, out Vector3 offset, out float scale)
+    {
+        if (!enableBreakShaderShake)
+        {
+            offset = Vector3.zero;
+            scale = 1f;
+            return false;
+        }
+
+        offset = ComputeBreakShakeOffset(center, progress01);
+        scale = ComputeBreakShakeScale(center, progress01);
+        return true;
+    }
+
+    public bool TryGetActiveBreakShake(Vector3Int blockPos, bool isBillboard, Vector3 center, out Vector3 offset, out float scale)
+    {
+        if (isBillboard || breakingIsBillboard || blockPos != breakingBlock)
+        {
+            offset = Vector3.zero;
+            scale = 1f;
+            return false;
+        }
+
+        return TryGetBreakShakeSample(center, breakProgress01, out offset, out scale);
     }
 
     void CancelBreak()
