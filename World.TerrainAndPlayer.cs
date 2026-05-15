@@ -33,12 +33,15 @@ public partial class World
     [SerializeField, Min(0f)] private float steamEngineEnergyPerSecond = 36f;
     [SerializeField, Min(0.1f)] private float steamEngineCoalBurnDuration = 30f;
     [SerializeField, Range(0f, 1f)] private float steamEngineIdleBurnMultiplier = 0.25f;
+    [SerializeField, Min(0.0001f)] private float steamEngineWaterPerEnergy = 0.02777778f;
+    [SerializeField, Min(0.1f)] private float steamEngineWaterCapacity = 5f;
     [SerializeField, Min(0f)] private float defaultPoweredLightEnergyPerSecond = 0.5f;
     [SerializeField, Min(0f)] private float roboticArmIdleEnergyPerSecond = 1.5f;
     [SerializeField, Min(0f)] private float electricalVisualRefreshDelaySeconds = 0f;
     [SerializeField, Min(0)] private int windMillMinimumGroundClearanceBlocks = 7;
     [SerializeField, Min(1f)] private float batteryCapacity = 240f;
     [SerializeField, Min(0f)] private float directSolarBufferSeconds = 1f;
+    [SerializeField, Min(0.01f)] private float waterPumpWaterPerSecond = 1f;
     [SerializeField, Min(1)] private int waterPumpRequiredWaterBlocks = 2;
     [SerializeField, Min(1)] private int waterPumpWaterSearchHorizontalRadius = 2;
     [SerializeField, Min(0)] private int waterPumpWaterSearchBelowBlocks = 1;

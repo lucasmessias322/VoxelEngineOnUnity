@@ -95,6 +95,7 @@ public enum BlockType
     ClayBricksWall = 94,
     ClayBricksWall_Ramp = 95,
     ClayBricksWall_VerticalRamp = 96,
+   
 }
 
 public static class MachineBlockUtility

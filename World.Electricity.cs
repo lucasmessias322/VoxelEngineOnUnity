@@ -949,12 +949,15 @@ public partial class World
         float solarRate = Mathf.Max(0f, solarPanelEnergyPerSecond);
         float windRate = Mathf.Max(0f, windMillEnergyPerSecond);
         electricalPoweredThisTick.Clear();
+        RefillSteamEngineWaterForAllNetworks(deltaTime);
 
         for (int i = 0; i < electricalNetworks.Count; i++)
         {
             ElectricalNetworkRuntime network = electricalNetworks[i];
             if (network == null)
                 continue;
+
+            steamEngineProducedEnergyThisTick.Clear();
 
             int activeWindMillCount = CountActiveWindMills(network);
             int readySteamEngineCount = CountReadySteamEngines(network.steamEnginePositions);
@@ -984,11 +987,10 @@ public partial class World
                 AddProducedElectricalEnergy(network, steamProducedEnergy);
             }
 
-            float idleSteamDemand = Mathf.Max(
-                0f,
-                GetSteamEngineIdleEnergyDemand(readySteamEngineCount, deltaTime) - steamProducedEnergy);
-            idleSteamDemand = Mathf.Min(idleSteamDemand, GetSteamGenerationBudget(network));
-            float idleSteamProducedEnergy = TickSteamEnginesAndGetProducedEnergy(
+            float idleSteamDemand = Mathf.Min(
+                GetSteamEngineIdleEnergyDemand(readySteamEngineCount, deltaTime),
+                GetSteamGenerationBudget(network));
+            float idleSteamProducedEnergy = TickSteamEnginesIdleAndGetProducedEnergy(
                 network.steamEnginePositions,
                 idleSteamDemand,
                 deltaTime);

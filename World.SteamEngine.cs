@@ -4,6 +4,9 @@ using UnityEngine;
 public partial class World
 {
     private const string SteamEngineCoalResourcePath = "Itens/Item/Coal";
+    private const float DefaultSteamEngineWaterPerEnergy = 0.02777778f;
+    private const float DefaultSteamEngineWaterCapacity = 5f;
+    private const float DefaultWaterPumpWaterPerSecond = 1f;
 
     private static readonly Vector3Int[] steamEngineFluidDirections =
     {
@@ -20,6 +23,13 @@ public partial class World
     private readonly Queue<Vector3Int> steamEngineFluidSearchQueue = new Queue<Vector3Int>(128);
     private readonly HashSet<Vector3Int> steamEngineFluidSearchVisited =
         new HashSet<Vector3Int>(InitialBlockEditCapacity);
+    private readonly List<Vector3Int> steamEngineWaterPumpSearchResults = new List<Vector3Int>(8);
+    private readonly Dictionary<Vector3Int, int> steamEngineWaterPumpConsumerCounts =
+        new Dictionary<Vector3Int, int>(InitialBlockEditCapacity);
+    private readonly Dictionary<Vector3Int, float> steamEngineProducedEnergyThisTick =
+        new Dictionary<Vector3Int, float>(InitialBlockEditCapacity);
+    private readonly HashSet<Vector3Int> steamEngineWaterRefillVisited =
+        new HashSet<Vector3Int>(InitialBlockEditCapacity);
 
     private Item cachedSteamEngineCoalItem;
 
@@ -29,6 +39,7 @@ public partial class World
         public int FuelAmount;
         public float BurnTimer;
         public float CurrentFuelDuration;
+        public float WaterAmount;
     }
 
     public bool IsSteamEngineBlockInWorld(Vector3Int steamEnginePos)
@@ -75,14 +86,18 @@ public partial class World
 
     public float GetSteamEngineWater01(Vector3Int steamEnginePos)
     {
-        return HasSteamEngineWaterSupply(steamEnginePos) ? 1f : 0f;
+        if (!steamEngineStates.TryGetValue(steamEnginePos, out SteamEngineRuntimeState state) || state == null)
+            return HasSteamEngineWaterSupply(steamEnginePos) ? 1f : 0f;
+
+        float capacity = GetSteamEngineWaterCapacity();
+        return capacity > 0f ? Mathf.Clamp01(state.WaterAmount / capacity) : 0f;
     }
 
     public bool IsSteamEngineGenerating(Vector3Int steamEnginePos)
     {
         return IsSteamEngineBlockInWorld(steamEnginePos) &&
-               HasSteamEngineWaterSupply(steamEnginePos) &&
                steamEngineStates.TryGetValue(steamEnginePos, out SteamEngineRuntimeState state) &&
+               HasSteamEngineUsableWater(state) &&
                state.BurnTimer > 0f;
     }
 
@@ -209,26 +224,32 @@ public partial class World
         for (int i = 0; i < steamEnginePositions.Count; i++)
         {
             Vector3Int steamEnginePos = steamEnginePositions[i];
-            if (!IsSteamEngineBlockInWorld(steamEnginePos) || !HasSteamEngineWaterSupply(steamEnginePos))
+            if (!IsSteamEngineBlockInWorld(steamEnginePos))
                 continue;
 
             SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
             float remainingEngineCapacity = energyPerSecond * deltaTime;
             while (remainingRequestedEnergy > 0.0001f && remainingEngineCapacity > 0.0001f)
             {
+                if (!HasSteamEngineUsableWater(state))
+                    break;
+
                 if (state.BurnTimer <= 0f && !TryStartSteamEngineFuelBurn(state))
                     break;
 
                 float fuelEnergyAvailable = state.BurnTimer * energyPerSecond;
-                float produceNow = Mathf.Min(remainingRequestedEnergy, remainingEngineCapacity, fuelEnergyAvailable);
+                float waterEnergyAvailable = GetSteamEngineWaterEnergyAvailable(state);
+                float produceNow = Mathf.Min(remainingRequestedEnergy, remainingEngineCapacity, fuelEnergyAvailable, waterEnergyAvailable);
                 if (produceNow <= 0.0001f)
                     break;
 
                 float burnSeconds = produceNow / energyPerSecond;
                 state.BurnTimer = Mathf.Max(0f, state.BurnTimer - burnSeconds);
+                ConsumeSteamEngineWaterForEnergy(state, produceNow);
                 remainingEngineCapacity -= produceNow;
                 remainingRequestedEnergy -= produceNow;
                 producedEnergy += produceNow;
+                AddSteamEngineProducedEnergyThisTick(steamEnginePos, produceNow);
             }
 
             if (remainingRequestedEnergy <= 0.0001f)
@@ -236,6 +257,85 @@ public partial class World
         }
 
         return producedEnergy;
+    }
+
+    private float TickSteamEnginesIdleAndGetProducedEnergy(
+        IReadOnlyList<Vector3Int> steamEnginePositions,
+        float requestedEnergy,
+        float deltaTime)
+    {
+        if (steamEnginePositions == null ||
+            steamEnginePositions.Count == 0 ||
+            requestedEnergy <= 0f ||
+            deltaTime <= 0f)
+        {
+            return 0f;
+        }
+
+        float idleMultiplier = Mathf.Clamp01(steamEngineIdleBurnMultiplier);
+        float energyPerSecond = Mathf.Max(0f, steamEngineEnergyPerSecond);
+        if (idleMultiplier <= 0f || energyPerSecond <= 0f)
+            return 0f;
+
+        float producedEnergy = 0f;
+        float remainingRequestedEnergyBudget = requestedEnergy;
+        float requestedEnergyPerEngine = energyPerSecond * idleMultiplier * deltaTime;
+        for (int i = 0; i < steamEnginePositions.Count; i++)
+        {
+            if (remainingRequestedEnergyBudget <= 0.0001f)
+                break;
+
+            Vector3Int steamEnginePos = steamEnginePositions[i];
+            if (!IsSteamEngineBlockInWorld(steamEnginePos))
+                continue;
+
+            SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
+            if (!HasSteamEngineUsableWater(state))
+                continue;
+
+            steamEngineProducedEnergyThisTick.TryGetValue(steamEnginePos, out float alreadyProducedEnergy);
+            float remainingRequestedEnergy = Mathf.Min(
+                Mathf.Max(0f, requestedEnergyPerEngine - alreadyProducedEnergy),
+                remainingRequestedEnergyBudget);
+            if (remainingRequestedEnergy <= 0.0001f)
+                continue;
+
+            float remainingEngineCapacity = energyPerSecond * deltaTime;
+            while (remainingRequestedEnergy > 0.0001f && remainingEngineCapacity > 0.0001f)
+            {
+                if (!HasSteamEngineUsableWater(state))
+                    break;
+
+                if (state.BurnTimer <= 0f && !TryStartSteamEngineFuelBurn(state))
+                    break;
+
+                float fuelEnergyAvailable = state.BurnTimer * energyPerSecond;
+                float waterEnergyAvailable = GetSteamEngineWaterEnergyAvailable(state);
+                float produceNow = Mathf.Min(remainingRequestedEnergy, remainingEngineCapacity, fuelEnergyAvailable, waterEnergyAvailable);
+                if (produceNow <= 0.0001f)
+                    break;
+
+                float burnSeconds = produceNow / energyPerSecond;
+                state.BurnTimer = Mathf.Max(0f, state.BurnTimer - burnSeconds);
+                ConsumeSteamEngineWaterForEnergy(state, produceNow);
+                remainingRequestedEnergy -= produceNow;
+                remainingRequestedEnergyBudget -= produceNow;
+                remainingEngineCapacity -= produceNow;
+                producedEnergy += produceNow;
+                AddSteamEngineProducedEnergyThisTick(steamEnginePos, produceNow);
+            }
+        }
+
+        return producedEnergy;
+    }
+
+    private void AddSteamEngineProducedEnergyThisTick(Vector3Int steamEnginePos, float producedEnergy)
+    {
+        if (producedEnergy <= 0f)
+            return;
+
+        steamEngineProducedEnergyThisTick.TryGetValue(steamEnginePos, out float previousEnergy);
+        steamEngineProducedEnergyThisTick[steamEnginePos] = previousEnergy + producedEnergy;
     }
 
     private int CountReadySteamEngines(IReadOnlyList<Vector3Int> steamEnginePositions)
@@ -247,10 +347,12 @@ public partial class World
         for (int i = 0; i < steamEnginePositions.Count; i++)
         {
             Vector3Int steamEnginePos = steamEnginePositions[i];
-            if (!IsSteamEngineBlockInWorld(steamEnginePos) || !HasSteamEngineWaterSupply(steamEnginePos))
+            if (!IsSteamEngineBlockInWorld(steamEnginePos))
                 continue;
 
             SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
+            if (!HasSteamEngineUsableWater(state))
+                continue;
 
             if (state.BurnTimer > 0f || HasUsableSteamEngineFuel(state))
                 count++;
@@ -273,15 +375,21 @@ public partial class World
         for (int i = 0; i < steamEnginePositions.Count; i++)
         {
             Vector3Int steamEnginePos = steamEnginePositions[i];
-            if (!IsSteamEngineBlockInWorld(steamEnginePos) || !HasSteamEngineWaterSupply(steamEnginePos))
+            if (!IsSteamEngineBlockInWorld(steamEnginePos))
                 continue;
 
             if (!steamEngineStates.TryGetValue(steamEnginePos, out SteamEngineRuntimeState state) || state == null)
                 continue;
 
-            availableEnergy += Mathf.Max(0f, state.BurnTimer) * energyPerSecond;
+            float waterLimitedEnergy = GetSteamEngineWaterEnergyAvailable(state);
+            if (waterLimitedEnergy <= 0.0001f)
+                continue;
+
+            float fuelLimitedEnergy = Mathf.Max(0f, state.BurnTimer) * energyPerSecond;
             if (HasUsableSteamEngineFuel(state))
-                availableEnergy += Mathf.Max(0, state.FuelAmount) * fuelDuration * energyPerSecond;
+                fuelLimitedEnergy += Mathf.Max(0, state.FuelAmount) * fuelDuration * energyPerSecond;
+
+            availableEnergy += Mathf.Min(waterLimitedEnergy, fuelLimitedEnergy);
         }
 
         return availableEnergy;
@@ -323,8 +431,112 @@ public partial class World
         return state;
     }
 
+    private void RefillSteamEngineWaterForAllNetworks(float deltaTime)
+    {
+        if (electricalNetworks == null || electricalNetworks.Count == 0 || deltaTime <= 0f)
+            return;
+
+        float capacity = GetSteamEngineWaterCapacity();
+        if (capacity <= 0f)
+            return;
+
+        steamEngineWaterPumpConsumerCounts.Clear();
+        steamEngineWaterRefillVisited.Clear();
+
+        for (int networkIndex = 0; networkIndex < electricalNetworks.Count; networkIndex++)
+        {
+            ElectricalNetworkRuntime network = electricalNetworks[networkIndex];
+            if (network == null)
+                continue;
+
+            IReadOnlyList<Vector3Int> steamEnginePositions = network.steamEnginePositions;
+            if (steamEnginePositions == null)
+                continue;
+
+            for (int i = 0; i < steamEnginePositions.Count; i++)
+            {
+                Vector3Int steamEnginePos = steamEnginePositions[i];
+                if (!steamEngineWaterRefillVisited.Add(steamEnginePos) ||
+                    !IsSteamEngineBlockInWorld(steamEnginePos))
+                {
+                    continue;
+                }
+
+                SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
+                if (state.WaterAmount >= capacity - 0.0001f)
+                    continue;
+
+                if (!TryCollectSteamEngineWaterPumps(steamEnginePos, steamEngineWaterPumpSearchResults))
+                    continue;
+
+                for (int pumpIndex = 0; pumpIndex < steamEngineWaterPumpSearchResults.Count; pumpIndex++)
+                {
+                    Vector3Int pumpPos = steamEngineWaterPumpSearchResults[pumpIndex];
+                    steamEngineWaterPumpConsumerCounts.TryGetValue(pumpPos, out int consumerCount);
+                    steamEngineWaterPumpConsumerCounts[pumpPos] = consumerCount + 1;
+                }
+            }
+        }
+
+        if (steamEngineWaterPumpConsumerCounts.Count == 0)
+            return;
+
+        steamEngineWaterRefillVisited.Clear();
+
+        for (int networkIndex = 0; networkIndex < electricalNetworks.Count; networkIndex++)
+        {
+            ElectricalNetworkRuntime network = electricalNetworks[networkIndex];
+            if (network == null)
+                continue;
+
+            IReadOnlyList<Vector3Int> steamEnginePositions = network.steamEnginePositions;
+            if (steamEnginePositions == null)
+                continue;
+
+            for (int i = 0; i < steamEnginePositions.Count; i++)
+            {
+                Vector3Int steamEnginePos = steamEnginePositions[i];
+                if (!steamEngineWaterRefillVisited.Add(steamEnginePos) ||
+                    !IsSteamEngineBlockInWorld(steamEnginePos))
+                {
+                    continue;
+                }
+
+                SteamEngineRuntimeState state = GetOrCreateSteamEngineState(steamEnginePos);
+                float waterNeeded = capacity - state.WaterAmount;
+                if (waterNeeded <= 0.0001f)
+                    continue;
+
+                if (!TryCollectSteamEngineWaterPumps(steamEnginePos, steamEngineWaterPumpSearchResults))
+                    continue;
+
+                float refillAmount = 0f;
+                for (int pumpIndex = 0; pumpIndex < steamEngineWaterPumpSearchResults.Count; pumpIndex++)
+                {
+                    Vector3Int pumpPos = steamEngineWaterPumpSearchResults[pumpIndex];
+                    if (!steamEngineWaterPumpConsumerCounts.TryGetValue(pumpPos, out int consumerCount) || consumerCount <= 0)
+                        continue;
+
+                    refillAmount += GetWaterPumpFlowPerSecond(pumpPos) * deltaTime / consumerCount;
+                }
+
+                if (refillAmount > 0f)
+                    state.WaterAmount = Mathf.Min(capacity, state.WaterAmount + Mathf.Min(waterNeeded, refillAmount));
+            }
+        }
+    }
+
     private bool HasSteamEngineWaterSupply(Vector3Int steamEnginePos)
     {
+        return TryCollectSteamEngineWaterPumps(steamEnginePos, steamEngineWaterPumpSearchResults);
+    }
+
+    private bool TryCollectSteamEngineWaterPumps(Vector3Int steamEnginePos, List<Vector3Int> waterPumpPositions)
+    {
+        if (waterPumpPositions == null)
+            return false;
+
+        waterPumpPositions.Clear();
         if (!IsSteamEngineBlockInWorld(steamEnginePos))
             return false;
 
@@ -357,8 +569,8 @@ public partial class World
                 BlockType neighborType = GetBlockAt(neighbor);
                 if (neighborType == BlockType.WaterPump)
                 {
-                    if (IsWaterPumpSupplying(neighbor))
-                        return true;
+                    if (IsWaterPumpSupplying(neighbor) && !waterPumpPositions.Contains(neighbor))
+                        waterPumpPositions.Add(neighbor);
 
                     continue;
                 }
@@ -368,7 +580,7 @@ public partial class World
             }
         }
 
-        return false;
+        return waterPumpPositions.Count > 0;
     }
 
     private void EnqueueSteamEngineFluidPipe(Vector3Int pipePos)
@@ -383,6 +595,55 @@ public partial class World
     {
         return GetBlockAt(pumpPos) == BlockType.WaterPump &&
                CountWaterPumpSourceBlocks(pumpPos) >= Mathf.Max(1, waterPumpRequiredWaterBlocks);
+    }
+
+    private float GetWaterPumpFlowPerSecond(Vector3Int pumpPos)
+    {
+        return IsWaterPumpSupplying(pumpPos) ? GetWaterPumpWaterPerSecond() : 0f;
+    }
+
+    private float GetSteamEngineWaterCapacity()
+    {
+        return steamEngineWaterCapacity > 0f
+            ? Mathf.Max(0.1f, steamEngineWaterCapacity)
+            : DefaultSteamEngineWaterCapacity;
+    }
+
+    private float GetSteamEngineWaterEnergyAvailable(SteamEngineRuntimeState state)
+    {
+        if (state == null)
+            return 0f;
+
+        return Mathf.Max(0f, state.WaterAmount) / GetSteamEngineWaterPerEnergy();
+    }
+
+    private bool HasSteamEngineUsableWater(SteamEngineRuntimeState state)
+    {
+        return state != null && state.WaterAmount > 0.0001f;
+    }
+
+    private void ConsumeSteamEngineWaterForEnergy(SteamEngineRuntimeState state, float producedEnergy)
+    {
+        if (state == null || producedEnergy <= 0f)
+            return;
+
+        state.WaterAmount = Mathf.Max(
+            0f,
+            state.WaterAmount - producedEnergy * GetSteamEngineWaterPerEnergy());
+    }
+
+    private float GetSteamEngineWaterPerEnergy()
+    {
+        return steamEngineWaterPerEnergy > 0f
+            ? Mathf.Max(0.0001f, steamEngineWaterPerEnergy)
+            : DefaultSteamEngineWaterPerEnergy;
+    }
+
+    private float GetWaterPumpWaterPerSecond()
+    {
+        return waterPumpWaterPerSecond > 0f
+            ? Mathf.Max(0.0001f, waterPumpWaterPerSecond)
+            : DefaultWaterPumpWaterPerSecond;
     }
 
     public int CountWaterPumpSourceBlocks(Vector3Int pumpPos)
