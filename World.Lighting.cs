@@ -65,9 +65,91 @@ public partial class World
         return Color.white;
     }
 
+    private ushort GetRuntimeBlockEmissionPacked(Vector3Int worldPos, BlockType type)
+    {
+        ushort emission = GetBlockEmissionPacked(type);
+        if (poweredElectricalEmissionByPosition.TryGetValue(worldPos, out ushort poweredEmission))
+            emission = LightUtils.MaxBlockLight(emission, poweredEmission);
+
+        return emission;
+    }
+
     private static ushort GetOverlappingBlockLight(ushort currentLight, ushort candidateLight)
     {
         return LightUtils.MinBlockLight(currentLight, candidateLight);
+    }
+
+    private int GetDirtySubchunkMaskForLightSample(int worldY)
+    {
+        int mask = GetDirtySubchunkMaskForWorldY(worldY);
+        mask |= GetSubchunkBitForWorldY(worldY - 1);
+        mask |= GetSubchunkBitForWorldY(worldY + 1);
+        return SanitizeDirtySubchunkMask(mask);
+    }
+
+    private void AddDirtyLightSampleChunks(Dictionary<Vector2Int, int> dirtyMasks, Vector3Int worldPos)
+    {
+        int dirtySubchunkMask = GetDirtySubchunkMaskForLightSample(worldPos.y);
+        if (dirtySubchunkMask == 0)
+            return;
+
+        Vector2Int coord = GetChunkCoordFromWorldXZ(worldPos.x, worldPos.z);
+        AddDirtySubchunkMask(dirtyMasks, coord, dirtySubchunkMask);
+
+        int localX = worldPos.x - coord.x * Chunk.SizeX;
+        int localZ = worldPos.z - coord.y * Chunk.SizeZ;
+        bool touchesMinX = localX == 0;
+        bool touchesMaxX = localX == Chunk.SizeX - 1;
+        bool touchesMinZ = localZ == 0;
+        bool touchesMaxZ = localZ == Chunk.SizeZ - 1;
+
+        if (touchesMinX) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.left, dirtySubchunkMask);
+        if (touchesMaxX) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.right, dirtySubchunkMask);
+        if (touchesMinZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.down, dirtySubchunkMask);
+        if (touchesMaxZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.up, dirtySubchunkMask);
+        if (touchesMinX && touchesMinZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.left + Vector2Int.down, dirtySubchunkMask);
+        if (touchesMinX && touchesMaxZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.left + Vector2Int.up, dirtySubchunkMask);
+        if (touchesMaxX && touchesMinZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.right + Vector2Int.down, dirtySubchunkMask);
+        if (touchesMaxX && touchesMaxZ) AddDirtySubchunkMask(dirtyMasks, coord + Vector2Int.right + Vector2Int.up, dirtySubchunkMask);
+    }
+
+    private void AddPotentialStaleBlockLightRemovalRegion(
+        Vector3Int center,
+        ushort removedEmission,
+        Dictionary<Vector3Int, ushort> affectedContributions)
+    {
+        int radius = Mathf.Clamp(LightUtils.GetBlockLight(removedEmission), 1, 15);
+        int minY = Mathf.Max(0, center.y - radius);
+        int maxY = Mathf.Min(Chunk.SizeY - 1, center.y + radius);
+
+        for (int z = center.z - radius; z <= center.z + radius; z++)
+        {
+            for (int x = center.x - radius; x <= center.x + radius; x++)
+            {
+                if (!IsWorldColumnLoaded(x, z) && !globalLightColumns.ContainsKey(new Vector2Int(x, z)))
+                    continue;
+
+                for (int y = minY; y <= maxY; y++)
+                {
+                    Vector3Int pos = new Vector3Int(x, y, z);
+                    int manhattanDistance =
+                        Mathf.Abs(pos.x - center.x) +
+                        Mathf.Abs(pos.y - center.y) +
+                        Mathf.Abs(pos.z - center.z);
+                    if (manhattanDistance > radius)
+                        continue;
+
+                    ushort currentLight = GetColumnLight(x, z, y);
+                    if (!LightUtils.HasBlockLight(currentLight))
+                        continue;
+
+                    if (affectedContributions.TryGetValue(pos, out ushort existing))
+                        affectedContributions[pos] = LightUtils.MaxBlockLight(existing, currentLight);
+                    else
+                        affectedContributions[pos] = currentLight;
+                }
+            }
+        }
     }
 
     #endregion
@@ -264,7 +346,11 @@ public partial class World
         lightQueue.Enqueue(startWorldPos);
 
         // Define a luz inicial usando o novo sistema de colunas
-        SetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y, lightEmission);
+        SetColumnLight(
+            startWorldPos.x,
+            startWorldPos.z,
+            startWorldPos.y,
+            LightUtils.MaxBlockLight(GetColumnLight(startWorldPos.x, startWorldPos.z, startWorldPos.y), lightEmission));
 
         Dictionary<Vector2Int, int> dirtiedChunks = propagateDirtyChunksBuffer;
         dirtiedChunks.Clear();
@@ -277,11 +363,7 @@ public partial class World
             ushort currentLight = GetColumnLight(node.x, node.z, node.y);
 
             // Marca o chunk como sujo
-            Vector2Int chunkCoord = new Vector2Int(
-                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
-                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
-            );
-            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
+            AddDirtyLightSampleChunks(dirtiedChunks, node);
 
             foreach (Vector3Int dir in sixDirections)
             {
@@ -410,6 +492,8 @@ public partial class World
             }
         }
 
+        AddPotentialStaleBlockLightRemovalRegion(startWorldPos, removedEmission, affectedContributions);
+
         if (affectedContributions.Count == 0)
         {
             enqueued.Clear();
@@ -423,10 +507,7 @@ public partial class World
             SetColumnLight(pos.x, pos.z, pos.y, 0);
             columnsToCleanup.Add(new Vector2Int(pos.x, pos.z));
 
-            Vector2Int chunkCoord = new Vector2Int(
-                Mathf.FloorToInt((float)pos.x / Chunk.SizeX),
-                Mathf.FloorToInt((float)pos.z / Chunk.SizeZ));
-            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(pos.y));
+            AddDirtyLightSampleChunks(dirtiedChunks, pos);
         }
 
         foreach (var kv in affectedContributions)
@@ -434,7 +515,7 @@ public partial class World
             Vector3Int pos = kv.Key;
             BlockType blockAtPos = GetBlockAt(pos);
             byte targetOpacity = GetBlockOpacity(blockAtPos);
-            ushort seededLight = GetBlockEmissionPacked(blockAtPos);
+            ushort seededLight = GetRuntimeBlockEmissionPacked(pos, blockAtPos);
 
             if (targetOpacity < 15)
             {
@@ -589,11 +670,7 @@ public partial class World
             ushort currentLight = GetColumnLight(node.x, node.z, node.y);
             if (!LightUtils.HasBlockLight(currentLight)) continue;
 
-            Vector2Int chunkCoord = new Vector2Int(
-                Mathf.FloorToInt((float)node.x / Chunk.SizeX),
-                Mathf.FloorToInt((float)node.z / Chunk.SizeZ)
-            );
-            AddDirtySubchunkMask(dirtiedChunks, chunkCoord, GetDirtySubchunkMaskForWorldY(node.y));
+            AddDirtyLightSampleChunks(dirtiedChunks, node);
 
             foreach (Vector3Int dir in sixDirections)
             {

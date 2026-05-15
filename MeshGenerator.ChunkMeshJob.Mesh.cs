@@ -298,6 +298,9 @@ public static partial class MeshGenerator
                                     TryGetRepresentableRectFast(mask, sizeU, i, j, w, h, out w, out h, out flipTriangle);
                                 }
 
+                                if (w > 1 || h > 1)
+                                    currentSubchunkSupportsLightingOnlyRebuild = false;
+
                                 GreedyFaceData bottomLeftFace = mask[i + j * sizeU];
                                 GreedyFaceData bottomRightFace = mask[i + (w - 1) + j * sizeU];
                                 GreedyFaceData topRightFace = mask[i + (w - 1) + (j + h - 1) * sizeU];
