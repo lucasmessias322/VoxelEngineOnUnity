@@ -230,6 +230,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     private const int MaxPoolSize = 512;
     private const float SplitterSplitMergeSuppressSeconds = 1.25f;
     private const float ShapeFaceEpsilon = 0.0001f;
+    private const float ShapeFaceGeometryEpsilon = 0.000001f;
     private static Vector2Int currentLegacyAtlasTiles = Vector2Int.one;
     private static bool currentAtlasOriginTopLeft;
 
@@ -1464,7 +1465,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         switch (rect.face)
         {
             case BlockFace.Right:
-                if (box.min.x > rect.plane + ShapeFaceEpsilon || box.max.x <= rect.plane + ShapeFaceEpsilon)
+                if (Mathf.Abs(box.min.x - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1479,7 +1480,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 break;
 
             case BlockFace.Left:
-                if (box.max.x < rect.plane - ShapeFaceEpsilon || box.min.x >= rect.plane - ShapeFaceEpsilon)
+                if (Mathf.Abs(box.max.x - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1494,7 +1495,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 break;
 
             case BlockFace.Top:
-                if (box.min.y > rect.plane + ShapeFaceEpsilon || box.max.y <= rect.plane + ShapeFaceEpsilon)
+                if (Mathf.Abs(box.min.y - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1509,7 +1510,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 break;
 
             case BlockFace.Bottom:
-                if (box.max.y < rect.plane - ShapeFaceEpsilon || box.min.y >= rect.plane - ShapeFaceEpsilon)
+                if (Mathf.Abs(box.max.y - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1524,7 +1525,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 break;
 
             case BlockFace.Front:
-                if (box.min.z > rect.plane + ShapeFaceEpsilon || box.max.z <= rect.plane + ShapeFaceEpsilon)
+                if (Mathf.Abs(box.min.z - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1539,7 +1540,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
                 break;
 
             case BlockFace.Back:
-                if (box.max.z < rect.plane - ShapeFaceEpsilon || box.min.z >= rect.plane - ShapeFaceEpsilon)
+                if (Mathf.Abs(box.max.z - rect.plane) > ShapeFaceGeometryEpsilon)
                     return false;
 
                 coverage = new ShapeFaceRect
@@ -1564,14 +1565,14 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
     {
         overlap = default;
 
-        if (a.face != b.face || Mathf.Abs(a.plane - b.plane) > ShapeFaceEpsilon)
+        if (a.face != b.face || Mathf.Abs(a.plane - b.plane) > ShapeFaceGeometryEpsilon)
             return false;
 
         float minA = Mathf.Max(a.minA, b.minA);
         float maxA = Mathf.Min(a.maxA, b.maxA);
         float minB = Mathf.Max(a.minB, b.minB);
         float maxB = Mathf.Min(a.maxB, b.maxB);
-        if (maxA <= minA + ShapeFaceEpsilon || maxB <= minB + ShapeFaceEpsilon)
+        if (maxA <= minA + ShapeFaceGeometryEpsilon || maxB <= minB + ShapeFaceGeometryEpsilon)
             return false;
 
         overlap = new ShapeFaceRect
@@ -1611,7 +1612,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         float minB,
         float maxB)
     {
-        if (maxA <= minA + ShapeFaceEpsilon || maxB <= minB + ShapeFaceEpsilon)
+        if (maxA <= minA + ShapeFaceGeometryEpsilon || maxB <= minB + ShapeFaceGeometryEpsilon)
             return;
 
         faceRects.Add(new ShapeFaceRect
@@ -1658,14 +1659,14 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
         merged = default;
 
         if (a.face != b.face ||
-            Mathf.Abs(a.plane - b.plane) > ShapeFaceEpsilon ||
+            Mathf.Abs(a.plane - b.plane) > ShapeFaceGeometryEpsilon ||
             !HasSameAppearance(a, b))
             return false;
 
-        bool sameA = Mathf.Abs(a.minA - b.minA) <= ShapeFaceEpsilon && Mathf.Abs(a.maxA - b.maxA) <= ShapeFaceEpsilon;
-        bool sameB = Mathf.Abs(a.minB - b.minB) <= ShapeFaceEpsilon && Mathf.Abs(a.maxB - b.maxB) <= ShapeFaceEpsilon;
+        bool sameA = Mathf.Abs(a.minA - b.minA) <= ShapeFaceGeometryEpsilon && Mathf.Abs(a.maxA - b.maxA) <= ShapeFaceGeometryEpsilon;
+        bool sameB = Mathf.Abs(a.minB - b.minB) <= ShapeFaceGeometryEpsilon && Mathf.Abs(a.maxB - b.maxB) <= ShapeFaceGeometryEpsilon;
 
-        if (sameA && (Mathf.Abs(a.maxB - b.minB) <= ShapeFaceEpsilon || Mathf.Abs(b.maxB - a.minB) <= ShapeFaceEpsilon))
+        if (sameA && (Mathf.Abs(a.maxB - b.minB) <= ShapeFaceGeometryEpsilon || Mathf.Abs(b.maxB - a.minB) <= ShapeFaceGeometryEpsilon))
         {
             merged = a;
             merged.minB = Mathf.Min(a.minB, b.minB);
@@ -1673,7 +1674,7 @@ public class BlockDrop : MonoBehaviour, IRoboticArmGrabbable, IRoboticArmItemSta
             return true;
         }
 
-        if (sameB && (Mathf.Abs(a.maxA - b.minA) <= ShapeFaceEpsilon || Mathf.Abs(b.maxA - a.minA) <= ShapeFaceEpsilon))
+        if (sameB && (Mathf.Abs(a.maxA - b.minA) <= ShapeFaceGeometryEpsilon || Mathf.Abs(b.maxA - a.minA) <= ShapeFaceGeometryEpsilon))
         {
             merged = a;
             merged.minA = Mathf.Min(a.minA, b.minA);

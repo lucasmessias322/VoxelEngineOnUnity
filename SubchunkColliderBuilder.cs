@@ -5,6 +5,8 @@ using UnityEngine;
 
 internal sealed class SubchunkColliderBuilder
 {
+    private const float MinShapeColliderSize = 0.0001f;
+
     private readonly List<BoxCollider> boxColliders = new List<BoxCollider>(128);
     private int activeBoxColliderCount;
     private bool[] colliderSolidsBuffer;
@@ -699,9 +701,19 @@ internal sealed class SubchunkColliderBuilder
 
     private int AddShapeColliderBox(GameObject owner, int colliderIndex, Vector3Int blockPos, ShapeBox box)
     {
+        Vector3 min = Vector3.Min(box.min, box.max);
+        Vector3 max = Vector3.Max(box.min, box.max);
+        Vector3 size = max - min;
+        if (size.x <= MinShapeColliderSize ||
+            size.y <= MinShapeColliderSize ||
+            size.z <= MinShapeColliderSize)
+        {
+            return colliderIndex;
+        }
+
         BoxCollider collider = GetOrCreateBoxCollider(owner, colliderIndex);
-        collider.center = (Vector3)blockPos + (box.min + box.max) * 0.5f;
-        collider.size = box.max - box.min;
+        collider.center = (Vector3)blockPos + (min + max) * 0.5f;
+        collider.size = size;
         collider.enabled = true;
         return colliderIndex + 1;
     }

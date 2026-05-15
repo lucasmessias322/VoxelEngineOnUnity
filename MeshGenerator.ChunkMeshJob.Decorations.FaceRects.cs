@@ -36,6 +36,8 @@ public static partial class MeshGenerator
             public float fluidPipeAxisMax;
         }
 
+        private const float ShapeFaceEpsilon = 0.0001f;
+        private const float ShapeFaceGeometryEpsilon = 0.000001f;
 
         private static void AppendShapeFaceRects(ref FixedList4096Bytes<ShapeFaceRect> faceRects, ShapeBox box)
         {
@@ -434,19 +436,18 @@ public static partial class MeshGenerator
 
         private static bool TryMergeShapeFaceRects(ShapeFaceRect a, ShapeFaceRect b, out ShapeFaceRect merged)
         {
-            const float epsilon = 0.0001f;
             merged = default;
 
             if (a.face != b.face ||
-                math.abs(a.plane - b.plane) > epsilon ||
+                math.abs(a.plane - b.plane) > ShapeFaceGeometryEpsilon ||
                 !HasSameAppearance(a, b) ||
                 !HasSameSourceUvBounds(a, b))
                 return false;
 
-            bool sameA = math.abs(a.minA - b.minA) <= epsilon && math.abs(a.maxA - b.maxA) <= epsilon;
-            bool sameB = math.abs(a.minB - b.minB) <= epsilon && math.abs(a.maxB - b.maxB) <= epsilon;
+            bool sameA = math.abs(a.minA - b.minA) <= ShapeFaceGeometryEpsilon && math.abs(a.maxA - b.maxA) <= ShapeFaceGeometryEpsilon;
+            bool sameB = math.abs(a.minB - b.minB) <= ShapeFaceGeometryEpsilon && math.abs(a.maxB - b.maxB) <= ShapeFaceGeometryEpsilon;
 
-            if (sameA && (math.abs(a.maxB - b.minB) <= epsilon || math.abs(b.maxB - a.minB) <= epsilon))
+            if (sameA && (math.abs(a.maxB - b.minB) <= ShapeFaceGeometryEpsilon || math.abs(b.maxB - a.minB) <= ShapeFaceGeometryEpsilon))
             {
                 merged = a;
                 merged.minB = math.min(a.minB, b.minB);
@@ -454,7 +455,7 @@ public static partial class MeshGenerator
                 return true;
             }
 
-            if (sameB && (math.abs(a.maxA - b.minA) <= epsilon || math.abs(b.maxA - a.minA) <= epsilon))
+            if (sameB && (math.abs(a.maxA - b.minA) <= ShapeFaceGeometryEpsilon || math.abs(b.maxA - a.minA) <= ShapeFaceGeometryEpsilon))
             {
                 merged = a;
                 merged.minA = math.min(a.minA, b.minA);
@@ -471,8 +472,8 @@ public static partial class MeshGenerator
                    a.usesFluidPipeImportedUv == b.usesFluidPipeImportedUv &&
                    a.usesTransportTubeImportedUv == b.usesTransportTubeImportedUv &&
                    a.fluidPipeAxis == b.fluidPipeAxis &&
-                   math.abs(a.fluidPipeAxisMin - b.fluidPipeAxisMin) <= 0.0001f &&
-                   math.abs(a.fluidPipeAxisMax - b.fluidPipeAxisMax) <= 0.0001f &&
+                   math.abs(a.fluidPipeAxisMin - b.fluidPipeAxisMin) <= ShapeFaceEpsilon &&
+                   math.abs(a.fluidPipeAxisMax - b.fluidPipeAxisMax) <= ShapeFaceEpsilon &&
                    (!a.usesExplicitAppearance ||
                     (a.tint == b.tint &&
                      a.uvFace == b.uvFace &&
@@ -483,11 +484,10 @@ public static partial class MeshGenerator
 
         private static bool HasSameSourceUvBounds(ShapeFaceRect a, ShapeFaceRect b)
         {
-            const float epsilon = 0.0001f;
-            return math.abs(a.sourceMinU - b.sourceMinU) <= epsilon &&
-                   math.abs(a.sourceMaxU - b.sourceMaxU) <= epsilon &&
-                   math.abs(a.sourceMinV - b.sourceMinV) <= epsilon &&
-                   math.abs(a.sourceMaxV - b.sourceMaxV) <= epsilon;
+            return math.abs(a.sourceMinU - b.sourceMinU) <= ShapeFaceEpsilon &&
+                   math.abs(a.sourceMaxU - b.sourceMaxU) <= ShapeFaceEpsilon &&
+                   math.abs(a.sourceMinV - b.sourceMinV) <= ShapeFaceEpsilon &&
+                   math.abs(a.sourceMaxV - b.sourceMaxV) <= ShapeFaceEpsilon;
         }
 
         private static void CullHiddenShapeFaceRects(
@@ -539,13 +539,12 @@ public static partial class MeshGenerator
 
         private static bool TryGetShapeBoxCoverage(ShapeFaceRect rect, ShapeBox box, out ShapeFaceRect coverage)
         {
-            const float epsilon = 0.0001f;
             coverage = default;
 
             switch (rect.face)
             {
                 case BlockFace.Right:
-                    if (box.min.x > rect.plane + epsilon || box.max.x <= rect.plane + epsilon)
+                    if (math.abs(box.min.x - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -560,7 +559,7 @@ public static partial class MeshGenerator
                     break;
 
                 case BlockFace.Left:
-                    if (box.max.x < rect.plane - epsilon || box.min.x >= rect.plane - epsilon)
+                    if (math.abs(box.max.x - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -575,7 +574,7 @@ public static partial class MeshGenerator
                     break;
 
                 case BlockFace.Top:
-                    if (box.min.y > rect.plane + epsilon || box.max.y <= rect.plane + epsilon)
+                    if (math.abs(box.min.y - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -590,7 +589,7 @@ public static partial class MeshGenerator
                     break;
 
                 case BlockFace.Bottom:
-                    if (box.max.y < rect.plane - epsilon || box.min.y >= rect.plane - epsilon)
+                    if (math.abs(box.max.y - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -605,7 +604,7 @@ public static partial class MeshGenerator
                     break;
 
                 case BlockFace.Front:
-                    if (box.min.z > rect.plane + epsilon || box.max.z <= rect.plane + epsilon)
+                    if (math.abs(box.min.z - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -620,7 +619,7 @@ public static partial class MeshGenerator
                     break;
 
                 case BlockFace.Back:
-                    if (box.max.z < rect.plane - epsilon || box.min.z >= rect.plane - epsilon)
+                    if (math.abs(box.max.z - rect.plane) > ShapeFaceGeometryEpsilon)
                         return false;
 
                     coverage = new ShapeFaceRect
@@ -643,17 +642,16 @@ public static partial class MeshGenerator
 
         private static bool TryGetSameFaceOverlap(ShapeFaceRect a, ShapeFaceRect b, out ShapeFaceRect overlap)
         {
-            const float epsilon = 0.0001f;
             overlap = default;
 
-            if (a.face != b.face || math.abs(a.plane - b.plane) > epsilon)
+            if (a.face != b.face || math.abs(a.plane - b.plane) > ShapeFaceGeometryEpsilon)
                 return false;
 
             float minA = math.max(a.minA, b.minA);
             float maxA = math.min(a.maxA, b.maxA);
             float minB = math.max(a.minB, b.minB);
             float maxB = math.min(a.maxB, b.maxB);
-            if (maxA <= minA + epsilon || maxB <= minB + epsilon)
+            if (maxA <= minA + ShapeFaceGeometryEpsilon || maxB <= minB + ShapeFaceGeometryEpsilon)
                 return false;
 
             overlap = new ShapeFaceRect
@@ -696,8 +694,7 @@ public static partial class MeshGenerator
             float minB,
             float maxB)
         {
-            const float epsilon = 0.0001f;
-            if (maxA <= minA + epsilon || maxB <= minB + epsilon)
+            if (maxA <= minA + ShapeFaceGeometryEpsilon || maxB <= minB + ShapeFaceGeometryEpsilon)
                 return;
 
             if (faceRects.Length >= faceRects.Capacity)
