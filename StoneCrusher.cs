@@ -74,6 +74,9 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     [SerializeField] private bool disableVisualAnimationsOutsideSimulationDistance = true;
     [SerializeField, Min(0.05f)] private float visualSimulationCheckInterval = 0.25f;
 
+    [Header("Machine Audio")]
+    [SerializeField] private MachineLoopAudio workingAudio = new MachineLoopAudio();
+
     private float nextScanTime;
     private float crushTimer;
     private bool isCrushing;
@@ -162,6 +165,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     private void OnDisable()
     {
         ActiveCrushers.Remove(this);
+        workingAudio.Stop();
     }
 
     protected override void OnDynamicBlockSpawned()
@@ -179,6 +183,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
         ActiveCrushers.Remove(this);
         ResetMovingQuadPosition();
         ResetVisualAnimationTiming();
+        workingAudio.Stop();
 
         if (ShouldKeepStateAfterDespawn())
             StoreRuntimeState();
@@ -190,6 +195,7 @@ public sealed class StoneCrusher : DynamicVoxelBlock
     {
         rollersPoweredThisFrame = false;
         UpdateCrushing(Time.deltaTime);
+        workingAudio.UpdatePlayback(transform, ShouldSpinRollers());
 
         float visualDeltaTime = ConsumeVisualAnimationDeltaTime();
         if (visualDeltaTime <= 0f)
@@ -1403,5 +1409,76 @@ public sealed class StoneCrusher : DynamicVoxelBlock
 
         Gizmos.color = Color.yellow;
         Gizmos.DrawWireSphere(ResolveExitPosition(), 0.18f);
+    }
+}
+
+[System.Serializable]
+public sealed class MachineLoopAudio
+{
+    [SerializeField] private AudioClip clip;
+    [SerializeField, Range(0f, 1f)] private float volume = 0.75f;
+    [SerializeField, Min(0.01f)] private float minDistance = 1.5f;
+    [SerializeField, Min(0.01f)] private float maxDistance = 18f;
+    [SerializeField, Range(0.1f, 3f)] private float pitch = 1f;
+    [SerializeField] private Vector3 localOffset = Vector3.zero;
+    [SerializeField] private AudioRolloffMode rolloffMode = AudioRolloffMode.Linear;
+
+    [System.NonSerialized] private AudioSource audioSource;
+    [System.NonSerialized] private GameObject audioObject;
+
+    public void UpdatePlayback(Transform owner, bool shouldPlay)
+    {
+        if (!shouldPlay || clip == null || owner == null)
+        {
+            Stop();
+            return;
+        }
+
+        EnsureAudioSource(owner);
+        if (audioSource == null)
+            return;
+
+        audioObject.transform.localPosition = localOffset;
+        ApplySettings();
+
+        if (!audioSource.isPlaying)
+            audioSource.Play();
+    }
+
+    public void Stop()
+    {
+        if (audioSource != null && audioSource.isPlaying)
+            audioSource.Stop();
+    }
+
+    private void EnsureAudioSource(Transform owner)
+    {
+        if (audioSource != null)
+            return;
+
+        audioObject = new GameObject("MachineLoopAudio");
+        audioObject.transform.SetParent(owner, false);
+        audioObject.transform.localPosition = localOffset;
+
+        audioSource = audioObject.AddComponent<AudioSource>();
+        audioSource.playOnAwake = false;
+        audioSource.loop = true;
+        audioSource.spatialBlend = 1f;
+        ApplySettings();
+    }
+
+    private void ApplySettings()
+    {
+        if (audioSource == null)
+            return;
+
+        audioSource.clip = clip;
+        audioSource.volume = Mathf.Clamp01(volume);
+        audioSource.pitch = Mathf.Max(0.1f, pitch);
+        audioSource.spatialBlend = 1f;
+        audioSource.rolloffMode = rolloffMode;
+        audioSource.minDistance = Mathf.Max(0.01f, minDistance);
+        audioSource.maxDistance = Mathf.Max(audioSource.minDistance, maxDistance);
+        audioSource.dopplerLevel = 0f;
     }
 }

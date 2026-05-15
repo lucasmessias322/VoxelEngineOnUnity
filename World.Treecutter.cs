@@ -343,6 +343,7 @@ public partial class World
 
             bool outputDrop = TryOutputTreecutterDrop(treecutterPos, currentType);
             SetBlockAt(logPos, BlockType.Air);
+            PlayMachineBlockBreakSound(logPos);
             InvalidateLoadedSubchunkCollidersAt(logPos);
 
             if (!outputDrop)
@@ -356,6 +357,7 @@ public partial class World
                 continue;
 
             SetBlockAt(leafPos, BlockType.Air);
+            PlayMachineBlockBreakSound(leafPos);
             InvalidateLoadedSubchunkCollidersAt(leafPos);
         }
 

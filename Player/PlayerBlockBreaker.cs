@@ -126,6 +126,7 @@ public class PlayerBlockBreaker : MonoBehaviour
     public bool IsBreakInProgress => breakingBlock.x != int.MinValue;
     public float BreakProgressNormalized => Mathf.Clamp01(breakProgress01);
     public int PlaceActionVersion => placeActionVersion;
+    public AudioClip BreakBlockClip => breakBlockClip;
     public float EffectiveCrackOverlayScale
     {
         get
@@ -136,6 +137,18 @@ public class PlayerBlockBreaker : MonoBehaviour
 
             return scale;
         }
+    }
+
+    public void PlayBreakBlockSound()
+    {
+        if (breakBlockClip == null)
+            return;
+
+        if (audioSource == null)
+            audioSource = GetComponent<AudioSource>();
+
+        if (audioSource != null)
+            audioSource.PlayOneShot(breakBlockClip);
     }
 
     void Awake()
@@ -217,8 +230,7 @@ public class PlayerBlockBreaker : MonoBehaviour
                 return;
 
             World.Instance.SuppressGrassBillboardAt(sel);
-            if (breakBlockClip != null)
-                audioSource.PlayOneShot(breakBlockClip);
+            PlayBreakBlockSound();
 
             CancelBreak();
             return;
@@ -276,8 +288,7 @@ public class PlayerBlockBreaker : MonoBehaviour
             }
         }
 
-        if (breakBlockClip != null)
-            audioSource.PlayOneShot(breakBlockClip);
+        PlayBreakBlockSound();
 
         CancelBreak();
     }

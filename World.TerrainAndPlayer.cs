@@ -104,6 +104,12 @@ public partial class World
     };
     [SerializeField, Min(0.02f)] private float autoMinerLaserDurationSeconds = 0.22f;
 
+    [Header("Machine Block Break Audio")]
+    [SerializeField] private AudioClip machineBreakBlockClip;
+    [SerializeField, Range(0f, 1f)] private float machineBreakBlockVolume = 1f;
+    [SerializeField, Min(0.01f)] private float machineBreakBlockMinDistance = 1.5f;
+    [SerializeField, Min(0.01f)] private float machineBreakBlockMaxDistance = 16f;
+
     [Header("Transport Tubes")]
     [SerializeField] private bool enableTransportTubeFilters = true;
     [SerializeField, Min(0.05f)] private float transportTubeFilterTickInterval = 0.35f;

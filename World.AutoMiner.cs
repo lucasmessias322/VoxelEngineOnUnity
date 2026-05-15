@@ -189,6 +189,7 @@ public partial class World
         }
 
         SetBlockAt(targetPos, BlockType.Air);
+        PlayMachineBlockBreakSound(targetPos);
         InvalidateLoadedSubchunkCollidersAt(targetPos);
         return true;
     }

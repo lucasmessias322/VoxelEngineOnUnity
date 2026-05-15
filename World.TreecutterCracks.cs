@@ -14,6 +14,47 @@ public partial class World
     private Material treecutterCrackOverlayBaseMaterial;
     private Vector3Int treecutterCrackOverlayBlock = InvalidTreecutterCrackBlock;
     private int treecutterCrackOverlayStage = -1;
+    private PlayerBlockBreaker machineBlockBreakAudioSource;
+
+    private void PlayMachineBlockBreakSound(Vector3Int blockPos)
+    {
+        AudioClip clip = ResolveMachineBlockBreakClip();
+        if (clip == null)
+            return;
+
+        GameObject soundObject = new GameObject("MachineBlockBreakSound");
+        soundObject.transform.position = blockPos + Vector3.one * 0.5f;
+
+        AudioSource source = soundObject.AddComponent<AudioSource>();
+        source.clip = clip;
+        source.volume = Mathf.Clamp01(machineBreakBlockVolume);
+        source.spatialBlend = 1f;
+        source.rolloffMode = AudioRolloffMode.Linear;
+        source.minDistance = Mathf.Max(0.01f, machineBreakBlockMinDistance);
+        source.maxDistance = Mathf.Max(source.minDistance, machineBreakBlockMaxDistance);
+        source.dopplerLevel = 0f;
+        source.Play();
+
+        Destroy(soundObject, clip.length + 0.1f);
+    }
+
+    private AudioClip ResolveMachineBlockBreakClip()
+    {
+        if (machineBreakBlockClip != null)
+            return machineBreakBlockClip;
+
+        PlayerBlockBreaker source = ResolveMachineBlockBreakAudioSource();
+        return source != null ? source.BreakBlockClip : null;
+    }
+
+    private PlayerBlockBreaker ResolveMachineBlockBreakAudioSource()
+    {
+        if (machineBlockBreakAudioSource != null)
+            return machineBlockBreakAudioSource;
+
+        machineBlockBreakAudioSource = FindAnyObjectByType<PlayerBlockBreaker>();
+        return machineBlockBreakAudioSource;
+    }
 
     private void UpdateTreecutterBreakCrackVisual(float now)
     {
